@@ -26,6 +26,15 @@ async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   );
 }
 
+async function discoverWithStateDir(
+  stateDir: string,
+  params: Parameters<typeof discoverOpenClawPlugins>[0],
+) {
+  return await withStateDir(stateDir, async () => {
+    return discoverOpenClawPlugins(params);
+  });
+}
+
 function writePluginPackageManifest(params: {
   packageDir: string;
   packageName: string;
@@ -197,9 +206,7 @@ describe("discoverOpenClawPlugins", () => {
     });
     fs.writeFileSync(outside, "export default function () {}", "utf-8");
 
-    const result = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const result = await discoverWithStateDir(stateDir, {});
 
     expect(result.candidates).toHaveLength(0);
     expectEscapesPackageDiagnostic(result.diagnostics);
@@ -225,9 +232,7 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./linked/escape.ts"],
     });
 
-    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
     expectEscapesPackageDiagnostic(diagnostics);
@@ -338,9 +343,10 @@ describe("discoverOpenClawPlugins", () => {
       const result = await withStateDir(stateDir, async () => {
         return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
       });
-      expect(result.candidates).toHaveLength(0);
+      const shouldBlockForMismatch = actualUid !== 0;
+      expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
-        true,
+        shouldBlockForMismatch,
       );
     },
   );

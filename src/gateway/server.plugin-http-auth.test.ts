@@ -1,258 +1,67 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
-import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
-import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import {
+  AUTH_NONE,
+  AUTH_TOKEN,
+  buildChannelPathFuzzCorpus,
+  CANONICAL_AUTH_VARIANTS,
+  CANONICAL_UNAUTH_VARIANTS,
+  createCanonicalizedChannelPluginHandler,
+  createHooksHandler,
+  createTestGatewayServer,
+  expectAuthorizedVariants,
+  expectUnauthorizedResponse,
+  expectUnauthorizedVariants,
+  sendRequest,
+  withGatewayServer,
+  withGatewayTempConfig,
+} from "./server-http.test-harness.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
-type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
-
-const AUTH_NONE: ResolvedGatewayAuth = {
-  mode: "none",
-  token: undefined,
-  password: undefined,
-  allowTailscale: false,
-};
-
-const AUTH_TOKEN: ResolvedGatewayAuth = {
-  mode: "token",
-  token: "test-token",
-  password: undefined,
-  allowTailscale: false,
-};
-
-function createRequest(params: {
-  path: string;
-  authorization?: string;
-  method?: string;
-}): IncomingMessage {
-  return createGatewayRequest({
-    path: params.path,
-    authorization: params.authorization,
-    method: params.method,
-  });
-}
-
-function createResponse(): {
-  res: ServerResponse;
-  setHeader: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-  getBody: () => string;
-} {
-  const setHeader = vi.fn();
-  let body = "";
-  const end = vi.fn((chunk?: unknown) => {
-    if (typeof chunk === "string") {
-      body = chunk;
-      return;
-    }
-    if (chunk == null) {
-      body = "";
-      return;
-    }
-    body = JSON.stringify(chunk);
-  });
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader,
-    end,
-  } as unknown as ServerResponse;
-  return {
-    res,
-    setHeader,
-    end,
-    getBody: () => body,
-  };
-}
-
-async function dispatchRequest(
-  server: GatewayHttpServer,
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
-  server.emit("request", req, res);
-  await new Promise((resolve) => setImmediate(resolve));
-}
-
-async function withGatewayTempConfig(prefix: string, run: () => Promise<void>): Promise<void> {
-  await withTempConfig({
-    cfg: { gateway: { trustedProxies: [] } },
-    prefix,
-    run,
-  });
-}
-
-function createTestGatewayServer(options: {
-  resolvedAuth: ResolvedGatewayAuth;
-  overrides?: GatewayServerOptions;
-}): GatewayHttpServer {
-  return createGatewayHttpServer({
-    canvasHost: null,
-    clients: new Set(),
-    controlUiEnabled: false,
-    controlUiBasePath: "/__control__",
-    openAiChatCompletionsEnabled: false,
-    openResponsesEnabled: false,
-    handleHooksRequest: async () => false,
-    ...options.overrides,
-    resolvedAuth: options.resolvedAuth,
-  });
-}
-
-async function withGatewayServer(params: {
-  prefix: string;
-  resolvedAuth: ResolvedGatewayAuth;
-  overrides?: GatewayServerOptions;
-  run: (server: GatewayHttpServer) => Promise<void>;
-}): Promise<void> {
-  await withGatewayTempConfig(params.prefix, async () => {
-    const server = createTestGatewayServer({
-      resolvedAuth: params.resolvedAuth,
-      overrides: params.overrides,
-    });
-    await params.run(server);
-  });
-}
-
-async function sendRequest(
-  server: GatewayHttpServer,
-  params: {
-    path: string;
-    authorization?: string;
-    method?: string;
-  },
-) {
-  const response = createResponse();
-  await dispatchRequest(server, createRequest(params), response.res);
-  return response;
-}
-
-function expectUnauthorizedResponse(
-  response: ReturnType<typeof createResponse>,
-  label?: string,
-): void {
-  expect(response.res.statusCode, label).toBe(401);
-  expect(response.getBody(), label).toContain("Unauthorized");
-}
+type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 function canonicalizePluginPath(pathname: string): string {
   return canonicalizePathVariant(pathname);
 }
 
-function createCanonicalizedChannelPluginHandler() {
-  return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    const canonicalPath = canonicalizePluginPath(pathname);
-    if (canonicalPath !== "/api/channels/nostr/default/profile") {
-      return false;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: true, route: "channel-canonicalized" }));
-    return true;
+function respondJsonRoute(res: ServerResponse, route: string): true {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify({ ok: true, route }));
+  return true;
+}
+
+function createRootMountedControlUiOverrides(handlePluginRequest: PluginRequestHandler) {
+  return {
+    controlUiEnabled: true,
+    controlUiBasePath: "",
+    controlUiRoot: { kind: "missing" as const },
+    handlePluginRequest,
+  };
+}
+
+const withRootMountedControlUiServer = (params: {
+  prefix: string;
+  handlePluginRequest: PluginRequestHandler;
+  run: Parameters<typeof withGatewayServer>[0]["run"];
+}) =>
+  withPluginGatewayServer({
+    prefix: params.prefix,
+    resolvedAuth: AUTH_NONE,
+    overrides: createRootMountedControlUiOverrides(params.handlePluginRequest),
+    run: params.run,
   });
-}
 
-function createHooksHandler(bindHost: string) {
-  return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
-    bindHost,
-    port: 18789,
-    logHooks: {
-      warn: vi.fn(),
-      debug: vi.fn(),
-      info: vi.fn(),
-      error: vi.fn(),
-    } as unknown as ReturnType<typeof createSubsystemLogger>,
-    dispatchWakeHook: () => {},
-    dispatchAgentHook: () => "run-1",
-  });
-}
+const withPluginGatewayServer = (params: Parameters<typeof withGatewayServer>[0]) =>
+  withGatewayServer(params);
 
-type RouteVariant = {
-  label: string;
-  path: string;
-};
-
-const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
-  { label: "case-variant", path: "/API/channels/nostr/default/profile" },
-  { label: "encoded-slash", path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" },
-  { label: "encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "dot-traversal-encoded-slash", path: "/api/foo/..%2fchannels/nostr/default/profile" },
-  {
-    label: "dot-traversal-encoded-dotdot-slash",
-    path: "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
-  },
-  {
-    label: "dot-traversal-double-encoded",
-    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-  },
-  { label: "duplicate-slashes", path: "/api/channels//nostr/default/profile" },
-  { label: "trailing-slash", path: "/api/channels/nostr/default/profile/" },
-  { label: "malformed-short-percent", path: "/api/channels%2" },
-  { label: "malformed-double-slash-short-percent", path: "/api//channels%2" },
-];
-
-const CANONICAL_AUTH_VARIANTS: RouteVariant[] = [
-  { label: "auth-case-variant", path: "/API/channels/nostr/default/profile" },
-  { label: "auth-encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "auth-duplicate-trailing-slash", path: "/api/channels//nostr/default/profile/" },
-  {
-    label: "auth-dot-traversal-encoded-slash",
-    path: "/api/foo/..%2fchannels/nostr/default/profile",
-  },
-  {
-    label: "auth-dot-traversal-double-encoded",
-    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-  },
-];
-
-function buildChannelPathFuzzCorpus(): RouteVariant[] {
-  const variants = [
-    "/api/channels/nostr/default/profile",
-    "/API/channels/nostr/default/profile",
-    "/api/foo/..%2fchannels/nostr/default/profile",
-    "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
-    "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-    "/api/channels//nostr/default/profile/",
-    "/api/channels%2Fnostr%2Fdefault%2Fprofile",
-    "/api/channels%252Fnostr%252Fdefault%252Fprofile",
-    "/api//channels/nostr/default/profile",
-    "/api/channels%2",
-    "/api/channels%zz",
-    "/api//channels%2",
-    "/api//channels%zz",
-  ];
-  return variants.map((path) => ({ label: `fuzz:${path}`, path }));
-}
-
-async function expectUnauthorizedVariants(params: {
-  server: GatewayHttpServer;
-  variants: RouteVariant[];
-}) {
-  for (const variant of params.variants) {
-    const response = await sendRequest(params.server, { path: variant.path });
-    expectUnauthorizedResponse(response, variant.label);
-  }
-}
-
-async function expectAuthorizedVariants(params: {
-  server: GatewayHttpServer;
-  variants: RouteVariant[];
-  authorization: string;
-}) {
-  for (const variant of params.variants) {
-    const response = await sendRequest(params.server, {
-      path: variant.path,
-      authorization: params.authorization,
-    });
-    expect(response.res.statusCode, variant.label).toBe(200);
-    expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
-  }
+function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHandler) {
+  return {
+    handlePluginRequest,
+    shouldEnforcePluginGatewayAuth: (pathContext: { pathname: string }) =>
+      isProtectedPluginRoutePath(pathContext.pathname),
+  };
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
@@ -378,8 +187,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          isProtectedPluginRoutePath(requestPath) || requestPath === "/plugin/public",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname) ||
+          pathContext.pathname === "/plugin/public",
       },
       run: async (server) => {
         const unauthenticated = await sendRequest(server, {
@@ -407,20 +217,101 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/mattermost/command") {
+        res.statusCode = 200;
+        res.end("ok:mm-callback");
+        return true;
+      }
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/mattermost/command" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-callback-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const slashCallback = await sendRequest(server, {
+          path: "/api/channels/mattermost/command",
+          method: "POST",
+        });
+        expect(slashCallback.res.statusCode).toBe(200);
+        expect(slashCallback.getBody()).toBe("ok:mm-callback");
+
+        const otherChannelUnauthed = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+        });
+        expect(otherChannelUnauthed.res.statusCode).toBe(401);
+        expect(otherChannelUnauthed.getBody()).toContain("Unauthorized");
+      },
+    });
+  });
+
+  test("does not bypass auth when mattermost callbackPath points to non-mattermost channel routes", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/nostr/default/profile" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-misconfig-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const unauthenticated = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+          method: "POST",
+        });
+
+        expect(unauthenticated.res.statusCode).toBe(401);
+        expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   test("keeps wildcard plugin handlers ungated when auth enforcement predicate excludes their paths", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
       if (pathname === "/plugin/routed") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "routed" }));
-        return true;
+        return respondJsonRoute(res, "routed");
       }
       if (pathname === "/googlechat") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "wildcard-handler" }));
-        return true;
+        return respondJsonRoute(res, "wildcard-handler");
       }
       return false;
     });
@@ -430,8 +321,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          requestPath.startsWith("/api/channels") || requestPath === "/plugin/routed",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/api/channels") ||
+          pathContext.pathname === "/plugin/routed",
       },
       run: async (server) => {
         const unauthenticatedRouted = await sendRequest(server, { path: "/plugin/routed" });
@@ -454,17 +346,11 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/api/channels/nostr/default/profile") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel-default" }));
-        return true;
+      if (canonicalizePluginPath(pathname) === "/api/channels/nostr/default/profile") {
+        return respondJsonRoute(res, "channel-default");
       }
       if (pathname === "/googlechat") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "wildcard-default" }));
-        return true;
+        return respondJsonRoute(res, "wildcard-default");
       }
       return false;
     });
@@ -483,6 +369,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expectUnauthorizedResponse(unauthenticatedChannel);
 
+        const unauthenticatedDeepEncodedChannel = await sendRequest(server, {
+          path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+        });
+        expectUnauthorizedResponse(unauthenticatedDeepEncodedChannel);
+
         const authenticated = await sendRequest(server, {
           path: "/googlechat",
           authorization: "Bearer test-token",
@@ -496,6 +387,13 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expect(authenticatedChannel.res.statusCode).toBe(200);
         expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
+
+        const authenticatedDeepEncodedChannel = await sendRequest(server, {
+          path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+          authorization: "Bearer test-token",
+        });
+        expect(authenticatedDeepEncodedChannel.res.statusCode).toBe(200);
+        expect(authenticatedDeepEncodedChannel.getBody()).toContain('"route":"channel-default"');
       },
     });
   });
@@ -512,15 +410,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       return false;
     });
 
-    await withGatewayServer({
+    await withRootMountedControlUiServer({
       prefix: "openclaw-plugin-http-control-ui-precedence-test-",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-        controlUiRoot: { kind: "missing" },
-        handlePluginRequest,
-      },
+      handlePluginRequest,
       run: async (server) => {
         const response = await sendRequest(server, {
           path: "/plugins/diffs/view/demo-id/demo-token",
@@ -533,33 +425,71 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("does not let plugin handlers shadow control ui routes", async () => {
+  test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/chat") {
+      if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("plugin-webhook");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-webhook-post-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/bluebubbles-webhook",
+          method: "POST",
+        });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("plugin-webhook");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("plugin routes take priority over control ui catch-all", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/my-plugin/inbound") {
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin-shadow");
+        res.end("plugin-handled");
         return true;
       }
       return false;
     });
 
-    await withGatewayServer({
+    await withRootMountedControlUiServer({
       prefix: "openclaw-plugin-http-control-ui-shadow-test-",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-        controlUiRoot: { kind: "missing" },
-        handlePluginRequest,
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/my-plugin/inbound" });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain("plugin-handled");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
+    });
+  });
+
+  test("unmatched plugin paths fall through to control ui", async () => {
+    const handlePluginRequest = vi.fn(async () => false);
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-control-ui-fallthrough-test-",
+      handlePluginRequest,
       run: async (server) => {
         const response = await sendRequest(server, { path: "/chat" });
 
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");
-        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });
@@ -567,13 +497,10 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("requires gateway auth for canonicalized /api/channels variants", async () => {
     const handlePluginRequest = createCanonicalizedChannelPluginHandler();
 
-    await withGatewayServer({
+    await withPluginGatewayServer({
       prefix: "openclaw-plugin-http-auth-canonicalized-test-",
       resolvedAuth: AUTH_TOKEN,
-      overrides: {
-        handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
-      },
+      overrides: createProtectedPluginAuthOverrides(handlePluginRequest),
       run: async (server) => {
         await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
         expect(handlePluginRequest).not.toHaveBeenCalled();
@@ -591,21 +518,38 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("rejects unauthenticated plugin-channel fuzz corpus variants", async () => {
     const handlePluginRequest = createCanonicalizedChannelPluginHandler();
 
-    await withGatewayServer({
+    await withPluginGatewayServer({
       prefix: "openclaw-plugin-http-auth-fuzz-corpus-test-",
       resolvedAuth: AUTH_TOKEN,
-      overrides: {
-        handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
-      },
+      overrides: createProtectedPluginAuthOverrides(handlePluginRequest),
       run: async (server) => {
-        for (const variant of buildChannelPathFuzzCorpus()) {
-          const response = await sendRequest(server, { path: variant.path });
-          expect(response.res.statusCode, variant.label).not.toBe(200);
-          expect(response.getBody(), variant.label).not.toContain(
-            '"route":"channel-canonicalized"',
-          );
-        }
+        await expectUnauthorizedVariants({
+          server,
+          variants: buildChannelPathFuzzCorpus(),
+        });
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("enforces auth before plugin handlers on encoded protected-path variants", async () => {
+    const encodedVariants = buildChannelPathFuzzCorpus().filter((variant) =>
+      variant.path.includes("%"),
+    );
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, route: "should-not-run" }));
+      return true;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-auth-encoded-order-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { handlePluginRequest },
+      run: async (server) => {
+        await expectUnauthorizedVariants({ server, variants: encodedVariants });
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

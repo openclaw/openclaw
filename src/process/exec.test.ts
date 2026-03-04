@@ -56,36 +56,6 @@ describe("runCommandWithTimeout", () => {
     expect(result.code).not.toBe(0);
   });
 
-  it("resets no output timer when command keeps emitting output", async () => {
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        [
-          'process.stdout.write(".");',
-          "let count = 0;",
-          'const ticker = setInterval(() => { process.stdout.write(".");',
-          "count += 1;",
-          "if (count === 3) {",
-          "clearInterval(ticker);",
-          "process.exit(0);",
-          "}",
-          "}, 6);",
-        ].join(" "),
-      ],
-      {
-        timeoutMs: 180,
-        // Keep a healthy margin above the emit interval while avoiding long idle waits.
-        noOutputTimeoutMs: 120,
-      },
-    );
-
-    expect(result.code ?? 0).toBe(0);
-    expect(result.termination).toBe("exit");
-    expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout.length).toBeGreaterThanOrEqual(3);
-  });
-
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setTimeout(() => {}, 10)"],

@@ -268,6 +268,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "slack",
       AccountId: "acc-1",
       MessageThreadId: 123,
+      GroupChannel: "ops-room",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
     });
@@ -286,6 +287,8 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:999",
         accountId: "acc-1",
         threadId: 123,
+        isGroup: true,
+        groupId: "telegram:999",
       }),
     );
   });

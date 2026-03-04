@@ -1,7 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -9,12 +10,72 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
-  withTempCronHome,
   writeSessionStore,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
-const withTempHome = withTempCronHome;
+
+type HomeEnvSnapshot = {
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  HOMEDRIVE: string | undefined;
+  HOMEPATH: string | undefined;
+  OPENCLAW_HOME: string | undefined;
+  OPENCLAW_STATE_DIR: string | undefined;
+};
+
+let suiteTempHomeRoot = "";
+let suiteTempHomeCaseId = 0;
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  const restoreValue = (key: keyof HomeEnvSnapshot) => {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreValue("HOME");
+  restoreValue("USERPROFILE");
+  restoreValue("HOMEDRIVE");
+  restoreValue("HOMEPATH");
+  restoreValue("OPENCLAW_HOME");
+  restoreValue("OPENCLAW_STATE_DIR");
+}
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  const home = path.join(suiteTempHomeRoot, `case-${suiteTempHomeCaseId++}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  const snapshot = snapshotHomeEnv();
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+  if (process.platform === "win32") {
+    const parsed = path.parse(home);
+    if (parsed.root) {
+      process.env.HOMEDRIVE = parsed.root.replace(/[\\/]+$/, "");
+      process.env.HOMEPATH = home.slice(process.env.HOMEDRIVE.length) || "\\";
+    }
+  }
+  try {
+    return await fn(home);
+  } finally {
+    restoreHomeEnv(snapshot);
+  }
+}
 
 function makeDeps(): CliDeps {
   return {
@@ -149,7 +210,33 @@ async function runTurnWithStoredModelOverride(
   });
 }
 
+async function runStoredOverrideAndExpectModel(params: {
+  home: string;
+  deterministicCatalog: Array<{ id: string; name: string; provider: string }>;
+  jobPayload: CronJob["payload"];
+  expected: { provider: string; model: string };
+}) {
+  vi.mocked(runEmbeddedPiAgent).mockClear();
+  vi.mocked(loadModelCatalog).mockResolvedValue(params.deterministicCatalog);
+  const res = (await runTurnWithStoredModelOverride(params.home, params.jobPayload)).res;
+  expect(res.status).toBe("ok");
+  expectEmbeddedProviderModel(params.expected);
+}
+
 describe("runCronIsolatedAgentTurn", () => {
+  beforeAll(async () => {
+    suiteTempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-turn-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!suiteTempHomeRoot) {
+      return;
+    }
+    await fs.rm(suiteTempHomeRoot, { recursive: true, force: true });
+    suiteTempHomeRoot = "";
+    suiteTempHomeCaseId = 0;
+  });
+
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -323,6 +410,20 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
+      const deterministicCatalog = [
+        {
+          id: "gpt-4.1-mini",
+          name: "GPT-4.1 Mini",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
+
       let res = (
         await runCronTurn(home, {
           jobPayload: {
@@ -335,28 +436,28 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
-      vi.clearAllMocks();
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+        },
+        expected: { provider: "openai", model: "gpt-4.1-mini" },
+      });
 
-      vi.clearAllMocks();
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           model: "anthropic/claude-opus-4-5",
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
+        },
+        expected: { provider: "anthropic", model: "claude-opus-4-5" },
+      });
     });
   });
 
@@ -369,7 +470,7 @@ describe("runCronIsolatedAgentTurn", () => {
         model: GMAIL_MODEL.replace("openrouter/", ""),
       });
 
-      vi.clearAllMocks();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
       res = (
         await runGmailHookTurn(home, {
           "agent:main:hook:gmail:msg-1": {
@@ -397,7 +498,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as { prompt?: string };
       expect(call?.prompt).toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -419,7 +520,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as { prompt?: string };
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as { prompt?: string };
       expect(call?.prompt).not.toContain("EXTERNAL, UNTRUSTED");
       expect(call?.prompt).toContain("Hello");
     });
@@ -456,12 +557,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        provider?: string;
-        model?: string;
-      };
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-5");
+      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
     });
   });
 
@@ -520,26 +616,18 @@ describe("runCronIsolatedAgentTurn", () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
-
-      const first = (
-        await runCronTurn(home, {
+      const runPingTurn = () =>
+        runCronTurn(home, {
           deps,
           jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
           message: "ping",
           mockTexts: ["ok"],
           storePath,
-        })
-      ).res;
+        });
 
-      const second = (
-        await runCronTurn(home, {
-          deps,
-          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
-          message: "ping",
-          mockTexts: ["ok"],
-          storePath,
-        })
-      ).res;
+      const first = (await runPingTurn()).res;
+
+      const second = (await runPingTurn()).res;
 
       expect(first.sessionId).toBeDefined();
       expect(second.sessionId).toBeDefined();

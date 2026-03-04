@@ -4,6 +4,28 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
+export function resolvePinnedMainDmOwnerFromAllowlist(params: {
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+  normalizeEntry: (entry: string) => string | undefined;
+}): string | null {
+  if ((params.dmScope ?? "main") !== "main") {
+    return null;
+  }
+  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+    return null;
+  }
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => params.normalizeEntry(String(entry)))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+}
+
 export function resolveEffectiveAllowFromLists(params: {
   allowFrom?: Array<string | number> | null;
   groupAllowFrom?: Array<string | number> | null;
