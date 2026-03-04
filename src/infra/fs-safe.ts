@@ -187,7 +187,7 @@ export async function openFileWithinRoot(params: {
     opened = await openVerifiedLocalFile(resolved);
   } catch (err) {
     if (err instanceof SafeOpenError) {
-      if (err.code === "not-found") {
+      if (err.code === "not-found" || err.code === "not-file") {
         throw err;
       }
       throw new SafeOpenError("invalid-path", "path is not a regular file under root", {
