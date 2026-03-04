@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/compat";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);

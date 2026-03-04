@@ -133,6 +133,8 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
+        SecretRef values are also supported for `channels.discord.token` (env/file/exec providers). See [Secrets Management](/gateway/secrets).
+
       </Tab>
     </Tabs>
 
@@ -1082,6 +1084,7 @@ openclaw logs --follow
     By default bot-authored messages are ignored.
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
+    Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
 
   </Accordion>
 
