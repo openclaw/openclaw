@@ -136,6 +136,20 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("uses context ChannelId for DM when To is not channel-based", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        To: "user:U123",
+        ChannelId: "D1234567890",
+      },
+    });
+
+    expect(result.currentChannelId).toBe("D1234567890");
+  });
+
   it("defaults to off when no replyToMode is configured", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
