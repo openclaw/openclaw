@@ -42,6 +42,7 @@ vi.mock("../command-detection.js", () => ({
 
 vi.mock("./agent-runner.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
+  cancelContinuationTimer: vi.fn(),
 }));
 
 vi.mock("./body.js", () => ({
