@@ -708,6 +708,103 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("DM allowlist added");
   });
 
+  it("respects channel=feishu for DM config edits", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          telegram: { allowFrom: ["123"], configWrites: true },
+          feishu: { allowFrom: ["user:old"], configWrites: true },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: { allowFrom: ["123"], configWrites: true },
+        feishu: { allowFrom: ["user:old"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm channel=feishu --config user:ou_abc", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          feishu: expect.objectContaining({
+            allowFrom: expect.arrayContaining(["user:old", "user:ou_abc"]),
+          }),
+        }),
+      }),
+    );
+    expect(result.reply?.text).toContain("channels.feishu.allowFrom");
+  });
+
+  it("supports feishu group allowlist config edits", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          feishu: { allowFrom: ["user:owner"], configWrites: true },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        feishu: { allowFrom: ["user:owner"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add group channel=feishu --config chat:ops", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          feishu: expect.objectContaining({
+            groupAllowFrom: expect.arrayContaining(["chat:ops"]),
+          }),
+        }),
+      }),
+    );
+    expect(result.reply?.text).toContain("channels.feishu.groupAllowFrom");
+  });
+
+  it("lists feishu DM/group allowlist from config", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        feishu: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user:alice"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat:team"],
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist list all channel=feishu", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Channel: feishu");
+    expect(result.reply?.text).toContain("DM policy: allowlist");
+    expect(result.reply?.text).toContain("Group policy: allowlist");
+    expect(result.reply?.text).toContain("DM allowFrom (config): user:alice");
+    expect(result.reply?.text).toContain("Group allowFrom (config): chat:team");
+  });
+
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
     delete (Object.prototype as Record<string, unknown>).allowFrom;
 

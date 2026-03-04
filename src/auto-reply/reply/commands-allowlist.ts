@@ -1,8 +1,8 @@
 import { getChannelDock } from "../../channels/dock.js";
 import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import { normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   readConfigFileSnapshot,
@@ -196,6 +196,44 @@ function extractConfigAllowlist(account: {
   };
 }
 
+function readAllowlistEntries(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.map((entry) => String(entry));
+}
+
+function readPolicyValue(raw: unknown): string | undefined {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value || undefined;
+}
+
+function resolveChannelAccountConfig(params: {
+  cfg: OpenClawConfig;
+  channelId: ChannelId;
+  accountId?: string | null;
+}): Record<string, unknown> | null {
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const channelValue = channels?.[params.channelId];
+  if (!channelValue || typeof channelValue !== "object") {
+    return null;
+  }
+  const channel = channelValue as Record<string, unknown>;
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const accountsValue = channel.accounts;
+  const hasAccounts = Boolean(accountsValue && typeof accountsValue === "object");
+  const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
+  if (!useAccount || !hasAccounts) {
+    return channel;
+  }
+  const accounts = accountsValue as Record<string, unknown>;
+  const accountValue = accounts[normalizedAccountId];
+  if (!accountValue || typeof accountValue !== "object") {
+    return channel;
+  }
+  return accountValue as Record<string, unknown>;
+}
+
 function resolveAccountTarget(
   parsed: Record<string, unknown>,
   channelId: ChannelId,
@@ -288,7 +326,8 @@ function resolveChannelAllowFromPaths(
     channelId === "telegram" ||
     channelId === "whatsapp" ||
     channelId === "signal" ||
-    channelId === "imessage";
+    channelId === "imessage" ||
+    channelId === "feishu";
   if (scope === "all") {
     return null;
   }
@@ -307,6 +346,31 @@ function resolveChannelAllowFromPaths(
       return ["groupAllowFrom"];
     }
     return null;
+  }
+  return null;
+}
+
+function resolveAllowlistChannelId(params: {
+  raw?: string | null;
+  cfg: OpenClawConfig;
+}): ChannelId | null {
+  const normalized = normalizeChannelId(params.raw);
+  if (normalized) {
+    return normalized;
+  }
+  const fallback = params.raw?.trim().toLowerCase();
+  if (!fallback) {
+    return null;
+  }
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  if (channels && Object.hasOwn(channels, fallback)) {
+    return fallback as ChannelId;
+  }
+  if (getChannelDock(fallback as ChannelId)) {
+    return fallback as ChannelId;
+  }
+  if (listPairingChannels().includes(fallback as ChannelId)) {
+    return fallback as ChannelId;
   }
   return null;
 }
@@ -366,9 +430,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   }
 
   const channelId =
-    normalizeChannelId(parsed.channel) ??
+    resolveAllowlistChannelId({ raw: parsed.channel, cfg: params.cfg }) ??
     params.command.channelId ??
-    normalizeChannelId(params.command.channel);
+    resolveAllowlistChannelId({ raw: params.command.channel, cfg: params.cfg });
   if (!channelId) {
     return {
       shouldContinue: false,
@@ -460,6 +524,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           }
         }
       }
+    } else if (channelId === "feishu") {
+      const account = resolveChannelAccountConfig({ cfg: params.cfg, channelId, accountId });
+      dmAllowFrom = readAllowlistEntries(account?.allowFrom);
+      groupAllowFrom = readAllowlistEntries(account?.groupAllowFrom);
+      dmPolicy = readPolicyValue(account?.dmPolicy);
+      groupPolicy = readPolicyValue(account?.groupPolicy);
     }
 
     const dmDisplay = normalizeAllowFrom({
