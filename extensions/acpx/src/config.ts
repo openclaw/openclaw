@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/compat";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
