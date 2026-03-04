@@ -166,7 +166,7 @@ export function runPatternMatching(
     // Strip Sender/Conversation info metadata blocks
     body = body.replace(/(?:Sender|Conversation info) \(untrusted[\s\S]*?(?=\n\n\S|$)/g, "");
     // Strip previous pattern detector output to avoid feedback loops
-    body = body.replace(/Numero detectado:\s*\d+/g, "");
+    body = body.replace(/Numero detectado:\s*\+?\d+/g, "");
   }
 
   const alerts: string[] = [];
