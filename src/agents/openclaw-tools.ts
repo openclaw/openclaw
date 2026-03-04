@@ -136,6 +136,7 @@ export function createOpenClawTools(options?: {
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       config: options?.config,
+      modelHasVision: options?.modelHasVision,
     }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
