@@ -149,6 +149,60 @@ describe("buildInlineProviderModels", () => {
       name: "claude-opus-4.5",
     });
   });
+
+  it("propagates provider-level headers to inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      "anthropic-1m": {
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        headers: { "anthropic-beta": "context-1m-2025-08-07" },
+        models: [makeModel("claude-opus-4-6")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "anthropic-beta": "context-1m-2025-08-07" });
+  });
+
+  it("model-level headers take precedence over provider-level headers", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        baseUrl: "https://api.example.com",
+        headers: { "x-custom": "provider-value", "x-shared": "provider" },
+        models: [
+          {
+            ...makeModel("my-model"),
+            headers: { "x-shared": "model-wins", "x-model-only": "model-value" },
+          },
+        ],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "x-custom": "provider-value",
+      "x-shared": "model-wins",
+      "x-model-only": "model-value",
+    });
+  });
+
+  it("omits headers when neither provider nor model defines them", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("basic-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toBeUndefined();
+  });
 });
 
 describe("resolveModel", () => {

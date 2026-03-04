@@ -17,6 +17,7 @@ type InlineModelEntry = ModelDefinitionConfig & {
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
+  headers?: Record<string, string>;
   models?: ModelDefinitionConfig[];
 };
 
@@ -30,12 +31,23 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    return (entry?.models ?? []).map((model) => ({
-      ...model,
-      provider: trimmed,
-      baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
-    }));
+    // Merge provider-level headers into each model, with model-level headers
+    // taking precedence.  This ensures custom provider headers (e.g. the
+    // Anthropic `context-1m-2025-08-07` beta header) survive when the model
+    // registry's custom-model loading fails and the inline fallback path is
+    // used instead.
+    const providerHeaders = entry?.headers;
+    return (entry?.models ?? []).map((model) => {
+      const mergedHeaders =
+        providerHeaders || model.headers ? { ...providerHeaders, ...model.headers } : undefined;
+      return {
+        ...model,
+        provider: trimmed,
+        baseUrl: entry?.baseUrl,
+        api: model.api ?? entry?.api,
+        ...(mergedHeaders ? { headers: mergedHeaders } : {}),
+      };
+    });
   });
 }
 

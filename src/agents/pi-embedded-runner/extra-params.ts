@@ -68,7 +68,7 @@ function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
 ): CacheRetention | undefined {
-  const isAnthropicDirect = provider === "anthropic";
+  const isAnthropicDirect = isAnthropicDirectProvider(provider);
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
@@ -356,12 +356,26 @@ function parseHeaderList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Returns true for providers that talk directly to the Anthropic Messages API.
+ * This covers the canonical "anthropic" provider and custom providers that use
+ * a prefixed name (e.g. "anthropic-1m", "anthropic-beta") to enable extended
+ * context windows or other beta features via provider-level headers.
+ */
+function isAnthropicDirectProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "anthropic" || normalized.startsWith("anthropic-");
+}
+
 function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
   modelId: string,
 ): string[] | undefined {
-  if (provider !== "anthropic") {
+  // Match the canonical "anthropic" provider as well as custom Anthropic
+  // providers that use a prefixed name (e.g. "anthropic-1m", "anthropic-beta").
+  // These providers use the same anthropic-messages API and need beta headers.
+  if (!isAnthropicDirectProvider(provider)) {
     return undefined;
   }
 
