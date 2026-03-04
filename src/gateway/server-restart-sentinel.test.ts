@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -84,6 +84,10 @@ vi.mock("../infra/system-events.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("calls agentCommand with resolved channel, to, and sessionKey after restart", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -106,7 +110,6 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("falls back to enqueueSystemEvent when agentCommand throws", async () => {
     mocks.agentCommand.mockRejectedValueOnce(new Error("agent failed"));
-    mocks.enqueueSystemEvent.mockClear();
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -121,8 +124,6 @@ describe("scheduleRestartSentinelWake", () => {
       ok: false,
       error: new Error("no-target"),
     } as never);
-    mocks.agentCommand.mockClear();
-    mocks.enqueueSystemEvent.mockClear();
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -134,7 +135,6 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("falls back to enqueueSystemEvent on main session key when sentinel has no sessionKey", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({ payload: { sessionKey: "" } } as never);
-    mocks.enqueueSystemEvent.mockClear();
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
