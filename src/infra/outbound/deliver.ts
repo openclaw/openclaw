@@ -355,6 +355,7 @@ function createMessageSentEmitter(params: {
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
+      sessionKey: params.sessionKeyForInternalHooks,
     });
     if (hasMessageSentHooks) {
       fireAndForgetHook(
