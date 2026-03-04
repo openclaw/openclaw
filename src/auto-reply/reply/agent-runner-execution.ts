@@ -313,14 +313,24 @@ export async function runAgentTurnWithFallback(params: {
               // When the codex CLI backend was auto-selected (not explicitly configured
               // by the user) and the CLI binary is unavailable or fails to launch,
               // fall through to the embedded runner instead of surfacing an error.
-              // Don't emit a lifecycle error here — the embedded runner will emit its
-              // own complete lifecycle (start -> end), and emitting error + start would
-              // create an invalid sequence.
+              // Emit a terminal lifecycle error for the CLI run so downstream
+              // consumers don't stall on the open "start" event from line 250.
               if (isCodexAutoFallback) {
                 defaultRuntime.log(
                   `Codex CLI backend unavailable, falling back to embedded runner: ${String(err)}`,
                 );
-                // Mark as emitted so the finally-block backstop doesn't fire either.
+                // Close the CLI lifecycle so downstream consumers don't stall on an
+                // open "start" event. The embedded runner will emit its own lifecycle.
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: `CLI fallback: ${String(err)}`,
+                  },
+                });
                 lifecycleTerminalEmitted = true;
               } else {
                 if (!lifecycleTerminalEmitted) {
