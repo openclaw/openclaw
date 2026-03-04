@@ -126,10 +126,16 @@ export async function runAgentTurnWithFallback(params: {
     reason: string,
   ): Promise<void> {
     if (!params.sessionKey || !params.activeSessionStore || !params.storePath) {
+      defaultRuntime.error(
+        `Cannot persist compaction halt state: missing session params (sessionKey=${params.sessionKey ?? "undefined"})`,
+      );
       return;
     }
     const entry = params.getActiveSessionEntry();
     if (!entry) {
+      defaultRuntime.error(
+        `Cannot persist compaction halt state: no active session entry for ${params.sessionKey}`,
+      );
       return;
     }
     const now = Date.now();
@@ -578,7 +584,13 @@ export async function runAgentTurnWithFallback(params: {
           };
         }
         if (onFailurePolicy === "continue") {
-          // Skip reset — session continues accepting messages.
+          // Skip reset — session continues accepting messages with a user-friendly notice.
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Compaction failed but the session will continue. Context may be degraded — consider using /new if responses seem off.",
+            },
+          };
         } else if (await params.resetSessionAfterCompactionFailure(message)) {
           didResetAfterCompactionFailure = true;
           return {
