@@ -7,7 +7,9 @@ const styles = {
     minWidth: 200,
     background: "var(--card)",
     color: "var(--text-strong)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     display: "flex",
     alignItems: "center",
     gap: 12,
@@ -38,7 +40,9 @@ const styles = {
     width: 8,
     height: 8,
     background: "var(--muted)",
-    border: "2px solid var(--card)",
+    borderWidth: 2,
+    borderStyle: "solid",
+    borderColor: "var(--card)",
   },
 };
 

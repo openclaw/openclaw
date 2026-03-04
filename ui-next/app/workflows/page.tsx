@@ -27,7 +27,9 @@ const styles = {
   editorContainer: {
     flex: 1,
     minHeight: 600,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-lg)",
     background: "var(--card)",
     overflow: "hidden",

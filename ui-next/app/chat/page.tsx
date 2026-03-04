@@ -43,7 +43,9 @@ const styles = {
   } as React.CSSProperties,
   sidebar: {
     background: "var(--card)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-lg)",
     padding: 16,
     display: "flex",
@@ -52,7 +54,9 @@ const styles = {
   } as React.CSSProperties,
   card: {
     background: "var(--card)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-lg)",
     display: "flex",
     flexDirection: "column" as const,
@@ -180,7 +184,9 @@ const styles = {
     minHeight: 38,
     padding: "8px 12px",
     fontSize: 14,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     background: "var(--bg)",
     color: "var(--text)",
@@ -201,7 +207,9 @@ const styles = {
   calloutDanger: {
     background: "var(--danger-subtle)",
     color: "var(--danger)",
-    border: "1px solid var(--danger)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--danger)",
   } as React.CSSProperties,
   emptyState: {
     flex: 1,
@@ -584,7 +592,7 @@ export default function ChatPage() {
                         onClick={(e) => handleDeleteSession(session.key, e)}
                         style={{
                           background: "transparent",
-                          border: "none",
+                          borderWidth: 0,
                           color: "var(--muted)",
                           cursor: "pointer",
                           padding: "4px",

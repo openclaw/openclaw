@@ -24,7 +24,9 @@ export function useWorkflows() {
     }
 
     let active = true;
-    setLoading(true);
+    void Promise.resolve().then(() => {
+      void (active && setLoading(true));
+    });
     request<{ workflows: WorkflowItem[] }>("workflows.get", {})
       .then((res) => {
         if (active) {

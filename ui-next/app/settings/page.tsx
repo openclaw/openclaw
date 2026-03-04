@@ -53,7 +53,9 @@ export default function SettingsPage() {
       <div
         style={{
           background: "var(--card)",
-          border: "1px solid var(--border)",
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "var(--border)",
           borderRadius: "var(--radius-lg)",
           padding: 20,
           marginBottom: 20,
@@ -93,7 +95,9 @@ export default function SettingsPage() {
               fontSize: 14,
               fontFamily: "var(--mono)",
               background: "var(--input-bg)",
-              border: "1px solid var(--border)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
               borderRadius: "var(--radius)",
               color: "var(--text)",
               boxSizing: "border-box",
@@ -135,7 +139,9 @@ export default function SettingsPage() {
               fontSize: 14,
               fontFamily: "var(--mono)",
               background: "var(--input-bg)",
-              border: "1px solid var(--border)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
               borderRadius: "var(--radius)",
               color: "var(--text)",
               boxSizing: "border-box",
@@ -162,7 +168,7 @@ export default function SettingsPage() {
               fontWeight: 500,
               background: "var(--accent)",
               color: "#fff",
-              border: "none",
+              borderWidth: 0,
               borderRadius: "var(--radius)",
               cursor: "pointer",
             }}
@@ -177,7 +183,9 @@ export default function SettingsPage() {
               fontWeight: 500,
               background: "transparent",
               color: "var(--muted)",
-              border: "1px solid var(--border)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
               borderRadius: "var(--radius)",
               cursor: "pointer",
             }}
@@ -190,7 +198,9 @@ export default function SettingsPage() {
       <div
         style={{
           background: "var(--card)",
-          border: "1px solid var(--border)",
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "var(--border)",
           borderRadius: "var(--radius-lg)",
           padding: 20,
         }}

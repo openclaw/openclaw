@@ -83,7 +83,9 @@ function computeSkillReasons(skill: SkillStatusEntry): string[] {
 const styles = {
   card: {
     background: "var(--card)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-lg)",
     padding: 20,
   } as React.CSSProperties,
@@ -108,7 +110,9 @@ const styles = {
     padding: "0 12px",
     fontSize: 12,
     fontWeight: 500,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     background: "var(--secondary)",
     color: "var(--text)",
@@ -140,7 +144,9 @@ const styles = {
     height: 32,
     padding: "0 10px",
     fontSize: 13,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     background: "var(--bg)",
     color: "var(--text)",
@@ -159,11 +165,15 @@ const styles = {
   calloutDanger: {
     background: "var(--danger-subtle)",
     color: "var(--danger)",
-    border: "1px solid var(--danger)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--danger)",
   } as React.CSSProperties,
   groupDetails: {
     marginTop: 16,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     borderRadius: "var(--radius-md)",
     overflow: "hidden",
   } as React.CSSProperties,
@@ -213,7 +223,9 @@ const styles = {
     fontWeight: 500,
     borderRadius: 9999,
     background: "var(--bg)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     color: "var(--muted)",
   } as React.CSSProperties,
   chipOk: {
@@ -671,7 +683,9 @@ export default function SkillsPage() {
               borderRadius: "var(--radius-lg)",
               width: 1800,
               maxWidth: "90%",
-              border: "1px solid var(--border)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
             }}
           >
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Create New Skill</h2>

@@ -37,7 +37,9 @@ const styles = {
   } as React.CSSProperties,
   item: {
     background: "var(--card)",
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     padding: "10px 14px",
     borderRadius: "var(--radius-md)",
     fontSize: 13,

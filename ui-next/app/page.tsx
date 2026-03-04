@@ -36,7 +36,9 @@ export default function OverviewPage() {
             key={stat.label}
             style={{
               background: "var(--card)",
-              border: "1px solid var(--border)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
               borderRadius: "var(--radius-md)",
               padding: "14px 16px",
             }}
@@ -70,7 +72,9 @@ export default function OverviewPage() {
       <div
         style={{
           background: "var(--card)",
-          border: "1px solid var(--border)",
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "var(--border)",
           borderRadius: "var(--radius-lg)",
           padding: 20,
         }}
