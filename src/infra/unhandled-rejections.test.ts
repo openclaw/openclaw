@@ -163,13 +163,20 @@ describe("isTransientNetworkError", () => {
 });
 
 describe("isTransientSqliteError", () => {
-  it.each(["SQLITE_CANTOPEN", "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR"])(
+  it.each(["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR"])(
     "returns true for error with code %s",
     (code) => {
       const error = Object.assign(new Error("database error"), { code });
       expect(isTransientSqliteError(error)).toBe(true);
     },
   );
+
+  it("returns false for SQLITE_CANTOPEN (permanent, not transient)", () => {
+    const error = Object.assign(new Error("unable to open database file"), {
+      code: "SQLITE_CANTOPEN",
+    });
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
 
   it("returns true for SQLite error nested in cause chain", () => {
     const innerCause = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
