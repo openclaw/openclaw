@@ -119,13 +119,17 @@ function resolveTelegramReasoningLevel(params: {
     const store = loadSessionStore(storePath, { skipCache: true });
     const entry = store[sessionKey.toLowerCase()] ?? store[sessionKey];
     const level = entry?.reasoningLevel;
+    // If session has an explicit value (including "off"), respect it
     if (level === "on" || level === "stream") {
       return level;
+    }
+    if (level === "off") {
+      return "off";
     }
   } catch {
     // Fall through to default.
   }
-  // Check config default before falling back to "off"
+  // Only check config default when session has no explicit value
   const configDefault = cfg.agents?.defaults?.reasoningDefault;
   if (configDefault === "on" || configDefault === "stream") {
     return configDefault;
