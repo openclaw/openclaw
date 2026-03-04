@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "../../ui/src/i18n/lib/registry.ts";
-import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 
 function getNestedTranslation(map: TranslationMap | null, ...path: string[]): string | undefined {
   let value: string | TranslationMap | undefined = map ?? undefined;

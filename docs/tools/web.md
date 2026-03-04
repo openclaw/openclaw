@@ -30,14 +30,14 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 
 ## Choosing a search provider
 
-| Provider                  | Pros                                                                                          | Cons                                        | API Key                             |
-| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
-| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
-| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
-| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
-| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
-| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
-| **Exa**                   | Semantic search, text highlights                                                              | Requires Exa API key                        | `EXA_API_KEY`                       |
+| Provider                  | Pros                                                                                          | Cons                                        | API Key                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------- |
+| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                         |
+| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                              |
+| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                             |
+| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                                |
+| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY`          |
+| **Exa**                   | Semantic search, text highlights                                                              | Requires Exa API key                        | `EXA_API_KEY`                                |
 
 ### Auto-detection
 
