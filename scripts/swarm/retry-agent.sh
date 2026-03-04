@@ -23,14 +23,18 @@ AGENT="$(echo "$TASK" | jq -r '.agent')"
 PROMPT_FILE="$(echo "$TASK" | jq -r '.prompt_file')"
 
 cd "$ROOT"
-if [[ ! -d "$WORKTREE/.git" ]]; then
+if [[ ! -e "$WORKTREE/.git" ]]; then
   git worktree add "$WORKTREE" "$BRANCH"
 fi
 
+PIPELINE_SKILL="/home/ubuntu/.openclaw/workspace/skills/code-pipeline/scripts/pipeline-run.sh"
+
 if [[ "$AGENT" == "claude" ]]; then
-  CMD="claude \"$(cat "$PROMPT_FILE")\""
+  CMD="claude --dangerously-skip-permissions \"\$(cat '$PROMPT_FILE')\""
+elif [[ "$AGENT" == "pipeline" ]]; then
+  CMD="bash '$PIPELINE_SKILL' --repo '$ROOT' --task \"\$(cat '$PROMPT_FILE')\" --task-id '$TASK_ID' --base main --max-rounds $MAX"
 else
-  CMD="codex exec --full-auto \"$(cat "$PROMPT_FILE")\""
+  CMD="codex --full-auto \"\$(cat '$PROMPT_FILE')\""
 fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then

@@ -58,6 +58,11 @@ for id in $task_ids; do
       continue
     fi
 
+    is_draft=$(echo "$pr_json" | jq -r '.isDraft // false')
+    if [[ "$is_draft" == "true" ]]; then
+      continue
+    fi
+
     if bash "$ROOT/scripts/swarm/pr-ready.sh" "$pr_number" >/dev/null 2>&1; then
       if [[ "$notified" != "true" ]]; then
         tmp=$(mktemp)

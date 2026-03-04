@@ -29,6 +29,14 @@ export async function applyAuthChoiceCliBackends(
     return { config: params.config };
   }
 
+  if (!availability.credentialsFound) {
+    await params.prompter.note(
+      `Run \`${availability.binaryName} auth login\` to authenticate before using this backend.`,
+      "Credentials not found",
+    );
+    return { config: params.config };
+  }
+
   const defaultModel =
     params.authChoice === "claude-cli" ? CLAUDE_CLI_DEFAULT_MODEL : CODEX_CLI_DEFAULT_MODEL;
 

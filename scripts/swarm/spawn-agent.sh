@@ -25,8 +25,11 @@ if [[ "$MODE" == "pipeline" ]]; then
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux kill-session -t "$SESSION"
   fi
+  # Write task content to a temp file to avoid shell metacharacter injection
+  PIPELINE_TASK_FILE="$(mktemp)"
+  printf '%s' "$TASK_CONTENT" > "$PIPELINE_TASK_FILE"
   tmux new-session -d -s "$SESSION" \
-    "bash '$PIPELINE_SKILL' --repo '$ROOT' --task '$TASK_CONTENT' --task-id '$TASK_ID' --base main --max-rounds $MAX_RETRIES"
+    "bash '$PIPELINE_SKILL' --repo '$ROOT' --task \"\$(cat '$PIPELINE_TASK_FILE')\" --task-id '$TASK_ID' --base main --max-rounds $MAX_RETRIES; rm -f '$PIPELINE_TASK_FILE'"
 
   # 注册到 task registry
   NOW="$(date -Iseconds)"
@@ -59,20 +62,24 @@ if ! git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
   git branch "$BRANCH" origin/main
 fi
 
-if [[ ! -d "$WORKTREE/.git" ]]; then
+if [[ ! -e "$WORKTREE/.git" ]]; then
   git worktree add "$WORKTREE" "$BRANCH"
 fi
 
+# Write task content to a temp file to avoid shell metacharacter injection
+TASK_FILE="$(mktemp)"
+printf '%s' "$TASK_CONTENT" > "$TASK_FILE"
+
 if [[ "$MODE" == "claude" ]]; then
-  CMD="claude --dangerously-skip-permissions \"$TASK_CONTENT\""
+  CMD="claude --dangerously-skip-permissions \"\$(cat '$TASK_FILE')\""
 else
-  CMD="codex --full-auto \"$TASK_CONTENT\""
+  CMD="codex --full-auto \"\$(cat '$TASK_FILE')\""
 fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux kill-session -t "$SESSION"
 fi
-tmux new-session -d -s "$SESSION" "cd '$WORKTREE' && $CMD"
+tmux new-session -d -s "$SESSION" "cd '$WORKTREE' && $CMD; rm -f '$TASK_FILE'"
 
 NOW="$(date -Iseconds)"
 TMP="$(mktemp)"

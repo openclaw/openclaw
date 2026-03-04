@@ -135,12 +135,24 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
-  if (authChoice === "claude-cli") {
-    nextConfig = applyPrimaryModel(nextConfig, "claude-cli/sonnet");
-    return nextConfig;
-  }
-  if (authChoice === "codex-cli") {
-    nextConfig = applyPrimaryModel(nextConfig, "codex-cli/codex");
+  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
+    const { checkCliBackendAvailability } =
+      await import("../../../agents/cli-backend-availability.js");
+    const availability = await checkCliBackendAvailability(authChoice);
+    if (!availability.binaryFound) {
+      runtime.error(`${availability.binaryName} CLI not found in PATH. Install it and retry.`);
+      runtime.exit(1);
+      return null;
+    }
+    if (!availability.credentialsFound) {
+      runtime.error(
+        `${availability.binaryName} credentials not found at ${availability.credentialsPath}. Run \`${availability.binaryName} auth login\` first.`,
+      );
+      runtime.exit(1);
+      return null;
+    }
+    const model = authChoice === "claude-cli" ? "claude-cli/sonnet" : "codex-cli/codex";
+    nextConfig = applyPrimaryModel(nextConfig, model);
     return nextConfig;
   }
 
