@@ -60,6 +60,7 @@ export type TtsConfig = {
     apiKey?: SecretInput;
     model?: string;
     voice?: string;
+    instructions?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
