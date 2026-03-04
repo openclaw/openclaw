@@ -334,7 +334,7 @@ export type AgentCompactionConfig = {
    * - "halt": halt the session so no further messages are processed until /new.
    */
   onFailure?: AgentCompactionOnFailure;
-  /** Custom message delivered to the user when compaction fails. Only used when onFailure is set. */
+  /** Custom message returned when session is halted due to compaction failure. Only used with onFailure: "halt". */
   onFailureMessage?: string;
 };
 
