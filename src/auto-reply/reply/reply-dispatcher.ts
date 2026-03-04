@@ -143,10 +143,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       return false;
     }
 
-    // Layer 3: per-dispatch-lifecycle dedup — skip if this exact payload
-    // was already enqueued during this dispatcher's lifetime.
-    // The key is computed here but only registered after successful delivery
-    // so that failed sends can be retried within the same dispatch cycle.
+    // Layer 3: per-dispatch-lifecycle dedup — atomically claim a slot for
+    // this payload at enqueue time so that back-to-back synchronous
+    // emissions of the same content within one dispatch cycle are blocked.
+    // On delivery failure the key is removed so the payload can be retried.
     const dedupeKey = buildOutboundDedupeKey({
       channel: "dispatch",
       to: "dispatch",
@@ -156,6 +156,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       if (deliveredPayloadKeys.has(dedupeKey)) {
         return false;
       }
+      // Claim immediately to block concurrent/synchronous duplicates.
+      deliveredPayloadKeys.add(dedupeKey);
     }
 
     queuedCounts[kind] += 1;
@@ -179,12 +181,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
-        // Register the key only after successful delivery so failures can retry.
-        if (dedupeKey) {
-          deliveredPayloadKeys.add(dedupeKey);
-        }
       })
       .catch((err) => {
+        // Rollback the dedup claim on failure so the payload can be retried.
+        if (dedupeKey) {
+          deliveredPayloadKeys.delete(dedupeKey);
+        }
         options.onError?.(err, { kind });
       })
       .finally(() => {

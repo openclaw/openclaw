@@ -75,7 +75,7 @@ export function buildOutboundDedupeKey(params: OutboundDedupeKeyParams): string 
   // Fallback to trimmed raw text when normalization produces empty string
   // (e.g. emoji-only messages where normalizeTextForComparison strips all emoji).
   const effectiveText = normalizedText || rawText.trim();
-  const sortedMediaUrls = mediaUrls.toSorted().join(",");
+  const sortedMediaUrls = JSON.stringify(mediaUrls.toSorted());
   // Use the resolved replyToId (payload-level takes precedence, then dispatch-level fallback).
   const replyTo = payload.replyToId ?? resolvedReplyToId ?? "";
   const thread = threadId != null ? String(threadId) : "";

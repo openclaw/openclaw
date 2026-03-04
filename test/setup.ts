@@ -19,6 +19,7 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { resetOutboundDedupe } from "../src/infra/outbound/outbound-dedupe.js";
 import { withIsolatedTestHome } from "./test-env.js";
 
 // Set HOME/state isolation before importing any runtime OpenClaw modules.
@@ -191,4 +192,9 @@ afterEach(() => {
   if (vi.isFakeTimers()) {
     vi.useRealTimers();
   }
+  // Reset outbound dedup cache between tests to prevent cross-test pollution.
+  // The dedup cache is a process-level singleton; without this reset, heartbeat
+  // and cron tests can fail when a prior test in the same worker claimed a key
+  // that blocks delivery in a subsequent test (observed on Windows CI shards).
+  resetOutboundDedupe();
 });
