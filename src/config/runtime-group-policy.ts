@@ -86,6 +86,16 @@ export function resolveAllowlistProviderRuntimeGroupPolicy(
   });
 }
 
+export type NonTelegramGroupPolicy = "open" | "allowlist" | "disabled";
+
+/**
+ * Normalize groupPolicy for non-Telegram channels.
+ * "members" is Telegram-only (requires Bot API getChatMember); treat as "open" elsewhere.
+ */
+export function normalizeNonTelegramGroupPolicy(policy: GroupPolicy): NonTelegramGroupPolicy {
+  return policy === "members" ? "open" : policy;
+}
+
 const warnedMissingProviderGroupPolicy = new Set<string>();
 
 export function warnMissingProviderGroupPolicyFallbackOnce(params: {

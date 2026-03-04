@@ -16,6 +16,7 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -100,17 +101,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const sentMessageCache = createSentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const defaultGroupAllowFrom = cfg.channels?.defaults?.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       imessageCfg.groupAllowFrom ??
+      defaultGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.imessage !== undefined,
-    groupPolicy: imessageCfg.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.imessage !== undefined,
+      groupPolicy: imessageCfg.groupPolicy,
+      defaultGroupPolicy,
+    });
+  // "members" is Telegram-only; normalize to "open" for iMessage
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "imessage",

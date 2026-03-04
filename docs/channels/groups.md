@@ -133,7 +133,7 @@ Control how group/room messages are handled per channel:
 {
   channels: {
     whatsapp: {
-      groupPolicy: "disabled", // "open" | "disabled" | "allowlist"
+      groupPolicy: "disabled", // "open" | "disabled" | "allowlist" ("members" is Telegram-only)
       groupAllowFrom: ["+15551234567"],
     },
     telegram: {
@@ -174,11 +174,12 @@ Control how group/room messages are handled per channel:
 }
 ```
 
-| Policy        | Behavior                                                     |
-| ------------- | ------------------------------------------------------------ |
-| `"open"`      | Groups bypass allowlists; mention-gating still applies.      |
-| `"disabled"`  | Block all group messages entirely.                           |
-| `"allowlist"` | Only allow groups/rooms that match the configured allowlist. |
+| Policy        | Behavior                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| `"open"`      | Groups bypass allowlists; mention-gating still applies.                                          |
+| `"disabled"`  | Block all group messages entirely.                                                               |
+| `"allowlist"` | Only allow groups/rooms that match the configured allowlist.                                     |
+| `"members"`   | Verify all group members are in the trusted `groupAllowFrom` list (Telegram only; cached 5 min). |
 
 Notes:
 

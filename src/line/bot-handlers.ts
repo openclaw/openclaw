@@ -11,6 +11,7 @@ import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -295,21 +296,25 @@ async function shouldProcessLineEvent(
   const fallbackGroupAllowFrom = account.config.allowFrom?.length
     ? account.config.allowFrom
     : undefined;
+  const defaultGroupAllowFrom = cfg.channels?.defaults?.groupAllowFrom;
   const groupAllowFrom = firstDefined(
     groupAllowOverride,
     account.config.groupAllowFrom,
+    defaultGroupAllowFrom,
     fallbackGroupAllowFrom,
   );
   // Group sender policy must be derived from explicit group config only.
   // Pairing store entries are DM-oriented and must not expand group allowlists.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowFrom);
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const { groupPolicy, providerMissingFallbackApplied } =
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.line !== undefined,
       groupPolicy: account.config.groupPolicy,
       defaultGroupPolicy,
     });
+  // "members" is Telegram-only; normalize to "open" for Line
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "line",

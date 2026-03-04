@@ -190,12 +190,14 @@ export type {
 } from "../config/types.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
+  normalizeNonTelegramGroupPolicy,
   resetMissingProviderGroupPolicyFallbackWarningsForTesting,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveRuntimeGroupPolicy,
   type GroupPolicyDefaultsConfig,
+  type NonTelegramGroupPolicy,
   type RuntimeGroupPolicyResolution,
   type RuntimeGroupPolicyParams,
   type ResolveProviderRuntimeGroupPolicyParams,

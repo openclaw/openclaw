@@ -12,6 +12,7 @@ import {
 import { loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -130,11 +131,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let channelsConfig = slackCfg.channels;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const providerConfigPresent = cfg.channels?.slack !== undefined;
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent,
-    groupPolicy: slackCfg.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent,
+      groupPolicy: slackCfg.groupPolicy,
+      defaultGroupPolicy,
+    });
+  // "members" is Telegram-only; normalize to "open" for Slack
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "slack",

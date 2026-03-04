@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { normalizeNonTelegramGroupPolicy } from "../../config/runtime-group-policy.js";
+import { isDiscordGroupAllowedByPolicy } from "./allow-list.js";
 import { __testing } from "./provider.js";
 
 describe("resolveDiscordRuntimeGroupPolicy", () => {
@@ -34,5 +36,41 @@ describe("resolveDiscordRuntimeGroupPolicy", () => {
     });
     expect(resolved.groupPolicy).toBe("allowlist");
     expect(resolved.providerMissingFallbackApplied).toBe(true);
+  });
+});
+
+describe("groupPolicy 'members' normalization for Discord preflight", () => {
+  it("normalizes 'members' to 'open' so guild messages are allowed", () => {
+    // "members" is Telegram-only; for Discord it must normalize to "open" so
+    // that guild messages pass the policy gate rather than being blocked.
+    const normalized = normalizeNonTelegramGroupPolicy("members");
+    expect(normalized).toBe("open");
+
+    const allowed = isDiscordGroupAllowedByPolicy({
+      groupPolicy: normalized,
+      guildAllowlisted: false,
+      channelAllowlistConfigured: false,
+      channelAllowed: false,
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("normalized 'members' through full policy resolution allows guild messages", () => {
+    // Simulate: provider configured, groupPolicy="members" explicitly set.
+    const resolved = __testing.resolveDiscordRuntimeGroupPolicy({
+      providerConfigPresent: true,
+      groupPolicy: "members",
+    });
+    // resolveDiscordRuntimeGroupPolicy returns the raw policy; normalization happens next.
+    const normalized = normalizeNonTelegramGroupPolicy(resolved.groupPolicy);
+    expect(normalized).toBe("open");
+
+    const allowed = isDiscordGroupAllowedByPolicy({
+      groupPolicy: normalized,
+      guildAllowlisted: false,
+      channelAllowlistConfigured: false,
+      channelAllowed: false,
+    });
+    expect(allowed).toBe(true);
   });
 });

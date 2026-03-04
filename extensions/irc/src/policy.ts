@@ -1,3 +1,4 @@
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
@@ -144,7 +145,8 @@ export function resolveIrcGroupSenderAllowed(params: {
   innerAllowFrom: string[];
   allowNameMatching?: boolean;
 }): boolean {
-  const policy = params.groupPolicy ?? "allowlist";
+  // "members" is Telegram-only; normalize to "open" for IRC
+  const policy = normalizeNonTelegramGroupPolicy(params.groupPolicy ?? "allowlist");
   const inner = normalizeIrcAllowlist(params.innerAllowFrom);
   const outer = normalizeIrcAllowlist(params.outerAllowFrom);
 

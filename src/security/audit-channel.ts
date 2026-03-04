@@ -537,7 +537,9 @@ export async function collectChannelSecurityFindings(params: {
       const groups = telegramCfg.groups as Record<string, unknown> | undefined;
       const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
       const groupAccessPossible =
-        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
+        groupPolicy === "open" ||
+        groupPolicy === "members" ||
+        (groupPolicy === "allowlist" && groupsConfigured);
       if (!groupAccessPossible) {
         continue;
       }
@@ -600,8 +602,18 @@ export async function collectChannelSecurityFindings(params: {
         }),
       );
 
+      const defaultGroupAllowFrom = Array.isArray(params.cfg.channels?.defaults?.groupAllowFrom)
+        ? params.cfg.channels.defaults.groupAllowFrom
+        : [];
       const hasAnySenderAllowlist =
-        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+        storeAllowFrom.length > 0 ||
+        groupAllowFrom.length > 0 ||
+        defaultGroupAllowFrom.length > 0 ||
+        anyGroupOverride ||
+        // For "members" policy, per-account allowFrom is a valid runtime fallback
+        // (bot.ts uses allowFrom when groupAllowFrom is not set). Count it here to
+        // avoid false-positive "no sender allowlist" findings.
+        (groupPolicy === "members" && dmAllowFrom.length > 0);
 
       if (invalidTelegramAllowFromEntries.size > 0) {
         const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);

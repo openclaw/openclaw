@@ -10,6 +10,7 @@ import {
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
   mergeAllowlist,
+  normalizeNonTelegramGroupPolicy,
   resolveMentionGatingWithBypass,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -208,11 +209,14 @@ async function processMessage(
   }
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.zalouser !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.zalouser !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  // "members" is Telegram-only; normalize to "open" for Zalo
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "zalouser",
