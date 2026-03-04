@@ -1656,9 +1656,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // Block streaming: edit-in-place for progressive text rendering
           if ((isBlock || isFinal) && blockStreamingClient && mediaUrls.length === 0 && text) {
             if (isBlock && blockStreamMessageId) {
-              // Subsequent block: accumulate and edit the existing message
+              // Subsequent block: accumulate and edit the existing message.
               // Append exactly as we receive blocks; do not inject separators.
-              blockStreamAccumulatedText += text;
+              // If responsePrefix is enabled, avoid repeatedly embedding it for each block.
+              let streamText = text;
+              if (
+                prefixOptions.responsePrefix &&
+                blockStreamAccumulatedText.startsWith(prefixOptions.responsePrefix) &&
+                streamText.startsWith(prefixOptions.responsePrefix)
+              ) {
+                streamText = streamText.slice(prefixOptions.responsePrefix.length);
+              }
+              blockStreamAccumulatedText += streamText;
               try {
                 await patchMattermostPost(blockStreamingClient, {
                   postId: blockStreamMessageId,
@@ -1668,15 +1677,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 logVerboseMessage(
                   `mattermost block-stream edit failed: ${String(err)}, falling back to new message`,
                 );
+
+                // Preserve everything we've accumulated so far (including the current block)
+                // and send it as a new message so we don't lose content.
+                const fallbackText = blockStreamAccumulatedText;
+
+                // Reset state before sending to avoid confusing subsequent blocks.
                 blockStreamMessageId = null;
                 blockStreamAccumulatedText = "";
-                // Fall through to send as new message
-                const result = await sendMessageMattermost(to, text, {
+
+                const result = await sendMessageMattermost(to, fallbackText, {
                   accountId: account.accountId,
                   replyToId: threadRootId,
                 });
+
                 blockStreamMessageId = result.messageId;
-                blockStreamAccumulatedText = text;
+                blockStreamAccumulatedText = fallbackText;
+                runtime.log?.(`block-stream fallback sent ${blockStreamMessageId}`);
+                return;
               }
               runtime.log?.(`block-stream edited ${blockStreamMessageId}`);
               return;
