@@ -854,20 +854,28 @@ async function sendSubagentAnnounceDirectly(params: {
       }
     }
 
-    const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    // When completionRouteViaParent forced us off the direct-send path,
+    // prefer completionDirectOrigin (from hooks like subagent_delivery_target)
+    // over directOrigin (requester origin). This ensures hook-selected
+    // completion targets are respected even on the agent delivery path.
+    const routeViaParent =
+      cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+    const effectiveOrigin = routeViaParent && completionDirectOrigin
+      ? completionDirectOrigin
+      : normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
-      typeof directOrigin?.channel === "string" ? directOrigin.channel.trim() : "";
+      typeof effectiveOrigin?.channel === "string" ? effectiveOrigin.channel.trim() : "";
     const directChannel =
       directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    const directTo = typeof effectiveOrigin?.to === "string" ? effectiveOrigin.to.trim() : "";
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
       !params.requesterIsSubagent &&
       (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
     const threadId =
-      directOrigin?.threadId != null && directOrigin.threadId !== ""
-        ? String(directOrigin.threadId)
+      effectiveOrigin?.threadId != null && effectiveOrigin.threadId !== ""
+        ? String(effectiveOrigin.threadId)
         : undefined;
     if (params.signal?.aborted) {
       return {
@@ -888,7 +896,7 @@ async function sendSubagentAnnounceDirectly(params: {
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
             channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
+            accountId: shouldDeliverExternally ? effectiveOrigin?.accountId : undefined,
             to: shouldDeliverExternally ? directTo : undefined,
             threadId: shouldDeliverExternally ? threadId : undefined,
             idempotencyKey: params.directIdempotencyKey,
