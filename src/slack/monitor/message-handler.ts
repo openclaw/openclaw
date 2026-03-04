@@ -165,10 +165,7 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    // Exempt app_mention from dedup check to avoid race condition with message event
-    // (Slack delivers both events with no guaranteed order; whichever arrives first
-    // would mark the message as seen and drop the second event)
-    if (opts.source !== "app_mention" && ctx.markMessageSeen(message.channel, message.ts)) {
+    if (ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     trackEvent?.();
