@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -128,6 +132,95 @@ describe("resolveChannelGroupPolicy", () => {
 
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
+  });
+});
+
+describe("resolveChannelGroupRequireMention", () => {
+  it("defaults to true when no groupPolicy is set", () => {
+    const cfg = {
+      channels: {
+        telegram: {},
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("defaults to false when groupPolicy is open", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+    });
+    expect(result).toBe(false);
+  });
+
+  it("respects explicit requireMention even when groupPolicy is open", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100123": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("respects requireMentionOverride over groupPolicy=open default", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+      requireMentionOverride: true,
+    });
+    expect(result).toBe(true);
+  });
+
+  it("defaults to true when groupPolicy is allowlist with no groups", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+    });
+    expect(result).toBe(true);
   });
 });
 
