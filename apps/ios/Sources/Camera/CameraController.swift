@@ -1,6 +1,7 @@
 import AVFoundation
 import OpenClawKit
 import Foundation
+import os
 
 actor CameraController {
     struct CameraDeviceInfo: Codable, Sendable {
@@ -120,7 +121,8 @@ actor CameraController {
                 Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
             cameraUnavailableError: CameraError.cameraUnavailable,
-            mapSetupError: Self.mapMovieSetupError) { output in
+            mapSetupError: Self.mapMovieSetupError,
+            operation: { output in
                 var delegate: MovieFileDelegate?
                 let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
                     let d = MovieFileDelegate(cont)
@@ -131,7 +133,7 @@ actor CameraController {
                 // Transcode .mov -> .mp4 for easier downstream handling.
                 try await Self.exportToMP4(inputURL: recordedURL, outputURL: mp4URL)
                 return try Data(contentsOf: mp4URL)
-            }
+            })
         return (
             format: format.rawValue,
             base64: data.base64EncodedString(),
@@ -259,7 +261,7 @@ actor CameraController {
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private let continuation: CheckedContinuation<Data, Error>
-    private var didResume = false
+    private let resumed = OSAllocatedUnfairLock(initialState: false)
 
     init(_ continuation: CheckedContinuation<Data, Error>) {
         self.continuation = continuation
@@ -270,8 +272,12 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
-        guard !self.didResume else { return }
-        self.didResume = true
+        let alreadyResumed = self.resumed.withLock { old in
+            let was = old
+            old = true
+            return was
+        }
+        guard !alreadyResumed else { return }
 
         if let error {
             self.continuation.resume(throwing: error)
@@ -300,15 +306,19 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         error: Error?
     ) {
         guard let error else { return }
-        guard !self.didResume else { return }
-        self.didResume = true
+        let alreadyResumed = self.resumed.withLock { old in
+            let was = old
+            old = true
+            return was
+        }
+        guard !alreadyResumed else { return }
         self.continuation.resume(throwing: error)
     }
 }
 
 private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDelegate {
     private let continuation: CheckedContinuation<URL, Error>
-    private var didResume = false
+    private let resumed = OSAllocatedUnfairLock(initialState: false)
 
     init(_ continuation: CheckedContinuation<URL, Error>) {
         self.continuation = continuation
@@ -320,8 +330,12 @@ private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDel
         from connections: [AVCaptureConnection],
         error: Error?)
     {
-        guard !self.didResume else { return }
-        self.didResume = true
+        let alreadyResumed = self.resumed.withLock { old in
+            let was = old
+            old = true
+            return was
+        }
+        guard !alreadyResumed else { return }
 
         if let error {
             let ns = error as NSError

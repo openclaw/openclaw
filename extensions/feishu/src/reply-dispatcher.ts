@@ -94,6 +94,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ) {
         return;
       }
+      // Feishu reactions persist until explicitly removed, so skip keepalive
+      // re-adds when a reaction already exists. Re-adding the same emoji
+      // triggers a new push notification for every call (#28660).
+      if (typingState?.reactionId) {
+        return;
+      }
       typingState = await addTypingIndicator({
         cfg,
         messageId: replyToMessageId,
@@ -139,6 +145,48 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+
+  const mergeStreamingText = (nextText: string) => {
+    if (!streamText) {
+      streamText = nextText;
+      return;
+    }
+    if (nextText.startsWith(streamText)) {
+      // Handle cumulative partial payloads where nextText already includes prior text.
+      streamText = nextText;
+      return;
+    }
+    if (streamText.endsWith(nextText)) {
+      return;
+    }
+    streamText += nextText;
+  };
+
+  const queueStreamingUpdate = (
+    nextText: string,
+    options?: {
+      dedupeWithLastPartial?: boolean;
+    },
+  ) => {
+    if (!nextText) {
+      return;
+    }
+    if (options?.dedupeWithLastPartial && nextText === lastPartial) {
+      return;
+    }
+    if (options?.dedupeWithLastPartial) {
+      lastPartial = nextText;
+    }
+    mergeStreamingText(nextText);
+    partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      if (streaming?.isActive()) {
+        await streaming.update(streamText);
+      }
+    });
+  };
 
   const startStreaming = () => {
     if (!streamingEnabled || streamingStartPromise || streaming) {
@@ -199,12 +247,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        // FIX: Filter out internal 'block' reasoning chunks immediately to prevent
-        // data leak and race conditions with streaming state initialization.
-        if (info?.kind === "block") {
-          return;
-        }
-
         const text = payload.text ?? "";
         const mediaList =
           payload.mediaUrls && payload.mediaUrls.length > 0
@@ -222,6 +264,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (hasText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
+          if (info?.kind === "block") {
+            // Drop internal block chunks unless we can safely consume them as
+            // streaming-card fallback content.
+            if (!(streamingEnabled && useCard)) {
+              return;
+            }
+            startStreaming();
+            if (streamingStartPromise) {
+              await streamingStartPromise;
+            }
+          }
+
           if (info?.kind === "final" && streamingEnabled && useCard) {
             startStreaming();
             if (streamingStartPromise) {
@@ -230,6 +284,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (streaming?.isActive()) {
+            if (info?.kind === "block") {
+              // Some runtimes emit block payloads without onPartial/final callbacks.
+              // Mirror block text into streamText so onIdle close still sends content.
+              queueStreamingUpdate(text);
+            }
             if (info?.kind === "final") {
               streamText = text;
               await closeStreaming();
@@ -325,19 +384,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onModelSelected: prefixContext.onModelSelected,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            if (!payload.text || payload.text === lastPartial) {
+            if (!payload.text) {
               return;
             }
-            lastPartial = payload.text;
-            streamText = payload.text;
-            partialUpdateQueue = partialUpdateQueue.then(async () => {
-              if (streamingStartPromise) {
-                await streamingStartPromise;
-              }
-              if (streaming?.isActive()) {
-                await streaming.update(streamText);
-              }
-            });
+            queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
           }
         : undefined,
     },

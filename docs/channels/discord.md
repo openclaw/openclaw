@@ -133,6 +133,8 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
+        SecretRef values are also supported for `channels.discord.token` (env/file/exec providers). See [Secrets Management](/gateway/secrets).
+
       </Tab>
     </Tabs>
 
@@ -419,6 +421,7 @@ Example:
       guilds: {
         "123456789012345678": {
           requireMention: true,
+          ignoreOtherMentions: true,
           users: ["987654321098765432"],
           roles: ["123456789012345678"],
           channels: {
@@ -446,6 +449,7 @@ Example:
     - implicit reply-to-bot behavior in supported cases
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
+    `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
 
     Group DMs:
 
@@ -786,7 +790,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Presence configuration">
-    Presence updates are applied only when you set a status or activity field.
+    Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
     Status only example:
 
@@ -835,6 +839,29 @@ Default slash command settings:
     - 3: Watching
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
+
+    Auto presence example (runtime health signal):
+
+```json5
+{
+  channels: {
+    discord: {
+      autoPresence: {
+        enabled: true,
+        intervalMs: 30000,
+        minUpdateIntervalMs: 15000,
+        exhaustedText: "token exhausted",
+      },
+    },
+  },
+}
+```
+
+    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Optional text overrides:
+
+    - `autoPresence.healthyText`
+    - `autoPresence.degradedText`
+    - `autoPresence.exhaustedText` (supports `{reason}` placeholder)
 
   </Accordion>
 
@@ -1057,6 +1084,7 @@ openclaw logs --follow
     By default bot-authored messages are ignored.
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
+    Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
 
   </Accordion>
 

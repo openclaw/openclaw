@@ -396,7 +396,7 @@ describe("convertMessagesToInputItems", () => {
       ["Let me run that."],
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
@@ -433,7 +433,7 @@ describe("convertMessagesToInputItems", () => {
       isError: false,
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toEqual([]);
@@ -448,7 +448,7 @@ describe("convertMessagesToInputItems", () => {
       isError: false,
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);

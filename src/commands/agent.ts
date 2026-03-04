@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -47,6 +48,8 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -176,6 +179,11 @@ function runAgentAttempt(params: {
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
   });
+  const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    params.sessionEntry?.systemPromptReport,
+  );
+  const bootstrapPromptWarningSignature =
+    bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
@@ -194,6 +202,8 @@ function runAgentAttempt(params: {
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         cliSessionId: nextCliSessionId,
+        bootstrapPromptWarningSignaturesSeen,
+        bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
         streamParams: params.opts.streamParams,
       });
@@ -279,6 +289,7 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
+    trigger: "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
@@ -314,6 +325,8 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     onAgentEvent: params.onAgentEvent,
+    bootstrapPromptWarningSignaturesSeen,
+    bootstrapPromptWarningSignature,
   });
 }
 
@@ -331,7 +344,15 @@ async function agentCommandInternal(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "agent",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -862,6 +883,10 @@ async function agentCommandInternal(
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       if (!lifecycleEnded) {
+        const stopReason = result.meta.stopReason;
+        if (stopReason && stopReason !== "end_turn") {
+          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        }
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -870,6 +895,7 @@ async function agentCommandInternal(
             startedAt,
             endedAt: Date.now(),
             aborted: result.meta.aborted ?? false,
+            stopReason,
           },
         });
       }
