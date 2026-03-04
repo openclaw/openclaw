@@ -11,6 +11,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
+import { probeLineBot } from "./probe.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import {
   replyMessageLine,
@@ -28,7 +29,6 @@ import {
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
-import { probeLineBot } from "./probe.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;

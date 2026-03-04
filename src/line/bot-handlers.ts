@@ -232,7 +232,10 @@ function resolveLineRequireMention(params: {
   return resolveLineGroupConfig(params)?.requireMention ?? false;
 }
 
-function resolveLineMentionMetadata(event: MessageEvent, botUserId?: string): {
+function resolveLineMentionMetadata(
+  event: MessageEvent,
+  botUserId?: string,
+): {
   canDetectMention: boolean;
   wasMentioned: boolean;
   hasAnyMention: boolean;
@@ -252,9 +255,11 @@ function resolveLineMentionMetadata(event: MessageEvent, botUserId?: string): {
     };
   }
   const mentionees =
-    (event.message as MessageEvent["message"] & {
-      mention?: { mentionees?: Array<{ type?: string; userId?: string }> };
-    }).mention?.mentionees ?? [];
+    (
+      event.message as MessageEvent["message"] & {
+        mention?: { mentionees?: Array<{ type?: string; userId?: string }> };
+      }
+    ).mention?.mentionees ?? [];
   const hasAnyMention = mentionees.length > 0;
   const normalizedBotUserId = botUserId.trim();
   const wasMentioned = mentionees.some((entry) => {
