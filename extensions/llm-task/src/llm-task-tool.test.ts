@@ -123,6 +123,19 @@ describe("llm-task tool (json-only)", () => {
     ).rejects.toThrow(/not allowed/i);
   });
 
+  it("fallback import path targets dist/extensionAPI.js, not src/", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(
+        new URL("./llm-task-tool.ts", import.meta.url).pathname.replace(/\.test\.ts$/, ".ts"),
+        "utf-8",
+      ),
+    );
+    const importLines = [...source.matchAll(/await import\(["']([^"']+)["']\)/g)].map((m) => m[1]);
+    expect(importLines).toHaveLength(2);
+    expect(importLines[0]).toContain("src/agents/pi-embedded-runner");
+    expect(importLines[1]).toContain("dist/extensionAPI");
+  });
+
   it("disables tools for embedded run", async () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
