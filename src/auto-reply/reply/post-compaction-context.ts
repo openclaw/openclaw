@@ -55,7 +55,10 @@ export async function readPostCompactionContext(
 
     // Extract "## Session Startup" and "## Red Lines" sections
     // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    const sections = extractSections(content, [
+      ["Session Startup", "Every Session"],
+      ["Red Lines", "Safety"],
+    ]);
 
     if (sections.length === 0) {
       return null;
@@ -90,12 +93,16 @@ export async function readPostCompactionContext(
  * Matches H2 (##) or H3 (###) headings case-insensitively.
  * Skips content inside fenced code blocks.
  * Captures until the next heading of same or higher level, or end of string.
+ *
+ * Each entry in `sectionNames` can be a single name or an array of aliases.
+ * When an array is given, the first matching alias wins (canonical name first).
  */
-export function extractSections(content: string, sectionNames: string[]): string[] {
+export function extractSections(content: string, sectionNames: (string | string[])[]): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
 
-  for (const name of sectionNames) {
+  for (const nameEntry of sectionNames) {
+    const names = Array.isArray(nameEntry) ? nameEntry : [nameEntry];
     let sectionLines: string[] = [];
     let inSection = false;
     let sectionLevel = 0;
@@ -127,8 +134,8 @@ export function extractSections(content: string, sectionNames: string[]): string
         const headingText = headingMatch[2];
 
         if (!inSection) {
-          // Check if this is our target section (case-insensitive)
-          if (headingText.toLowerCase() === name.toLowerCase()) {
+          // Check if this is our target section (case-insensitive, first alias wins)
+          if (names.some((n) => headingText.toLowerCase() === n.toLowerCase())) {
             inSection = true;
             sectionLevel = level;
             sectionLines = [line];

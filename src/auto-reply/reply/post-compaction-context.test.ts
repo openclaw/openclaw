@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { extractSections, readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
   const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
@@ -225,5 +225,88 @@ Read WORKFLOW.md on startup.
     const result = await readPostCompactionContext(tmpDir, undefined, nowMs);
     expect(result).not.toBeNull();
     expect(result).toContain("Current time:");
+  });
+
+  it("extracts legacy '## Every Session' heading via alias", async () => {
+    const content = `# Rules
+
+## Every Session
+
+Read SOUL.md first.
+
+## Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Read SOUL.md first");
+  });
+
+  it("extracts legacy '## Safety' heading via alias", async () => {
+    const content = `# Rules
+
+## Safety
+
+Don't exfiltrate data.
+
+## Other
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Don't exfiltrate data");
+  });
+});
+
+describe("extractSections", () => {
+  it("alias arrays return first match", () => {
+    const content = `## Every Session
+
+Do startup things.
+
+## Safety
+
+Never break things.
+
+## Other
+
+Ignore this.
+`;
+    const sections = extractSections(content, [
+      ["Session Startup", "Every Session"],
+      ["Red Lines", "Safety"],
+    ]);
+    expect(sections).toHaveLength(2);
+    expect(sections[0]).toContain("Do startup things");
+    expect(sections[1]).toContain("Never break things");
+  });
+
+  it("canonical name is preferred over alias when both exist", () => {
+    const content = `## Session Startup
+
+Canonical startup content.
+
+## Every Session
+
+Legacy startup content.
+
+## Red Lines
+
+Canonical red lines.
+
+## Safety
+
+Legacy safety content.
+`;
+    const sections = extractSections(content, [
+      ["Session Startup", "Every Session"],
+      ["Red Lines", "Safety"],
+    ]);
+    expect(sections).toHaveLength(2);
+    // Canonical name appears first in the document, so it should be extracted
+    expect(sections[0]).toContain("Canonical startup content");
+    expect(sections[0]).not.toContain("Legacy startup content");
+    expect(sections[1]).toContain("Canonical red lines");
+    expect(sections[1]).not.toContain("Legacy safety content");
   });
 });

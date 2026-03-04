@@ -413,7 +413,10 @@ async function readWorkspaceContextForSummary(): Promise<string> {
         fs.closeSync(opened.fd);
       }
     })();
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    const sections = extractSections(content, [
+      ["Session Startup", "Every Session"],
+      ["Red Lines", "Safety"],
+    ]);
 
     if (sections.length === 0) {
       return "";
