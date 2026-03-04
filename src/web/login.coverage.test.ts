@@ -4,7 +4,7 @@ import path from "node:path";
 import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
-import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
+import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
 
@@ -35,10 +35,12 @@ vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(async () => (call++ === 0 ? sockA : sockB));
   const waitForWaConnection = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
+  const getStatusCode = vi.fn();
   return {
     createWaSocket,
     waitForWaConnection,
     formatError,
+    getStatusCode,
     WA_WEB_AUTH_DIR: authDir,
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
@@ -53,6 +55,7 @@ vi.mock("./session.js", () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const formatErrorMock = vi.mocked(formatError);
+const getStatusCodeMock = vi.mocked(getStatusCode);
 
 describe("loginWeb coverage", () => {
   beforeEach(() => {
@@ -65,8 +68,9 @@ describe("loginWeb coverage", () => {
   });
 
   it("restarts once when WhatsApp requests code 515", async () => {
+    getStatusCodeMock.mockReturnValueOnce(515);
     waitForWaConnectionMock
-      .mockRejectedValueOnce({ output: { statusCode: 515 } })
+      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
 
     const runtime = { log: vi.fn(), error: vi.fn() } as never;
@@ -81,6 +85,7 @@ describe("loginWeb coverage", () => {
   });
 
   it("clears creds and throws when logged out", async () => {
+    getStatusCodeMock.mockReturnValueOnce(DisconnectReason.loggedOut);
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: DisconnectReason.loggedOut },
     });

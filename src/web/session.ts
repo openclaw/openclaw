@@ -184,10 +184,38 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
-  );
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    const record = current as {
+      output?: { statusCode?: unknown; payload?: unknown };
+      statusCode?: unknown;
+      status?: unknown;
+      error?: unknown;
+      lastDisconnect?: unknown;
+      cause?: unknown;
+    };
+    const direct =
+      typeof record.output?.statusCode === "number"
+        ? record.output.statusCode
+        : typeof record.statusCode === "number"
+          ? record.statusCode
+          : typeof record.status === "number"
+            ? record.status
+            : undefined;
+    if (typeof direct === "number") {
+      return direct;
+    }
+
+    queue.push(record.error, record.lastDisconnect, record.cause, record.output?.payload);
+  }
+  return undefined;
 }
 
 function safeStringify(value: unknown, limit = 800): string {
