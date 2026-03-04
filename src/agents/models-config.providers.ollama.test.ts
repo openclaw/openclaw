@@ -278,9 +278,10 @@ describe("Ollama provider", () => {
 
     expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
-  it("registers ollama when explicitly configured even if discovery returns no models", async () => {
+  it("registers ollama when explicitly configured even if discovery returns no models and no apiKey", async () => {
     const agentDir = createAgentDir();
-    // Discovery returns no models (test env skips fetch), but explicit config ensures registration
+    // Discovery returns no models (test env skips fetch), no apiKey set.
+    // The hasExplicitOllamaConfig condition ensures registration anyway.
     const providers = await resolveImplicitProviders({
       agentDir,
       explicitProviders: {
@@ -288,14 +289,14 @@ describe("Ollama provider", () => {
           baseUrl: "http://127.0.0.1:11434",
           api: "ollama",
           models: [],
-          apiKey: "local",
+          // No apiKey - this is the key difference from previous tests
         },
       },
     });
 
     expect(providers?.ollama).toBeDefined();
     expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
-    expect(providers?.ollama?.apiKey).toBe("local");
+    expect(providers?.ollama?.apiKey).toBe("ollama-local"); // Falls back to default
     expect(providers?.ollama?.models).toEqual([]);
   });
 });
