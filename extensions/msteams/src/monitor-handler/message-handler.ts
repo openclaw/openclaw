@@ -154,6 +154,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupAllowFrom,
       storeAllowFrom: storedAllowFrom,
       dmPolicy,
+      // Match resolveDmGroupAccessWithLists: don't fall back from groupAllowFrom to allowFrom
+      groupAllowFromFallbackToAllowFrom: false,
       groupAuthIncludesPairingStore: msteamsCfg?.groupAuthIncludesPairingStore,
     });
 
@@ -175,15 +177,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationId,
       channelName,
     });
-    // Derive senderGroupPolicy from configuredGroupAllowFrom (without pairing store).
-    // Using effectiveGroupAllowFrom here would cause policy to flip to "allowlist" when
-    // only pairing store entries exist, which then fails with empty configured allowlist.
-    const senderGroupPolicy =
-      groupPolicy === "disabled"
-        ? "disabled"
-        : configuredGroupAllowFrom.length > 0
-          ? "allowlist"
-          : "open";
+    // Use the configured groupPolicy directly. The access decision in resolveDmGroupAccessWithLists
+    // handles allowlist evaluation with the effective group allowlist (including pairing store
+    // when groupAuthIncludesPairingStore is enabled).
+    const senderGroupPolicy = groupPolicy;
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
