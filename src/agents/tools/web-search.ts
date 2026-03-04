@@ -1441,6 +1441,13 @@ export function createWebSearchTool(options?: {
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
       const language = readStringParam(params, "language");
+      if (language && provider !== "brave" && provider !== "perplexity") {
+        return jsonResult({
+          error: "unsupported_language",
+          message: `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       // For Brave, accept both `language` (unified) and `search_lang`
