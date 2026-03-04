@@ -485,7 +485,7 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  if (params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
   if (!params.useResume && params.sessionId) {
