@@ -861,7 +861,7 @@ export async function getPageForTargetIdWithRetry(opts: {
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
-      reason: "recovering from tab not found after navigation",
+      reason: "tab not found - retrying with fresh connection",
     });
 
     // Second attempt - try again after disconnecting

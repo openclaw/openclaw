@@ -1,32 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { getPageForTargetIdWithRetry } from "./pw-session.js";
 
-// Mock the exported functions that are used by getPageForTargetIdWithRetry
+// Mock the underlying functions that are exported
 vi.mock("./pw-session.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    getPageForTargetId: vi.fn(),
-    forceDisconnectPlaywrightForTarget: vi.fn(),
     connectBrowser: vi.fn(),
     getAllPages: vi.fn(),
+    findPageByTargetId: vi.fn(),
+    forceDisconnectPlaywrightForTarget: vi.fn(),
   };
 });
 
 describe("pw-session getPageForTargetIdWithRetry", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("returns page when found on first attempt", async () => {
     const mockPage = { url: () => "https://example.com" };
-    const getPageForTargetIdMock = vi.fn().mockResolvedValue(mockPage);
+
+    // Mock the exported functions
+    const connectBrowserMock = vi.fn().mockResolvedValue({
+      browser: { pages: vi.fn().mockResolvedValue([mockPage]) },
+    });
+    const getAllPagesMock = vi.fn().mockResolvedValue([mockPage]);
+    const findPageByTargetIdMock = vi.fn().mockResolvedValue(mockPage);
     const forceDisconnectMock = vi.fn();
 
-    // @ts-ignore - mocking exported function
-    getPageForTargetId.mockImplementation(getPageForTargetIdMock);
-    // @ts-ignore - mocking exported function
-    forceDisconnectPlaywrightForTarget.mockImplementation(forceDisconnectMock);
+    // Override the mocks
+    vi.mocked(connectBrowser).mockImplementation(connectBrowserMock);
+    vi.mocked(getAllPages).mockImplementation(getAllPagesMock);
+    vi.mocked(findPageByTargetId).mockImplementation(findPageByTargetIdMock);
+    vi.mocked(forceDisconnectPlaywrightForTarget).mockImplementation(forceDisconnectMock);
 
     const result = await getPageForTargetIdWithRetry({
       cdpUrl: "ws://localhost:9222/devtools/browser/123",
@@ -39,16 +42,23 @@ describe("pw-session getPageForTargetIdWithRetry", () => {
 
   it("retries once after tab not found error", async () => {
     const mockPage = { url: () => "https://example.com" };
-    const getPageForTargetIdMock = vi
+
+    // First call returns null, second call returns page
+    const findPageByTargetIdMock = vi
       .fn()
-      .mockRejectedValueOnce(new Error("tab not found"))
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(mockPage);
+
+    const connectBrowserMock = vi.fn().mockResolvedValue({
+      browser: { pages: vi.fn().mockResolvedValue([mockPage]) },
+    });
+    const getAllPagesMock = vi.fn().mockResolvedValue([mockPage]);
     const forceDisconnectMock = vi.fn();
 
-    // @ts-ignore - mocking exported function
-    getPageForTargetId.mockImplementation(getPageForTargetIdMock);
-    // @ts-ignore - mocking exported function
-    forceDisconnectPlaywrightForTarget.mockImplementation(forceDisconnectMock);
+    vi.mocked(connectBrowser).mockImplementation(connectBrowserMock);
+    vi.mocked(getAllPages).mockImplementation(getAllPagesMock);
+    vi.mocked(findPageByTargetId).mockImplementation(findPageByTargetIdMock);
+    vi.mocked(forceDisconnectPlaywrightForTarget).mockImplementation(forceDisconnectMock);
 
     const result = await getPageForTargetIdWithRetry({
       cdpUrl: "ws://127.0.0.1:18791/cdp",
@@ -59,19 +69,25 @@ describe("pw-session getPageForTargetIdWithRetry", () => {
     expect(forceDisconnectMock).toHaveBeenCalledWith({
       cdpUrl: "ws://127.0.0.1:18791/cdp",
       targetId: "target-123",
-      reason: "recovering from tab not found after navigation",
+      reason: "tab not found - retrying with fresh connection",
     });
-    expect(getPageForTargetIdMock).toHaveBeenCalledTimes(2);
+    expect(findPageByTargetIdMock).toHaveBeenCalledTimes(2);
   });
 
   it("throws error after retry still fails", async () => {
-    const getPageForTargetIdMock = vi.fn().mockRejectedValue(new Error("tab not found"));
+    const mockPage = { url: () => "https://example.com" };
+
+    const findPageByTargetIdMock = vi.fn().mockResolvedValue(null);
+    const connectBrowserMock = vi.fn().mockResolvedValue({
+      browser: { pages: vi.fn().mockResolvedValue([mockPage]) },
+    });
+    const getAllPagesMock = vi.fn().mockResolvedValue([mockPage]);
     const forceDisconnectMock = vi.fn();
 
-    // @ts-ignore - mocking exported function
-    getPageForTargetId.mockImplementation(getPageForTargetIdMock);
-    // @ts-ignore - mocking exported function
-    forceDisconnectPlaywrightForTarget.mockImplementation(forceDisconnectMock);
+    vi.mocked(connectBrowser).mockImplementation(connectBrowserMock);
+    vi.mocked(getAllPages).mockImplementation(getAllPagesMock);
+    vi.mocked(findPageByTargetId).mockImplementation(findPageByTargetIdMock);
+    vi.mocked(forceDisconnectPlaywrightForTarget).mockImplementation(forceDisconnectMock);
 
     await expect(
       getPageForTargetIdWithRetry({
@@ -81,17 +97,23 @@ describe("pw-session getPageForTargetIdWithRetry", () => {
     ).rejects.toThrow("tab not found");
 
     expect(forceDisconnectMock).toHaveBeenCalled();
-    expect(getPageForTargetIdMock).toHaveBeenCalledTimes(2);
+    expect(findPageByTargetIdMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry for non-extension relay URLs", async () => {
-    const getPageForTargetIdMock = vi.fn().mockRejectedValue(new Error("tab not found"));
+    const mockPage = { url: () => "https://example.com" };
+
+    const findPageByTargetIdMock = vi.fn().mockResolvedValue(null);
+    const connectBrowserMock = vi.fn().mockResolvedValue({
+      browser: { pages: vi.fn().mockResolvedValue([mockPage]) },
+    });
+    const getAllPagesMock = vi.fn().mockResolvedValue([mockPage]);
     const forceDisconnectMock = vi.fn();
 
-    // @ts-ignore - mocking exported function
-    getPageForTargetId.mockImplementation(getPageForTargetIdMock);
-    // @ts-ignore - mocking exported function
-    forceDisconnectPlaywrightForTarget.mockImplementation(forceDisconnectMock);
+    vi.mocked(connectBrowser).mockImplementation(connectBrowserMock);
+    vi.mocked(getAllPages).mockImplementation(getAllPagesMock);
+    vi.mocked(findPageByTargetId).mockImplementation(findPageByTargetIdMock);
+    vi.mocked(forceDisconnectPlaywrightForTarget).mockImplementation(forceDisconnectMock);
 
     await expect(
       getPageForTargetIdWithRetry({
@@ -106,26 +128,17 @@ describe("pw-session getPageForTargetIdWithRetry", () => {
   it("uses single page fallback without retry", async () => {
     const mockPage = { url: () => "https://example.com" };
 
-    // First call fails, but we need to simulate the fallback logic
-    // This test is more complex because it requires mocking connectBrowser and getAllPages
-    const getPageForTargetIdMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("tab not found"))
-      .mockResolvedValueOnce(mockPage);
+    const findPageByTargetIdMock = vi.fn().mockResolvedValue(null);
     const connectBrowserMock = vi.fn().mockResolvedValue({
       browser: { pages: vi.fn().mockResolvedValue([mockPage]) },
     });
     const getAllPagesMock = vi.fn().mockResolvedValue([mockPage]);
     const forceDisconnectMock = vi.fn();
 
-    // @ts-ignore - mocking exported function
-    getPageForTargetId.mockImplementation(getPageForTargetIdMock);
-    // @ts-ignore - mocking exported function
-    connectBrowser.mockImplementation(connectBrowserMock);
-    // @ts-ignore - mocking exported function
-    getAllPages.mockImplementation(getAllPagesMock);
-    // @ts-ignore - mocking exported function
-    forceDisconnectPlaywrightForTarget.mockImplementation(forceDisconnectMock);
+    vi.mocked(connectBrowser).mockImplementation(connectBrowserMock);
+    vi.mocked(getAllPages).mockImplementation(getAllPagesMock);
+    vi.mocked(findPageByTargetId).mockImplementation(findPageByTargetIdMock);
+    vi.mocked(forceDisconnectPlaywrightForTarget).mockImplementation(forceDisconnectMock);
 
     const result = await getPageForTargetIdWithRetry({
       cdpUrl: "ws://127.0.0.1:18791/cdp",
