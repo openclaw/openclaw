@@ -263,6 +263,8 @@ When validation fails:
 
     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
     - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `cron` here configures scheduler runtime only. Job definitions are not declared in `openclaw.json`.
+    - `cron.jobs` is not a valid config key. Manage jobs with `openclaw cron add/edit/remove` (or Gateway `cron.*` tools), persisted at `~/.openclaw/cron/jobs.json`.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
