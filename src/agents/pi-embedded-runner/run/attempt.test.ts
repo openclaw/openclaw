@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveClaudeSdkConfig } from "../../claude-sdk-runner/prepare-session.js";
 import {
   isOllamaCompatProvider,
+  repairTrailingUserMessageOrphan,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
@@ -10,7 +12,9 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
+  resolveRuntime,
 } from "./attempt.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
   return {
@@ -69,6 +73,67 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+});
+
+describe("repairTrailingUserMessageOrphan", () => {
+  it("repairs orphaned trailing user entries for runtime-agnostic sessions", () => {
+    const replacementMessages = [{ role: "assistant", content: "hi" }];
+    const sessionManager = {
+      getLeafEntry: vi.fn(() => ({
+        type: "message",
+        message: { role: "user" },
+        parentId: "parent-entry",
+      })),
+      branch: vi.fn(),
+      resetLeaf: vi.fn(),
+      buildSessionContext: vi.fn(() => ({ messages: replacementMessages })),
+    };
+    const agentSession = {
+      replaceMessages: vi.fn(),
+    };
+    const session = {
+      agent: {
+        replaceMessages: vi.fn(),
+      },
+    };
+
+    const repaired = repairTrailingUserMessageOrphan({
+      sessionManager: sessionManager as never,
+      agentSession: agentSession as never,
+      session: session as never,
+      runId: "run-1",
+      sessionId: "sess-1",
+    });
+
+    expect(repaired).toBe(true);
+    expect(sessionManager.branch).toHaveBeenCalledWith("parent-entry");
+    expect(sessionManager.resetLeaf).not.toHaveBeenCalled();
+    expect(agentSession.replaceMessages).toHaveBeenCalledWith(replacementMessages);
+    expect(session.agent.replaceMessages).toHaveBeenCalledWith(replacementMessages);
+  });
+
+  it("returns false when there is no trailing orphaned user entry", () => {
+    const sessionManager = {
+      getLeafEntry: vi.fn(() => ({
+        type: "message",
+        message: { role: "assistant" },
+      })),
+      branch: vi.fn(),
+      resetLeaf: vi.fn(),
+      buildSessionContext: vi.fn(),
+    };
+
+    const repaired = repairTrailingUserMessageOrphan({
+      sessionManager: sessionManager as never,
+      agentSession: { replaceMessages: vi.fn() } as never,
+      runId: "run-1",
+      sessionId: "sess-1",
+    });
+
+    expect(repaired).toBe(false);
+    expect(sessionManager.branch).not.toHaveBeenCalled();
+    expect(sessionManager.resetLeaf).not.toHaveBeenCalled();
   });
 });
 
@@ -323,7 +388,7 @@ describe("isOllamaCompatProvider", () => {
       isOllamaCompatProvider({
         provider: "custom",
         api: "openai-completions",
-        baseUrl: "https://api.openrouter.ai/v1",
+        baseUrl: "https://api.proxy.example/v1",
       }),
     ).toBe(false);
   });
@@ -451,5 +516,273 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveClaudeSdkConfig", () => {
+  it("returns empty config for empty claudeSdk object", () => {
+    const params = {
+      config: {
+        agents: {
+          list: [{ id: "main", claudeSdk: {} }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toEqual({});
+  });
+
+  it("returns config when claudeSdk has valid options", () => {
+    const params = {
+      config: {
+        agents: {
+          list: [{ id: "main", claudeSdk: { configDir: "/tmp/agent-claude-dir" } }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toEqual({
+      configDir: "/tmp/agent-claude-dir",
+    });
+  });
+
+  it("returns undefined when claudeSdk is explicitly false", () => {
+    const params = {
+      config: {
+        agents: {
+          list: [{ id: "main", claudeSdk: false }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toBeUndefined();
+  });
+
+  it("falls back to defaults.claudeSdk when agent has no override", () => {
+    const params = {
+      config: {
+        agents: {
+          defaults: { claudeSdk: { configDir: "/tmp/default-claude-dir" } },
+          list: [{ id: "main" }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toEqual({
+      configDir: "/tmp/default-claude-dir",
+    });
+  });
+
+  it("merges defaults.claudeSdk and agent claudeSdk with agent fields taking precedence", () => {
+    const params = {
+      config: {
+        agents: {
+          defaults: {
+            claudeSdk: {
+              configDir: "/tmp/default-claude-dir",
+            },
+          },
+          list: [
+            {
+              id: "main",
+              claudeSdk: { configDir: "/tmp/agent-claude-dir" },
+            },
+          ],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toEqual({
+      configDir: "/tmp/agent-claude-dir",
+    });
+  });
+
+  it("keeps defaults fields when agent claudeSdk is an empty object", () => {
+    const params = {
+      config: {
+        agents: {
+          defaults: {
+            claudeSdk: {
+              configDir: "/tmp/default-claude-dir",
+            },
+          },
+          list: [{ id: "main", claudeSdk: {} }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toEqual({
+      configDir: "/tmp/default-claude-dir",
+    });
+  });
+
+  it("honors explicit agent false even when defaults.claudeSdk is set", () => {
+    const params = {
+      config: {
+        agents: {
+          defaults: { claudeSdk: { configDir: "/tmp/default-claude-dir" } },
+          list: [{ id: "main", claudeSdk: false }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toBeUndefined();
+  });
+
+  it("returns defaults when defaults.claudeSdk is an empty object", () => {
+    const params = {
+      config: {
+        agents: {
+          defaults: { claudeSdk: {} },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "other")).toEqual({});
+  });
+
+  it("returns undefined when claudeSdk includes deprecated thinkingDefault", () => {
+    const params = {
+      config: {
+        agents: {
+          list: [{ id: "main", claudeSdk: { thinkingDefault: "low" } }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toBeUndefined();
+  });
+
+  it("returns undefined when claudeSdk has non-sdk provider (validation rejects it)", () => {
+    const params = {
+      config: {
+        agents: {
+          list: [{ id: "main", claudeSdk: { provider: "anthropic" } }],
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams;
+
+    // Non-sdk providers are no longer valid — safeParse fails and returns undefined.
+    expect(resolveClaudeSdkConfig(params, "main")).toBeUndefined();
+  });
+
+  it("config undefined (no agents) returns undefined", () => {
+    const params = {
+      config: undefined,
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveClaudeSdkConfig(params, "main")).toBeUndefined();
+  });
+});
+
+describe("resolveRuntime", () => {
+  it("returns pi when resolvedProviderAuth says system-keychain but provider is not system-keychain", () => {
+    const params = {
+      provider: "not-claude-pro",
+      resolvedProviderAuth: {
+        source: "Claude Pro (system keychain)",
+        mode: "system-keychain",
+      },
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    // resolvedProviderAuth is no longer consulted; routing is driven solely by provider name.
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns claude-sdk for the canonical claude-personal provider", () => {
+    const params = {
+      provider: "claude-personal",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("claude-sdk");
+  });
+
+  it("returns pi for unknown claude-max-like provider (not in SYSTEM_KEYCHAIN_PROVIDERS)", () => {
+    const params = {
+      provider: "claude-max",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns pi for non-claude-sdk providers", () => {
+    const params = {
+      provider: "openai",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns pi for any provider that is not in SYSTEM_KEYCHAIN_PROVIDERS", () => {
+    const params = {
+      provider: "claude-pro-custom",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("runtimeOverride pi forces pi even when provider is a known claude-sdk provider", () => {
+    const params = {
+      provider: "claude-personal",
+      runtimeOverride: "pi",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("runtimeOverride claude-sdk forces claude-sdk even when provider is openai with no supportedProviders", () => {
+    const params = {
+      provider: "openai",
+      runtimeOverride: "claude-sdk",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("claude-sdk");
+  });
+
+  it("config undefined with a non-sdk provider returns pi", () => {
+    const params = {
+      provider: "gemini",
+      config: undefined,
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns pi for non-Claude model even when runtimeOverride is claude-sdk", () => {
+    const params = {
+      provider: "openai",
+      modelId: "gpt-5.1",
+      runtimeOverride: "claude-sdk",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns pi for non-Claude model ID regardless of provider", () => {
+    const params = {
+      provider: "google",
+      modelId: "gemini-3-pro-preview",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("pi");
+  });
+
+  it("returns claude-sdk for Claude model with claude-personal provider", () => {
+    const params = {
+      provider: "claude-personal",
+      modelId: "claude-sonnet-4-5",
+      config: {},
+    } as unknown as EmbeddedRunAttemptParams;
+
+    expect(resolveRuntime(params, "main")).toBe("claude-sdk");
   });
 });

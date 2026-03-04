@@ -6,6 +6,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { upsertAuthProfile } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import {
+  CLAUDE_SDK_POLICY_ACKNOWLEDGEMENT_MESSAGE,
+  emitClaudeSdkPolicyWarningLines,
+} from "../../agents/claude-sdk-runner/logging.js";
+import { isSystemKeychainProvider } from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -48,7 +53,7 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ),
   });
 
-type TokenProvider = "anthropic";
+type TokenProvider = "anthropic" | "claude-personal";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   const trimmed = raw?.trim();
@@ -56,6 +61,9 @@ function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
     return null;
   }
   const normalized = normalizeProviderId(trimmed);
+  if (isSystemKeychainProvider(normalized)) {
+    return "claude-personal";
+  }
   if (normalized === "anthropic") {
     return "anthropic";
   }
@@ -64,6 +72,10 @@ function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
 
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+function resolveDefaultKeychainProfileId(provider: "claude-personal"): string {
+  return `${provider}:system-keychain`;
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -159,11 +171,66 @@ export async function modelsAuthPasteTokenCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
+export async function modelsAuthSetupClaudePersonalCommand(
+  opts: { provider?: string; profileId?: string; yes?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const provider = resolveTokenProvider(opts.provider ?? "claude-personal");
+  if (provider !== "claude-personal") {
+    throw new Error("Only --provider claude-personal is supported for setup-claude-personal.");
+  }
+
+  const profileId = opts.profileId?.trim() || resolveDefaultKeychainProfileId(provider);
+  emitClaudeSdkPolicyWarningLines({ log: runtime.log.bind(runtime), padding: true });
+
+  const requiresPrompt = process.stdin.isTTY && !opts.yes;
+  if (requiresPrompt) {
+    const acknowledgedPolicy = await confirm({
+      message: CLAUDE_SDK_POLICY_ACKNOWLEDGEMENT_MESSAGE,
+      initialValue: false,
+    });
+    if (!acknowledgedPolicy) {
+      runtime.log("Cancelled Claude Code keychain setup.");
+      return;
+    }
+    const proceed = await confirm({
+      message: `Configure Claude Code keychain auth for ${provider}?`,
+      initialValue: true,
+    });
+    if (!proceed) {
+      return;
+    }
+  }
+
+  upsertAuthProfile({
+    profileId,
+    credential: {
+      type: "token",
+      provider,
+      token: "system-keychain",
+    },
+  });
+
+  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
+
+  logConfigUpdated(runtime);
+  runtime.log(`Auth profile: ${profileId} (${provider}/system-keychain)`);
+}
+
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
   const provider = (await select({
-    message: "Token provider",
+    message: "Auth provider",
     options: [
-      { value: "anthropic", label: "anthropic" },
+      {
+        value: "anthropic",
+        label: "anthropic",
+        hint: "Anthropic API key — pay-per-token, no usage restrictions",
+      },
+      {
+        value: "claude-personal",
+        label: "claude-personal",
+        hint: "Claude Pro/Max subscription — personal subscriber use ONLY; prohibited for business, bots, or shared services",
+      },
       { value: "custom", label: "custom (type provider id)" },
     ],
   })) as TokenProvider | "custom";
@@ -181,8 +248,17 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       : provider;
 
   const method = (await select({
-    message: "Token method",
+    message: "Auth method",
     options: [
+      ...(isSystemKeychainProvider(providerId)
+        ? [
+            {
+              value: "setup-claude-pro",
+              label: "Configure Claude Code w/Keychain",
+              hint: `Create ${providerId}:system-keychain for runtime failover + cooldown tracking`,
+            },
+          ]
+        : []),
       ...(providerId === "anthropic"
         ? [
             {
@@ -194,7 +270,12 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
         : []),
       { value: "paste", label: "paste token" },
     ],
-  })) as "setup-token" | "paste";
+  })) as "setup-claude-pro" | "setup-token" | "paste";
+
+  if (method === "setup-claude-pro") {
+    await modelsAuthSetupClaudePersonalCommand({ provider: providerId }, runtime);
+    return;
+  }
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);

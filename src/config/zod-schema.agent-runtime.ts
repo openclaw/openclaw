@@ -12,6 +12,25 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+// ---------------------------------------------------------------------------
+// Claude SDK runtime config
+// ---------------------------------------------------------------------------
+
+// Claude SDK runtime is only for system-keychain providers (claude-pro / claude-max).
+// API-key-based providers use Pi runtime via models.providers config instead.
+export const ClaudeSdkConfigSchema = z
+  .object({
+    /**
+     * Optional Claude SDK base directory override. When set, this value is
+     * propagated to the Claude subprocess as CLAUDE_CONFIG_DIR.
+     */
+    configDir: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
+export type ClaudeSdkConfig = NonNullable<z.infer<typeof ClaudeSdkConfigSchema>>;
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -679,6 +698,16 @@ export const MemorySearchSchema = z
   .strict()
   .optional();
 export { AgentModelSchema };
+export const ThinkLevelSchema = z.union([
+  z.literal("off"),
+  z.literal("minimal"),
+  z.literal("low"),
+  z.literal("medium"),
+  z.literal("high"),
+  z.literal("xhigh"),
+  z.literal("adaptive"),
+]);
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -687,6 +716,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    thinkingDefault: ThinkLevelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
@@ -713,6 +743,7 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    claudeSdk: z.union([ClaudeSdkConfigSchema, z.literal(false)]).optional(),
   })
   .strict();
 

@@ -56,12 +56,29 @@ describe("resolveAgentConfig", () => {
       workspace: "~/openclaw",
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-opus-4",
+      thinkingDefault: undefined,
       identity: undefined,
       groupChat: undefined,
       subagents: undefined,
       sandbox: undefined,
       tools: undefined,
     });
+  });
+
+  it("returns per-agent thinkingDefault when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            thinkingDefault: "adaptive",
+          },
+        ],
+      },
+    };
+
+    const result = resolveAgentConfig(cfg, "main");
+    expect(result?.thinkingDefault).toBe("adaptive");
   });
 
   it("resolves explicit and effective model primary separately", () => {

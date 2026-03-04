@@ -21,12 +21,16 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   // Run before_compaction plugin hook (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_compaction")) {
+    const legacySession = ctx.params.session as typeof ctx.params.session & {
+      sessionFile?: string;
+    };
     void hookRunner
       .runBeforeCompaction(
         {
           messageCount: ctx.params.session.messages?.length ?? 0,
           messages: ctx.params.session.messages,
-          sessionFile: ctx.params.session.sessionFile,
+          // Keep compatibility with legacy mocked/test session shapes.
+          sessionFile: ctx.params.session.runtimeHints?.sessionFile ?? legacySession.sessionFile,
         },
         {
           sessionKey: ctx.params.sessionKey,

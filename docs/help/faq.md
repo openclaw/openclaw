@@ -38,10 +38,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I ask OpenClaw to update itself?](#can-i-ask-openclaw-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
-  - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
+  - [Can I use a Claude personal subscription without an API key](#can-i-use-a-claude-personal-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setuptoken)
-  - [Do you support Claude subscription auth (Claude Pro or Max)?](#do-you-support-claude-subscription-auth-claude-pro-or-max)
+  - [Do you support Claude subscription auth (Pro or Max)?](#do-you-support-claude-subscription-auth-pro-or-max)
   - [Why am I seeing `HTTP 429: rate_limit_error` from Anthropic?](#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
   - [Is AWS Bedrock supported?](#is-aws-bedrock-supported)
   - [How does Codex auth work?](#how-does-codex-auth-work)
@@ -711,12 +711,12 @@ OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
 Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 [Local models](/gateway/local-models), [Models](/concepts/models).
 
-### Can I use Claude Max subscription without an API key
+### Can I use a Claude personal subscription without an API key
 
 Yes. You can authenticate with a **setup-token**
 instead of an API key. This is the subscription path.
 
-Claude Pro/Max subscriptions **do not include an API key**, so this is the
+Claude personal subscriptions (Pro or Max) **do not include an API key**, so this is the
 technical path for subscription accounts. But this is your decision: Anthropic
 has blocked some subscription usage outside Claude Code in the past.
 If you want the clearest and safest supported path for production, use an Anthropic API key.
@@ -735,7 +735,7 @@ claude setup-token
 
 Copy the token it prints, then choose **Anthropic token (paste setup-token)** in the wizard. If you want to run it on the gateway host, use `openclaw models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `openclaw models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
 
-### Do you support Claude subscription auth (Claude Pro or Max)
+### Do you support Claude subscription auth (Pro or Max)
 
 Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
@@ -2397,6 +2397,25 @@ OpenClaw uses provider-prefixed IDs like:
 - `anthropic:default` (common when no email identity exists)
 - `anthropic:<email>` for OAuth identities
 - custom IDs you choose (e.g. `anthropic:work`)
+
+### Provider id vs auth profile id
+
+They solve different problems:
+
+- Provider ID: model/runtime routing target (for example `anthropic`, `claude-personal`, `custom`)
+- Auth profile ID: concrete credential record to use (for example `anthropic:work`, `claude-personal:system-keychain`, `custom-bridge:work`)
+
+The auth profile must exist in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+Config examples are in [/gateway/configuration-reference#agentsdefaultsclaudesdk](/gateway/configuration-reference#agentsdefaultsclaudesdk).
+
+### How does Claude SDK failover work
+
+OpenClaw failover for Claude SDK uses staged fallback:
+
+1. Rotate auth profiles for the active system-keychain provider (`claude-personal`).
+2. If no auth profiles remain (all cooling down or expired), switch runtime to Pi for the turn and continue normal model/provider fallback.
+
+This is why a session can start on Claude SDK and continue on Pi runtime when the Claude subscription auth is unavailable.
 
 ### Can I control which auth profile is tried first
 

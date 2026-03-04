@@ -10,6 +10,7 @@ import {
   modelsAuthOrderGetCommand,
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
+  modelsAuthSetupClaudePersonalCommand,
   modelsAuthSetupTokenCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
@@ -296,7 +297,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("add")
-    .description("Interactive auth helper (setup-token or paste token)")
+    .description("Interactive auth helper (Claude keychain, setup-token, or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
@@ -316,6 +317,44 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("setup-claude-personal")
+    .description("Create a claude-personal (Claude Pro/Max) system-keychain auth profile")
+    .option("--provider <name>", "Provider id (default: claude-personal)")
+    .option("--profile-id <id>", "Auth profile id (default: claude-personal:system-keychain)")
+    .option("--yes", "Skip confirmation when interactive", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthSetupClaudePersonalCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  // Backward-compat alias — hidden from help output
+  auth
+    .command("setup-claude-pro", { hidden: true })
+    .option("--provider <name>")
+    .option("--profile-id <id>")
+    .option("--yes", undefined, false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthSetupClaudePersonalCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
+            yes: Boolean(opts.yes),
           },
           defaultRuntime,
         );

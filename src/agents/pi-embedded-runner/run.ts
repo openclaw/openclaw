@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
@@ -9,12 +10,15 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
-  isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
-  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
+import {
+  isStaleClaudeResumeSessionError,
+  isStaleClaudeResumeSessionErrorMessage,
+} from "../claude-sdk-runner/error-mapping.js";
+import { emitClaudeSdkMetricFields } from "../claude-sdk-runner/logging.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -23,13 +27,8 @@ import {
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import {
-  ensureAuthProfileStore,
-  getApiKeyForModel,
-  resolveAuthProfileOrder,
-  type ResolvedProviderAuth,
-} from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../model-auth.js";
+import { normalizeProviderId, resolveThinkingDefault } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
@@ -46,7 +45,6 @@ import {
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
-  type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -55,6 +53,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { createRunAuthRuntimeFailoverController } from "./run/auth-runtime-failover.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -63,19 +62,6 @@ import {
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
-
-type ApiKeyInfo = ResolvedProviderAuth;
-
-type CopilotTokenState = {
-  githubToken: string;
-  expiresAt: number;
-  refreshTimer?: ReturnType<typeof setTimeout>;
-  refreshInFlight?: Promise<void>;
-};
-
-const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
-const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -116,6 +102,48 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 
 function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function emitClaudeSdkRuntimeMetric(
+  metric: string,
+  fields: Record<string, unknown>,
+  diagnosticsEnabled: boolean,
+): void {
+  emitClaudeSdkMetricFields(metric, fields, diagnosticsEnabled);
+}
+
+function normalizeOverflowFingerprint(message: string): string {
+  return message
+    .toLowerCase()
+    .replace(/\b\d+\b/g, "#")
+    .replace(/[0-9a-f]{6,}/g, "<hex>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function extractRateLimitBackoffMs(rateLimitInfo: unknown): number | undefined {
+  if (!rateLimitInfo || typeof rateLimitInfo !== "object") {
+    return undefined;
+  }
+  const info = rateLimitInfo as Record<string, unknown>;
+  const retryAfterMsRaw = info.retry_after_ms ?? info.retryAfterMs;
+  if (
+    typeof retryAfterMsRaw === "number" &&
+    Number.isFinite(retryAfterMsRaw) &&
+    retryAfterMsRaw > 0
+  ) {
+    return Math.floor(retryAfterMsRaw);
+  }
+  const retryAfterSecondsRaw = info.retry_after_seconds ?? info.retryAfterSeconds;
+  if (
+    typeof retryAfterSecondsRaw === "number" &&
+    Number.isFinite(retryAfterSecondsRaw) &&
+    retryAfterSecondsRaw > 0
+  ) {
+    return Math.floor(retryAfterSecondsRaw * 1000);
+  }
+  return undefined;
 }
 
 // Defensive guard for the outer run loop across all retry branches.
@@ -366,291 +394,60 @@ export async function runEmbeddedPiAgent(
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
-          : [undefined];
-      let profileIndex = 0;
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      const initialThinkLevel =
+        params.thinkLevel ??
+        resolveThinkingDefault({
+          cfg: params.config ?? {},
+          provider,
+          model: modelId,
+          agentId: workspaceResolution.agentId,
+        });
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
-      let apiKeyInfo: ApiKeyInfo | null = null;
-      let lastProfileId: string | undefined;
-      const copilotTokenState: CopilotTokenState | null =
-        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
-      let copilotRefreshCancelled = false;
-      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
-
-      const clearCopilotRefreshTimer = () => {
-        if (!copilotTokenState?.refreshTimer) {
-          return;
-        }
-        clearTimeout(copilotTokenState.refreshTimer);
-        copilotTokenState.refreshTimer = undefined;
-      };
-
-      const stopCopilotRefreshTimer = () => {
-        if (!copilotTokenState) {
-          return;
-        }
-        copilotRefreshCancelled = true;
-        clearCopilotRefreshTimer();
-      };
-
-      const refreshCopilotToken = async (reason: string): Promise<void> => {
-        if (!copilotTokenState) {
-          return;
-        }
-        if (copilotTokenState.refreshInFlight) {
-          await copilotTokenState.refreshInFlight;
-          return;
-        }
-        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-        copilotTokenState.refreshInFlight = (async () => {
-          const githubToken = copilotTokenState.githubToken.trim();
-          if (!githubToken) {
-            throw new Error("Copilot refresh requires a GitHub token.");
-          }
-          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          copilotTokenState.expiresAt = copilotToken.expiresAt;
-          const remaining = copilotToken.expiresAt - Date.now();
-          log.debug(
-            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
+      let staleResumeRecoveryAttempted = false;
+      const authController = await createRunAuthRuntimeFailoverController({
+        provider,
+        modelId,
+        model,
+        cfg: params.config,
+        agentDir,
+        authStore,
+        authStorage,
+        fallbackConfigured,
+        preferredProfileId,
+        authProfileIdSource: params.authProfileIdSource,
+        onAuthRotationSuccess: () => {
+          thinkLevel = initialThinkLevel;
+          attemptedThinking.clear();
+          staleResumeRecoveryAttempted = false;
+        },
+        onClaudeSdkToPiFallback: () => {
+          log.warn(
+            `[claude-sdk-runtime-fallback] all claude-sdk providers unavailable/cooling down; switching to pi runtime for ${provider}/${modelId}`,
           );
-        })()
-          .catch((err) => {
-            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
-            throw err;
-          })
-          .finally(() => {
-            copilotTokenState.refreshInFlight = undefined;
-          });
-        await copilotTokenState.refreshInFlight;
-      };
-
-      const scheduleCopilotRefresh = (): void => {
-        if (!copilotTokenState || copilotRefreshCancelled) {
-          return;
-        }
-        if (!hasCopilotGithubToken()) {
-          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
-          return;
-        }
-        clearCopilotRefreshTimer();
-        const now = Date.now();
-        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
-        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
-        const timer = setTimeout(() => {
-          if (copilotRefreshCancelled) {
-            return;
-          }
-          refreshCopilotToken("scheduled")
-            .then(() => scheduleCopilotRefresh())
-            .catch(() => {
-              if (copilotRefreshCancelled) {
-                return;
-              }
-              const retryTimer = setTimeout(() => {
-                if (copilotRefreshCancelled) {
-                  return;
-                }
-                refreshCopilotToken("scheduled-retry")
-                  .then(() => scheduleCopilotRefresh())
-                  .catch(() => undefined);
-              }, COPILOT_REFRESH_RETRY_MS);
-              copilotTokenState.refreshTimer = retryTimer;
-              if (copilotRefreshCancelled) {
-                clearTimeout(retryTimer);
-                copilotTokenState.refreshTimer = undefined;
-              }
-            });
-        }, delayMs);
-        copilotTokenState.refreshTimer = timer;
-        if (copilotRefreshCancelled) {
-          clearTimeout(timer);
-          copilotTokenState.refreshTimer = undefined;
-        }
-      };
-
-      const resolveAuthProfileFailoverReason = (params: {
-        allInCooldown: boolean;
-        message: string;
-        profileIds?: Array<string | undefined>;
-      }): FailoverReason => {
-        if (params.allInCooldown) {
-          const profileIds = (params.profileIds ?? profileCandidates).filter(
-            (id): id is string => typeof id === "string" && id.length > 0,
-          );
-          return (
-            resolveProfilesUnavailableReason({
-              store: authStore,
-              profileIds,
-            }) ?? "rate_limit"
-          );
-        }
-        const classified = classifyFailoverReason(params.message);
-        return classified ?? "auth";
-      };
-
-      const throwAuthProfileFailover = (params: {
-        allInCooldown: boolean;
-        message?: string;
-        error?: unknown;
-      }): never => {
-        const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
-        const message =
-          params.message?.trim() ||
-          (params.error ? describeUnknownError(params.error).trim() : "") ||
-          fallbackMessage;
-        const reason = resolveAuthProfileFailoverReason({
-          allInCooldown: params.allInCooldown,
-          message,
-          profileIds: profileCandidates,
-        });
-        if (fallbackConfigured) {
-          throw new FailoverError(message, {
-            reason,
-            provider,
-            model: modelId,
-            status: resolveFailoverStatus(reason),
-            cause: params.error,
-          });
-        }
-        if (params.error instanceof Error) {
-          throw params.error;
-        }
-        throw new Error(message);
-      };
-
-      const resolveApiKeyForCandidate = async (candidate?: string) => {
-        return getApiKeyForModel({
-          model,
-          cfg: params.config,
-          profileId: candidate,
-          store: authStore,
-          agentDir,
-        });
-      };
-
-      const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
-        apiKeyInfo = await resolveApiKeyForCandidate(candidate);
-        const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
-        if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
-            throw new Error(
-              `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-            );
-          }
-          lastProfileId = resolvedProfileId;
-          return;
-        }
-        if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
-            await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          if (copilotTokenState) {
-            copilotTokenState.githubToken = apiKeyInfo.apiKey;
-            copilotTokenState.expiresAt = copilotToken.expiresAt;
-            scheduleCopilotRefresh();
-          }
-        } else {
-          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
-        }
-        lastProfileId = apiKeyInfo.profileId;
-      };
-
-      const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) {
-          return false;
-        }
-        let nextIndex = profileIndex + 1;
-        while (nextIndex < profileCandidates.length) {
-          const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
-            nextIndex += 1;
-            continue;
-          }
-          try {
-            await applyApiKeyInfo(candidate);
-            profileIndex = nextIndex;
-            thinkLevel = initialThinkLevel;
-            attemptedThinking.clear();
-            return true;
-          } catch (err) {
-            if (candidate && candidate === lockedProfileId) {
-              throw err;
-            }
-            nextIndex += 1;
-          }
-        }
-        return false;
-      };
-
-      try {
-        while (profileIndex < profileCandidates.length) {
-          const candidate = profileCandidates[profileIndex];
-          if (
-            candidate &&
-            candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
-          ) {
-            profileIndex += 1;
-            continue;
-          }
-          await applyApiKeyInfo(profileCandidates[profileIndex]);
-          break;
-        }
-        if (profileIndex >= profileCandidates.length) {
-          throwAuthProfileFailover({ allInCooldown: true });
-        }
-      } catch (err) {
-        if (err instanceof FailoverError) {
-          throw err;
-        }
-        if (profileCandidates[profileIndex] === lockedProfileId) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
-        }
-        const advanced = await advanceAuthProfile();
-        if (!advanced) {
-          throwAuthProfileFailover({ allInCooldown: false, error: err });
-        }
-      }
-
-      const maybeRefreshCopilotForAuthError = async (
-        errorText: string,
-        retried: boolean,
-      ): Promise<boolean> => {
-        if (!copilotTokenState || retried) {
-          return false;
-        }
-        if (!isFailoverErrorMessage(errorText)) {
-          return false;
-        }
-        if (classifyFailoverReason(errorText) !== "auth") {
-          return false;
-        }
-        try {
-          await refreshCopilotToken("auth-error");
-          scheduleCopilotRefresh();
-          return true;
-        } catch {
-          return false;
-        }
-      };
+        },
+      });
+      const authResolution = authController.authResolution;
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        authResolution.profileCandidates.length,
+      );
       let overflowCompactionAttempts = 0;
+      let forceFreshClaudeSession = false;
       let toolResultTruncationAttempted = false;
+      let claudeOverflowRetryCount = 0;
+      let claudeOverflowFailFastCount = 0;
+      const diagnosticsEnabled = isDiagnosticsEnabled(params.config);
+      let lastClaudeOverflowState:
+        | {
+            fingerprint: string;
+            messageCount: number;
+            sessionId: string;
+            promptTokens: number;
+          }
+        | undefined;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
@@ -677,6 +474,7 @@ export async function runEmbeddedPiAgent(
         });
       };
       try {
+        await authController.syncCopilotRefreshForCurrentProfile("run-start");
         let authRetryPending = false;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -747,11 +545,16 @@ export async function runEmbeddedPiAgent(
             provider,
             modelId,
             model,
+            attemptNumber: runLoopIterations,
+            runtimeOverride: authResolution.runtimeOverride,
+            forceFreshClaudeSession,
+            resolvedProviderAuth: authController.apiKeyInfo ?? undefined,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            thinkLevelExplicit: params.thinkLevel !== undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -781,6 +584,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
+          forceFreshClaudeSession = false;
 
           const {
             aborted,
@@ -826,6 +630,71 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const staleResumeError =
+            !aborted &&
+            authResolution.runtimeOverride === "claude-sdk" &&
+            (isStaleClaudeResumeSessionError(promptError) ||
+              isStaleClaudeResumeSessionErrorMessage(assistantErrorText));
+          if (staleResumeError) {
+            const staleMessage =
+              (promptError ? describeUnknownError(promptError) : assistantErrorText) ??
+              "stale Claude SDK resume session";
+            if (!staleResumeRecoveryAttempted) {
+              staleResumeRecoveryAttempted = true;
+              forceFreshClaudeSession = true;
+              emitClaudeSdkRuntimeMetric(
+                "claude_sdk.resume.stale_recovered",
+                {
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey ?? params.sessionId,
+                  provider,
+                  model: modelId,
+                  attempt: runLoopIterations,
+                  action: "retry_with_fresh_session",
+                },
+                diagnosticsEnabled,
+              );
+              log.warn(
+                `[claude-sdk-stale-resume] retrying with fresh session ` +
+                  `runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `provider=${provider}/${modelId} attempt=${runLoopIterations} ` +
+                  `error=${staleMessage.slice(0, 200)}`,
+              );
+              continue;
+            }
+            log.error(
+              `[claude-sdk-stale-resume] recovery failed after retry ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} attempt=${runLoopIterations} ` +
+                `error=${staleMessage.slice(0, 200)}`,
+            );
+            return {
+              payloads: [
+                {
+                  text:
+                    "Claude session resume failed because the previous server session is no longer valid. " +
+                    "Please retry once, or use /new to start a fresh thread if it persists.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                },
+                systemPromptReport: attempt.systemPromptReport,
+                error: {
+                  kind: "claude_sdk_stale_resume",
+                  message: staleMessage,
+                },
+              },
+            };
+          }
 
           const contextOverflowError = !aborted
             ? (() => {
@@ -858,11 +727,107 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            const claudeSdkManagedRuntime = authResolution.runtimeOverride === "claude-sdk";
+            if (!isCompactionFailure && claudeSdkManagedRuntime) {
+              const lifecycle = attempt.claudeSdkLifecycle;
+              const hasCompactionEvidence =
+                hadAttemptLevelCompaction ||
+                (lifecycle?.compactBoundaryCount ?? 0) > 0 ||
+                (lifecycle?.statusCompactingCount ?? 0) > 0;
+              const currentClaudeOverflowState = {
+                fingerprint: normalizeOverflowFingerprint(errorText),
+                messageCount: msgCount,
+                sessionId: sessionIdUsed,
+                promptTokens: lastTurnTotal ?? 0,
+              };
+              const noMeaningfulStateDelta =
+                !!lastClaudeOverflowState &&
+                lastClaudeOverflowState.fingerprint === currentClaudeOverflowState.fingerprint &&
+                lastClaudeOverflowState.messageCount === currentClaudeOverflowState.messageCount &&
+                lastClaudeOverflowState.sessionId === currentClaudeOverflowState.sessionId &&
+                lastClaudeOverflowState.promptTokens === currentClaudeOverflowState.promptTokens;
+
+              if (!hasCompactionEvidence || noMeaningfulStateDelta) {
+                claudeOverflowFailFastCount += 1;
+                emitClaudeSdkRuntimeMetric(
+                  "claude_sdk.overflow.fail_fast",
+                  {
+                    runId: params.runId,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider,
+                    model: modelId,
+                    attempt: runLoopIterations,
+                    failFastCount: claudeOverflowFailFastCount,
+                    fingerprint: currentClaudeOverflowState.fingerprint,
+                    reason: !hasCompactionEvidence ? "no_compaction_signal" : "no_state_delta",
+                  },
+                  diagnosticsEnabled,
+                );
+                log.warn(
+                  `[claude-sdk-overflow] fail-fast runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                    `provider=${provider}/${modelId} attempt=${runLoopIterations} ` +
+                    `reason=${!hasCompactionEvidence ? "no_compaction_signal" : "no_state_delta"}`,
+                );
+                return {
+                  payloads: [
+                    {
+                      text:
+                        "Context overflow: Claude could not compact this session enough to continue. " +
+                        "Use /new (or /reset) to start a fresh session, or switch to a larger-context model.",
+                      isError: true,
+                    },
+                  ],
+                  meta: {
+                    durationMs: Date.now() - started,
+                    agentMeta: {
+                      sessionId: sessionIdUsed,
+                      provider,
+                      model: model.id,
+                    },
+                    systemPromptReport: attempt.systemPromptReport,
+                    error: { kind: "context_overflow", message: errorText },
+                  },
+                };
+              }
+
+              if (overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS) {
+                overflowCompactionAttempts++;
+                claudeOverflowRetryCount += 1;
+                lastClaudeOverflowState = currentClaudeOverflowState;
+                emitClaudeSdkRuntimeMetric(
+                  "claude_sdk.overflow.retries",
+                  {
+                    runId: params.runId,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider,
+                    model: modelId,
+                    attempt: runLoopIterations,
+                    retryCount: claudeOverflowRetryCount,
+                    compactionEvidence: {
+                      attemptCompactionCount,
+                      compactBoundaryCount: lifecycle?.compactBoundaryCount ?? 0,
+                      statusCompactingCount: lifecycle?.statusCompactingCount ?? 0,
+                    },
+                  },
+                  diagnosticsEnabled,
+                );
+                log.warn(
+                  `context overflow detected in claude-sdk runtime with compaction evidence ` +
+                    `(attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); ` +
+                    `retrying prompt without local overflow recovery for ${provider}/${modelId}`,
+                );
+                continue;
+              }
+            }
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
               !isCompactionFailure &&
               hadAttemptLevelCompaction &&
+              !claudeSdkManagedRuntime &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
@@ -872,9 +837,10 @@ export async function runEmbeddedPiAgent(
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
-            // already auto-compact.
+            // already auto-compact and we're not in the Claude SDK runtime.
             if (
               !isCompactionFailure &&
+              !claudeSdkManagedRuntime &&
               !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
@@ -895,7 +861,7 @@ export async function runEmbeddedPiAgent(
                 messageChannel: params.messageChannel,
                 messageProvider: params.messageProvider,
                 agentAccountId: params.agentAccountId,
-                authProfileId: lastProfileId,
+                authProfileId: authController.lastProfileId,
                 sessionFile: params.sessionFile,
                 workspaceDir: resolvedWorkspace,
                 agentDir,
@@ -927,7 +893,7 @@ export async function runEmbeddedPiAgent(
             // Fallback: try truncating oversized tool results in the session.
             // This handles the case where a single tool result exceeds the
             // context window and compaction cannot reduce it further.
-            if (!toolResultTruncationAttempted) {
+            if (!toolResultTruncationAttempted && !claudeSdkManagedRuntime) {
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({
@@ -1008,10 +974,59 @@ export async function runEmbeddedPiAgent(
               },
             };
           }
+          lastClaudeOverflowState = undefined;
+
+          if (authResolution.runtimeOverride === "claude-sdk" && attempt.claudeSdkLifecycle) {
+            const lifecycle = attempt.claudeSdkLifecycle;
+            if (lifecycle.lastAuthStatus?.error && promptError) {
+              log.warn(
+                `[claude-sdk-auth-status] runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId} provider=${provider}/${modelId} ` +
+                  `attempt=${runLoopIterations} authError=${lifecycle.lastAuthStatus.error}`,
+              );
+            }
+            if (lifecycle.lastHookEvent) {
+              log.debug(
+                `[claude-sdk-hook] runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${provider}/${modelId} hook=${lifecycle.lastHookEvent.subtype} ` +
+                  `name=${lifecycle.lastHookEvent.hookName ?? "unknown"} ` +
+                  `event=${lifecycle.lastHookEvent.hookEvent ?? "unknown"} ` +
+                  `outcome=${lifecycle.lastHookEvent.outcome ?? "n/a"}`,
+              );
+            }
+            if (lifecycle.lastTaskEvent) {
+              log.debug(
+                `[claude-sdk-task] runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${provider}/${modelId} task=${lifecycle.lastTaskEvent.subtype} ` +
+                  `taskId=${lifecycle.lastTaskEvent.taskId ?? "unknown"} ` +
+                  `status=${lifecycle.lastTaskEvent.status ?? "n/a"}`,
+              );
+            }
+            if (lifecycle.lastPromptSuggestion) {
+              log.debug(
+                `[claude-sdk-prompt-suggestion] runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${provider}/${modelId} suggestion=${lifecycle.lastPromptSuggestion}`,
+              );
+            }
+            const retryDelayMs = extractRateLimitBackoffMs(lifecycle.lastRateLimitInfo);
+            if (
+              promptError &&
+              retryDelayMs &&
+              classifyFailoverReason(describeUnknownError(promptError)) === "rate_limit"
+            ) {
+              const boundedDelayMs = Math.min(10_000, retryDelayMs);
+              log.warn(
+                `[claude-sdk-rate-limit] backoff before retry runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} provider=${provider}/${modelId} ` +
+                  `attempt=${runLoopIterations} delayMs=${boundedDelayMs}`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, boundedDelayMs));
+            }
+          }
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
-            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+            if (await authController.maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
               continue;
             }
@@ -1068,14 +1083,15 @@ export async function runEmbeddedPiAgent(
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
-              profileId: lastProfileId,
+              profileId: authController.lastProfileId,
               reason: promptFailoverReason,
             });
             if (
               isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
-              (await advanceAuthProfile())
+              (await authController.advanceAuthProfile())
             ) {
+              await authController.syncCopilotRefreshForCurrentProfile("profile-rotate");
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1096,7 +1112,7 @@ export async function runEmbeddedPiAgent(
                 reason: promptFailoverReason ?? "unknown",
                 provider,
                 model: modelId,
-                profileId: lastProfileId,
+                profileId: authController.lastProfileId,
                 status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
               });
             }
@@ -1125,7 +1141,7 @@ export async function runEmbeddedPiAgent(
 
           if (
             authFailure &&
-            (await maybeRefreshCopilotForAuthError(
+            (await authController.maybeRefreshCopilotForAuthError(
               lastAssistant?.errorMessage ?? "",
               copilotAuthRetry,
             ))
@@ -1133,7 +1149,7 @@ export async function runEmbeddedPiAgent(
             authRetryPending = true;
             continue;
           }
-          if (imageDimensionError && lastProfileId) {
+          if (imageDimensionError && authController.lastProfileId) {
             const details = [
               imageDimensionError.messageIndex !== undefined
                 ? `message=${imageDimensionError.messageIndex}`
@@ -1148,7 +1164,7 @@ export async function runEmbeddedPiAgent(
               .filter(Boolean)
               .join(" ");
             log.warn(
-              `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
+              `Profile ${authController.lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
             );
           }
 
@@ -1158,7 +1174,7 @@ export async function runEmbeddedPiAgent(
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
-            if (lastProfileId) {
+            if (authController.lastProfileId) {
               const reason =
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
@@ -1167,21 +1183,24 @@ export async function runEmbeddedPiAgent(
               // not an auth issue. Marking the profile would poison fallback models
               // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
               await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
+                profileId: authController.lastProfileId,
                 reason,
               });
               if (timedOut && !isProbeSession) {
-                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
+                log.warn(
+                  `Profile ${authController.lastProfileId} timed out. Trying next account...`,
+                );
               }
               if (cloudCodeAssistFormatError) {
                 log.warn(
-                  `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
+                  `Profile ${authController.lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
                 );
               }
             }
 
-            const rotated = await advanceAuthProfile();
+            const rotated = await authController.advanceAuthProfile();
             if (rotated) {
+              await authController.syncCopilotRefreshForCurrentProfile("profile-rotate");
               continue;
             }
 
@@ -1216,7 +1235,7 @@ export async function runEmbeddedPiAgent(
                 reason: assistantFailoverReason ?? "unknown",
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
-                profileId: lastProfileId,
+                profileId: authController.lastProfileId,
                 status,
               });
             }
@@ -1290,16 +1309,19 @@ export async function runEmbeddedPiAgent(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
-          if (lastProfileId) {
+          if (authController.lastProfileId) {
+            const successfulProfileProvider =
+              authStore.profiles[authController.lastProfileId]?.provider ??
+              authResolution.authProvider;
             await markAuthProfileGood({
               store: authStore,
-              provider,
-              profileId: lastProfileId,
+              provider: successfulProfileProvider,
+              profileId: authController.lastProfileId,
               agentDir: params.agentDir,
             });
             await markAuthProfileUsed({
               store: authStore,
-              profileId: lastProfileId,
+              profileId: authController.lastProfileId,
               agentDir: params.agentDir,
             });
           }
@@ -1334,7 +1356,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
-        stopCopilotRefreshTimer();
+        authController.stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -10,6 +11,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ClaudeSdkConfig } from "../../../config/zod-schema.agent-runtime.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -27,6 +29,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
+import type { AgentRuntimeSession } from "../../agent-runtime.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
@@ -36,11 +39,15 @@ import {
   buildBootstrapInjectionStats,
 } from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
-import { createCacheTrace } from "../../cache-trace.js";
+import { createCacheTrace, type CacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import {
+  prepareClaudeSdkSession,
+  resolveClaudeSdkConfig,
+} from "../../claude-sdk-runner/prepare-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -48,10 +55,8 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
-import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
-  downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -97,6 +102,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
+import { createPiRuntimeAdapter } from "../pi-runtime-adapter.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -124,6 +130,29 @@ import {
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+/** @internal Exported for testing only. */
+export function resolveRuntime(
+  params: EmbeddedRunAttemptParams,
+  _agentId: string,
+): "pi" | "claude-sdk" {
+  // Non-Claude models cannot run through the claude-sdk subprocess; always route to Pi.
+  if (params.modelId && !params.modelId.startsWith("claude-")) {
+    log.warn(
+      `model "${params.modelId}" is not a Claude model; routing to Pi runtime (provider: ${params.provider})`,
+    );
+    return "pi";
+  }
+  // Explicit override wins — caller takes full responsibility.
+  if (params.runtimeOverride) {
+    return params.runtimeOverride;
+  }
+  // System-keychain auth providers use the claude-sdk subprocess.
+  if (resolveModelAuthMode(params.provider, params.config) === "system-keychain") {
+    return "claude-sdk";
+  }
+  return "pi";
+}
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -548,6 +577,152 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+export function pruneProcessedSessionImages(session?: {
+  messages: AgentMessage[];
+  agent: { replaceMessages: (messages: AgentMessage[]) => void };
+}) {
+  if (!session) {
+    return;
+  }
+  const didPrune = pruneProcessedHistoryImages(session.messages);
+  if (didPrune) {
+    session.agent.replaceMessages(session.messages);
+  }
+}
+
+export function injectHistoryImagesIntoMessages(
+  messages: AgentMessage[],
+  historyImagesByIndex: Map<number, ImageContent[]>,
+): boolean {
+  if (historyImagesByIndex.size === 0) {
+    return false;
+  }
+  let didMutate = false;
+
+  for (const [msgIndex, images] of historyImagesByIndex) {
+    // Bounds check: ensure index is valid before accessing
+    if (msgIndex < 0 || msgIndex >= messages.length) {
+      continue;
+    }
+    const msg = messages[msgIndex];
+    if (msg && msg.role === "user") {
+      // Convert string content to array format if needed
+      if (typeof msg.content === "string") {
+        msg.content = [{ type: "text", text: msg.content }];
+        didMutate = true;
+      }
+      if (Array.isArray(msg.content)) {
+        // Check for existing image content to avoid duplicates across turns
+        const existingImageData = new Set(
+          msg.content
+            .filter(
+              (c): c is ImageContent =>
+                c != null &&
+                typeof c === "object" &&
+                c.type === "image" &&
+                typeof c.data === "string",
+            )
+            .map((c) => c.data),
+        );
+        for (const img of images) {
+          // Only add if this image isn't already in the message
+          if (!existingImageData.has(img.data)) {
+            msg.content.push(img);
+            didMutate = true;
+          }
+        }
+      }
+    }
+  }
+
+  return didMutate;
+}
+
+export async function buildHookVisibleHistorySnapshot(params: {
+  messages: AgentMessage[];
+  modelApi: string;
+  modelId: string;
+  provider: string;
+  allowedToolNames: Set<string>;
+  config: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+  sessionId: string;
+  transcriptPolicy: ReturnType<typeof resolveTranscriptPolicy>;
+  sessionKey?: string;
+}): Promise<AgentMessage[]> {
+  const prior = await sanitizeSessionHistory({
+    messages: params.messages,
+    modelApi: params.modelApi,
+    modelId: params.modelId,
+    provider: params.provider,
+    allowedToolNames: params.allowedToolNames,
+    config: params.config,
+    sessionManager: params.sessionManager,
+    sessionId: params.sessionId,
+    policy: params.transcriptPolicy,
+  });
+  const validatedGemini = params.transcriptPolicy.validateGeminiTurns
+    ? validateGeminiTurns(prior)
+    : prior;
+  const validated = params.transcriptPolicy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini)
+    : validatedGemini;
+  const truncated = limitHistoryTurns(
+    validated,
+    getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+  );
+  return params.transcriptPolicy.repairToolUseResultPairing
+    ? sanitizeToolUseResultPairing(truncated)
+    : truncated;
+}
+
+export function repairTrailingUserMessageOrphan(params: {
+  sessionManager: SessionManager;
+  agentSession: AgentRuntimeSession;
+  session?: {
+    agent: { replaceMessages: (messages: AgentMessage[]) => void };
+  };
+  runId: string;
+  sessionId: string;
+}): boolean {
+  const leafEntry = params.sessionManager.getLeafEntry();
+  if (leafEntry?.type !== "message" || leafEntry.message.role !== "user") {
+    return false;
+  }
+  if (leafEntry.parentId) {
+    params.sessionManager.branch(leafEntry.parentId);
+  } else {
+    params.sessionManager.resetLeaf();
+  }
+  const sessionContext = params.sessionManager.buildSessionContext();
+  params.agentSession.replaceMessages(sessionContext.messages);
+  if (params.session) {
+    params.session.agent.replaceMessages(sessionContext.messages);
+  }
+  log.warn(
+    `Removed orphaned user message to prevent consecutive user turns. ` +
+      `runId=${params.runId} sessionId=${params.sessionId}`,
+  );
+  return true;
+}
+
+function getClaudeSdkLifecycleSnapshot(
+  session: AgentRuntimeSession,
+): EmbeddedRunAttemptResult["claudeSdkLifecycle"] | undefined {
+  if (
+    !("claudeSdkLifecycleSnapshot" in (session as object)) ||
+    typeof (session as { claudeSdkLifecycleSnapshot?: unknown }).claudeSdkLifecycleSnapshot !==
+      "object"
+  ) {
+    return undefined;
+  }
+  return (
+    session as {
+      claudeSdkLifecycleSnapshot?: EmbeddedRunAttemptResult["claudeSdkLifecycle"];
+    }
+  ).claudeSdkLifecycleSnapshot;
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -865,6 +1040,9 @@ export async function runEmbeddedAttempt(
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let piAgentForFlush: { waitForIdle?: () => Promise<void> } | undefined;
+    let agentSession: AgentRuntimeSession | null = null;
+    let cacheTrace: CacheTrace | null = null;
     let removeToolResultContextGuard: (() => void) | undefined;
     try {
       await repairSessionFileIfNeeded({
@@ -881,13 +1059,15 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
       });
+      const runtimeKind = resolveRuntime(params, sessionAgentId);
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         inputProvenance: params.inputProvenance,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        allowSyntheticToolResults:
+          runtimeKind === "claude-sdk" ? false : transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -960,213 +1140,186 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
-      ({ session } = await createAgentSession({
-        cwd: resolvedWorkspace,
-        agentDir,
-        authStorage: params.authStorage,
-        modelRegistry: params.modelRegistry,
-        model: params.model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
-        tools: builtInTools,
-        customTools: allCustomTools,
-        sessionManager,
-        settingsManager,
-        resourceLoader,
-      }));
-      applySystemPromptOverrideToSession(session, systemPromptText);
-      if (!session) {
-        throw new Error("Embedded agent session missing");
-      }
-      const activeSession = session;
-      removeToolResultContextGuard = installToolResultContextGuard({
-        agent: activeSession.agent,
-        contextWindowTokens: Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-          ),
-        ),
-      });
-      const cacheTrace = createCacheTrace({
-        cfg: params.config,
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
-      const anthropicPayloadLogger = createAnthropicPayloadLogger({
-        env: process.env,
-        runId: params.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        workspaceDir: params.workspaceDir,
-      });
-
-      // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
-      // for reliable streaming + tool calling support (#11828).
-      if (params.model.api === "ollama") {
-        // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
-        const providerConfig = params.config?.models?.providers?.[params.model.provider];
-        const modelBaseUrl =
-          typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
-        const providerBaseUrl =
-          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
-        const ollamaBaseUrl = resolveOllamaBaseUrlForRun({
-          modelBaseUrl,
-          providerBaseUrl,
-        });
-        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
-      } else if (params.model.api === "openai-responses" && params.provider === "openai") {
-        const wsApiKey = await params.authStorage.getApiKey(params.provider);
-        if (wsApiKey) {
-          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-            signal: runAbortController.signal,
-          });
-        } else {
-          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
-        }
-      } else {
-        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
-      }
-
-      // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
-      // Otherwise Ollama defaults to a 4096 context window.
-      const providerIdForNumCtx =
-        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
-          ? params.model.provider
-          : params.provider;
-      const shouldInjectNumCtx = shouldInjectOllamaCompatNumCtx({
-        model: params.model,
-        config: params.config,
-        providerId: providerIdForNumCtx,
-      });
-      if (shouldInjectNumCtx) {
-        const numCtx = Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-          ),
+      if (runtimeKind === "claude-sdk") {
+        const claudeSdkConfig = resolveClaudeSdkConfig(params, sessionAgentId);
+        const agentCfg: ClaudeSdkConfig = claudeSdkConfig ?? {};
+        agentSession = await prepareClaudeSdkSession(
+          params,
+          agentCfg,
+          params.resolvedProviderAuth,
+          sessionManager,
+          resolvedWorkspace,
+          agentDir,
+          systemPromptText,
+          builtInTools,
+          allCustomTools,
+          params.forceFreshClaudeSession === true,
         );
-        activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
-      }
-
-      applyExtraParamsToAgent(
-        activeSession.agent,
-        params.config,
-        params.provider,
-        params.modelId,
-        params.streamParams,
-        params.thinkLevel,
-        sessionAgentId,
-      );
-
-      if (cacheTrace) {
-        cacheTrace.recordStage("session:loaded", {
-          messages: activeSession.messages,
+        cacheTrace = createCacheTrace({
+          cfg: params.config,
+          env: process.env,
+          runId: params.runId,
+          sessionId: agentSession.sessionId,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          modelId: params.modelId,
+          modelApi: params.model.api,
+          workspaceDir: params.workspaceDir,
+        });
+        cacheTrace?.recordStage("session:loaded", {
+          messages: agentSession.messages,
           system: systemPromptText,
           note: "after session create",
         });
-        activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
-      }
+      } else {
+        ({ session } = await createAgentSession({
+          cwd: resolvedWorkspace,
+          agentDir,
+          authStorage: params.authStorage,
+          modelRegistry: params.modelRegistry,
+          model: params.model,
+          thinkingLevel: mapThinkingLevel(params.thinkLevel),
+          tools: builtInTools,
+          customTools: allCustomTools,
+          sessionManager,
+          settingsManager,
+          resourceLoader,
+        }));
+        if (!session) {
+          throw new Error("Embedded agent session missing");
+        }
+        applySystemPromptOverrideToSession(session, systemPromptText);
+        piAgentForFlush = session.agent;
+        agentSession = createPiRuntimeAdapter({
+          session,
+          runtimeHints: {
+            allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+            enforceFinalTag: params.enforceFinalTag ?? true,
+            managesOwnHistory: false,
+            supportsStreamFnWrapping: true,
+            sessionFile: params.sessionFile,
+          },
+        });
+        removeToolResultContextGuard = installToolResultContextGuard({
+          agent: session.agent,
+          contextWindowTokens: Math.max(
+            1,
+            Math.floor(
+              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            ),
+          ),
+        });
+        cacheTrace = createCacheTrace({
+          cfg: params.config,
+          env: process.env,
+          runId: params.runId,
+          sessionId: agentSession.sessionId,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          modelId: params.modelId,
+          modelApi: params.model.api,
+          workspaceDir: params.workspaceDir,
+        });
+        cacheTrace?.recordStage("session:loaded", {
+          messages: agentSession.messages,
+          system: systemPromptText,
+          note: "after session create",
+        });
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
+        // Pi-specific: streamFn setup and wrapping.
+        // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
+        // for reliable streaming + tool calling support (#11828).
+        if (params.model.api === "ollama") {
+          // Use the resolved model baseUrl first so custom provider aliases work.
+          const providerConfig = params.config?.models?.providers?.[params.model.provider];
+          const modelBaseUrl =
+            typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+          const providerBaseUrl =
+            typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
+          const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
+          session.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+        } else {
+          // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
+          session.agent.streamFn = streamSimple;
+        }
 
-      // Mistral (and other strict providers) reject tool call IDs that don't match their
-      // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
-      // historical messages at attempt start, but the agent loop's internal tool call →
-      // tool result cycles bypass that path. Wrap streamFn so every outbound request
-      // sees sanitized tool call IDs.
-      if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
-        const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      if (
-        params.model.api === "openai-responses" ||
-        params.model.api === "openai-codex-responses"
-      ) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      // Some models emit tool names with surrounding whitespace (e.g. " read ").
-      // pi-agent-core dispatches tool calls with exact string matching, so normalize
-      // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
-        activeSession.agent.streamFn,
-        allowedToolNames,
-      );
-
-      if (anthropicPayloadLogger) {
-        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
+        applyExtraParamsToAgent(
+          session.agent,
+          params.config,
+          params.provider,
+          params.modelId,
+          params.streamParams,
+          params.thinkLevel,
+          sessionAgentId,
         );
-      }
 
+        if (cacheTrace) {
+          session.agent.streamFn = cacheTrace.wrapStreamFn(session.agent.streamFn);
+        }
+
+        // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
+        // on *any* follow-up provider call (including tool continuations). Wrap the stream function
+        // so every outbound request sees sanitized messages.
+        if (transcriptPolicy.dropThinkingBlocks) {
+          const inner = session.agent.streamFn;
+          session.agent.streamFn = (model, context, options) => {
+            const ctx = context as unknown as { messages?: unknown };
+            const messages = ctx?.messages;
+            if (!Array.isArray(messages)) {
+              return inner(model, context, options);
+            }
+            const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+            if (sanitized === messages) {
+              return inner(model, context, options);
+            }
+            const nextContext = {
+              ...(context as unknown as Record<string, unknown>),
+              messages: sanitized,
+            } as unknown;
+            return inner(model, nextContext as typeof context, options);
+          };
+        }
+
+        // Mistral (and other strict providers) reject tool call IDs that don't match their
+        // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
+        // historical messages at attempt start, but the agent loop's internal tool call →
+        // tool result cycles bypass that path. Wrap streamFn so every outbound request
+        // sees sanitized tool call IDs.
+        if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
+          const inner = session.agent.streamFn;
+          const mode = transcriptPolicy.toolCallIdMode;
+          session.agent.streamFn = (model, context, options) => {
+            const ctx = context as unknown as { messages?: unknown };
+            const messages = ctx?.messages;
+            if (!Array.isArray(messages)) {
+              return inner(model, context, options);
+            }
+            const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
+              messages as AgentMessage[],
+              mode,
+            );
+            if (sanitized === messages) {
+              return inner(model, context, options);
+            }
+            const nextContext = {
+              ...(context as unknown as Record<string, unknown>),
+              messages: sanitized,
+            } as unknown;
+            return inner(model, nextContext as typeof context, options);
+          };
+        }
+        // Some models emit tool names with surrounding whitespace (e.g. " read ").
+        // pi-agent-core dispatches tool calls with exact string matching, so normalize
+        // names on the live response stream before tool execution.
+        session.agent.streamFn = wrapStreamFnTrimToolCallNames(session.agent.streamFn);
+      }
+      if (!agentSession) {
+        throw new Error("Embedded agent session missing");
+      }
+      let hookHistoryMessages = agentSession.messages;
       try {
-        const prior = await sanitizeSessionHistory({
-          messages: activeSession.messages,
+        const historySnapshot = await buildHookVisibleHistorySnapshot({
+          messages: agentSession.messages,
           modelApi: params.model.api,
           modelId: params.modelId,
           provider: params.provider,
@@ -1174,36 +1327,38 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
-          policy: transcriptPolicy,
+          transcriptPolicy,
+          sessionKey: params.sessionKey,
         });
-        cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validatedGemini = transcriptPolicy.validateGeminiTurns
-          ? validateGeminiTurns(prior)
-          : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
-          : validatedGemini;
-        const truncated = limitHistoryTurns(
-          validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
-        // assistant message that contained the matching tool_use.
-        const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
-          : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        cacheTrace?.recordStage("session:sanitized", { messages: historySnapshot });
+        cacheTrace?.recordStage("session:limited", { messages: historySnapshot });
+        hookHistoryMessages = historySnapshot;
+        if (!agentSession.runtimeHints.managesOwnHistory && session && historySnapshot.length > 0) {
+          session.agent.replaceMessages(historySnapshot);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
-          agent: activeSession?.agent,
+          agent: piAgentForFlush,
           sessionManager,
         });
-        activeSession.dispose();
+        agentSession.dispose();
         throw err;
+      }
+      // Narrowed reference for closures that capture agentSession before TS can narrow it.
+      const activeRuntime: AgentRuntimeSession = agentSession;
+      const anthropicPayloadLogger = createAnthropicPayloadLogger({
+        env: process.env,
+        runId: params.runId,
+        sessionId: agentSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
+      // Pi-specific: wrap streamFn with payload logger.
+      if (session && anthropicPayloadLogger) {
+        session.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(session.agent.streamFn);
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
@@ -1232,7 +1387,7 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
-        void activeSession.abort();
+        void activeRuntime.abort();
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
@@ -1259,7 +1414,7 @@ export async function runEmbeddedAttempt(
       };
 
       const subscription = subscribeEmbeddedPiSession({
-        session: activeSession,
+        session: agentSession,
         runId: params.runId,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
@@ -1277,7 +1432,7 @@ export async function runEmbeddedAttempt(
         onPartialReply: params.onPartialReply,
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
-        enforceFinalTag: params.enforceFinalTag,
+        enforceFinalTag: agentSession.runtimeHints.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
@@ -1301,9 +1456,9 @@ export async function runEmbeddedAttempt(
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
-          await activeSession.steer(text);
+          await activeRuntime.steer(text);
         },
-        isStreaming: () => activeSession.isStreaming,
+        isStreaming: () => activeRuntime.isStreaming,
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
@@ -1322,7 +1477,7 @@ export async function runEmbeddedAttempt(
             shouldFlagCompactionTimeout({
               isTimeout: true,
               isCompactionPendingOrRetrying: subscription.isCompacting(),
-              isCompactionInFlight: activeSession.isCompacting,
+              isCompactionInFlight: activeRuntime.isCompacting,
             })
           ) {
             timedOutDuringCompaction = true;
@@ -1330,7 +1485,7 @@ export async function runEmbeddedAttempt(
           abortRun(true);
           if (!abortWarnTimer) {
             abortWarnTimer = setTimeout(() => {
-              if (!activeSession.isStreaming) {
+              if (!activeRuntime.isStreaming) {
                 return;
               }
               if (!isProbeSession) {
@@ -1345,7 +1500,7 @@ export async function runEmbeddedAttempt(
       );
 
       let messagesSnapshot: AgentMessage[] = [];
-      let sessionIdUsed = activeSession.sessionId;
+      let sessionIdUsed = agentSession.sessionId;
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
@@ -1353,7 +1508,7 @@ export async function runEmbeddedAttempt(
           shouldFlagCompactionTimeout({
             isTimeout: timeout,
             isCompactionPendingOrRetrying: subscription.isCompacting(),
-            isCompactionInFlight: activeSession.isCompacting,
+            isCompactionInFlight: activeRuntime.isCompacting,
           })
         ) {
           timedOutDuringCompaction = true;
@@ -1390,9 +1545,20 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
+        if (
+          repairTrailingUserMessageOrphan({
+            sessionManager,
+            agentSession,
+            session,
+            runId: params.runId,
+            sessionId: params.sessionId,
+          })
+        ) {
+          hookHistoryMessages = agentSession.messages;
+        }
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
-          messages: activeSession.messages,
+          messages: hookHistoryMessages,
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -1407,7 +1573,12 @@ export async function runEmbeddedAttempt(
           const legacySystemPrompt =
             typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
           if (legacySystemPrompt) {
-            applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
+            // Apply system prompt override from hooks.
+            if (agentSession.setSystemPrompt) {
+              agentSession.setSystemPrompt(legacySystemPrompt);
+            } else if (!agentSession.runtimeHints.managesOwnHistory && session) {
+              applySystemPromptOverrideToSession(session, legacySystemPrompt);
+            }
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
@@ -1416,40 +1587,21 @@ export async function runEmbeddedAttempt(
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
-          messages: activeSession.messages,
+          messages: hookHistoryMessages,
         });
-
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
-          }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
-        }
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
-          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
-          if (didPruneImages) {
-            activeSession.agent.replaceMessages(activeSession.messages);
-          }
+          pruneProcessedSessionImages(session);
 
           // Detect and load images referenced in the prompt for vision-capable models.
-          // Images are prompt-local only (pi-like behavior).
+          // Also scans conversation history to enable follow-up questions about earlier images.
           const imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
+            historyMessages: hookHistoryMessages,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
@@ -1460,18 +1612,32 @@ export async function runEmbeddedAttempt(
                 : undefined,
           });
 
+          // Pi-specific: inject history images into their original message positions and
+          // persist them via the Pi agent's replaceMessages.
+          if (session) {
+            const didMutate = injectHistoryImagesIntoMessages(
+              session.messages,
+              imageResult.historyImagesByIndex,
+            );
+            if (didMutate) {
+              // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
+              session.agent.replaceMessages(session.messages);
+              hookHistoryMessages = session.messages;
+            }
+          }
+
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
-            messages: activeSession.messages,
-            note: `images: prompt=${imageResult.images.length}`,
+            messages: hookHistoryMessages,
+            note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
-            const msgCount = activeSession.messages.length;
+            const msgCount = hookHistoryMessages.length;
             const systemLen = systemPromptText?.length ?? 0;
             const promptLen = effectivePrompt.length;
-            const sessionSummary = summarizeSessionContext(activeSession.messages);
+            const sessionSummary = summarizeSessionContext(hookHistoryMessages);
             log.debug(
               `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
@@ -1480,6 +1646,7 @@ export async function runEmbeddedAttempt(
                 `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
                 `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
                 `promptImages=${imageResult.images.length} ` +
+                `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
           }
@@ -1494,7 +1661,7 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptText,
                   prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
+                  historyMessages: hookHistoryMessages,
                   imagesCount: imageResult.images.length,
                 },
                 {
@@ -1513,9 +1680,9 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            await abortable(agentSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+            await abortable(agentSession.prompt(effectivePrompt));
           }
         } catch (err) {
           promptError = err;
@@ -1529,12 +1696,12 @@ export async function runEmbeddedAttempt(
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
         // Check compaction state before and after to avoid race condition where compaction starts during capture
         // Use session state (not subscription) for snapshot decisions - need instantaneous compaction status
-        const wasCompactingBefore = activeSession.isCompacting;
-        const snapshot = activeSession.messages.slice();
-        const wasCompactingAfter = activeSession.isCompacting;
+        const wasCompactingBefore = agentSession.isCompacting;
+        const snapshot = agentSession.messages.slice();
+        const wasCompactingAfter = agentSession.isCompacting;
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
-        const preCompactionSessionId = activeSession.sessionId;
+        const preCompactionSessionId = agentSession.sessionId;
 
         try {
           await abortable(waitForCompactionRetry());
@@ -1581,8 +1748,8 @@ export async function runEmbeddedAttempt(
           timedOutDuringCompaction,
           preCompactionSnapshot,
           preCompactionSessionId,
-          currentSnapshot: activeSession.messages.slice(),
-          currentSessionId: activeSession.sessionId,
+          currentSnapshot: agentSession.messages.slice(),
+          currentSessionId: agentSession.sessionId,
         });
         if (timedOutDuringCompaction) {
           if (!isProbeSession) {
@@ -1729,6 +1896,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        claudeSdkLifecycle: getClaudeSdkLifecycleSnapshot(agentSession),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
       };
@@ -1741,13 +1909,18 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
-      removeToolResultContextGuard?.();
+      // Pi-specific: tear down context guard.
+      if (!agentSession?.runtimeHints.managesOwnHistory) {
+        removeToolResultContextGuard?.();
+      }
+
+      // Flush pending tool results before dispose for ALL runtimes (including Claude SDK)
+      // so that local JSONL transcripts correctly record tool outcomes.
       await flushPendingToolResultsAfterIdle({
-        agent: session?.agent,
+        agent: piAgentForFlush,
         sessionManager,
       });
-      session?.dispose();
-      releaseWsSession(params.sessionId);
+      agentSession?.dispose();
       await sessionLock.release();
     }
   } finally {

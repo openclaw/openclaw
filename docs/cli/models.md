@@ -65,6 +65,7 @@ openclaw models fallbacks list
 
 ```bash
 openclaw models auth add
+openclaw models auth setup-claude-personal
 openclaw models auth login --provider <id>
 openclaw models auth setup-token
 openclaw models auth paste-token
@@ -75,6 +76,7 @@ openclaw models auth paste-token
 
 Notes:
 
+- `setup-claude-personal` creates a synthetic Claude Code keychain profile (`claude-personal:system-keychain`) for the `claude-personal` provider (personal Claude subscription, Pro or Max).
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
 - Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.

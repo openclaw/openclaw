@@ -53,6 +53,7 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (!model) {

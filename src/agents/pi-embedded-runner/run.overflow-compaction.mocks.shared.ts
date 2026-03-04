@@ -37,6 +37,9 @@ vi.mock("../auth-profiles.js", () => ({
   markAuthProfileFailure: vi.fn(async () => {}),
   markAuthProfileGood: vi.fn(async () => {}),
   markAuthProfileUsed: vi.fn(async () => {}),
+  resolveProfilesUnavailableReason: vi.fn(() => null),
+  upsertAuthProfileWithLock: vi.fn(async () => null),
+  saveAuthProfileStore: vi.fn(() => {}),
 }));
 
 vi.mock("../usage.js", () => ({
@@ -109,7 +112,10 @@ vi.mock("./model.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
-  ensureAuthProfileStore: vi.fn(() => ({})),
+  SYSTEM_KEYCHAIN_PROVIDERS: new Set(["claude-personal"]),
+  isSystemKeychainProvider: (provider: string | undefined) =>
+    typeof provider === "string" && provider.trim().toLowerCase() === "claude-personal",
+  ensureAuthProfileStore: vi.fn(() => ({ profiles: {}, usageStats: {} })),
   getApiKeyForModel: vi.fn(async () => ({
     apiKey: "test-key",
     profileId: "test-profile",

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  requireApiKey,
+  resolveApiKeyForProvider,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthMode,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -38,6 +43,21 @@ describe("resolveAwsSdkEnvVarName", () => {
 });
 
 describe("resolveModelAuthMode", () => {
+  it("returns system-keychain for claude-personal provider", () => {
+    const mode = resolveModelAuthMode("claude-personal");
+    expect(mode).toBe("system-keychain");
+  });
+
+  it("returns system-keychain for claude-personal provider (was claude-max)", () => {
+    const mode = resolveModelAuthMode("claude-personal");
+    expect(mode).toBe("system-keychain");
+  });
+
+  it("normalizes provider id before system-keychain detection", () => {
+    const mode = resolveModelAuthMode(" Claude-Personal ");
+    expect(mode).toBe("system-keychain");
+  });
+
   it("returns mixed when provider has both token and api key profiles", () => {
     const store: AuthProfileStore = {
       version: 1,
@@ -88,6 +108,34 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+});
+
+describe("resolveApiKeyForProvider", () => {
+  it("returns undefined apiKey with system-keychain mode for claude-personal", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "claude-personal",
+    });
+    expect(result.apiKey).toBeUndefined();
+    expect(result.mode).toBe("system-keychain");
+    expect(result.source).toContain("system keychain");
+  });
+
+  it("returns undefined apiKey with system-keychain mode for claude-personal (was claude-max)", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "claude-personal",
+    });
+    expect(result.apiKey).toBeUndefined();
+    expect(result.mode).toBe("system-keychain");
+    expect(result.source).toContain("system keychain");
+  });
+
+  it("normalizes provider id before system-keychain resolution", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: " Claude-Personal ",
+    });
+    expect(result.apiKey).toBeUndefined();
+    expect(result.mode).toBe("system-keychain");
   });
 });
 

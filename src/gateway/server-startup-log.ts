@@ -1,4 +1,8 @@
 import chalk from "chalk";
+import {
+  getClaudeSdkPolicyWarningText,
+  isClaudeSubscriptionProvider,
+} from "../agents/claude-sdk-runner/logging.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
@@ -23,6 +27,20 @@ export function logGatewayStartup(params: {
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
+  const providers = params.cfg.models?.providers;
+  const hasConfiguredClaudeSubscriptionProvider =
+    isClaudeSubscriptionProvider(agentProvider) ||
+    Object.keys(providers ?? {}).some((provider) => isClaudeSubscriptionProvider(provider)) ||
+    Object.values(params.cfg.auth?.profiles ?? {}).some((profile) =>
+      isClaudeSubscriptionProvider(
+        typeof profile === "object" && profile
+          ? ((profile as Record<string, unknown>).provider as string | undefined)
+          : undefined,
+      ),
+    );
+  if (hasConfiguredClaudeSubscriptionProvider) {
+    params.log.warn(getClaudeSdkPolicyWarningText());
+  }
   const scheme = params.tlsEnabled ? "wss" : "ws";
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
   const hosts =
