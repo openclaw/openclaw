@@ -10,11 +10,13 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
-  it("bm25RankToScore is monotonic and clamped", () => {
-    expect(bm25RankToScore(0)).toBeCloseTo(1);
-    expect(bm25RankToScore(1)).toBeCloseTo(0.5);
-    expect(bm25RankToScore(10)).toBeLessThan(bm25RankToScore(1));
-    expect(bm25RankToScore(-100)).toBeCloseTo(1);
+  it("bm25RankToScore differentiates FTS5 negative ranks", () => {
+    expect(bm25RankToScore(0)).toBeCloseTo(0);
+    expect(bm25RankToScore(-4.2)).toBeGreaterThan(bm25RankToScore(-2.1));
+    expect(bm25RankToScore(-2.1)).toBeGreaterThan(bm25RankToScore(-0.5));
+    expect(bm25RankToScore(-0.5)).toBeGreaterThan(0);
+    expect(bm25RankToScore(10)).toBeGreaterThan(bm25RankToScore(1));
+    expect(bm25RankToScore(NaN)).toBeCloseTo(0);
   });
 
   it("mergeHybridResults unions by id and combines weighted scores", async () => {
