@@ -28,18 +28,66 @@ metadata:
 
 # Tools
 ## save_fact
-将用户提到的核心事实、偏好或背景信息持久化到 PolarDB。
-- fact (string, required): 需要存入的语义事实。建议描述清晰完整（例如：“用户正在学习 Rust 语言并准备参加认证考试”）。
-
+Saves a specific fact, user preference, or context into the PolarDB persistent memory.
+- **fact** (string, required): The core information to be remembered. Use clear, descriptive statements (e.g., "User prefers dark mode for all UI components" or "User is a senior Python developer").
+- **metadata** (object, optional): Additional key-value pairs for filtering or categorization (e.g., {"category": "coding_pref"}).
+  
 ## search_memories
-根据当前的对话意图，从 PolarDB 的海量记忆库中检索相关的上下文。
-- query (string, required): 检索关键词或描述性语句（例如：“用户的职业背景”或“用户对编程语言的偏好”）。
+Retrieves relevant historical context or user facts from PolarDB based on a semantic query.
+- **query** (string, required): The natural language description or keyword of what you are trying to recall (e.g., "What are the user's career goals?" or "Previous feedback on project architecture").
+- **limit** (integer, optional): The maximum number of memory fragments to return. Defaults to 5.
 
 ## delete_all_memories
-【高危】彻底抹除当前用户在 PolarDB 中的所有长记忆。
-- confirm (boolean, required): 必须为 true 才能执行。仅在用户明确表达“忘记我”或“重置所有记忆”时使用。
+[High-Risk] Permanently erases all long-term memories for the current user from PolarDB.
+- **confirm** (boolean, required): Must be set to `true` to execute. Only use this when the user explicitly requests to "forget everything" or "reset all memories."
+
+# Configuration
+To enable the PolarDB-powered memory system, follow these steps:
+1. **Access the Console**: Visit the [Alibaba Cloud PolarDB Console](https://polardb.console.aliyun.com/cn-hangzhou/mem0).
+2. **Activate Mem0**: Enable the Mem0 service within your PolarDB instance and retrieve your unique `MEM0_API_KEY` and `MEM0_ORG_ID`.
+3. **Endpoint Details**:
+   - **Service Host**: `mem0test01.polardb.com` (Ensure your network allows outbound traffic to this host).
+4. **Set Environment Variables**:
+   - `/env set MEM0_API_KEY=your_key`
+   - `/env set MEM0_ORG_ID=your_id`
 
 # Output Format
-当调用 `search_memories` 获得结果后，请以如下逻辑组织回复：
-- 如果找到匹配项：结合该背景直接回答问题。
-- 如果未找到匹配项：按正常逻辑回答，并在对话间隙暗示自己已准备好记录新信息。
+1. **Natural Integration**: Do not explicitly mention "searching memory." Incorporate retrieved facts naturally into the conversation (e.g., "Since you're learning Rust, you might like...").
+2. **Contextual Awareness**: Use retrieved facts to personalize recommendations and technical advice.
+3. **Graceful Handling**: If no relevant memory is found, provide a high-quality response without mentioning the search failure.
+4. **Action Feedback**: Briefly confirm after successful `save_fact` calls to build user trust (e.g., "Noted your preference for PolarDB.").
+
+# Examples
+### Scenario 1: Memory Add (Ingestion)
+- **User**: "I’m starting to prepare for the AWS Solutions Architect exam next month, and I'm feeling a bit overwhelmed."
+- **Agent Action**: Call `save_fact(fact="User is planning to take the AWS Certified Solutions Architect exam next month.")`
+- **Logic**: Converts casual conversation into a structured fact with a specific goal and timeline.
+
+### Scenario 2: Retrieval (Context Recall)
+- **User**: "Can you help me create a study roadmap?"
+- **Agent Action**: Call `search_memories(query="User's professional goals and upcoming certification plans")`
+- **Logic**: Proactively searches PolarDB to retrieve the "AWS Exam" context before generating a personalized response.
+
+### Scenario 3: Update & Conflict Resolution
+- **User**: "I’ve decided to drop the AWS exam. I think Alibaba Cloud's PolarDB has more potential for my career, so I’m going for the ACP certification instead."
+- **Agent Action**: Call `save_fact(fact="User cancelled AWS exam plans and is now focusing on Alibaba Cloud ACP certification.")`
+- **Logic**: PolarDB Mem0 automatically resolves the conflict. In future interactions, the Agent will prioritize the new ACP goal over the outdated AWS info.
+
+### Scenario 4: Consolidation (Information Synthesis)
+- **User (Monday)**: "I'm self-studying vector databases today."
+- **User (Wednesday)**: "I'm currently reading about PolarDB's vector index implementation."
+- **Agent Action**: Call `save_fact(fact="User is deeply researching vector database technologies, with a specific focus on PolarDB vector indexing.")`
+- **Logic**: Instead of storing two fragmented notes, the system merges related information into a comprehensive user profile.
+
+### Scenario 5: Decay & Temporal Relevance
+- **User**: "Should I continue with that project I mentioned before?"
+- **Agent Action**: Call `search_memories(query="Status of user's past ongoing projects")`
+- **Logic**: PolarDB calculates relevance based on timestamps. If a project was mentioned years ago and never touched again, its weight decays. The Agent can then respond intelligently: "Are you referring to the old Project X from 2023, or the Project Y we discussed last week?"
+
+# Security & Privacy
+- **Data Isolation**: Memories are strictly isolated by `MEM0_ORG_ID` and `user_id`. No cross-user data leakage is possible.
+- **Encryption**: All data transmitted to `mem0.polar-db.com` is encrypted via TLS 1.3.
+- **Compliance**: Powered by Alibaba Cloud PolarDB, adhering to global data protection standards.
+
+# Tags
+`Memory-as-a-Service` `Long-term-Context` `PolarDB` `Vector-Database` `Mem0` `Enterprise-AI`
