@@ -104,10 +104,14 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    const cdpUrl =
+      profileCtx.profile.driver === "extension" && tab.wsUrl
+        ? tab.wsUrl
+        : profileCtx.profile.cdpUrl;
     return await params.run({
       profileCtx,
       tab,
-      cdpUrl: profileCtx.profile.cdpUrl,
+      cdpUrl,
     });
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
