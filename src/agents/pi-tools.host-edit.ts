@@ -97,11 +97,7 @@ export function wrapHostEditToolWithMismatchContent(
       signal: AbortSignal | undefined,
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
-      const result = (await base.execute(toolCallId, params, signal, onUpdate)) as {
-        isError?: boolean;
-        content: Array<{ type: "text"; text: string }>;
-        details?: unknown;
-      };
+      const result = await base.execute(toolCallId, params, signal, onUpdate);
 
       // Check if edit failed due to oldText mismatch
       if (
@@ -138,7 +134,6 @@ export function wrapHostEditToolWithMismatchContent(
                   text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
                 },
               ],
-              details: result.details,
             };
           } catch {
             // File read failed; return original error
