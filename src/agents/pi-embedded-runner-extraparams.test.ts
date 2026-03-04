@@ -915,7 +915,6 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("injects context-1m beta via additionalModelRequestFields for Bedrock Anthropic models", () => {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
     const capturedPayloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       // Simulate underlying stream emitting a payload so the wrapper can mutate it
