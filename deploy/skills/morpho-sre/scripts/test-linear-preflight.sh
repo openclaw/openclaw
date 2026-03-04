@@ -50,7 +50,7 @@ linear_lookup() {
 
   case "$kind:$name" in
     team:Platform) printf 'team-1\n' ;;
-    project:Infrastructure\ Backlog) printf 'project-1\n' ;;
+    project:\[PLATFORM\]\ Backlog) printf 'project-1\n' ;;
     user:florian) printf 'user-1\n' ;;
     label:Bug) printf 'label-bug\n' ;;
     label:Monitoring) printf 'label-monitoring\n' ;;
@@ -70,7 +70,7 @@ reset_case() {
   linear_preflight_reset_cache
   LINEAR_PREFLIGHT_RETRY_SECONDS=300
   LINEAR_PREFLIGHT_TEAM_NAME="Platform"
-  LINEAR_PREFLIGHT_PROJECT_NAME="Infrastructure Backlog"
+  LINEAR_PREFLIGHT_PROJECT_NAME="[PLATFORM] Backlog"
   LINEAR_PREFLIGHT_ASSIGNEE_NAME="florian"
   LINEAR_PREFLIGHT_REQUIRED_LABELS="Bug|Monitoring"
   LINEAR_PREFLIGHT_OPTIONAL_LABELS="ai-ready|Security|Alerting"
