@@ -38,6 +38,18 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
+    if (val.jitter) {
+      try {
+        parseDurationMs(val.jitter, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["jitter"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
+    }
+
     if (!val.every) {
       return;
     }
@@ -49,18 +61,6 @@ export const HeartbeatSchema = z
         path: ["every"],
         message: "invalid duration (use ms, s, m, h)",
       });
-    }
-
-    if (val.jitter) {
-      try {
-        parseDurationMs(val.jitter, { defaultUnit: "m" });
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["jitter"],
-          message: "invalid duration (use ms, s, m, h)",
-        });
-      }
     }
 
     const active = val.activeHours;
