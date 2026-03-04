@@ -703,7 +703,7 @@ function wrapHostEditToolWithPostWriteRecovery(base: AnyAgentTool, root: string)
       toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
-      onUpdate?: (update: unknown) => void,
+      onUpdate?: (update: AgentToolResult<unknown>) => void,
     ) => {
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
