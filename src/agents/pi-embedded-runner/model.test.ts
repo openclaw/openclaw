@@ -76,12 +76,14 @@ describe("buildInlineProviderModels", () => {
         provider: "alpha",
         baseUrl: "http://alpha.local",
         api: undefined,
+        headers: {},
       },
       {
         ...makeModel("beta-model"),
         provider: "beta",
         baseUrl: "http://beta.local",
         api: undefined,
+        headers: {},
       },
     ]);
   });
@@ -128,6 +130,59 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].api).toBe("anthropic-messages");
+  });
+
+  it("propagates provider-level headers to inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        headers: { "X-Custom-Auth": "token-123" },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "X-Custom-Auth": "token-123" });
+  });
+
+  it("model-level headers override provider-level headers", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        headers: { "User-Agent": "provider-agent", "X-Shared": "from-provider" },
+        models: [
+          {
+            ...makeModel("custom-model"),
+            headers: { "User-Agent": "model-agent", "X-Model": "only" },
+          },
+        ],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "User-Agent": "model-agent",
+      "X-Shared": "from-provider",
+      "X-Model": "only",
+    });
+  });
+
+  it("handles missing headers gracefully", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({});
   });
 
   it("inherits both baseUrl and api from provider config", () => {
@@ -224,6 +279,51 @@ describe("resolveModel", () => {
     const result = resolveModel("custom", "model-b", "/tmp/agent", cfg);
 
     expect(result.model?.reasoning).toBe(true);
+  });
+
+  it("propagates provider headers in generic fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: { "X-Api-Key": "secret-key" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.model?.headers).toEqual({ "X-Api-Key": "secret-key" });
+  });
+
+  it("merges provider and model headers in generic fallback, model takes precedence", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: { "User-Agent": "provider-ua", "X-Provider": "yes" },
+            models: [
+              {
+                ...makeModel("my-model"),
+                headers: { "User-Agent": "model-ua", "X-Model": "yes" },
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "my-model", "/tmp/agent", cfg);
+
+    expect(result.model?.headers).toEqual({
+      "User-Agent": "model-ua",
+      "X-Provider": "yes",
+      "X-Model": "yes",
+    });
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {

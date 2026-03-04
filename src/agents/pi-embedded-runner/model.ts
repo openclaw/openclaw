@@ -17,6 +17,7 @@ type InlineModelEntry = ModelDefinitionConfig & {
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
+  headers?: Record<string, string>;
   models?: ModelDefinitionConfig[];
 };
 
@@ -35,6 +36,7 @@ export function buildInlineProviderModels(
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
+      headers: { ...entry?.headers, ...model.headers },
     }));
   });
 }
@@ -103,6 +105,7 @@ export function resolveModel(
         api: providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
+        headers: { ...providerCfg?.headers, ...configuredModel?.headers },
         reasoning: configuredModel?.reasoning ?? false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -123,7 +126,17 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  const resolved = normalizeModelCompat(model);
+  const providerOverrides = cfg?.models?.providers?.[provider];
+  if (providerOverrides) {
+    if (providerOverrides.baseUrl) {
+      resolved.baseUrl = providerOverrides.baseUrl;
+    }
+    if (providerOverrides.headers) {
+      resolved.headers = { ...providerOverrides.headers, ...resolved.headers };
+    }
+  }
+  return { model: resolved, authStorage, modelRegistry };
 }
 
 /**
