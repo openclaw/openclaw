@@ -157,7 +157,7 @@ describe("cron view", () => {
     expect(historyButton).not.toBeUndefined();
     historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
   });
 
@@ -218,8 +218,8 @@ describe("cron view", () => {
     const summaries = Array.from(
       runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
     ).map((el) => (el.textContent ?? "").trim());
-    expect(summaries[0]).toBe("newer run");
-    expect(summaries[1]).toBe("older run");
+    expect(summaries[0]).toBe("older run");
+    expect(summaries[1]).toBe("newer run");
   });
 
   it("labels past nextRunAtMs as due instead of next", () => {

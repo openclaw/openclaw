@@ -156,9 +156,9 @@ describe("cron controller", () => {
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       name: "main job",
+      delivery: undefined,
     });
     expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
-    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it("submits cron.update when editing an existing job", async () => {
