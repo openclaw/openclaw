@@ -37,7 +37,7 @@ jobs:
       - name: Run Claude Code Action
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             你是 OpenFinClaw 项目的代码审查助手。这是一个金融领域的 AI 助手网关项目（OpenClaw 的金融 fork）。
 
