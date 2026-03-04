@@ -5,6 +5,7 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
+let jitiOverrideForTest = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -62,6 +63,9 @@ function resolveControlCommandGate(params) {
 }
 
 function getJiti() {
+  if (jitiOverrideForTest) {
+    return jitiOverrideForTest;
+  }
   if (jitiLoader) {
     return jitiLoader;
   }
@@ -97,14 +101,6 @@ function loadMonolithicSdk() {
   return monolithicSdk;
 }
 
-function tryLoadMonolithicSdk() {
-  try {
-    return loadMonolithicSdk();
-  } catch {
-    return null;
-  }
-}
-
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
@@ -112,9 +108,11 @@ const fastExports = {
   __unsafeResetMonolithicForTest: () => {
     monolithicSdk = null;
     jitiLoader = null;
+    jitiOverrideForTest = null;
   },
   __unsafeSetJitiOverrideForTest: (loader) => {
-    jitiLoader = loader;
+    jitiOverrideForTest = loader;
+    monolithicSdk = null;
   },
 };
 
@@ -129,8 +127,7 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return Reflect.get(target, prop, receiver);
     }
-    const monolithic = loadMonolithicSdk();
-    return monolithic[prop];
+    return loadMonolithicSdk()[prop];
   },
   has(target, prop) {
     if (prop === "__esModule" || prop === "default") {
@@ -139,8 +136,7 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
-    const monolithic = tryLoadMonolithicSdk();
-    return monolithic ? prop in monolithic : false;
+    return prop in loadMonolithicSdk();
   },
   ownKeys(target) {
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
@@ -176,10 +172,7 @@ const rootProxy = new Proxy(fastExports, {
         writable: true,
       };
     }
-    const monolithic = tryLoadMonolithicSdk();
-    if (!monolithic) {
-      return undefined;
-    }
+    const monolithic = loadMonolithicSdk();
     const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
     if (descriptor) {
       return { ...descriptor, configurable: true };
