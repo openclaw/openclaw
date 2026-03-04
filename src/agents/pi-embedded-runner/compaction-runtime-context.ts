@@ -19,6 +19,9 @@ export type EmbeddedCompactionRuntimeContext = {
   senderIsOwner?: boolean;
   senderId?: string;
   senderName?: string;
+  groupId?: string;
+  spawnedBy?: string;
+  sourceProvider?: string;
   provider?: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -44,6 +47,9 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderIsOwner?: boolean;
   senderId?: string | null;
   senderName?: string | null;
+  groupId?: string | null;
+  spawnedBy?: string | null;
+  sourceProvider?: string | null;
   provider?: string | null;
   modelId?: string | null;
   thinkLevel?: ThinkLevel;
@@ -68,6 +74,9 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
     senderName: params.senderName ?? undefined,
+    groupId: params.groupId ?? undefined,
+    spawnedBy: params.spawnedBy ?? undefined,
+    sourceProvider: params.sourceProvider ?? undefined,
     provider: params.provider ?? undefined,
     model: params.modelId ?? undefined,
     thinkLevel: params.thinkLevel,
