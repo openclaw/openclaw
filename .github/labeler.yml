@@ -194,7 +194,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/cli/security.md"
-          - "docs/gateway/security.md"
+          - "docs/gateway/security/**"
+          - "SECURITY.md"
 
 "extensions: copilot-proxy":
   - changed-files:
