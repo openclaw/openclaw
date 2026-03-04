@@ -282,7 +282,13 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
-                // CLI succeeded — emit lifecycle events retroactively
+                // CLI succeeded — emit lifecycle events retroactively.
+                // NOTE: notifyAgentRunStart and lifecycle:start are emitted after the
+                // CLI has already completed. This is an intentional trade-off of the
+                // speculative approach: we avoid orphaned lifecycle events on failure
+                // at the cost of downstream consumers (timers, UI spinners) having no
+                // window where the run is observable as "in progress". The startedAt
+                // timestamp is accurate; only the event delivery is retroactive.
                 notifyAgentRunStart();
                 emitAgentEvent({
                   runId,
@@ -394,8 +400,7 @@ export async function runAgentTurnWithFallback(params: {
             runId,
             authProfile,
           });
-          return (async () => {
-            const result = await runEmbeddedPiAgent({
+          const result = await runEmbeddedPiAgent({
               ...embeddedContext,
               trigger: params.isHeartbeat ? "heartbeat" : "user",
               groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -538,7 +543,6 @@ export async function runAgentTurnWithFallback(params: {
               result.meta?.systemPromptReport,
             );
             return result;
-          })();
         },
       });
       runResult = fallbackResult.result;
