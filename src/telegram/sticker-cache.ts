@@ -143,6 +143,14 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
 const VISION_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
+let imageRuntimePromise: Promise<
+  typeof import("../media-understanding/providers/image-runtime.js")
+> | null = null;
+
+function loadImageRuntime() {
+  imageRuntimePromise ??= import("../media-understanding/providers/image-runtime.js");
+  return imageRuntimePromise;
+}
 
 export interface DescribeStickerParams {
   imagePath: string;
@@ -242,8 +250,8 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
 
   try {
     const buffer = await fs.readFile(imagePath);
-    // Dynamic import to avoid circular dependency
-    const { describeImageWithModel } = await import("../media-understanding/providers/image.js");
+    // Lazy import to avoid circular dependency
+    const { describeImageWithModel } = await loadImageRuntime();
     const result = await describeImageWithModel({
       buffer,
       fileName: "sticker.webp",

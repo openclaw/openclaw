@@ -18,6 +18,15 @@ import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 
+let deliverRuntimePromise: Promise<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
+
 export type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
@@ -126,7 +135,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
