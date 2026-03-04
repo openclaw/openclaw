@@ -11,7 +11,7 @@ title: "Coding Agents in tmux"
 # Coding Agents in tmux
 
 OpenClaw agents can drive coding tools like **Claude Code**, **Codex CLI**, or **Aider**
-inside [tmux sessions](/skills), preventing timeout issues and enabling long-running
+inside tmux sessions, preventing timeout issues and enabling long-running
 development workflows.
 
 ---
@@ -281,7 +281,5 @@ tmux send-keys -t session "command2" Enter
 
 ## See Also
 
-- [tmux skill](/skills) — tmux session management reference
-- [Coding agent skill](/skills) — coding agent integration
 - [Cron jobs](/automation/cron-jobs) — scheduling automated tasks
 - [Multi-agent routing](/concepts/multi-agent) — dedicated dev agents

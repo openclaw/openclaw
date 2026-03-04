@@ -11,9 +11,9 @@ title: "X Posting Workflows"
 # X Posting Workflows
 
 Advanced patterns for automating X (Twitter) with OpenClaw agents, the
-[xurl skill](/skills), and [cron scheduling](/automation/cron-jobs).
+xurl skill, and [cron scheduling](/automation/cron-jobs).
 
-For basic setup, see [Social media automation](/automation/social-media).
+<!-- TODO: link to /automation/social-media once the page exists -->
 
 ---
 
@@ -228,7 +228,5 @@ Common issues and how agents should handle them:
 
 ## See Also
 
-- [xurl skill reference](/skills) — full command reference
-- [Social media automation](/automation/social-media) — overview of all platforms
 - [Cron jobs](/automation/cron-jobs) — scheduling fundamentals
 - [Browser automation](/tools/browser) — for platforms without APIs
