@@ -341,6 +341,7 @@ export class AnthropicProvider extends BaseProvider {
 
     const decoder = new TextDecoder();
     let fullContent = "";
+    let carryOver = ""; // Buffer for partial SSE events
     let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let model = request.model || this.config.defaultModel;
 
@@ -351,39 +352,49 @@ export class AnthropicProvider extends BaseProvider {
           break;
         }
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter((line) => line.startsWith("data: "));
+        // Add to carry-over buffer
+        carryOver += decoder.decode(value);
 
-        for (const line of lines) {
-          const data = line.slice(6);
-          try {
-            const parsed = JSON.parse(data) as AnthropicStreamEvent;
+        // Split on double newlines (SSE event separator)
+        const events = carryOver.split("\n\n");
 
-            switch (parsed.type) {
-              case "content_block_delta":
-                if (parsed.delta?.type === "text_delta") {
-                  const text = parsed.delta.text || "";
-                  fullContent += text;
-                  onChunk(text);
-                }
-                break;
-              case "message_delta":
-                if (parsed.usage) {
-                  usage.completionTokens = parsed.usage.output_tokens || 0;
-                  usage.totalTokens = usage.promptTokens + usage.completionTokens;
-                }
-                break;
-              case "message_start":
-                if (parsed.message?.model) {
-                  model = parsed.message.model;
-                }
-                if (parsed.message?.usage) {
-                  usage.promptTokens = parsed.message.usage.input_tokens || 0;
-                }
-                break;
+        // Keep the last potentially incomplete event
+        carryOver = events.pop() || "";
+
+        for (const event of events) {
+          const lines = event.split("\n").filter((line) => line.startsWith("data: "));
+
+          for (const line of lines) {
+            const data = line.slice(6);
+            try {
+              const parsed = JSON.parse(data) as AnthropicStreamEvent;
+
+              switch (parsed.type) {
+                case "content_block_delta":
+                  if (parsed.delta?.type === "text_delta") {
+                    const text = parsed.delta.text || "";
+                    fullContent += text;
+                    onChunk(text);
+                  }
+                  break;
+                case "message_delta":
+                  if (parsed.usage) {
+                    usage.completionTokens = parsed.usage.output_tokens || 0;
+                    usage.totalTokens = usage.promptTokens + usage.completionTokens;
+                  }
+                  break;
+                case "message_start":
+                  if (parsed.message?.model) {
+                    model = parsed.message.model;
+                  }
+                  if (parsed.message?.usage) {
+                    usage.promptTokens = parsed.message.usage.input_tokens || 0;
+                  }
+                  break;
+              }
+            } catch {
+              // Skip malformed JSON
             }
-          } catch {
-            // Skip malformed JSON
           }
         }
       }

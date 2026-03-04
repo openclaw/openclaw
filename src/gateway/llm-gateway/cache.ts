@@ -40,12 +40,8 @@ class VectorStore {
 
     return results.slice(0, maxResults).map(({ entry, similarity: _similarity }) => ({
       key: entry.key,
-      value: entry.value,
-      embedding: entry.embedding,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 86400000, // 24 hours
-      hits: 0,
-      tier: "semantic" as const,
+      cached: true,
+      _similarity,
     }));
   }
 

@@ -182,12 +182,13 @@ export class ContentPolicy {
    * Check request against content policy
    */
   checkRequest(request: GatewayRequest): SecurityCheckResult {
-    // Check kill switch first
-    if (!this.allowedModels.has("*") && request.model) {
-      if (!this.allowedModels.has(request.model)) {
+    // Check model allowlist (even when model is omitted, use default model)
+    if (!this.allowedModels.has("*")) {
+      const effectiveModel = request.model || this.policy.defaultModel;
+      if (effectiveModel && !this.allowedModels.has(effectiveModel)) {
         return {
           allowed: false,
-          reason: `Model ${request.model} is not in allowed list`,
+          reason: `Model ${effectiveModel} is not in allowed list`,
         };
       }
     }
