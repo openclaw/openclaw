@@ -6,10 +6,55 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
+  resolveSlackAutoThreadId,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
+
+describe("resolveSlackAutoThreadId", () => {
+  const baseContext = {
+    currentThreadTs: "1234567890.000100",
+    replyToMode: "all" as const,
+  };
+
+  it("returns thread ts for channel target matching currentChannelId", () => {
+    const result = resolveSlackAutoThreadId({
+      to: "channel:C123456",
+      toolContext: { ...baseContext, currentChannelId: "C123456" },
+    });
+    expect(result).toBe("1234567890.000100");
+  });
+
+  it("returns thread ts for user: target in DM session (matching user id)", () => {
+    const result = resolveSlackAutoThreadId({
+      to: "user:U123456",
+      toolContext: { ...baseContext, currentChannelId: "U123456" },
+    });
+    expect(result).toBe("1234567890.000100");
+  });
+
+  it("returns undefined for user: target when user id does not match currentChannelId", () => {
+    const result = resolveSlackAutoThreadId({
+      to: "user:UOTHER",
+      toolContext: { ...baseContext, currentChannelId: "U123456" },
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when toolContext has no currentChannelId", () => {
+    const result = resolveSlackAutoThreadId({
+      to: "user:U123456",
+      toolContext: { ...baseContext, currentChannelId: undefined },
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when toolContext is missing", () => {
+    const result = resolveSlackAutoThreadId({ to: "user:U123456" });
+    expect(result).toBeUndefined();
+  });
+});
 
 describe("message action sandbox media hydration", () => {
   maybeIt("rejects symlink retarget escapes after sandbox media normalization", async () => {

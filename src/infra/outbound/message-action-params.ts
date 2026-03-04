@@ -30,7 +30,7 @@ export function resolveSlackAutoThreadId(params: {
     return undefined;
   }
   const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
+  if (!parsedTarget || (parsedTarget.kind !== "channel" && parsedTarget.kind !== "user")) {
     return undefined;
   }
   if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {

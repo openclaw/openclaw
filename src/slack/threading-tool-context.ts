@@ -22,7 +22,9 @@ export function buildSlackThreadingToolContext(params: {
   return {
     currentChannelId: params.context.To?.startsWith("channel:")
       ? params.context.To.slice("channel:".length)
-      : undefined,
+      : params.context.To?.startsWith("user:")
+        ? params.context.To.slice("user:".length)
+        : undefined,
     currentThreadTs: threadId != null ? String(threadId) : undefined,
     replyToMode: effectiveReplyToMode,
     hasRepliedRef: params.hasRepliedRef,

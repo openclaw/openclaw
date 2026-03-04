@@ -144,4 +144,31 @@ describe("buildSlackThreadingToolContext", () => {
     });
     expect(result.replyToMode).toBe("off");
   });
+
+  it("sets currentChannelId from channel: prefix target", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "channel:C123456", ChatType: "channel" },
+    });
+    expect(result.currentChannelId).toBe("C123456");
+  });
+
+  it("sets currentChannelId from user: prefix target for DM sessions", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "user:U123456", ChatType: "direct" },
+    });
+    expect(result.currentChannelId).toBe("U123456");
+  });
+
+  it("leaves currentChannelId undefined when To has no known prefix", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: { To: "someOtherTarget", ChatType: "direct" },
+    });
+    expect(result.currentChannelId).toBeUndefined();
+  });
 });
