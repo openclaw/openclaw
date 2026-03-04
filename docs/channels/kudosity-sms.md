@@ -36,6 +36,7 @@ The Kudosity SMS channel lets your OpenClaw agent send and receive SMS messages 
     ```
 
     Select **SMS Kudosity** from the channel list and follow the prompts.
+
   </Step>
 </Steps>
 
@@ -57,13 +58,13 @@ Or use environment variables:
 
 ## Capabilities
 
-| Feature | Supported |
-|---------|-----------|
-| Text messages | ✅ |
-| Media/MMS | ❌ (graceful degradation — sends caption text) |
-| Threads | ❌ |
-| Groups | ❌ |
-| Reactions | ❌ |
+| Feature       | Supported                                      |
+| ------------- | ---------------------------------------------- |
+| Text messages | ✅                                             |
+| Media/MMS     | ❌ (graceful degradation — sends caption text) |
+| Threads       | ❌                                             |
+| Groups        | ❌                                             |
+| Reactions     | ❌                                             |
 
 ## Resources
 

@@ -16,10 +16,9 @@ import type {
   ChannelPlugin,
   OpenClawConfig,
 } from "openclaw/plugin-sdk";
-
 import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
-import { getKudositySmsRuntime } from "./runtime.js";
 import { kudositySmsOnboarding } from "./onboarding.js";
+import { getKudositySmsRuntime } from "./runtime.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -88,14 +87,8 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    */
   resolveAccount(cfg, _accountId) {
     const section = (cfg as any).channels?.[CHANNEL_KEY];
-    const apiKey =
-      (section?.apiKey as string) ||
-      process.env.KUDOSITY_API_KEY ||
-      "";
-    const sender =
-      (section?.sender as string) ||
-      process.env.KUDOSITY_SENDER ||
-      "";
+    const apiKey = (section?.apiKey as string) || process.env.KUDOSITY_API_KEY || "";
+    const sender = (section?.sender as string) || process.env.KUDOSITY_SENDER || "";
     const enabled = section?.enabled as boolean | undefined;
     return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
@@ -133,7 +126,8 @@ const meta: ChannelMeta = {
   detailLabel: "SMS Kudosity",
   docsPath: "/channels/kudosity-sms",
   docsLabel: "kudosity-sms",
-  blurb: "cloud SMS via the Kudosity API — works on any phone, no app needed. https://developers.kudosity.com",
+  blurb:
+    "cloud SMS via the Kudosity API — works on any phone, no app needed. https://developers.kudosity.com",
   systemImage: "phone.badge.waveform",
 };
 
@@ -184,17 +178,19 @@ const outbound: ChannelOutboundAdapter = {
    * @param ctx.text - Message body
    * @param ctx.accountId - Account ID (defaults to "default")
    */
-  async sendText({ cfg, to, text, accountId }: {
+  async sendText({
+    cfg,
+    to,
+    text,
+    accountId,
+  }: {
     cfg: OpenClawConfig;
     to: string;
     text: string;
     accountId?: string | null;
     [key: string]: unknown;
   }) {
-    const account = configAdapter.resolveAccount(
-      cfg,
-      accountId ?? DEFAULT_ACCOUNT_ID,
-    );
+    const account = configAdapter.resolveAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
     const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
@@ -223,7 +219,13 @@ const outbound: ChannelOutboundAdapter = {
    * the caption text. The media URL is ignored since SMS/MMS doesn't
    * support inline media attachments via the Kudosity v2 API.
    */
-  async sendMedia({ cfg, to, text, mediaUrl, accountId }: {
+  async sendMedia({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    accountId,
+  }: {
     cfg: OpenClawConfig;
     to: string;
     text: string;
@@ -234,14 +236,11 @@ const outbound: ChannelOutboundAdapter = {
     if (mediaUrl) {
       console.warn(
         "Kudosity SMS: media attachments are not supported via SMS — sending text only. " +
-        `Dropped media URL: ${mediaUrl}`,
+          `Dropped media URL: ${mediaUrl}`,
       );
     }
 
-    const account = configAdapter.resolveAccount(
-      cfg,
-      accountId ?? DEFAULT_ACCOUNT_ID,
-    );
+    const account = configAdapter.resolveAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
     const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
