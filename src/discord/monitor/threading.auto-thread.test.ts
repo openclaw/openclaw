@@ -147,6 +147,13 @@ describe("extractFirstSentence", () => {
       "See docs.openclaw.io for help.",
     );
   });
+
+  it("preserves sentence-final periods in abbreviations", () => {
+    expect(extractFirstSentence("I moved to the U.S. Then I traveled.")).toBe(
+      "I moved to the U.S.",
+    );
+    expect(extractFirstSentence("We bought fruit, etc. Then left.")).toBe("We bought fruit, etc.");
+  });
 });
 
 describe("maybeCreateDiscordAutoThread config integration", () => {

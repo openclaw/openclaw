@@ -248,18 +248,24 @@ export function extractFirstSentence(text: string): string {
   const placeholder = "\x00DOT\x00";
 
   // Protect common abbreviations by replacing their periods
-  // Single-letter abbreviations with period
-  let sanitized = trimmed.replace(/\b([A-Z])\./g, `$1${placeholder}`);
-  // Common title/name abbreviations
+  let sanitized = trimmed;
+
+  // Title abbreviations (Dr/Mr/Mrs/Prof etc) - ALWAYS protect, they're followed by names
   sanitized = sanitized.replace(
-    /\b(Mr|Mrs|Ms|Dr|Jr|Sr|vs|etc|Prof|Rev|St|Lt|Gen|Col|Sgt|Capt)\./gi,
+    /\b(Mr|Mrs|Ms|Dr|Prof|Rev|Lt|Gen|Col|Sgt|Capt)\./gi,
     `$1${placeholder}`,
   );
-  // e.g. and i.e.
-  sanitized = sanitized.replace(/\b(e)\.(g)\./gi, `$1${placeholder}$2${placeholder}`);
-  sanitized = sanitized.replace(/\b(i)\.(e)\./gi, `$1${placeholder}$2${placeholder}`);
+
+  // Single-letter abbreviations - only protect if NOT followed by space+capital (sentence start)
+  sanitized = sanitized.replace(/\b([A-Z])\.(?!\s+[A-Z])/g, `$1${placeholder}`);
+
+  // Other abbreviations (Jr/Sr/vs/etc) - only protect if NOT sentence-ending
+  sanitized = sanitized.replace(/\b(Jr|Sr|vs|etc)\.(?!\s+[A-Z])/gi, `$1${placeholder}`);
+
+  // e.g. and i.e. (only protect if not sentence-ending)
+  sanitized = sanitized.replace(/\b(e)\.(g)\.(?!\s+[A-Z])/gi, `$1${placeholder}$2${placeholder}`);
+  sanitized = sanitized.replace(/\b(i)\.(e)\.(?!\s+[A-Z])/gi, `$1${placeholder}$2${placeholder}`);
   // Domain-like patterns: protect dots that are between word chars (foo.bar.com)
-  // This catches subdomains and most domain patterns
   sanitized = sanitized.replace(/(\w)\.(\w)/g, `$1${placeholder}$2`);
   // Version numbers (2.0, v1.2.3)
   sanitized = sanitized.replace(/(\d)\.(\d)/g, `$1${placeholder}$2`);
