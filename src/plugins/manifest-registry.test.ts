@@ -153,7 +153,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
-  it("prefers higher-precedence origins for distinct plugins with the same id", () => {
+  it("suppresses duplicate warning for distinct plugins with the same id across origins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
@@ -174,9 +174,9 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.origin).toBe("global");
-    expect(registry.plugins[0]?.rootDir).toBe(globalDir);
+    expect(registry.plugins.length).toBe(2);
+    expect(registry.plugins.map((entry) => entry.origin)).toEqual(["bundled", "global"]);
+    expect(registry.plugins.map((entry) => entry.rootDir)).toEqual([bundledDir, globalDir]);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

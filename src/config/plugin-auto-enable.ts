@@ -371,8 +371,9 @@ function isInstalledPluginEnabledByDefault(
   registry: PluginManifestRegistry,
   pluginId: string,
 ): boolean {
-  const record = registry.plugins.find((entry) => entry.id === pluginId);
-  return record != null && (record.origin === "workspace" || record.origin === "global");
+  return registry.plugins.some(
+    (entry) => entry.id === pluginId && (entry.origin === "workspace" || entry.origin === "global"),
+  );
 }
 
 function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {

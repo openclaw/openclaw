@@ -233,27 +233,23 @@ export function loadPluginManifestRegistry(params: {
       }
       // Distinct plugin directories with the same id can still be intentional
       // when a higher-precedence origin overrides a lower-precedence one
-      // (e.g. a global install shadowing a bundled plugin). In that case keep
-      // only the higher-precedence record without warning.
+      // (e.g. a global install shadowing a bundled plugin). Keep both records
+      // so the loader can surface the overridden entry, but suppress the
+      // duplicate warning and track the higher-precedence candidate for any
+      // later comparisons.
       if (candidateRank !== existingRank) {
         if (candidateRank < existingRank) {
-          records[existing.recordIndex] = buildRecord({
-            manifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(manifest.id, { candidate, recordIndex: records.length });
         }
-        continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      if (candidateRank === existingRank) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
