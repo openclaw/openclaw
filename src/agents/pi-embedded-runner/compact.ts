@@ -905,8 +905,8 @@ export async function compactEmbeddedPiSessionDirect(
         try {
           fullSessionTokensBefore = limited.reduce((sum, msg) => sum + estimateTokens(msg), 0);
         } catch {
-          // If token estimation throws on a malformed message, skip the sanity check
-          // instead of crashing compaction.
+          // If token estimation throws on a malformed message, fall back to 0 so
+          // the sanity check below becomes a no-op instead of crashing compaction.
         }
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
