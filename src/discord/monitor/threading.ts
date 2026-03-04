@@ -260,7 +260,7 @@ export function extractFirstSentence(text: string): string {
   sanitized = sanitized.replace(/\b(i)\.(e)\./gi, `$1${placeholder}$2${placeholder}`);
 
   // Now find the first real sentence ending
-  const match = sanitized.match(/^[^.!?]*[.!?](?:\s|$)/);
+  const match = sanitized.match(/^[^.!?]*[.!?]["')\]]*(?:\s|$)/);
   if (match) {
     // Get the matched portion length and extract from original
     const matchLength = match[0].length;
@@ -448,7 +448,7 @@ export async function maybeCreateDiscordAutoThread(params: {
 
     // Parse archive duration from config, default to 60 minutes
     const archiveDuration = params.channelConfig?.autoThreadArchiveMin
-      ? parseInt(params.channelConfig.autoThreadArchiveMin, 10)
+      ? Number(params.channelConfig.autoThreadArchiveMin)
       : 60;
 
     const created = (await params.client.rest.post(

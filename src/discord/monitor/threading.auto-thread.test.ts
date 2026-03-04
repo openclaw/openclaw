@@ -132,6 +132,11 @@ describe("extractFirstSentence", () => {
       extractFirstSentence("The U.S. government announced something. More details later."),
     ).toBe("The U.S. government announced something.");
   });
+
+  it("handles punctuation before closing quotes and parens", () => {
+    expect(extractFirstSentence('He said "Done." Then left.')).toBe('He said "Done."');
+    expect(extractFirstSentence("(That's it.) Moving on.")).toBe("(That's it.)");
+  });
 });
 
 describe("maybeCreateDiscordAutoThread config integration", () => {

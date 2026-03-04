@@ -40,7 +40,7 @@ export type DiscordGuildEntryResolved = {
       includeThreadStarter?: boolean;
       autoThread?: boolean;
       autoThreadName?: "message" | "first-sentence";
-      autoThreadArchiveMin?: "60" | "1440" | "4320" | "10080";
+      autoThreadArchiveMin?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
     }
   >;
 };
@@ -57,7 +57,7 @@ export type DiscordChannelConfigResolved = {
   includeThreadStarter?: boolean;
   autoThread?: boolean;
   autoThreadName?: "message" | "first-sentence";
-  autoThreadArchiveMin?: "60" | "1440" | "4320" | "10080";
+  autoThreadArchiveMin?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
