@@ -1039,12 +1039,11 @@ export async function resolveImplicitProviders(params: {
   }
 
   const modelscopeKey =
-  resolveEnvApiKeyVarName("modelscope") ??
-  resolveApiKeyFromProfiles({ provider: "modelscope", store: authStore });
-if (modelscopeKey) {
-  providers.modelscope = { ...buildModelScopeProvider(), apiKey: modelscopeKey };
-}
-
+    resolveEnvApiKeyVarName("modelscope") ??
+    resolveApiKeyFromProfiles({ provider: "modelscope", store: authStore });
+  if (modelscopeKey) {
+    providers.modelscope = { ...buildModelScopeProvider(), apiKey: modelscopeKey };
+  }
 
   const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
   for (const profileId of cloudflareProfiles) {
