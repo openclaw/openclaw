@@ -1,19 +1,27 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 
 export type RestartAttempt = {
   ok: boolean;
-  method: "launchctl" | "systemd" | "supervisor";
+  method: "launchctl" | "systemd" | "supervisor" | "schtasks";
   detail?: string;
   tried?: string[];
 };
+
+/** Validates a string is safe for embedding in a batch (cmd.exe) script. */
+function isBatchSafe(value: string): boolean {
+  return /^[A-Za-z0-9 _\-().]+$/.test(value);
+}
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
@@ -297,6 +305,59 @@ export function triggerOpenClawRestart(): RestartAttempt {
 
   const tried: string[] = [];
   if (process.platform !== "darwin") {
+    if (process.platform === "win32") {
+      const taskName = resolveGatewayWindowsTaskName(process.env.OPENCLAW_PROFILE);
+      if (!isBatchSafe(taskName)) {
+        return {
+          ok: false,
+          method: "schtasks",
+          detail: `unsafe task name for batch script: ${taskName}`,
+        };
+      }
+      const port = DEFAULT_GATEWAY_PORT;
+      const tmpDir = os.tmpdir();
+      const filename = `openclaw-restart-${Date.now()}.bat`;
+      const scriptPath = path.join(tmpDir, filename);
+      const scriptContent = `@echo off
+REM Standalone restart script for /restart command.
+timeout /t 2 /nobreak >nul
+schtasks /End /TN "${taskName}"
+set /a attempts=0
+:wait_for_port_release
+set /a attempts+=1
+netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul
+if errorlevel 1 goto port_released
+if %attempts% GEQ 10 goto force_kill_listener
+timeout /t 1 /nobreak >nul
+goto wait_for_port_release
+:force_kill_listener
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"') do (
+  taskkill /F /PID %%P >nul 2>&1
+  goto port_released
+)
+:port_released
+schtasks /Run /TN "${taskName}"
+del "%~f0"
+`;
+      try {
+        fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+        const child = spawn("cmd.exe", ["/c", scriptPath], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.unref();
+        tried.push(`schtasks restart via ${scriptPath}`);
+        return { ok: true, method: "schtasks", tried };
+      } catch (err) {
+        return {
+          ok: false,
+          method: "schtasks",
+          detail: err instanceof Error ? err.message : String(err),
+          tried,
+        };
+      }
+    }
     if (process.platform === "linux") {
       const unit = normalizeSystemdUnit(
         process.env.OPENCLAW_SYSTEMD_UNIT,
