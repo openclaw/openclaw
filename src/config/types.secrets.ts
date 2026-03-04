@@ -1,11 +1,12 @@
-export type SecretRefSource = "env" | "file" | "exec";
+export type SecretRefSource = "env" | "file" | "exec" | "vault";
 
 /**
  * Stable identifier for a secret in a configured source.
  * Examples:
  * - env source: provider "default", id "OPENAI_API_KEY"
  * - file source: provider "mounted-json", id "/providers/openai/apiKey"
- * - exec source: provider "vault", id "openai/api-key"
+ * - exec source: provider "my-exec", id "openai/api-key"
+ * - vault source: provider "my-vault", id "notion/apikey#api_key"
  */
 export type SecretRef = {
   source: SecretRefSource;
@@ -34,7 +35,10 @@ export function isSecretRef(value: unknown): value is SecretRef {
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "vault") &&
     typeof value.provider === "string" &&
     value.provider.trim().length > 0 &&
     typeof value.id === "string" &&
@@ -49,7 +53,10 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "vault") &&
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
@@ -199,10 +206,51 @@ export type ExecSecretProviderConfig = {
   allowSymlinkCommand?: boolean;
 };
 
+/**
+ * HashiCorp Vault KV v2 secret provider.
+ *
+ * Refs use the format: `{ source: "vault", provider: "<name>", id: "path/to/secret#fieldName" }`
+ *
+ * Example config:
+ * ```json
+ * {
+ *   "secrets": {
+ *     "providers": {
+ *       "my-vault": {
+ *         "source": "vault",
+ *         "addr": "http://192.168.1.100:8200",
+ *         "tokenEnv": "VAULT_TOKEN",
+ *         "mountPath": "demo"
+ *       }
+ *     }
+ *   }
+ * }
+ * ```
+ *
+ * Example ref in auth-profiles.json:
+ * ```json
+ * { "source": "vault", "provider": "my-vault", "id": "notion/apikey#api_key" }
+ * ```
+ */
+export type VaultSecretProviderConfig = {
+  source: "vault";
+  /** Vault server address, e.g. "http://192.168.1.100:8200" */
+  addr: string;
+  /** Static Vault token. Prefer tokenEnv to avoid storing tokens in config. */
+  token?: string;
+  /** Name of the environment variable that holds the Vault token. */
+  tokenEnv?: string;
+  /** KV v2 mount path (default: "secret"). */
+  mountPath?: string;
+  /** Request timeout in milliseconds (default: 5000). */
+  timeoutMs?: number;
+};
+
 export type SecretProviderConfig =
   | EnvSecretProviderConfig
   | FileSecretProviderConfig
-  | ExecSecretProviderConfig;
+  | ExecSecretProviderConfig
+  | VaultSecretProviderConfig;
 
 export type SecretsConfig = {
   providers?: Record<string, SecretProviderConfig>;
@@ -210,6 +258,7 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
+    vault?: string;
   };
   resolution?: {
     maxProviderConcurrency?: number;
