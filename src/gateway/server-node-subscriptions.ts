@@ -1,3 +1,5 @@
+import { loadSessionEntry } from "./session-utils.js";
+
 export type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
@@ -97,6 +99,40 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     nodeSubscriptions.delete(normalizedNodeId);
   };
 
+  const resolveSessionSubscribers = (sessionKey: string): Set<string> | undefined => {
+    const direct = sessionSubscribers.get(sessionKey);
+    if (direct && direct.size > 0) {
+      return direct;
+    }
+
+    // Fallback for subagent sessions: when a node only subscribed to the
+    // requester session, route child session events through spawnedBy lineage.
+    // Only walk on direct-miss to keep hot paths O(1).
+    const visited = new Set<string>([sessionKey]);
+    let current = sessionKey;
+    for (let depth = 0; depth < 8; depth += 1) {
+      let parent: string | undefined;
+      try {
+        const loaded = loadSessionEntry(current);
+        parent =
+          typeof loaded.entry?.spawnedBy === "string" ? loaded.entry.spawnedBy.trim() : undefined;
+      } catch {
+        parent = undefined;
+      }
+      if (!parent || visited.has(parent)) {
+        return undefined;
+      }
+      const parentSubs = sessionSubscribers.get(parent);
+      if (parentSubs && parentSubs.size > 0) {
+        return parentSubs;
+      }
+      visited.add(parent);
+      current = parent;
+    }
+
+    return undefined;
+  };
+
   const sendToSession = (
     sessionKey: string,
     event: string,
@@ -107,7 +143,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (!normalizedSessionKey || !sendEvent) {
       return;
     }
-    const subs = sessionSubscribers.get(normalizedSessionKey);
+    const subs = resolveSessionSubscribers(normalizedSessionKey);
     if (!subs || subs.size === 0) {
       return;
     }

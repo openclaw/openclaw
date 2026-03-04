@@ -17,6 +17,7 @@ import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-r
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
+import * as sessionUtils from "./session-utils.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -307,6 +308,37 @@ describe("node subscription manager", () => {
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
     expect(sent).toEqual([]);
+  });
+
+  test("falls back to spawnedBy session subscribers when child has none", () => {
+    const manager = createNodeSubscriptionManager();
+    const sent: Array<{ nodeId: string; event: string }> = [];
+    const sendEvent = (evt: { nodeId: string; event: string }) => sent.push(evt);
+    const loadSpy = vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((key: string) => {
+      if (key === "agent:child:main") {
+        return {
+          canonicalKey: key,
+          entry: { spawnedBy: "agent:parent:main" },
+          cfg: {} as never,
+          storePath: undefined,
+        } as ReturnType<typeof sessionUtils.loadSessionEntry>;
+      }
+      return {
+        canonicalKey: key,
+        entry: undefined,
+        cfg: {} as never,
+        storePath: undefined,
+      } as ReturnType<typeof sessionUtils.loadSessionEntry>;
+    });
+
+    manager.subscribe("node-a", "agent:parent:main");
+    manager.sendToSession("agent:child:main", "chat", { ok: true }, sendEvent);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({ nodeId: "node-a", event: "chat" });
+    expect(loadSpy).toHaveBeenCalledWith("agent:child:main");
+
+    loadSpy.mockRestore();
   });
 });
 
