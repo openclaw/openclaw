@@ -100,6 +100,13 @@ const resolvePluginSdkTelegramAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "telegram.ts", distFile: "telegram.js" });
 };
 
+const resolvePluginSdkKeyedAsyncQueueAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({
+    srcFile: "keyed-async-queue.ts",
+    distFile: "keyed-async-queue.js",
+  });
+};
+
 const resolvePluginSdkDiscordAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "discord.ts", distFile: "discord.js" });
 };
@@ -502,6 +509,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
     const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
     const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
+    const pluginSdkKeyedAsyncQueueAlias = resolvePluginSdkKeyedAsyncQueueAlias();
     const pluginSdkDiscordAlias = resolvePluginSdkDiscordAlias();
     const pluginSdkSlackAlias = resolvePluginSdkSlackAlias();
     const pluginSdkSignalAlias = resolvePluginSdkSignalAlias();
@@ -520,6 +528,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       ...(pluginSdkLineAlias ? { "openclaw/plugin-sdk/line": pluginSdkLineAlias } : {}),
       ...(pluginSdkAccountIdAlias
         ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+        : {}),
+      ...(pluginSdkKeyedAsyncQueueAlias
+        ? { "openclaw/plugin-sdk/keyed-async-queue": pluginSdkKeyedAsyncQueueAlias }
         : {}),
     };
     jitiLoader = createJiti(import.meta.url, {
