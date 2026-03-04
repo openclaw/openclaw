@@ -245,12 +245,12 @@ function resolveModelToolPolicy(params: {
   const patternEntries = Object.entries(byModel).filter(([key]) => key.includes("*"));
 
   for (const [pattern, policy] of patternEntries) {
-    const normalizedPattern = normalizeToolName(pattern);
-    if (matchesAnyGlobPattern(normalizeToolName(fullModelId), [normalizedPattern])) {
+    const compiledPatterns = compileGlobPatterns([pattern]);
+    if (matchesAnyGlobPattern(normalizeToolName(fullModelId), compiledPatterns)) {
       return policy;
     }
     // Also try matching just the model id (without provider)
-    if (matchesAnyGlobPattern(normalizeToolName(modelId), [normalizedPattern])) {
+    if (matchesAnyGlobPattern(normalizeToolName(modelId), compiledPatterns)) {
       return policy;
     }
   }
