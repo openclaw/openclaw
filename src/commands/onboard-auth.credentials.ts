@@ -491,6 +491,18 @@ export async function setMistralApiKey(
   });
 }
 
+export async function setVivgridApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "vivgrid:default",
+    credential: buildApiKeyCredential("vivgrid", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setKilocodeApiKey(
   key: SecretInput,
   agentDir?: string,

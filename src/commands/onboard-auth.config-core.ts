@@ -7,8 +7,10 @@ import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
+  buildVivgridProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  VIVGRID_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -75,8 +77,10 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  VIVGRID_DEFAULT_MODEL_REF as VIVGRID_MODEL_REF,
   ZAI_DEFAULT_MODEL_ID,
   resolveZaiBaseUrl,
+  VIVGRID_BASE_URL,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
@@ -572,4 +576,40 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyVivgridProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[VIVGRID_MODEL_REF] = {
+    ...models[VIVGRID_MODEL_REF],
+    alias: models[VIVGRID_MODEL_REF]?.alias ?? "Vivgrid",
+  };
+  const defaultProvider = buildVivgridProvider();
+  const existingProvider = cfg.models?.providers?.vivgrid as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedBaseUrl = existingBaseUrl || VIVGRID_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "vivgrid",
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: VIVGRID_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyVivgridConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyVivgridProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, VIVGRID_MODEL_REF);
 }

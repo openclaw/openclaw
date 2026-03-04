@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL, VIVGRID_BASE_URL } from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -570,6 +570,25 @@ describe("onboard (non-interactive): provider auth", () => {
         profileId: "qianfan:default",
         provider: "qianfan",
         key: "qianfan-test-key",
+      });
+    });
+  });
+
+  it("infers Vivgrid auth choice from --vivgrid-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-vivgrid-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        vivgridApiKey: "vivgrid-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["vivgrid:default"]?.provider).toBe("vivgrid");
+      expect(cfg.auth?.profiles?.["vivgrid:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.vivgrid?.baseUrl).toBe(VIVGRID_BASE_URL);
+      expect(cfg.models?.providers?.vivgrid?.api).toBe("openai-completions");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("vivgrid/gpt-5-mini");
+      await expectApiKeyProfile({
+        profileId: "vivgrid:default",
+        provider: "vivgrid",
+        key: "vivgrid-test-key",
       });
     });
   });

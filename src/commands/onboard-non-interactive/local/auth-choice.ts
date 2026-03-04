@@ -15,6 +15,7 @@ import {
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
+  applyVivgridConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
@@ -37,6 +38,7 @@ import {
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
+  setVivgridApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
@@ -495,6 +497,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "vivgrid-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "vivgrid",
+      cfg: baseConfig,
+      flagValue: opts.vivgridApiKey,
+      flagName: "--vivgrid-api-key",
+      envVar: "VIVGRID_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setVivgridApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "vivgrid:default",
+      provider: "vivgrid",
+      mode: "api_key",
+    });
+    return applyVivgridConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {

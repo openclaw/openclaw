@@ -120,6 +120,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "vivgrid",
+    label: "Vivgrid",
+    hint: "API key + OpenAI-compatible",
+    choices: ["vivgrid-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",

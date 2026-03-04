@@ -412,6 +412,13 @@ describe("applyAuthChoice", () => {
         provider: "litellm",
         expectedModelPrefix: "litellm/",
       },
+      {
+        tokenProvider: " Vivgrid ",
+        token: "sk-vivgrid-token-provider-test",
+        profileId: "vivgrid:default",
+        provider: "vivgrid",
+        expectedModelPrefix: "vivgrid/",
+      },
     ];
     for (const scenario of scenarios) {
       await setupTempState();
@@ -512,6 +519,13 @@ describe("applyAuthChoice", () => {
       profileId: "qianfan:default",
       provider: "qianfan",
       modelPrefix: "qianfan/",
+    },
+    {
+      authChoice: "vivgrid-api-key",
+      tokenProvider: "vivgrid",
+      profileId: "vivgrid:default",
+      provider: "vivgrid",
+      modelPrefix: "vivgrid/",
     },
     {
       authChoice: "synthetic-api-key",

@@ -53,6 +53,13 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { buildVivgridProviderWithDiscovery } from "./vivgrid-models.js";
+
+export {
+  buildVivgridProvider,
+  VIVGRID_BASE_URL,
+  VIVGRID_DEFAULT_MODEL_ID,
+} from "./vivgrid-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -1134,6 +1141,22 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
   if (kilocodeKey) {
     providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
+  }
+
+  const vivgridEnvVar = resolveEnvApiKeyVarName("vivgrid");
+  const vivgridProfileKey = resolveApiKeyFromProfiles({ provider: "vivgrid", store: authStore });
+  const vivgridKey = vivgridEnvVar ?? vivgridProfileKey;
+  if (vivgridKey) {
+    const vivgridDiscoveryKey = vivgridEnvVar
+      ? (process.env[vivgridEnvVar]?.trim() ?? "")
+      : (vivgridProfileKey ?? "");
+    providers.vivgrid = {
+      ...(await buildVivgridProviderWithDiscovery({
+        baseUrl: params.explicitProviders?.vivgrid?.baseUrl,
+        apiKey: vivgridDiscoveryKey || undefined,
+      })),
+      apiKey: vivgridKey,
+    };
   }
 
   return providers;

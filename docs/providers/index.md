@@ -46,6 +46,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Together AI](/providers/together)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Vivgrid](/providers/vivgrid)
 - [vLLM (local models)](/providers/vllm)
 - [Xiaomi](/providers/xiaomi)
 - [Z.AI](/providers/zai)

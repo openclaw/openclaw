@@ -300,6 +300,38 @@ describe("model-selection", () => {
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
       ]);
     });
+
+    it("expands vivgrid allowlist entry to all discovered vivgrid models", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "vivgrid/gpt-5-mini": { alias: "Vivgrid" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        { provider: "openai", id: "gpt-5", name: "gpt-5" },
+        { provider: "vivgrid", id: "gpt-5-mini", name: "gpt-5-mini" },
+        { provider: "vivgrid", id: "glm-5", name: "glm-5" },
+        { provider: "vivgrid", id: "gpt-5.1-codex", name: "gpt-5.1-codex" },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog,
+        defaultProvider: "openai",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "vivgrid", id: "gpt-5-mini", name: "gpt-5-mini" },
+        { provider: "vivgrid", id: "glm-5", name: "glm-5" },
+        { provider: "vivgrid", id: "gpt-5.1-codex", name: "gpt-5.1-codex" },
+      ]);
+    });
   });
 
   describe("resolveAllowedModelRef", () => {

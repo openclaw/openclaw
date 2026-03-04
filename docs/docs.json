@@ -1119,6 +1119,7 @@
                   "providers/together",
                   "providers/vercel-ai-gateway",
                   "providers/venice",
+                  "providers/vivgrid",
                   "providers/vllm",
                   "providers/xiaomi",
                   "providers/zai"

@@ -145,6 +145,17 @@ What you set:
     Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
+  <Accordion title="Vivgrid API key">
+    Uses `VIVGRID_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
+
+    Sets `agents.defaults.model` to `vivgrid/gpt-5-mini` by default and configures `models.providers.vivgrid.api` as `openai-completions`.
+
+    You can keep provider default as Completions and override specific models to Responses with model-level `api`.
+    For agent-type projects, fallback catalog keeps only `vivgrid/gpt-5-mini`; codex/claude models are populated from dynamic discovery.
+
+    More detail: [Vivgrid](/providers/vivgrid).
+
+  </Accordion>
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider.
   </Accordion>
