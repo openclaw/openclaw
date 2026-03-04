@@ -300,17 +300,20 @@ export async function startGatewayServer(
           });
           break; // port is free
         } catch (err) {
-          if (
-            (err as NodeJS.ErrnoException).code === "EADDRINUSE" &&
-            attempt < PREFLIGHT_MAX_RETRIES
-          ) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "EADDRINUSE" && attempt < PREFLIGHT_MAX_RETRIES) {
             await new Promise<void>((r) => setTimeout(r, PREFLIGHT_RETRY_MS));
             continue;
           }
-          throw new GatewayLockError(
-            `another gateway instance is already listening on ws://${probeHost}:${port}`,
-            err,
-          );
+          if (code === "EADDRINUSE") {
+            throw new GatewayLockError(
+              `another gateway instance is already listening on ws://${probeHost}:${port}`,
+              err,
+            );
+          }
+          // Non-EADDRINUSE errors (e.g. ERR_SOCKET_BAD_PORT) are config
+          // issues, not lock contention — surface them without wrapping.
+          throw err;
         }
       }
     }
