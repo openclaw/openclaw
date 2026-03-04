@@ -121,7 +121,7 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["owner", "owner2"]);
   });
 
-  it("excludes pairing store when fallback is disabled (strict group mode)", () => {
+  it("includes pairing store by default even when fallback is disabled", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["owner"],
       groupAllowFrom: [],
@@ -129,7 +129,21 @@ describe("security/dm-policy-shared", () => {
       groupAllowFromFallbackToAllowFrom: false,
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
-    // Pairing store excluded when fallback is disabled (strict group mode)
+    // Pairing store included by default for backward compatibility,
+    // regardless of fallback setting
+    expect(lists.effectiveGroupAllowFrom).toEqual(["paired-user"]);
+  });
+
+  it("excludes pairing store when explicitly opted out", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["owner"],
+      groupAllowFrom: [],
+      storeAllowFrom: ["paired-user"],
+      groupAllowFromFallbackToAllowFrom: false,
+      groupAuthIncludesPairingStore: false,
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
+    // Pairing store excluded when explicitly opted out
     expect(lists.effectiveGroupAllowFrom).toEqual([]);
   });
 
