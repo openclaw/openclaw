@@ -51,6 +51,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     defaultRequireMention?: boolean;
     replyToMode?: "off" | "all";
     channelsConfig?: Record<string, { systemPrompt: string }>;
+    threadAutoReplyOnParticipation?: boolean;
   }) {
     return createSlackMonitorContext({
       cfg: params.cfg,
@@ -90,6 +91,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       typingReaction: "",
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
+      threadAutoReplyOnParticipation: params.threadAutoReplyOnParticipation ?? true,
     });
   }
 
