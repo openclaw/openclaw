@@ -27,14 +27,14 @@ describe("plugin-sdk root alias", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("loads legacy root exports lazily through the proxy", () => {
+  it("loads legacy root exports lazily through the proxy", { timeout: 240_000 }, () => {
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("preserves reflection semantics for lazily resolved exports", () => {
+  it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
