@@ -938,6 +938,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const finalReplyParts: string[] = [];
+      const finalReplyMediaUrls = new Set<string>();
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
@@ -948,10 +949,19 @@ export const chatHandlers: GatewayRequestHandlers = {
             return;
           }
           const text = payload.text?.trim() ?? "";
-          if (!text) {
-            return;
+          if (text) {
+            finalReplyParts.push(text);
           }
-          finalReplyParts.push(text);
+          const mediaCandidates = [
+            payload.mediaUrl,
+            ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+          ];
+          for (const candidate of mediaCandidates) {
+            const mediaUrl = typeof candidate === "string" ? candidate.trim() : "";
+            if (mediaUrl) {
+              finalReplyMediaUrls.add(mediaUrl);
+            }
+          }
         },
       });
 
@@ -1023,6 +1033,19 @@ export const chatHandlers: GatewayRequestHandlers = {
                   usage: { input: 0, output: 0, totalTokens: 0 },
                 };
               }
+            } else if (finalReplyMediaUrls.size > 0) {
+              // Keep a defined assistant message so clients don't force-refresh history
+              // and interrupt media playback after media-only finals (for example /tts audio).
+              const mediaUrls = [...finalReplyMediaUrls];
+              message = {
+                role: "assistant",
+                content: [{ type: "text", text: "" }],
+                mediaUrl: mediaUrls[0],
+                mediaUrls,
+                timestamp: Date.now(),
+                stopReason: "stop",
+                usage: { input: 0, output: 0, totalTokens: 0 },
+              };
             }
             broadcastChatFinal({
               context,

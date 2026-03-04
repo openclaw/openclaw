@@ -11,6 +11,7 @@ const mockState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "sess-1",
   finalText: "[[reply_to_current]]",
+  finalMediaUrl: undefined as string | undefined,
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -48,7 +49,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
     async (params: {
       ctx: MsgContext;
       dispatcher: {
-        sendFinalReply: (payload: { text: string }) => boolean;
+        sendFinalReply: (payload: { text?: string; mediaUrl?: string }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
       };
@@ -60,7 +61,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
-      params.dispatcher.sendFinalReply({ text: mockState.finalText });
+      params.dispatcher.sendFinalReply({
+        text: mockState.finalText || undefined,
+        mediaUrl: mockState.finalMediaUrl,
+      });
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
       return { ok: true };
@@ -190,6 +194,7 @@ async function runNonStreamingChatSend(params: {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.finalText = "[[reply_to_current]]";
+    mockState.finalMediaUrl = undefined;
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
@@ -304,6 +309,32 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         runId: "idem-directive-only",
         state: "final",
         message: expect.any(Object),
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("chat.send non-streaming media-only final keeps message defined", async () => {
+    createTranscriptFixture("openclaw-chat-send-media-only-final-");
+    mockState.finalText = "";
+    mockState.finalMediaUrl = "/tmp/voice.ogg";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-media-only-final",
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-media-only-final",
+        state: "final",
+        message: expect.objectContaining({
+          role: "assistant",
+          mediaUrl: "/tmp/voice.ogg",
+        }),
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
