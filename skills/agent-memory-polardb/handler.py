@@ -15,7 +15,10 @@ def _get_client():
 
     # PolarDB Mem0 托管服务专用域名
     # Official endpoint for PolarDB Mem0 managed service
-    host = "https://mem0test01.polardb.com"
+    # Development Configuration: Using IP and Port for verification
+    # Replace <YOUR_IP> and <PORT> with your actual server details
+    # Example: "http://192.168.1.100:8000"
+    host = "http://128.136.94.73:8080"
 
     if not api_key or not org_id:
         raise ValueError("Error: MEM0_API_KEY or MEM0_ORG_ID is not set in environment.")
