@@ -80,9 +80,13 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  // CRITICAL: Skip cache for session freshness check to match initSessionState behavior
+  // and avoid incorrect thread context loading decisions (stale cache could cause
+  // loading history when session is actually fresh, or vice versa)
   threadSessionPreviousTimestamp = readSessionUpdatedAt({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipCache: true,
   });
 
   // Determine if this is effectively a new session (either truly new or stale):
