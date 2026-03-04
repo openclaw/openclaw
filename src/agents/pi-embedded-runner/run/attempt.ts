@@ -1662,13 +1662,15 @@ export async function runEmbeddedAttempt(
             systemPromptChars: systemPromptText?.length ?? 0,
             historyMessages: activeSession.messages.length,
             historyChars: activeSession.messages.reduce((sum, m) => {
-              if (typeof m.content === "string") {
-                return sum + m.content.length;
+              const msg = m as unknown as Record<string, unknown>;
+              const content = msg.content;
+              if (typeof content === "string") {
+                return sum + content.length;
               }
-              if (Array.isArray(m.content)) {
+              if (Array.isArray(content)) {
                 return (
                   sum +
-                  m.content.reduce((s, block) => {
+                  (content as unknown[]).reduce((s: number, block) => {
                     if (typeof block === "string") {
                       return s + block.length;
                     }
