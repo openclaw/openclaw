@@ -541,16 +541,34 @@ export async function runAgentTurnWithFallback(params: {
       if (
         embeddedError &&
         isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
+        !didResetAfterCompactionFailure
       ) {
-        didResetAfterCompactionFailure = true;
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
-          },
-        };
+        const onFailurePolicy = resolveCompactionOnFailure(params.followupRun.run.config);
+        if (onFailurePolicy === "halt") {
+          await markSessionHalted(params, embeddedError.message);
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: { text: resolveCompactionOnFailureMessage(params.followupRun.run.config) },
+          };
+        }
+        if (onFailurePolicy === "continue") {
+          return {
+            kind: "final",
+            payload: {
+              text: "\u26a0\ufe0f Compaction failed but the session will continue. Context may be degraded \u2014 consider using /new if responses seem off.",
+            },
+          };
+        }
+        if (await params.resetSessionAfterCompactionFailure(embeddedError.message)) {
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: {
+              text: "\u26a0\ufe0f Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            },
+          };
+        }
       }
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
