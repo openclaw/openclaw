@@ -1,7 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
+const { defaultRouteConfig } = vi.hoisted(() => ({
+  defaultRouteConfig: {
+    agents: {
+      list: [{ id: "main", default: true }, { id: "zu" }, { id: "q" }, { id: "support" }],
+    },
+    channels: { telegram: {} },
+    messages: { groupChat: { mentionPatterns: [] } },
+  },
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => defaultRouteConfig),
+  };
+});
+
 describe("buildTelegramMessageContext per-topic agentId routing", () => {
+  beforeEach(() => {
+    vi.mocked(loadConfig).mockReturnValue(defaultRouteConfig as never);
+  });
+
   it("uses group-level agent when no topic agentId is set", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       message: {
@@ -113,6 +136,41 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       resolveTelegramGroupConfig: () => ({
         groupConfig: { requireMention: false },
         topicConfig: { agentId: "   ", systemPrompt: "Be nice" },
+      }),
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
+  });
+
+  it("falls back to default agent when topic agentId does not exist", async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "zu" }],
+      },
+      channels: { telegram: {} },
+      messages: { groupChat: { mentionPatterns: [] } },
+    } as never);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 1,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum",
+          is_forum: true,
+        },
+        date: 1700000000,
+        text: "@bot hello",
+        message_thread_id: 3,
+        from: { id: 42, first_name: "Alice" },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: { agentId: "ghost" },
       }),
     });
 
