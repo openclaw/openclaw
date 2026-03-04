@@ -754,6 +754,8 @@ export function buildWorkspaceSkillCommandSpecs(
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+      ...(entry.invocation?.context ? { context: entry.invocation.context } : {}),
+      ...(entry.invocation?.agentType ? { agentType: entry.invocation.agentType } : {}),
     });
   }
   return specs;
