@@ -563,13 +563,19 @@ export const registerTelegramNativeCommands = ({
           if (command.name === "groupid") {
             // Build thread params from message context
             const messageThreadId = msg.message_thread_id;
-            const groupidThreadParams = messageThreadId != null ? { message_thread_id: messageThreadId } : undefined;
-            
+            const groupidThreadParams =
+              messageThreadId != null ? { message_thread_id: messageThreadId } : undefined;
+
             if (!msg.chat.type.includes("group") && !msg.chat.type.includes("supergroup")) {
               await withTelegramApiErrorLogging({
                 operation: "sendMessage",
                 runtime,
-                fn: () => bot.api.sendMessage(chatId, "⚠️ This command only works in group chats.", groupidThreadParams),
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    "⚠️ This command only works in group chats.",
+                    groupidThreadParams,
+                  ),
               });
               return;
             }
@@ -578,12 +584,15 @@ export const registerTelegramNativeCommands = ({
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
-              fn: () => bot.api.sendMessage(chatId, groupIdText, { parse_mode: "Markdown", ...groupidThreadParams }),
+              fn: () =>
+                bot.api.sendMessage(chatId, groupIdText, {
+                  parse_mode: "Markdown",
+                  ...groupidThreadParams,
+                }),
             });
             return;
           }
 
-          
           const auth = await resolveTelegramCommandAuth({
             msg,
             bot,
