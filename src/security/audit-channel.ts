@@ -90,7 +90,7 @@ function hasExplicitProviderAccountConfig(
   if (!accounts || typeof accounts !== "object") {
     return false;
   }
-  return accountId in accounts;
+  return Object.hasOwn(accounts, accountId);
 }
 
 export async function collectChannelSecurityFindings(params: {
