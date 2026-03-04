@@ -45,7 +45,7 @@ describe("i18n", () => {
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     // Explicitly call the initialization path that runs in the constructor
-    (i18n as any).loadLocale();
+    (i18n as unknown as { loadLocale: () => void }).loadLocale();
     // Yield to let the promise resolve
     await new Promise((resolve) => setTimeout(resolve, 10));
 
