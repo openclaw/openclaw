@@ -81,7 +81,7 @@ describe("CronService restart catch-up", () => {
     await store.cleanup();
   });
 
-  it("clears stale running markers without replaying interrupted startup jobs", async () => {
+  it("schedules interrupted past-due jobs for immediate timer pickup instead of silently advancing (#34432)", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -115,18 +115,24 @@ describe("CronService restart catch-up", () => {
 
     await cron.start();
 
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    // The stale running marker should be cleared on startup.
     expect(noopLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "restart-stale-running" }),
       "cron: clearing stale running marker on startup",
     );
 
+    // runMissedJobs skips interrupted jobs to avoid duplicates during
+    // overlapping restarts, so the job should NOT have been executed yet.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    // However, nextRunAtMs must be set to "now" (not silently advanced to
+    // the next occurrence) so the timer picks it up immediately (#34432).
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((job) => job.id === "restart-stale-running");
     expect(updated?.state.runningAtMs).toBeUndefined();
-    expect(updated?.state.lastStatus).toBeUndefined();
-    expect(updated?.state.lastRunAtMs).toBeUndefined();
-    expect((updated?.state.nextRunAtMs ?? 0) > Date.parse("2025-12-13T17:00:00.000Z")).toBe(true);
+    // nextRunAtMs should be set to "now" (17:00:00 fake time), not advanced
+    // to the next cron occurrence (which would be 16:00 tomorrow).
+    expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T17:00:00.000Z"));
 
     cron.stop();
     await store.cleanup();

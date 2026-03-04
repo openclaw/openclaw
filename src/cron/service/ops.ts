@@ -109,11 +109,29 @@ export async function start(state: CronServiceState) {
     await persist(state);
   });
 
+  // Skip interrupted jobs during the immediate catch-up pass to avoid
+  // duplicate execution when another service instance is still finishing
+  // the same run (shared-store / overlapping restart scenario).
   await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     recomputeNextRuns(state);
+
+    // Schedule interrupted past-due jobs for immediate execution on the
+    // next timer tick instead of silently advancing to the next occurrence.
+    // runMissedJobs skipped these to avoid duplicate execution during
+    // overlapping restarts; the timer will pick them up through the normal
+    // findDueJobs path with proper locking (#34432).
+    if (startupInterruptedJobIds.size > 0) {
+      const now = state.deps.nowMs();
+      for (const job of state.store?.jobs ?? []) {
+        if (startupInterruptedJobIds.has(job.id) && job.enabled) {
+          job.state.nextRunAtMs = now;
+        }
+      }
+    }
+
     await persist(state);
     armTimer(state);
     state.deps.log.info(
