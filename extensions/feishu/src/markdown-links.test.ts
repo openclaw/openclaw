@@ -29,11 +29,9 @@ describe("markdown-links", () => {
     );
   });
 
-  it("converts autolink to stable markdown link", () => {
+  it("converts autolink to stable markdown link without double-wrapping", () => {
     const out = normalizeFeishuMarkdownLinks("<https://example.com/a_b>");
-    expect(out.includes("<https://")).toBe(false);
-    expect(out).toContain("example.com");
-    expect(out).toContain("%5F");
+    expect(out).toBe("[https://example.com/a%5Fb](https://example.com/a%5Fb)");
   });
 
   it("keeps trailing punctuation outside markdown destination", () => {

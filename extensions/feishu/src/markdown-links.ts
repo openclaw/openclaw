@@ -72,9 +72,15 @@ function wrapBareUrls(text: string): string {
       return raw;
     }
 
-    // Do not rebuild existing markdown destinations, only normalize URL chars in-place.
+    // Skip URLs that are already inside a markdown link (label or destination).
+    // Label: preceded by "[" → already a link label, leave as-is.
+    // Destination: preceded by "](" → normalize chars in-place, no re-wrap.
+    const isMarkdownLabel = offset >= 1 && input.slice(offset - 1, offset) === "[";
     const isMarkdownDestination = offset >= 2 && input.slice(offset - 2, offset) === "](";
     const normalizedUrl = normalizeUrlForFeishu(url);
+    if (isMarkdownLabel) {
+      return raw;
+    }
     if (isMarkdownDestination) {
       return `${normalizedUrl}${trailing}`;
     }
