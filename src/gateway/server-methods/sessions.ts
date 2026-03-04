@@ -198,7 +198,10 @@ async function ensureSessionRuntimeCleanup(params: {
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  const ended = await waitForEmbeddedPiRunEnd(
+    params.sessionId,
+    params.cfg.agents?.defaults?.embeddedPi?.timeoutMs ?? 15_000,
+  );
   if (ended) {
     return undefined;
   }

@@ -66,7 +66,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = params.sessionEntry.sessionId;
   if (isEmbeddedPiRunActive(sessionId)) {
     abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    await waitForEmbeddedPiRunEnd(
+      sessionId,
+      params.cfg.agents?.defaults?.embeddedPi?.timeoutMs ?? 15_000,
+    );
   }
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
