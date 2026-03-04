@@ -2,7 +2,7 @@ import {
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
   type PluginRuntime,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type {

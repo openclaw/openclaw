@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/compat";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";

@@ -8,7 +8,7 @@ import {
   extensionForMime,
   extractOriginalFilename,
   getFileExtension,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 
 /**
  * Detect MIME type from URL extension or data URL.
