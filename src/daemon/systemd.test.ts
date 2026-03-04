@@ -18,7 +18,7 @@ import {
 
 describe("systemd availability", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -67,7 +67,7 @@ describe("systemd availability", () => {
 
 describe("isSystemdServiceEnabled", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("returns false when systemctl is not present", async () => {
@@ -104,14 +104,28 @@ describe("isSystemdServiceEnabled", () => {
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      const err = new Error("Failed to connect to bus") as Error & { code?: number };
-      err.code = 1;
-      cb(err, "", "Failed to connect to bus");
-    });
-    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: Failed to connect to bus",
-    );
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Failed to connect to bus");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          `${process.env.USER ?? process.env.LOGNAME}@`,
+          "--user",
+          "is-enabled",
+          "openclaw-gateway.service",
+        ]);
+        const err = new Error("permission denied") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
+      });
+    await expect(
+      isSystemdServiceEnabled({ env: { USER: process.env.USER ?? process.env.LOGNAME } }),
+    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
@@ -239,7 +253,7 @@ describe("parseSystemdExecStart", () => {
 
 describe("systemd service control", () => {
   beforeEach(() => {
-    execFileMock.mockClear();
+    execFileMock.mockReset();
   });
 
   it("stops the resolved user unit", async () => {
