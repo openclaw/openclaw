@@ -143,6 +143,54 @@ describe("extractKeywords", () => {
     expect(keywords).not.toContain("onde");
   });
 
+  it("extracts keywords from Danish conversational query", () => {
+    const keywords = extractKeywords("igår diskuterede vi vagtplanen for plejehjemmet");
+    expect(keywords).toContain("diskuterede");
+    expect(keywords).toContain("vagtplanen");
+    expect(keywords).toContain("plejehjemmet");
+    // Should not include stop words
+    expect(keywords).not.toContain("igår");
+    expect(keywords).not.toContain("vi");
+    expect(keywords).not.toContain("for");
+  });
+
+  it("filters Danish stop words", () => {
+    const keywords = extractKeywords("den denne disse jeg mig og eller men hvis");
+    expect(keywords).not.toContain("den");
+    expect(keywords).not.toContain("denne");
+    expect(keywords).not.toContain("disse");
+    expect(keywords).not.toContain("jeg");
+    expect(keywords).not.toContain("mig");
+    expect(keywords).not.toContain("og");
+    expect(keywords).not.toContain("eller");
+    expect(keywords).not.toContain("men");
+    expect(keywords).not.toContain("hvis");
+  });
+
+  it("filters Danish auxiliary verbs and adverbs", () => {
+    const keywords = extractKeywords("er var har kan vil skal blev også bare kun");
+    expect(keywords).not.toContain("er");
+    expect(keywords).not.toContain("var");
+    expect(keywords).not.toContain("har");
+    expect(keywords).not.toContain("kan");
+    expect(keywords).not.toContain("vil");
+    expect(keywords).not.toContain("skal");
+    expect(keywords).not.toContain("blev");
+    expect(keywords).not.toContain("også");
+    expect(keywords).not.toContain("bare");
+    expect(keywords).not.toContain("kun");
+  });
+
+  it("handles mixed Danish and English query", () => {
+    const keywords = extractKeywords("hvad var løsningen på den API fejl");
+    expect(keywords).toContain("løsningen");
+    expect(keywords).toContain("api");
+    expect(keywords).toContain("fejl");
+    expect(keywords).not.toContain("hvad");
+    expect(keywords).not.toContain("var");
+    expect(keywords).not.toContain("den");
+  });
+
   it("extracts keywords from Arabic conversational query", () => {
     const keywords = extractKeywords("بالأمس ناقشنا استراتيجية النشر");
     expect(keywords).toContain("ناقشنا");
