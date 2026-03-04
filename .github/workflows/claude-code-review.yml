@@ -1,0 +1,58 @@
+name: Claude Code Review
+
+on:
+  # PR 自动代码审查
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  # @claude 交互式对话（Issue + PR 评论）
+  issue_comment:
+    types: [created]
+
+  # PR review 评论中 @claude
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  claude-review:
+    # 仅在以下情况触发：
+    # 1. PR 事件（自动审查）
+    # 2. 评论中包含 @claude（交互式）
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            你是 OpenFinClaw 项目的代码审查助手。这是一个金融领域的 AI 助手网关项目（OpenClaw 的金融 fork）。
+
+            ## 审查重点：
+            1. **安全性** — 金融数据处理、API key 泄露、注入攻击、OWASP top 10
+            2. **TypeScript 质量** — 严格类型（避免 any）、ESM 规范、错误处理
+            3. **架构一致性** — 零核心侵入原则（所有金融功能通过 extensions/fin-* 实现）
+            4. **测试覆盖** — 新代码 ≥80% 覆盖率，核心逻辑 ≥90%
+            5. **性能** — 避免 N+1 查询、内存泄漏、不必要的阻塞
+
+            ## 项目规范：
+            - 使用 Conventional Commits（type(scope): description）
+            - 文件保持 ~500 LOC 以内
+            - 插件依赖放在 extension 自己的 package.json
+            - 不修改 OpenClaw 核心代码，只通过 extension 扩展
+
+            ## 回复语言：
+            - 默认用中文回复，专业术语保留英文
+            - 代码审查评论直接标注在对应行上
