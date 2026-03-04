@@ -88,8 +88,13 @@ export async function parseProviderError(
   } else if (httpStatus === 503) {
     category = "resource-exhaustion";
     retryable = true;
-    retryAfterMs = null;
-    message = `${label} Resource exhausted. Retrying with backoff...`;
+    retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+    if (retryAfterMs !== null) {
+      const seconds = Math.round(retryAfterMs / 1000);
+      message = `${label} Resource exhausted. Retrying in ${seconds}s...`;
+    } else {
+      message = `${label} Resource exhausted. Retrying with backoff...`;
+    }
   } else if (httpStatus === 401) {
     category = "auth";
     retryable = false;
@@ -108,8 +113,13 @@ export async function parseProviderError(
   } else if (httpStatus === 500 || httpStatus === 502 || httpStatus === 504) {
     category = "resource-exhaustion";
     retryable = true;
-    retryAfterMs = null;
-    message = `${label} Server error (${httpStatus}). Retrying with backoff...`;
+    retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+    if (retryAfterMs !== null) {
+      const seconds = Math.round(retryAfterMs / 1000);
+      message = `${label} Server error (${httpStatus}). Retrying in ${seconds}s...`;
+    } else {
+      message = `${label} Server error (${httpStatus}). Retrying with backoff...`;
+    }
   } else {
     category = "unknown";
     retryable = false;

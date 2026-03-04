@@ -77,13 +77,20 @@ describe("parseProviderError", () => {
   });
 
   describe("resource-exhaustion (503)", () => {
-    it("category, retryable, retryAfterMs, message", async () => {
+    it("503 without Retry-After → retryAfterMs null, message contains 'backoff'", async () => {
       const res = mockResponse(503);
       const err = await parseProviderError("ollama", res);
       expect(err.category).toBe("resource-exhaustion");
       expect(err.retryable).toBe(true);
       expect(err.retryAfterMs).toBeNull();
-      expect(err.message).toContain("exhausted");
+      expect(err.message).toContain("backoff");
+    });
+
+    it("503 with Retry-After header → retryAfterMs set, message contains seconds", async () => {
+      const res = mockResponse(503, { "retry-after": "20" });
+      const err = await parseProviderError("ollama", res);
+      expect(err.retryAfterMs).toBe(20000);
+      expect(err.message).toContain("20s");
     });
   });
 
@@ -123,6 +130,13 @@ describe("parseProviderError", () => {
       expect(err.retryable).toBe(true);
       expect(err.retryAfterMs).toBeNull();
       expect(err.message).toContain("500");
+    });
+
+    it("500 with Retry-After: 10 → retryAfterMs = 10000", async () => {
+      const res = mockResponse(500, { "retry-after": "10" });
+      const err = await parseProviderError("openai", res);
+      expect(err.retryAfterMs).toBe(10000);
+      expect(err.message).toContain("10s");
     });
 
     it("502 → resource-exhaustion, retryable = true", async () => {
