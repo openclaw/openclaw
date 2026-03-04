@@ -34,7 +34,7 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 
 1. Resolver semantics match eligibility semantics for `expires`.
 2. For eligible profiles, token material may be resolved from inline value or `tokenRef`.
-3. Unresolvable refs produce `unresolved_ref` in probe/diagnostic surfaces.
+3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
 
 ## Legacy-Compatible Messaging
 
