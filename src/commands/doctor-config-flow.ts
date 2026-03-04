@@ -1407,20 +1407,6 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         }
       }
 
-      // Also check parent?.groups for consistency with parent?.groupAllowFrom handling
-      if (!hasPerGroupAllowFrom && parent) {
-        const parentGroups = asObjectRecord(parent.groups);
-        if (parentGroups) {
-          for (const groupId of Object.keys(parentGroups)) {
-            const group = asObjectRecord(parentGroups[groupId]);
-            if (group && group.enabled !== false && hasAllowFromEntries(group.allowFrom as Array<string | number> | undefined)) {
-              hasPerGroupAllowFrom = true;
-              break;
-            }
-          }
-        }
-      }
-
       if (!hasAllowFromEntries(effectiveGroupAllowFrom) && !hasPerGroupAllowFrom) {
         if (fallbackToAllowFrom) {
           warnings.push(
