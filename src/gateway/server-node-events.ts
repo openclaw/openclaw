@@ -308,7 +308,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           message: text,
           sessionId,
           sessionKey: canonicalKey,
-          thinking: "low",
           deliver: false,
           messageChannel: "node",
           inputProvenance: {
