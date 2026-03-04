@@ -961,6 +961,16 @@ description: test skill
         expectedSeverity: "info",
         detailIncludes: ["mistral-8b", "sandbox=all"],
       },
+      {
+        name: "small model with gemini search key auto-enables web_search exposure",
+        cfg: {
+          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+          tools: { web: { search: { gemini: { apiKey: "gemini-key" } } } },
+          browser: { enabled: false },
+        },
+        expectedSeverity: "critical",
+        detailIncludes: ["mistral-8b", "web_search"],
+      },
     ];
     await Promise.all(
       cases.map(async (testCase) => {
