@@ -196,20 +196,38 @@ async function runPollCycle(cfg: ImapHookRuntimeConfig, expectedGeneration: numb
 
       log.debug(`retrieved ${envelopes.length} envelopes from himalaya page ${page}`);
 
+      // Filter by allowedSenders if configured
+      let filteredEnvelopes = envelopes;
+      if (cfg.allowedSenders?.length) {
+        const allowedSet = new Set(cfg.allowedSenders);
+        filteredEnvelopes = envelopes.filter((e) => {
+          const from = e.from?.toLowerCase().trim() || "";
+          // Match exact email or email within angle brackets
+          const emailMatch = from.match(/[<\s]([^\u003e\s]+@[^\u003e\s]+)/);
+          const email = emailMatch ? emailMatch[1] : from;
+          const isAllowed = allowedSet.has(email);
+          if (!isAllowed) {
+            log.debug(`skipping envelope from non-allowed sender: ${e.from}`);
+          }
+          return isAllowed;
+        });
+        log.debug(`filtered to ${filteredEnvelopes.length} envelopes from allowed senders`);
+      }
+
       // Stop if no more envelopes on this page
-      if (envelopes.length === 0) {
+      if (filteredEnvelopes.length === 0) {
         log.debug(`no envelopes on page ${page}, stopping pagination`);
         hasMorePages = false;
         break;
       }
 
-      if (page === 1 && envelopes.length > 0) {
+      if (page === 1 && filteredEnvelopes.length > 0) {
         log.debug(
-          `first envelope: id=${envelopes[0].id}, subject="${envelopes[0].subject}", from="${envelopes[0].from}"`,
+          `first envelope: id=${filteredEnvelopes[0].id}, subject="${filteredEnvelopes[0].subject}", from="${filteredEnvelopes[0].from}"`,
         );
       }
 
-      const newEnvelopes = envelopes.filter((e) => e.id && !seenIds.has(e.id));
+      const newEnvelopes = filteredEnvelopes.filter((e) => e.id && !seenIds.has(e.id));
       log.debug(`found ${newEnvelopes.length} new envelopes on page ${page} (not in seenIds set)`);
 
       // Continue pagination even when this page is fully seen so unread
@@ -251,6 +269,13 @@ async function runPollCycle(cfg: ImapHookRuntimeConfig, expectedGeneration: numb
         );
         try {
           await processEnvelope(cfg, envelope);
+          // Check generation after processEnvelope to detect reloads that occurred during processing
+          if (expectedGeneration !== generation) {
+            log.debug(
+              `stale poll cycle detected after envelope ${envelope.id} processed, aborting`,
+            );
+            break;
+          }
           seenIds.add(envelope.id);
           totalProcessed++;
           log.debug(`envelope ${envelope.id} processed and added to seenIds`);

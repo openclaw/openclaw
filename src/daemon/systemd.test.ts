@@ -90,6 +90,21 @@ describe("isSystemdServiceEnabled", () => {
       "systemctl is-enabled unavailable: Failed to connect to bus",
     );
   });
+
+  it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
+      // code 4 and prints "not-found" to stdout when the unit doesn't exist.
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 4;
+      cb(err, "not-found\n", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {
@@ -251,5 +266,30 @@ describe("systemd service control", () => {
         env: {},
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
+  });
+
+  it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          "debian@",
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { SUDO_USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
   });
 });

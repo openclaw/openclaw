@@ -61,7 +61,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-gmail-watcher", "restart-imap-watcher"],
   },
-  { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
+  {
+    prefix: "hooks",
+    kind: "hot",
+    actions: ["reload-hooks", "restart-gmail-watcher", "restart-imap-watcher"],
+  },
   {
     prefix: "agents.defaults.heartbeat",
     kind: "hot",
