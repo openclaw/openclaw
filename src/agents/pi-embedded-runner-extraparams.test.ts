@@ -761,6 +761,66 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
+  it("passes configured toolChoice through stream options", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "sub2api/gpt-5.3-codex": {
+              params: {
+                toolChoice: "required",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "sub2api", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-responses",
+      provider: "sub2api",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as unknown as Record<string, unknown>)?.toolChoice).toBe("required");
+  });
+
+  it("passes configured tool_choice through stream options", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "sub2api/gpt-5.3-codex": {
+              params: {
+                tool_choice: "required",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "sub2api", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-responses",
+      provider: "sub2api",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as unknown as Record<string, unknown>)?.toolChoice).toBe("required");
+  });
+
   it("passes configured websocket transport through stream options for openai-codex gpt-5.4", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
@@ -1642,5 +1702,94 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.store).toBe(false);
+  });
+
+  it("forces sub2api compat for sub2api-passthrough gpt-5.2 on openai-responses", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-passthrough",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-passthrough",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        previous_response_id: "resp_prev",
+        include: ["reasoning.encrypted_content"],
+        prompt_cache_key: "session-key",
+        max_output_tokens: 32000,
+        reasoning: { effort: "medium" },
+        instructions: "",
+        input: [
+          { role: "developer", content: "dev note" },
+          {
+            role: "assistant",
+            content: [{ type: "input_text", text: "assistant output" }],
+          },
+        ],
+      },
+    });
+
+    expect(payload.store).toBe(true);
+    expect(payload.previous_response_id).toBeUndefined();
+    expect(payload.include).toBeUndefined();
+    expect(payload.prompt_cache_key).toBeUndefined();
+    expect(payload.max_output_tokens).toBeUndefined();
+    expect(payload.reasoning).toBeUndefined();
+    expect(payload.instructions).toBe("dev note");
+    expect(payload.input).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "assistant output" }],
+      },
+    ]);
+  });
+
+  it("downgrades required tool_choice to auto for sub2api-passthrough gpt-5.2 when tools are missing", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-passthrough",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-passthrough",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        tool_choice: "required",
+      },
+    });
+
+    expect(payload.tool_choice).toBe("auto");
+  });
+
+  it("keeps required tool_choice for sub2api-passthrough gpt-5.2 when tools are present", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-passthrough",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-passthrough",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        tool_choice: "required",
+        tools: [
+          {
+            type: "function",
+            name: "apply_patch",
+            description: "Apply patch",
+            parameters: {
+              type: "object",
+              properties: {},
+            },
+          },
+        ],
+      },
+    });
+
+    expect(payload.tool_choice).toBe("required");
   });
 });

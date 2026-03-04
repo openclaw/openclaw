@@ -48,6 +48,7 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
+  toolChoice?: unknown;
 };
 
 /**
@@ -128,6 +129,11 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  if (extraParams.toolChoice !== undefined) {
+    streamParams.toolChoice = extraParams.toolChoice;
+  } else if (extraParams.tool_choice !== undefined) {
+    streamParams.toolChoice = extraParams.tool_choice;
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
@@ -296,7 +302,8 @@ function shouldApplySub2apiCodexCompat(model: {
   if (typeof model.api !== "string" || typeof model.provider !== "string") {
     return false;
   }
-  if (model.provider !== "sub2api") {
+  const provider = model.provider.toLowerCase();
+  if (provider !== "sub2api" && !provider.startsWith("sub2api-")) {
     return false;
   }
   // Keep codex-responses behavior unchanged (store=false); this compat layer is
@@ -307,7 +314,7 @@ function shouldApplySub2apiCodexCompat(model: {
   if (typeof model.id !== "string") {
     return false;
   }
-  return /codex/i.test(model.id);
+  return /codex|gpt-5\.2/i.test(model.id);
 }
 
 function extractTextFromContentBlocks(value: unknown): string[] {
@@ -430,6 +437,38 @@ function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): 
   return normalized;
 }
 
+function hasUsableTools(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
+    return false;
+  }
+  return tools.some((tool) => tool && typeof tool === "object");
+}
+
+function normalizeRequiredToolChoiceWhenNoTools(payloadObj: {
+  tools?: unknown;
+  tool_choice?: unknown;
+}): void {
+  if (hasUsableTools(payloadObj.tools)) {
+    return;
+  }
+
+  if (payloadObj.tool_choice === "required") {
+    payloadObj.tool_choice = "auto";
+    return;
+  }
+
+  if (
+    payloadObj.tool_choice &&
+    typeof payloadObj.tool_choice === "object" &&
+    !Array.isArray(payloadObj.tool_choice)
+  ) {
+    const toolChoiceObj = payloadObj.tool_choice as Record<string, unknown>;
+    if (toolChoiceObj.type === "required") {
+      payloadObj.tool_choice = { ...toolChoiceObj, type: "auto" };
+    }
+  }
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -461,6 +500,8 @@ function createOpenAIResponsesContextManagementWrapper(
             reasoning?: unknown;
             instructions?: unknown;
             input?: unknown;
+            tools?: unknown;
+            tool_choice?: unknown;
             context_management?: unknown;
           };
 
@@ -483,6 +524,7 @@ function createOpenAIResponsesContextManagementWrapper(
             delete payloadObj.prompt_cache_key;
             delete payloadObj.max_output_tokens;
             delete payloadObj.reasoning;
+            normalizeRequiredToolChoiceWhenNoTools(payloadObj);
 
             const instructionParts: string[] = [];
             if (typeof payloadObj.instructions === "string" && payloadObj.instructions.trim()) {
