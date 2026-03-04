@@ -95,7 +95,9 @@ export async function readPostCompactionContext(
  * Captures until the next heading of same or higher level, or end of string.
  *
  * Each entry in `sectionNames` can be a single name or an array of aliases.
- * When an array is given, the first matching alias wins (canonical name first).
+ * When an array is given, aliases are tried in priority order (canonical first).
+ * This ensures `["Session Startup", "Every Session"]` always prefers
+ * `## Session Startup` even if `## Every Session` appears earlier in the document.
  */
 export function extractSections(content: string, sectionNames: (string | string[])[]): string[] {
   const results: string[] = [];
@@ -103,64 +105,79 @@ export function extractSections(content: string, sectionNames: (string | string[
 
   for (const nameEntry of sectionNames) {
     const names = Array.isArray(nameEntry) ? nameEntry : [nameEntry];
-    let sectionLines: string[] = [];
-    let inSection = false;
-    let sectionLevel = 0;
-    let inCodeBlock = false;
-
-    for (const line of lines) {
-      // Track fenced code blocks
-      if (line.trimStart().startsWith("```")) {
-        inCodeBlock = !inCodeBlock;
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
-      }
-
-      // Skip heading detection inside code blocks
-      if (inCodeBlock) {
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
-      }
-
-      // Check if this line is a heading
-      const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
-
-      if (headingMatch) {
-        const level = headingMatch[1].length; // 2 or 3
-        const headingText = headingMatch[2];
-
-        if (!inSection) {
-          // Check if this is our target section (case-insensitive, first alias wins)
-          if (names.some((n) => headingText.toLowerCase() === n.toLowerCase())) {
-            inSection = true;
-            sectionLevel = level;
-            sectionLines = [line];
-            continue;
-          }
-        } else {
-          // We're in section — stop if we hit a heading of same or higher level
-          if (level <= sectionLevel) {
-            break;
-          }
-          // Lower-level heading (e.g., ### inside ##) — include it
-          sectionLines.push(line);
-          continue;
-        }
-      }
-
-      if (inSection) {
-        sectionLines.push(line);
+    // Try aliases in priority order (canonical first), full scan per alias
+    let matched: string | null = null;
+    for (const name of names) {
+      matched = extractSingleSection(lines, name);
+      if (matched) {
+        break;
       }
     }
-
-    if (sectionLines.length > 0) {
-      results.push(sectionLines.join("\n").trim());
+    if (matched) {
+      results.push(matched);
     }
   }
 
   return results;
+}
+
+/** Scan all lines for a single heading name and return the section content, or null. */
+function extractSingleSection(lines: string[], name: string): string | null {
+  let sectionLines: string[] = [];
+  let inSection = false;
+  let sectionLevel = 0;
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    // Track fenced code blocks
+    if (line.trimStart().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      if (inSection) {
+        sectionLines.push(line);
+      }
+      continue;
+    }
+
+    // Skip heading detection inside code blocks
+    if (inCodeBlock) {
+      if (inSection) {
+        sectionLines.push(line);
+      }
+      continue;
+    }
+
+    // Check if this line is a heading
+    const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
+
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2];
+
+      if (!inSection) {
+        if (headingText.toLowerCase() === name.toLowerCase()) {
+          inSection = true;
+          sectionLevel = level;
+          sectionLines = [line];
+          continue;
+        }
+      } else {
+        // We're in section -- stop if we hit a heading of same or higher level
+        if (level <= sectionLevel) {
+          break;
+        }
+        // Lower-level heading (e.g., ### inside ##) -- include it
+        sectionLines.push(line);
+        continue;
+      }
+    }
+
+    if (inSection) {
+      sectionLines.push(line);
+    }
+  }
+
+  if (sectionLines.length > 0) {
+    return sectionLines.join("\n").trim();
+  }
+  return null;
 }

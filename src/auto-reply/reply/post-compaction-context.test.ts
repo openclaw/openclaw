@@ -303,7 +303,37 @@ Legacy safety content.
       ["Red Lines", "Safety"],
     ]);
     expect(sections).toHaveLength(2);
-    // Canonical name appears first in the document, so it should be extracted
+    // Canonical name is tried first in alias priority order, so it wins
+    expect(sections[0]).toContain("Canonical startup content");
+    expect(sections[0]).not.toContain("Legacy startup content");
+    expect(sections[1]).toContain("Canonical red lines");
+    expect(sections[1]).not.toContain("Legacy safety content");
+  });
+
+  it("prefers canonical name even when legacy alias appears first in the document", () => {
+    // Regression: old single-pass logic picked whichever alias appeared first
+    // in the document, not the canonical (first-listed) alias.
+    const content = `## Every Session
+
+Legacy startup content.
+
+## Session Startup
+
+Canonical startup content.
+
+## Safety
+
+Legacy safety content.
+
+## Red Lines
+
+Canonical red lines.
+`;
+    const sections = extractSections(content, [
+      ["Session Startup", "Every Session"],
+      ["Red Lines", "Safety"],
+    ]);
+    expect(sections).toHaveLength(2);
     expect(sections[0]).toContain("Canonical startup content");
     expect(sections[0]).not.toContain("Legacy startup content");
     expect(sections[1]).toContain("Canonical red lines");
