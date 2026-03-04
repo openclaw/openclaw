@@ -651,3 +651,16 @@ Key options:
 - ✅ Files
 - ✅ Audio
 - ⚠️ Rich text (partial support)
+
+## Available Tools
+
+The Feishu plugin provides the following tools for agents:
+
+- **feishu_doc** - Read/write Feishu documents
+- **feishu_chat** - Chat operations (get info, list members)
+- **feishu_wiki** - Knowledge base operations
+- **feishu_drive** - Cloud storage file management
+- **feishu_bitable** - Multidimensional table operations
+- **feishu_perm** - Permission management
+- **feishu_reaction** - Add/remove/list emoji reactions on messages
+
