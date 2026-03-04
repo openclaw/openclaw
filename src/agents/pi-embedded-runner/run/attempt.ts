@@ -1543,52 +1543,54 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
-      // Subscribe for after_llm_call hook events
+      // Subscribe for LLM hook events (iteration tracking + after_llm_call)
+      const hookIterationRefEarly = { current: 0 };
       let hookTurnIteration = 0;
-      const hookEventUnsub = hookRunner?.hasHooks("after_llm_call")
-        ? activeSession.subscribe((event) => {
-            if (event.type === "turn_start") {
-              hookTurnIteration++;
-              hookIterationRef.current = hookTurnIteration;
-            }
-            if (event.type === "message_end" && hookRunner.hasHooks("after_llm_call")) {
-              const msg = event.message;
-              const toolCalls: Array<{
-                id: string;
-                name: string;
-                arguments: Record<string, unknown>;
-              }> = [];
-              if (
-                msg &&
-                typeof msg === "object" &&
-                "content" in msg &&
-                Array.isArray((msg as unknown as Record<string, unknown>).content)
-              ) {
-                for (const part of (msg as unknown as { content: Array<Record<string, unknown>> })
-                  .content) {
-                  if (part && part.type === "toolCall") {
-                    toolCalls.push({
-                      id: (part.id as string) ?? "",
-                      name: (part.name as string) ?? "",
-                      arguments: (part.arguments as Record<string, unknown>) ?? {},
-                    });
+      const hookEventUnsub =
+        hookRunner?.hasHooks("after_llm_call") || hookRunner?.hasHooks("before_llm_call")
+          ? activeSession.subscribe((event) => {
+              if (event.type === "turn_start") {
+                hookTurnIteration++;
+                hookIterationRefEarly.current = hookTurnIteration;
+              }
+              if (event.type === "message_end" && hookRunner.hasHooks("after_llm_call")) {
+                const msg = event.message;
+                const toolCalls: Array<{
+                  id: string;
+                  name: string;
+                  arguments: Record<string, unknown>;
+                }> = [];
+                if (
+                  msg &&
+                  typeof msg === "object" &&
+                  "content" in msg &&
+                  Array.isArray((msg as unknown as Record<string, unknown>).content)
+                ) {
+                  for (const part of (msg as unknown as { content: Array<Record<string, unknown>> })
+                    .content) {
+                    if (part && part.type === "toolCall") {
+                      toolCalls.push({
+                        id: (part.id as string) ?? "",
+                        name: (part.name as string) ?? "",
+                        arguments: (part.arguments as Record<string, unknown>) ?? {},
+                      });
+                    }
                   }
                 }
+                hookRunner
+                  .runAfterLlmCall(
+                    {
+                      response: msg,
+                      toolCalls,
+                      iteration: hookTurnIteration,
+                      model: params.modelId,
+                    },
+                    hookCtx,
+                  )
+                  .catch((err) => log.warn(`after_llm_call hook: ${String(err)}`));
               }
-              hookRunner
-                .runAfterLlmCall(
-                  {
-                    response: msg,
-                    toolCalls,
-                    iteration: hookTurnIteration,
-                    model: params.modelId,
-                  },
-                  hookCtx,
-                )
-                .catch((err) => log.warn(`after_llm_call hook: ${String(err)}`));
-            }
-          })
-        : undefined;
+            })
+          : undefined;
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1663,7 +1665,6 @@ export async function runEmbeddedAttempt(
 
       // Hook runner was already obtained earlier before tool creation
       const hookAgentId = sessionAgentId;
-      const hookIterationRef = { current: 0 };
       const hookCtx: import("../../../plugins/hooks.js").PluginHookAgentContext = {
         agentId: hookAgentId,
         sessionKey: params.sessionKey,
@@ -1681,7 +1682,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapStreamFnWithHooks(activeSession.agent.streamFn, {
           hookRunner,
           agentCtx: hookCtx,
-          iterationRef: hookIterationRef,
+          iterationRef: hookIterationRefEarly,
           modelId: params.modelId,
         });
       }

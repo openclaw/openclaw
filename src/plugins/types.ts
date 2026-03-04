@@ -802,7 +802,10 @@ export type PluginHookBeforeLlmCallResult = {
   blockReason?: string;
 };
 
-// after_llm_call hook (modifying — sequential)
+// after_llm_call hook (void — parallel)
+// Note: this is observational only. Modifying tool calls or blocking execution
+// would require interception points inside the agent loop that don't exist yet.
+// When those are added, this can be upgraded to a modifying hook.
 export type PluginHookAfterLlmCallEvent = {
   response: AgentMessage;
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
@@ -811,12 +814,6 @@ export type PluginHookAfterLlmCallEvent = {
   /** Wall-clock LLM call duration. Undefined when not measurable. */
   latencyMs?: number;
   tokenUsage?: { input: number; output: number };
-};
-
-export type PluginHookAfterLlmCallResult = {
-  toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
-  block?: boolean;
-  blockReason?: string;
 };
 
 // before_response_emit hook (modifying — sequential)
@@ -937,7 +934,7 @@ export type PluginHookHandlerMap = {
   after_llm_call: (
     event: PluginHookAfterLlmCallEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookAfterLlmCallResult | void> | PluginHookAfterLlmCallResult | void;
+  ) => Promise<void> | void;
   before_response_emit: (
     event: PluginHookBeforeResponseEmitEvent,
     ctx: PluginHookAgentContext,

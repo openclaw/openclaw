@@ -195,31 +195,9 @@ describe("after_llm_call hook", () => {
     });
   });
 
-  it("returns modified toolCalls when handler provides them", async () => {
-    const filtered = [{ id: "tc-1", name: "read", arguments: { path: "/safe" } }];
-    const handler = vi.fn().mockResolvedValue({ toolCalls: filtered });
-    const runner = createHookRunner(
-      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
-    );
-
-    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
-    expect(result?.toolCalls).toBe(filtered);
-  });
-
-  it("returns block=true when handler blocks", async () => {
-    const handler = vi.fn().mockResolvedValue({ block: true, blockReason: "dangerous tool call" });
-    const runner = createHookRunner(
-      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
-    );
-
-    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
-    expect(result?.block).toBe(true);
-    expect(result?.blockReason).toBe("dangerous tool call");
-  });
-
-  it("merges results from multiple handlers", async () => {
-    const h1 = vi.fn().mockResolvedValue({ toolCalls: [] });
-    const h2 = vi.fn().mockResolvedValue({ block: true, blockReason: "nope" });
+  it("runs multiple handlers in parallel (void)", async () => {
+    const h1 = vi.fn().mockResolvedValue(undefined);
+    const h2 = vi.fn().mockResolvedValue(undefined);
     const runner = createHookRunner(
       makeRegistry([
         { pluginId: "p1", hookName: "after_llm_call", handler: h1, source: "test" },
@@ -227,16 +205,15 @@ describe("after_llm_call hook", () => {
       ]),
     );
 
-    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
-    // h2 runs after h1; block=true from h2 is merged on top
-    expect(result?.block).toBe(true);
-    expect(result?.blockReason).toBe("nope");
+    await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(h1).toHaveBeenCalledOnce();
+    expect(h2).toHaveBeenCalledOnce();
   });
 
   it("skips when no handlers registered", async () => {
     const runner = createHookRunner(makeRegistry([]));
-    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
-    expect(result).toBeUndefined();
+    await runner.runAfterLlmCall(baseEvent, agentCtx);
+    // No error, no-op
   });
 });
 

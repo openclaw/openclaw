@@ -30,7 +30,6 @@ import type {
   PluginHookBeforeLlmCallEvent,
   PluginHookBeforeLlmCallResult,
   PluginHookAfterLlmCallEvent,
-  PluginHookAfterLlmCallResult,
   PluginHookBeforeResponseEmitEvent,
   PluginHookBeforeResponseEmitResult,
   PluginHookMessageContext,
@@ -104,7 +103,6 @@ export type {
   PluginHookBeforeLlmCallEvent,
   PluginHookBeforeLlmCallResult,
   PluginHookAfterLlmCallEvent,
-  PluginHookAfterLlmCallResult,
   PluginHookBeforeResponseEmitEvent,
   PluginHookBeforeResponseEmitResult,
 };
@@ -747,24 +745,15 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run after_llm_call hook.
-   * Fires after receiving the LLM response but before executing tool calls.
-   * Allows plugins to filter/modify tool calls or block execution.
-   * Runs sequentially, merging results across handlers.
+   * Fires after receiving the LLM response. Currently observational only —
+   * modifying tool calls would require agent loop interception points.
+   * Runs in parallel (fire-and-forget).
    */
   async function runAfterLlmCall(
     event: PluginHookAfterLlmCallEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<PluginHookAfterLlmCallResult | undefined> {
-    return runModifyingHook<"after_llm_call", PluginHookAfterLlmCallResult>(
-      "after_llm_call",
-      event,
-      ctx,
-      (acc, next) => ({
-        toolCalls: next.toolCalls ?? acc?.toolCalls,
-        block: next.block ?? acc?.block,
-        blockReason: next.blockReason ?? acc?.blockReason,
-      }),
-    );
+  ): Promise<void> {
+    return runVoidHook("after_llm_call", event, ctx);
   }
 
   /**

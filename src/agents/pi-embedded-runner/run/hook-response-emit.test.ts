@@ -138,7 +138,7 @@ describe("applyBeforeResponseEmitHook", () => {
     ).toBe("modified!");
   });
 
-  it("returns undefined when hook blocks", async () => {
+  it("returns empty string when hook blocks", async () => {
     const hookRunner = makeMockHookRunner({ block: true, blockReason: "policy" });
 
     const result = await applyBeforeResponseEmitHook({
@@ -149,7 +149,7 @@ describe("applyBeforeResponseEmitHook", () => {
       activeSession: { messages: [makeMsg("assistant", "original")] },
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toBe("");
   });
 
   it("returns undefined when content unchanged", async () => {

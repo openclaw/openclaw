@@ -80,7 +80,10 @@ export async function applyBeforeResponseEmitHook(
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
-    return undefined;
+    // Return empty string to signal the caller that the response was blocked.
+    // The caller checks `modifiedContent !== undefined` — returning undefined
+    // would be indistinguishable from "no modification".
+    return "";
   }
 
   if (!emitResult?.content || emitResult.content === content) {
