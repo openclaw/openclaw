@@ -135,6 +135,27 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
+  it("advanced preserves enabled:false when keeping existing key", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "perplexity",
+            enabled: false,
+            perplexity: { apiKey: "existing-key" },
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      selectValue: "perplexity",
+      textValue: "",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(result.tools?.web?.search?.enabled).toBe(false);
+  });
+
   it("quickstart skips key prompt when config key exists", async () => {
     const cfg: OpenClawConfig = {
       tools: {
