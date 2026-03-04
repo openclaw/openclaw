@@ -337,6 +337,21 @@ describe("systemd service control", () => {
     expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
   });
 
+  it("throws when systemd bus is unavailable during service stop", async () => {
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      // assertSystemdAvailable: bus unreachable
+      const err = new Error("Failed to connect to bus") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "", "Failed to connect to bus");
+    });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await expect(stopSystemdService({ stdout, env: {} })).rejects.toThrow(
+      "systemctl --user unavailable",
+    );
+  });
+
   it("surfaces stop failures with systemctl detail", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
