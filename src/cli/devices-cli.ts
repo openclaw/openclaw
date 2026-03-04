@@ -328,9 +328,7 @@ export function registerDevicesCli(program: Command) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
-          defaultRuntime.log(
-            `${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}${resolvedDeviceId === trimmed ? "" : theme.muted(` (from alias: ${trimmed})`)}`,
-          );
+          defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}`);
           return;
         } catch (error) {
           if (!isUnknownDeviceIdError(error)) {
