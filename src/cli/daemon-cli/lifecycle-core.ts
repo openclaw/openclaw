@@ -41,8 +41,12 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
 
 function shouldBlockSystemdRestartFromAgentExec(params: {
   service: GatewayService;
+  serviceNoun: string;
   env: NodeJS.ProcessEnv;
 }): boolean {
+  if (params.serviceNoun.trim().toLowerCase() !== "gateway") {
+    return false;
+  }
   const serviceLabel = params.service.label.trim().toLowerCase();
   if (serviceLabel !== "systemd") {
     return false;
@@ -286,12 +290,16 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  if (shouldBlockSystemdRestartFromAgentExec({ service: params.service, env: process.env })) {
+  if (
+    shouldBlockSystemdRestartFromAgentExec({
+      service: params.service,
+      serviceNoun: params.serviceNoun,
+      env: process.env,
+    })
+  ) {
     const hints = [
       "Run this restart command from a normal shell outside agent exec sessions.",
-      params.serviceNoun.trim().toLowerCase() === "gateway"
-        ? `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`
-        : "A systemd restart from inside an agent exec session can terminate that same session.",
+      `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`,
     ];
     fail(
       `${params.serviceNoun} restart is blocked from agent exec sessions on systemd to avoid SIGTERMing the active session and triggering restart loops.`,
