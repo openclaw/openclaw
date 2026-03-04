@@ -573,7 +573,8 @@ export const registerTelegramNativeCommands = ({
               });
               return;
             }
-            const groupIdText = `🆔 *Group Chat ID:* \`${chatId}\`\n\nYou can use this ID in your OpenClaw configuration.`;
+            // Use msg.chat.id instead of auth.chatId
+            const groupIdText = `🆔 *Group Chat ID:* \`${msg.chat.id}\`\n\nYou can use this ID in your OpenClaw configuration.`;
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
