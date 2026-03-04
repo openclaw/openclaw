@@ -428,12 +428,15 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: abort",
       "Unhandled stop reason: error",
       "Unhandled stop reason: network_error",
+      "Unhandled stop reason: model_context_window_exceeded",
       "stop reason: abort",
       "stop reason: error",
       "stop reason: network_error",
+      "stop reason: model_context_window_exceeded",
       "reason: abort",
       "reason: error",
       "reason: network_error",
+      "reason: model_context_window_exceeded",
     ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);

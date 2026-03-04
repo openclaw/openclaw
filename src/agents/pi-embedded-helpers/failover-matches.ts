@@ -33,9 +33,9 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|network_error)\b/i,
-    /\breason:\s*(?:abort|error|network_error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|network_error)\b/i,
+    /\bstop reason:\s*(?:abort|error|network_error|model_context_window_exceeded)\b/i,
+    /\breason:\s*(?:abort|error|network_error|model_context_window_exceeded)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error|network_error|model_context_window_exceeded)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,

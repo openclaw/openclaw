@@ -45,12 +45,21 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" })).toBe(
       "timeout",
     );
+    expect(
+      resolveFailoverReasonFromError({ message: "Unhandled stop reason: model_context_window_exceeded" }),
+    ).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "stop reason: network_error" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "stop reason: model_context_window_exceeded" }),
+    ).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: network_error" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "reason: model_context_window_exceeded" }),
+    ).toBe("timeout");
   });
 
   it("infers timeout from connection/network error messages", () => {
