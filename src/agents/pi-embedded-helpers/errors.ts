@@ -92,6 +92,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
+    lower.includes("model_context_window_exceeded") ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
@@ -180,7 +181,7 @@ const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
-  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+  /^(?:context overflow:|request_too_large\b|model_context_window_exceeded\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
