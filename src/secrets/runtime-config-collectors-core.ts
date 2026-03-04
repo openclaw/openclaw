@@ -282,6 +282,7 @@ function collectToolsWebSearchAssignments(params: {
       ? rawProvider
       : undefined;
   const paths = [
+    "brave.apiKey",
     "apiKey",
     "gemini.apiKey",
     "grok.apiKey",

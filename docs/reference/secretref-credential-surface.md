@@ -31,6 +31,7 @@ Scope intent:
 - `messages.tts.elevenlabs.apiKey`
 - `messages.tts.openai.apiKey`
 - `tools.web.search.apiKey`
+- `tools.web.search.brave.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
 - `tools.web.search.kimi.apiKey`

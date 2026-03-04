@@ -7,6 +7,7 @@ const {
   normalizeFreshness,
   normalizeToIsoDate,
   isoToPerplexityDate,
+  resolveSearchApiKey,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -243,6 +244,30 @@ describe("web_search kimi config resolution", () => {
   it("resolves default model and baseUrl", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("resolveSearchApiKey (brave key normalization)", () => {
+  it("prefers brave.apiKey over legacy apiKey", () => {
+    const search = { brave: { apiKey: "canonical-key" }, apiKey: "legacy-key" } as any;
+    expect(resolveSearchApiKey(search)).toBe("canonical-key");
+  });
+
+  it("falls back to legacy apiKey when brave.apiKey is absent", () => {
+    const search = { apiKey: "legacy-key" } as any;
+    expect(resolveSearchApiKey(search)).toBe("legacy-key");
+  });
+
+  it("falls back to BRAVE_API_KEY env var", () => {
+    withEnv({ BRAVE_API_KEY: "env-key" }, () => {
+      expect(resolveSearchApiKey(undefined)).toBe("env-key");
+    });
+  });
+
+  it("returns undefined when no key is available", () => {
+    withEnv({ BRAVE_API_KEY: undefined }, () => {
+      expect(resolveSearchApiKey(undefined)).toBeUndefined();
+    });
   });
 });
 

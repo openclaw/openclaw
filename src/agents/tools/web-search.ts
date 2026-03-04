@@ -370,14 +370,22 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
-  const fromConfigRaw =
+  const brave = search && "brave" in search ? (search as Record<string, unknown>).brave : undefined;
+  const fromCanonicalRaw =
+    brave && typeof brave === "object" && brave !== null && "apiKey" in brave
+      ? normalizeResolvedSecretInputString({
+          value: (brave as Record<string, unknown>).apiKey,
+          path: "tools.web.search.brave.apiKey",
+        })
+      : undefined;
+  const fromLegacyRaw =
     search && "apiKey" in search
       ? normalizeResolvedSecretInputString({
           value: search.apiKey,
           path: "tools.web.search.apiKey",
         })
       : undefined;
-  const fromConfig = normalizeSecretInput(fromConfigRaw);
+  const fromConfig = normalizeSecretInput(fromCanonicalRaw) || normalizeSecretInput(fromLegacyRaw);
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
@@ -1604,6 +1612,7 @@ export function createWebSearchTool(options?: {
 
 export const __testing = {
   resolveSearchProvider,
+  resolveSearchApiKey,
   normalizeBraveLanguageParams,
   normalizeFreshness,
   normalizeToIsoDate,
