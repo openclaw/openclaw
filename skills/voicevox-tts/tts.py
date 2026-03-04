@@ -17,13 +17,13 @@ except ImportError:
     sys.exit(1)
 
 
-def synthesize_speech(text: str, speaker: int = 1, output_path: str = None) -> str:
+def synthesize_speech(text: str, speaker: int = 8, output_path: str = None) -> str:
     """
     Synthesize speech using VOICEVOX engine.
 
     Args:
         text: Japanese text to speak
-        speaker: Speaker ID (default: 1 = 四国めたん)
+        speaker: Speaker ID (default: 8 = 春日部つむぎ)
         output_path: Optional output file path
 
     Returns:
@@ -81,7 +81,7 @@ def main():
     parser = argparse.ArgumentParser(description="VOICEVOX TTS Tool")
     parser.add_argument("text", nargs="?", help="Text to speak")
     parser.add_argument(
-        "-s", "--speaker", type=int, default=1, help="Speaker ID (default: 1 = 四国めたん)"
+        "-s", "--speaker", type=int, default=8, help="Speaker ID (default: 8 = 春日部つむぎ)"
     )
     parser.add_argument("-o", "--output", help="Output WAV file path")
     parser.add_argument("-p", "--play", action="store_true", help="Play audio after synthesis")

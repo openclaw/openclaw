@@ -27,20 +27,21 @@ The skill provides a tool that can be called from the qwen3.5-9B brain:
 
 ```
 Tool: voicevox_tts
-Input: { "text": "Japanese text to speak", "speaker": 1 }
+Input: { "text": "Japanese text to speak", "speaker": 8 }
 ```
 
 ### Speaker IDs
 
-| ID  | Voice Name                  |
-| --- | --------------------------- |
-| 1   | 四国めたん (Shikoku Metan)  |
-| 2   | ずんだもん (Zundamon)       |
-| 3   | あおい (Aoi)                |
-| 8   | 冥鳴ひまり (Meirome Himari) |
-| 10  | 九州そら (Kyushu Sora)      |
+| ID  | Voice Name                      |
+| --- | ------------------------------- |
+| 8   | 春日部つむぎ (Kasukabe Tsukumi) |
+| 1   | 四国めたん (Shikoku Metan)      |
+| 2   | ずんだもん (Zundamon)           |
+| 3   | あおい (Aoi)                    |
+| 14  | 冥鳴ひまり (Meirome Himari)     |
+| 16  | 九州そら (Kyushu Sora)          |
 
-**Default: 1 (四国めたん)**
+**Default: 8 (春日部つむぎ)**
 
 ### Direct Python Usage
 
@@ -48,7 +49,7 @@ Input: { "text": "Japanese text to speak", "speaker": 1 }
 import requests
 
 endpoint = "http://localhost:50021"
-speaker = 1
+speaker = 8
 text = "Papa, can you hear my voice?"
 
 # 1. Audio Query
