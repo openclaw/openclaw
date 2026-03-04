@@ -84,9 +84,10 @@ const pages = useMemo(() => {
 Map through the pages and words to render captions with highlighting:
 
 ```tsx
-import { useCurrentFrame } from "remotion";
+import { useCurrentFrame, useVideoConfig } from "remotion";
 
 const frame = useCurrentFrame();
+const { fps } = useVideoConfig();
 
 // Find the current page based on frame time
 const currentPage = pages.find((page) => {
