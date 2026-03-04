@@ -366,6 +366,31 @@ describe("model-selection", () => {
       });
     });
 
+    it("prefers exact provider-scoped shorthand match over close prefix matches", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/custom/kimi": {},
+              "nvidia/moonshotai/kimi-k2.5": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "nvidia/kimi",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "nvidia/custom/kimi",
+        ref: { provider: "nvidia", model: "custom/kimi" },
+      });
+    });
+
     it("rejects provider-scoped shorthand when multiple allowlist matches exist", () => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -388,6 +413,31 @@ describe("model-selection", () => {
       expect(result).toEqual({
         error:
           "model shorthand ambiguous: nvidia/kimi (matches: custom/kimi-v1, moonshotai/kimi-k2.5)",
+      });
+    });
+
+    it("rejects close provider-scoped shorthand collisions when no exact match exists", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": {},
+              "nvidia/moonshotai/kimi-k2.6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "nvidia/kimi-k2",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        error:
+          "model shorthand ambiguous: nvidia/kimi-k2 (matches: moonshotai/kimi-k2.5, moonshotai/kimi-k2.6)",
       });
     });
   });

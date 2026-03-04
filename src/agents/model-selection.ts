@@ -57,7 +57,8 @@ function resolveProviderScopedModelShorthand(params: {
     defaultModel: params.defaultModel,
   });
   const providerPrefix = `${params.provider}/`;
-  const matches = new Set<string>();
+  const exactMatches = new Set<string>();
+  const prefixMatches = new Set<string>();
 
   for (const key of allowed.allowedKeys) {
     if (!key.startsWith(providerPrefix)) {
@@ -71,15 +72,21 @@ function resolveProviderScopedModelShorthand(params: {
     const candidateBaseToken = normalizeShorthandToken(
       candidateModel.split("/").pop() ?? candidateModel,
     );
-    const isMatch =
-      candidateModelToken === shorthandToken ||
-      candidateBaseToken === shorthandToken ||
+    const isExactMatch =
+      candidateModelToken === shorthandToken || candidateBaseToken === shorthandToken;
+    if (isExactMatch) {
+      exactMatches.add(candidateModel);
+      continue;
+    }
+
+    const isPrefixMatch =
       candidateModelToken.startsWith(shorthandToken) ||
       candidateBaseToken.startsWith(shorthandToken);
-    if (isMatch) {
-      matches.add(candidateModel);
+    if (isPrefixMatch) {
+      prefixMatches.add(candidateModel);
     }
   }
+  const matches = exactMatches.size > 0 ? exactMatches : prefixMatches;
 
   if (matches.size === 0) {
     return null;
