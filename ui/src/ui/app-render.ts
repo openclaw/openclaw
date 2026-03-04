@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -8,7 +8,13 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { cloneAgent, createAgent, loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import {
+  cloneAgent,
+  createAgent,
+  deleteAgent,
+  loadAgents,
+  loadToolsCatalog,
+} from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -610,7 +616,22 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onCloneAgent: async (sourceAgentId) => {
-                  const cloned = await cloneAgent(state, { sourceAgentId });
+                  const sourceAgent =
+                    state.agentsList?.agents.find((entry) => entry.id === sourceAgentId) ?? null;
+                  const sourceName = sourceAgent?.name?.trim() || sourceAgentId;
+                  const requestedName = window.prompt(
+                    `Clone agent "${sourceName}" as (display name):`,
+                    `${sourceName} Copy`,
+                  );
+                  if (requestedName == null) {
+                    return;
+                  }
+
+                  const nextName = requestedName.trim();
+                  const cloned = await cloneAgent(state, {
+                    sourceAgentId,
+                    ...(nextName ? { name: nextName } : {}),
+                  });
                   if (!cloned?.ok) {
                     return;
                   }
@@ -625,6 +646,62 @@ export function renderApp(state: AppViewState) {
                   }
                   if (state.agentsPanel === "skills") {
                     void loadAgentSkills(state, cloned.agentId);
+                  }
+                },
+                onDeleteAgent: async (agentId) => {
+                  const deleted = await deleteAgent(state, { agentId });
+                  if (!deleted?.ok) {
+                    return;
+                  }
+
+                  await loadAgents(state);
+                  const nextSelected =
+                    state.agentsSelectedId ??
+                    state.agentsList?.defaultId ??
+                    state.agentsList?.agents?.[0]?.id ??
+                    null;
+                  state.agentsSelectedId = nextSelected;
+                  state.agentFilesList = null;
+                  state.agentFilesError = null;
+                  state.agentFilesLoading = false;
+                  state.agentFileActive = null;
+                  state.agentFileContents = {};
+                  state.agentFileDrafts = {};
+                  state.agentSkillsReport = null;
+                  state.agentSkillsError = null;
+                  state.agentSkillsAgentId = null;
+
+                  const activeSessionAgentId =
+                    parseAgentSessionKey(state.sessionKey)?.agentId ?? "";
+                  if (activeSessionAgentId === agentId) {
+                    const fallbackAgentId = nextSelected ?? "main";
+                    const fallbackSessionKey = toAgentStoreSessionKey({
+                      agentId: fallbackAgentId,
+                      requestKey: "main",
+                    });
+                    state.sessionKey = fallbackSessionKey;
+                    state.applySettings({
+                      ...state.settings,
+                      sessionKey: fallbackSessionKey,
+                      lastActiveSessionKey: fallbackSessionKey,
+                    });
+                    void loadSessions(state, {
+                      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+                    });
+                    void refreshChatAvatar(state);
+                  }
+
+                  if (nextSelected) {
+                    void loadAgentIdentity(state, nextSelected);
+                  }
+                  if (state.agentsPanel === "tools") {
+                    void loadToolsCatalog(state, nextSelected);
+                  }
+                  if (state.agentsPanel === "files" && nextSelected) {
+                    void loadAgentFiles(state, nextSelected);
+                  }
+                  if (state.agentsPanel === "skills" && nextSelected) {
+                    void loadAgentSkills(state, nextSelected);
                   }
                 },
                 onSelectAgent: (agentId) => {

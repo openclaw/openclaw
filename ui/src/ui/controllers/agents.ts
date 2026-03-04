@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsCloneResult,
   AgentsCreateResult,
+  AgentsDeleteResult,
   AgentsListResult,
   ToolsCatalogResult,
 } from "../types.ts";
@@ -17,6 +18,15 @@ export type AgentsState = {
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
 };
+
+function isLegacyAgentsDeletePurgeStateError(err: unknown): boolean {
+  const message = String(err);
+  return (
+    message.includes("invalid agents.delete params") &&
+    message.includes("unexpected property") &&
+    message.includes("purgeState")
+  );
+}
 
 export async function createAgent(
   state: AgentsState,
@@ -65,6 +75,56 @@ export async function cloneAgent(
   try {
     const res = await state.client.request<AgentsCloneResult>("agents.clone", params);
     return res ?? null;
+  } catch (err) {
+    state.agentsError = String(err);
+    return null;
+  } finally {
+    state.agentsLoading = false;
+  }
+}
+
+export async function deleteAgent(
+  state: AgentsState,
+  params: {
+    agentId: string;
+  },
+): Promise<AgentsDeleteResult | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  if (state.agentsLoading) {
+    return null;
+  }
+  const agentId = params.agentId.trim();
+  if (!agentId) {
+    return null;
+  }
+  const confirmed = window.confirm(
+    `Delete agent "${agentId}"?\n\nThis permanently removes its config, sessions, cron jobs, workspace, and agent files.`,
+  );
+  if (!confirmed) {
+    return null;
+  }
+  state.agentsLoading = true;
+  state.agentsError = null;
+  try {
+    try {
+      const res = await state.client.request<AgentsDeleteResult>("agents.delete", {
+        agentId,
+        deleteFiles: true,
+        purgeState: true,
+      });
+      return res ?? null;
+    } catch (err) {
+      if (!isLegacyAgentsDeletePurgeStateError(err)) {
+        throw err;
+      }
+      const res = await state.client.request<AgentsDeleteResult>("agents.delete", {
+        agentId,
+        deleteFiles: true,
+      });
+      return res ?? null;
+    }
   } catch (err) {
     state.agentsError = String(err);
     return null;

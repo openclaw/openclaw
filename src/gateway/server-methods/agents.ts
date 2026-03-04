@@ -27,6 +27,7 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
@@ -666,6 +667,62 @@ async function cloneAgentCronJobs(params: {
   return { cloned, skippedDuplicates };
 }
 
+function isPathInsideRoot(rootPath: string, candidatePath: string): boolean {
+  const rootResolved = path.resolve(rootPath);
+  const candidateResolved = path.resolve(candidatePath);
+  const relative = path.relative(rootResolved, candidateResolved);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function removeAgentSessionsFromStore(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  agentId: string;
+  sessionsDir: string;
+}): Promise<number> {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  let removed = 0;
+  const nextStore: Record<string, SessionEntry> = {};
+  for (const [key, entry] of Object.entries(store)) {
+    const parsed = parseAgentSessionKey(key);
+    const keyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : "";
+    const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile.trim() : "";
+    const belongsToAgentByKey = keyAgentId === params.agentId;
+    const belongsToAgentByFile = sessionFile
+      ? isPathInsideRoot(params.sessionsDir, sessionFile)
+      : false;
+    if (belongsToAgentByKey || belongsToAgentByFile) {
+      removed += 1;
+      continue;
+    }
+    nextStore[key] = entry;
+  }
+  if (removed > 0) {
+    await saveSessionStore(storePath, nextStore);
+  }
+  return removed;
+}
+
+async function removeAgentCronJobs(params: {
+  context: GatewayRequestContext;
+  agentId: string;
+}): Promise<number> {
+  const jobs = await params.context.cron.list({ includeDisabled: true });
+  let removed = 0;
+  for (const job of jobs) {
+    if (normalizeAgentId(job.agentId ?? DEFAULT_AGENT_ID) !== params.agentId) {
+      continue;
+    }
+    const result = await params.context.cron.remove(job.id);
+    if (result.removed) {
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 async function moveToTrashBestEffort(pathname: string): Promise<void> {
   if (!pathname) {
     return;
@@ -1102,14 +1159,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId }, undefined);
   },
-  "agents.delete": async ({ params, respond }) => {
+  "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {
       respondInvalidMethodParams(respond, "agents.delete", validateAgentsDeleteParams.errors);
       return;
     }
 
     const cfg = loadConfig();
-    const agentId = normalizeAgentId(String(params.agentId ?? ""));
+    const agentIdRaw = typeof params.agentId === "string" ? params.agentId : "";
+    const agentId = normalizeAgentId(agentIdRaw);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
         false,
@@ -1124,22 +1182,65 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteFiles = typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
+    const purgeState = typeof params.purgeState === "boolean" ? params.purgeState : true;
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
     const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+    const agentStateRootDir = path.join(resolveStateDir(process.env), "agents", agentId);
 
     const result = pruneAgentConfig(cfg, agentId);
+    let removedSessions = 0;
+    let removedCronJobs = 0;
+    if (purgeState) {
+      removedSessions = await removeAgentSessionsFromStore({
+        cfg,
+        agentId,
+        sessionsDir,
+      });
+      removedCronJobs = await removeAgentCronJobs({ context, agentId });
+    }
     await writeConfigFile(result.config);
 
     if (deleteFiles) {
-      await Promise.all([
-        moveToTrashBestEffort(workspaceDir),
-        moveToTrashBestEffort(agentDir),
-        moveToTrashBestEffort(sessionsDir),
-      ]);
+      const memoryStorePath = resolveMemorySearchConfig(cfg, agentId)?.store.path;
+      const remainingAgentIds = listAgentIds(result.config).map((id) => normalizeAgentId(id));
+      const memoryStoreUsedByOtherAgent =
+        typeof memoryStorePath === "string" &&
+        remainingAgentIds.some((remainingAgentId) => {
+          const remainingStorePath = resolveMemorySearchConfig(result.config, remainingAgentId)
+            ?.store.path;
+          return (
+            typeof remainingStorePath === "string" &&
+            sameResolvedPath(remainingStorePath, memoryStorePath)
+          );
+        });
+
+      const deletePaths = [
+        workspaceDir,
+        agentStateRootDir,
+        agentDir,
+        sessionsDir,
+        typeof memoryStorePath === "string" && !memoryStoreUsedByOtherAgent
+          ? memoryStorePath
+          : undefined,
+      ]
+        .filter((pathname): pathname is string => Boolean(pathname))
+        .map((pathname) => path.resolve(pathname));
+      const uniqueDeletePaths = Array.from(new Set(deletePaths));
+      await Promise.all(uniqueDeletePaths.map((pathname) => moveToTrashBestEffort(pathname)));
     }
 
-    respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        agentId,
+        removedBindings: result.removedBindings,
+        removedAllow: result.removedAllow,
+        ...(purgeState ? { removedSessions, removedCronJobs } : {}),
+      },
+      undefined,
+    );
   },
   "agents.files.list": async ({ params, respond }) => {
     if (!validateAgentsFilesListParams(params)) {

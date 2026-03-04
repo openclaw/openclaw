@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn(() => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn(() => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
-  pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
+  pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0, removedAllow: 0 })),
   writeConfigFile: vi.fn(async () => {}),
   ensureAgentWorkspace: vi.fn(async () => {}),
   resolveAgentDir: vi.fn(() => "/agents/test-agent"),
@@ -20,32 +20,35 @@ const mocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(
     (_store?: string, opts?: { agentId?: string }) => `/sessions/${opts?.agentId ?? "main"}.json`,
   ),
-  loadSessionStore: vi.fn((_storePath: string) => ({
-    "agent:main:main": {
-      sessionId: "session-main",
-      updatedAt: 10,
-      sessionFile: "/transcripts/main/session-main.jsonl",
-      systemPromptReport: {
-        source: "run",
-        generatedAt: 10,
-        sessionId: "session-main",
-        sessionKey: "agent:main:main",
-        provider: "test",
-        model: "test-model",
-        workspaceDir: "/workspace/main",
-        bootstrapMaxChars: 0,
-        bootstrapTotalMaxChars: 0,
-        systemPrompt: {
-          chars: 0,
-          projectContextChars: 0,
-          nonProjectContextChars: 0,
+  loadSessionStore: vi.fn(
+    (_storePath: string) =>
+      ({
+        "agent:main:main": {
+          sessionId: "session-main",
+          updatedAt: 10,
+          sessionFile: "/transcripts/main/session-main.jsonl",
+          systemPromptReport: {
+            source: "run",
+            generatedAt: 10,
+            sessionId: "session-main",
+            sessionKey: "agent:main:main",
+            provider: "test",
+            model: "test-model",
+            workspaceDir: "/workspace/main",
+            bootstrapMaxChars: 0,
+            bootstrapTotalMaxChars: 0,
+            systemPrompt: {
+              chars: 0,
+              projectContextChars: 0,
+              nonProjectContextChars: 0,
+            },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
         },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      },
-    },
-  })),
+      }) as Record<string, unknown>,
+  ),
   saveSessionStore: vi.fn(async (_storePath: string, _store: Record<string, unknown>) => {}),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
@@ -64,6 +67,8 @@ const mocks = vi.hoisted(() => ({
   fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
   fsRealpath: vi.fn(async (p: string) => p),
   fsOpen: vi.fn(async () => ({}) as unknown),
+  cronList: vi.fn(async () => [] as Array<Record<string, unknown>>),
+  cronRemove: vi.fn(async () => ({ ok: true, removed: false })),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -162,7 +167,12 @@ function makeCall(
   const promise = handler({
     params,
     respond,
-    context: (opts?.context ?? {}) as never,
+    context: (opts?.context ?? {
+      cron: {
+        list: mocks.cronList,
+        remove: mocks.cronRemove,
+      },
+    }) as never,
     req: { type: "req" as const, id: "1", method },
     client: null,
     isWebchatConnect: () => false,
@@ -747,7 +757,9 @@ describe("agents.delete", () => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(0);
-    mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
+    mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2, removedAllow: 1 });
+    mocks.cronList.mockResolvedValue([]);
+    mocks.cronRemove.mockResolvedValue({ ok: true, removed: false });
   });
 
   it("deletes an existing agent and trashes files by default", async () => {
@@ -758,12 +770,94 @@ describe("agents.delete", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ok: true, agentId: "test-agent", removedBindings: 2 },
+      {
+        ok: true,
+        agentId: "test-agent",
+        removedBindings: 2,
+        removedAllow: 1,
+        removedSessions: 0,
+        removedCronJobs: 0,
+      },
       undefined,
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     // moveToTrashBestEffort calls fs.access then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(
+      expect.stringContaining("/agents/test-agent"),
+    );
+  });
+
+  it("removes agent sessions from store and cron jobs", async () => {
+    const report = {
+      source: "run",
+      generatedAt: 10,
+      sessionId: "session",
+      sessionKey: "agent:test-agent:main",
+      provider: "test",
+      model: "test-model",
+      workspaceDir: "/workspace/test-agent",
+      bootstrapMaxChars: 0,
+      bootstrapTotalMaxChars: 0,
+      systemPrompt: {
+        chars: 0,
+        projectContextChars: 0,
+        nonProjectContextChars: 0,
+      },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    };
+    mocks.loadSessionStore.mockImplementationOnce(() => ({
+      "agent:test-agent:main": {
+        sessionId: "s-1",
+        updatedAt: 10,
+        sessionFile: "/transcripts/test-agent/s-1.jsonl",
+        systemPromptReport: report,
+      },
+      "agent:test-agent:cron:job-1": {
+        sessionId: "s-2",
+        updatedAt: 20,
+        sessionFile: "/transcripts/test-agent/s-2.jsonl",
+        systemPromptReport: report,
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 30,
+        sessionFile: "/transcripts/main/s-main.jsonl",
+        systemPromptReport: report,
+      },
+    }));
+    mocks.cronList.mockResolvedValue([
+      { id: "job-a", agentId: "test-agent" },
+      { id: "job-b", agentId: "main" },
+    ] as never);
+    mocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+      deleteFiles: false,
+    });
+    await promise;
+
+    expect(mocks.saveSessionStore).toHaveBeenCalledWith(
+      "/sessions/test-agent.json",
+      expect.not.objectContaining({
+        "agent:test-agent:main": expect.anything(),
+        "agent:test-agent:cron:job-1": expect.anything(),
+      }),
+    );
+    expect(mocks.cronRemove).toHaveBeenCalledWith("job-a");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "test-agent",
+        removedSessions: 2,
+        removedCronJobs: 1,
+      }),
+      undefined,
+    );
   });
 
   it("skips file deletion when deleteFiles is false", async () => {
@@ -775,7 +869,11 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, removedSessions: 0, removedCronJobs: 0 }),
+      undefined,
+    );
     // moveToTrashBestEffort should not be called at all
     expect(mocks.fsAccess).not.toHaveBeenCalled();
   });

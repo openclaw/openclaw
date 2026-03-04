@@ -70,6 +70,7 @@ export type AgentsProps = {
   onRefresh: () => void;
   onCreateGeneral: () => void;
   onCloneAgent: (agentId: string) => void;
+  onDeleteAgent: (agentId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -109,6 +110,7 @@ export function renderAgents(props: AgentsProps) {
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
   const hasGeneral = agents.some((agent) => agent.id === "general");
+  const canDeleteSelected = Boolean(selectedId && selectedId !== "main");
 
   return html`
     <div class="agents-layout">
@@ -144,6 +146,22 @@ export function renderAgents(props: AgentsProps) {
               title="Clone selected agent with sessions, memory, and cron jobs"
             >
               Clone Selected
+            </button>
+            <button
+              class="btn btn--sm danger"
+              ?disabled=${props.loading || !canDeleteSelected}
+              @click=${() => {
+                if (selectedId && selectedId !== "main") {
+                  props.onDeleteAgent(selectedId);
+                }
+              }}
+              title=${
+                selectedId === "main"
+                  ? "main agent cannot be deleted"
+                  : "Delete selected agent and purge all agent data"
+              }
+            >
+              Delete Selected
             </button>
             <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
               ${props.loading ? "Loading…" : "Refresh"}

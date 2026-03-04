@@ -354,6 +354,15 @@ export type AgentsCloneResult = {
   warnings?: string[];
 };
 
+export type AgentsDeleteResult = {
+  ok: true;
+  agentId: string;
+  removedBindings: number;
+  removedAllow?: number;
+  removedSessions?: number;
+  removedCronJobs?: number;
+};
+
 export type ToolCatalogProfile = {
   id: "minimal" | "coding" | "messaging" | "full";
   label: string;

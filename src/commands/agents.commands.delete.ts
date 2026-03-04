@@ -1,6 +1,8 @@
+import path from "node:path";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -68,6 +70,7 @@ export async function agentsDeleteCommand(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = resolveAgentDir(cfg, agentId);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const agentStateRootDir = path.join(resolveStateDir(process.env), "agents", agentId);
 
   const result = pruneAgentConfig(cfg, agentId);
   await writeConfigFile(result.config);
@@ -77,6 +80,7 @@ export async function agentsDeleteCommand(
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);
+  await moveToTrash(agentStateRootDir, quietRuntime);
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
