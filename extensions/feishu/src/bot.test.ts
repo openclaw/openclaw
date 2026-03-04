@@ -347,6 +347,7 @@ describe("handleFeishuMessage command authorization", () => {
       messageId: "om_parent_001",
       chatId: "oc-group",
       content: "quoted content",
+      rawContent: '{"text":"quoted content"}',
       contentType: "text",
     });
 
@@ -383,6 +384,63 @@ describe("handleFeishuMessage command authorization", () => {
         ReplyToId: "om_parent_001",
         RootMessageId: "om_root_001",
         ReplyToBody: "quoted content",
+      }),
+    );
+  });
+
+  it("downloads media from quoted image message (#33798)", async () => {
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_img",
+      chatId: "oc-group",
+      content: "[Image]",
+      rawContent: '{"image_key":"img_quoted_abc"}',
+      contentType: "image",
+    });
+
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image-data"),
+      contentType: "image/png",
+      fileName: "image.png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_img",
+        parent_id: "om_parent_img",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "What is in this picture?" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // Verify getMessageFeishu was called for the quoted message
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_parent_img",
+      }),
+    );
+
+    // Verify downloadMessageResourceFeishu was called with the quoted message id
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_parent_img",
       }),
     );
   });
