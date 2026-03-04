@@ -163,11 +163,19 @@ export function clearSlackThreadParticipationCache(): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  // Persist the empty state so the clear survives restarts.
+  if (loaded) {
+    persistToDisk();
+  }
 }
 
 /** @internal — test helper to override persist path and reset load state. */
 export function _resetForTests(overridePath?: string): void {
-  clearSlackThreadParticipationCache();
+  threadParticipation.clear();
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   loaded = false;
   persistPathOverride = overridePath;
 }
