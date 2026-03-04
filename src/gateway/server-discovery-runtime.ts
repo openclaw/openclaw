@@ -44,9 +44,17 @@ export async function startGatewayDiscovery(params: {
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
+  if (!bonjourEnabled && cachedBonjour) {
+    cachedBonjour.stop().catch(() => {});
+    cachedBonjour = null;
+  }
+
   if (bonjourEnabled) {
     if (cachedBonjour) {
-      // Reuse existing Bonjour advertiser across in-process restarts.
+      // NOTE: Cached advertiser is reused verbatim to avoid mDNS name-conflict
+      // loops on restart. Any change to port, TLS, displayName, or other mDNS
+      // fields since the original start will NOT be reflected until a full
+      // process restart (which recreates the advertiser).
       bonjourStop = cachedBonjour.stop;
     } else {
       try {
