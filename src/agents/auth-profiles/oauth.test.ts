@@ -228,6 +228,29 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
+  it("accepts legacy apiKey field for api_key credentials", async () => {
+    const profileId = "openai:legacy-inline";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openai", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openai",
+            apiKey: "sk-openai-legacy",
+          },
+        },
+      },
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "sk-openai-legacy",
+      provider: "openai",
+      email: undefined,
+    });
+  });
+
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;

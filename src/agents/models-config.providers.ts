@@ -414,8 +414,9 @@ function resolveApiKeyFromProfiles(params: {
       continue;
     }
     if (cred.type === "api_key") {
-      if (cred.key?.trim()) {
-        return cred.key;
+      const inlineKey = cred.key?.trim() || cred.apiKey?.trim();
+      if (inlineKey) {
+        return inlineKey;
       }
       const keyRef = coerceSecretRef(cred.keyRef);
       if (keyRef?.source === "env" && keyRef.id.trim()) {

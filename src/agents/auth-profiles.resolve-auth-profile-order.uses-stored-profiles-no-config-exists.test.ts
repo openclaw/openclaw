@@ -230,6 +230,29 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:default"]);
   });
+  it("keeps api_key profiles backed by legacy apiKey field", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            apiKey: "sk-anthropic-legacy",
+          },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:default"]);
+  });
   it("keeps token profiles backed by tokenRef when expires is absent", () => {
     const order = resolveMinimaxOrderWithProfile({
       type: "token",

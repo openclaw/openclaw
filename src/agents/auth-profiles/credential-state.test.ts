@@ -46,6 +46,18 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
+  it("marks api_key with legacy apiKey field as eligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "anthropic",
+        apiKey: "sk-anthropic-legacy",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
   it("marks tokenRef with missing expires as eligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {

@@ -5,6 +5,11 @@ import type { SecretRef } from "../../config/types.secrets.js";
 export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
+  /**
+   * Legacy alias persisted by some onboarding/runtime paths.
+   * Prefer `key` when writing new credentials, but accept both when reading.
+   */
+  apiKey?: string;
   key?: string;
   keyRef?: SecretRef;
   email?: string;

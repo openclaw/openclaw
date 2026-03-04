@@ -39,7 +39,7 @@ export function evaluateStoredCredentialEligibility(params: {
   const credential = params.credential;
 
   if (credential.type === "api_key") {
-    const hasKey = hasConfiguredSecretString(credential.key);
+    const hasKey = hasConfiguredSecretString(credential.key ?? credential.apiKey);
     const hasKeyRef = hasConfiguredSecretRef(credential.keyRef);
     if (!hasKey && !hasKeyRef) {
       return { eligible: false, reasonCode: "missing_credential" };
