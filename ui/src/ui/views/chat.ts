@@ -184,7 +184,7 @@ function addAttachments(files: File[], props: ChatProps) {
     return;
   }
 
-  Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then((newAttachments) => {
+  void Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then((newAttachments) => {
     const current = props.attachments ?? [];
     props.onAttachmentsChange?.([...current, ...newAttachments]);
   });
