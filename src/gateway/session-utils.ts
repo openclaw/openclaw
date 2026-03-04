@@ -898,7 +898,9 @@ export async function listSessionsFromStore(params: {
         if (includeDerivedTitles || includeLastMessage) {
           const parsed = parseAgentSessionKey(s.key);
           const agentId =
-            parsed && parsed.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+            parsed && parsed.agentId
+              ? normalizeAgentId(parsed.agentId)
+              : resolveDefaultAgentId(cfg);
           const fields = await readSessionTitleFieldsFromTranscriptAsync(
             entry.sessionId,
             storePath,
