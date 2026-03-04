@@ -111,6 +111,7 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
