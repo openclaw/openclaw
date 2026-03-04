@@ -298,7 +298,7 @@ struct GeneralSettings: View {
                 Text("Gateway token")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.remoteLabelWidth, alignment: .leading)
-                SecureField("token from gateway.auth.token", text: self.$state.remoteToken)
+                SecureField("remote gateway auth token (gateway.auth.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
             }
