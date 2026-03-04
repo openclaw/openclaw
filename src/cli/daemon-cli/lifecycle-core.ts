@@ -54,6 +54,24 @@ function shouldBlockSystemdRestartFromAgentExec(params: {
   return params.env.OPENCLAW_SHELL?.trim().toLowerCase() === "exec";
 }
 
+function resolveAgentExecSystemdRestartBlock(params: {
+  service: GatewayService;
+  serviceNoun: string;
+  env: NodeJS.ProcessEnv;
+  action: "start" | "restart";
+}): { message: string; hints: string[] } | null {
+  if (!shouldBlockSystemdRestartFromAgentExec(params)) {
+    return null;
+  }
+  return {
+    message: `${params.serviceNoun} ${params.action} is blocked from agent exec sessions on systemd to avoid SIGTERMing the active session and triggering restart loops.`,
+    hints: [
+      "Run this service command from a normal shell outside agent exec sessions.",
+      `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`,
+    ],
+  };
+}
+
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
   const stdout = params.json ? createNullWriter() : process.stdout;
   const emit = (payload: Omit<DaemonActionResponse, "action">) => {
@@ -190,6 +208,16 @@ export async function runServiceStart(params: {
     });
     return;
   }
+  const agentExecBlock = resolveAgentExecSystemdRestartBlock({
+    service: params.service,
+    serviceNoun: params.serviceNoun,
+    env: process.env,
+    action: "start",
+  });
+  if (agentExecBlock) {
+    fail(agentExecBlock.message, agentExecBlock.hints);
+    return;
+  }
   try {
     await params.service.restart({ env: process.env, stdout });
   } catch (err) {
@@ -290,21 +318,14 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  if (
-    shouldBlockSystemdRestartFromAgentExec({
-      service: params.service,
-      serviceNoun: params.serviceNoun,
-      env: process.env,
-    })
-  ) {
-    const hints = [
-      "Run this restart command from a normal shell outside agent exec sessions.",
-      `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`,
-    ];
-    fail(
-      `${params.serviceNoun} restart is blocked from agent exec sessions on systemd to avoid SIGTERMing the active session and triggering restart loops.`,
-      hints,
-    );
+  const agentExecBlock = resolveAgentExecSystemdRestartBlock({
+    service: params.service,
+    serviceNoun: params.serviceNoun,
+    env: process.env,
+    action: "restart",
+  });
+  if (agentExecBlock) {
+    fail(agentExecBlock.message, agentExecBlock.hints);
     return false;
   }
 
