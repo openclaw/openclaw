@@ -1,6 +1,10 @@
 ---
 x-i18n:
-  source_path: "docs/help/index.md"
+  generated_at: "2026-03-04T06:16:36Z"
+  model: claude-opus-4-6
+  provider: anthropic
+  source_hash: 9356d1929df3e81a25c23ec55a51213090f7f761761b1cb055649c8d23df79a4
+  source_path: help/index.md
   workflow: 15
 summary: "ヘルプハブ：よくある修正方法、インストールの健全性チェック、問題発生時の対処法"
 read_when:
