@@ -71,6 +71,7 @@ import {
   normalizeForwardedContext,
   describeReplyTarget,
   extractTelegramLocation,
+  hasAnyMentionEntity,
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -378,7 +379,25 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
-  const botUsername = primaryCtx.me?.username?.toLowerCase();
+  let botUsername =
+    primaryCtx.me?.username?.toLowerCase() ??
+    (
+      bot as Bot & {
+        botInfo?: {
+          id?: number;
+          username?: string;
+        };
+      }
+    ).botInfo?.username?.toLowerCase();
+  let botId =
+    primaryCtx.me?.id ??
+    (
+      bot as Bot & {
+        botInfo?: {
+          id?: number;
+        };
+      }
+    ).botInfo?.id;
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({
     allow: allowForCommands,
@@ -482,10 +501,22 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
-  const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
-    (ent) => ent.type === "mention",
-  );
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const hasAnyMention = hasAnyMentionEntity(msg);
+  if (
+    !botUsername &&
+    isGroup &&
+    requireMention &&
+    (hasAnyMention || (msg.text ?? msg.caption ?? "").includes("@"))
+  ) {
+    try {
+      const me = await bot.api.getMe();
+      botUsername = me.username?.toLowerCase();
+      botId = me.id;
+    } catch (err) {
+      logVerbose(`telegram: failed to resolve bot username for mention detection: ${String(err)}`);
+    }
+  }
+  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername, botId) : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",
@@ -514,7 +545,6 @@ export const buildTelegramMessageContext = async ({
   // We detect service messages by the presence of Telegram's forum_topic_* fields
   // rather than by the absence of text/caption, because legitimate bot media messages
   // (stickers, voice notes, captionless photos) also lack text/caption.
-  const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
   const replyToBotMessage = botId != null && replyFromId === botId;
   const isReplyToServiceMessage =

@@ -4,6 +4,8 @@ import {
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  hasAnyMentionEntity,
+  hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
@@ -393,5 +395,55 @@ describe("expandTextLinks", () => {
     const text = " Hello world";
     const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
     expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
+  });
+});
+
+describe("hasBotMention", () => {
+  it("matches username mentions", () => {
+    const message = {
+      text: "@openclaw_bot hello",
+      entities: [{ type: "mention", offset: 0, length: 13 }],
+      chat: { id: 1, type: "private" },
+      date: 0,
+      message_id: 1,
+    };
+    expect(hasBotMention(message as never, "openclaw_bot")).toBe(true);
+  });
+
+  it("matches text_mention entities by bot id", () => {
+    const message = {
+      text: "OpenClaw hello",
+      entities: [
+        {
+          type: "text_mention",
+          offset: 0,
+          length: 8,
+          user: { id: 42, is_bot: true, first_name: "OpenClaw" },
+        },
+      ],
+      chat: { id: 1, type: "private" },
+      date: 0,
+      message_id: 1,
+    };
+    expect(hasBotMention(message as never, "openclaw_bot", 42)).toBe(true);
+    expect(hasAnyMentionEntity(message as never)).toBe(true);
+  });
+
+  it("does not match text_mention entities for a different bot id", () => {
+    const message = {
+      text: "OpenClaw hello",
+      entities: [
+        {
+          type: "text_mention",
+          offset: 0,
+          length: 8,
+          user: { id: 77, is_bot: true, first_name: "OpenClaw" },
+        },
+      ],
+      chat: { id: 1, type: "private" },
+      date: 0,
+      message_id: 1,
+    };
+    expect(hasBotMention(message as never, "openclaw_bot", 42)).toBe(false);
   });
 });
