@@ -55,7 +55,7 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("de")) {
     return "de";
   }
-   if (navLang.startsWith("es")) {
+  if (navLang.startsWith("es")) {
     return "es";
   }
   return DEFAULT_LOCALE;
