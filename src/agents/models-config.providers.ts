@@ -1050,16 +1050,18 @@ export async function resolveImplicitProviders(params: {
   const explicitOllama = params.explicitProviders?.ollama;
   const hasExplicitModels =
     Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (ollamaDiscoveryEnabled === false) {
-    // User explicitly disabled Ollama discovery; skip entirely.
-  } else if (hasExplicitModels && explicitOllama) {
+  if (hasExplicitModels && explicitOllama) {
+    // Always register explicitly configured Ollama models, regardless of
+    // the discovery toggle — the toggle controls network probing, not
+    // explicit-provider defaulting (#33329 review feedback).
     providers.ollama = {
       ...explicitOllama,
       baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
       api: explicitOllama.api ?? "ollama",
       apiKey: ollamaKey ?? explicitOllama.apiKey ?? "ollama-local",
     };
-  } else {
+  } else if (ollamaDiscoveryEnabled !== false) {
+    // No explicit models; probe only when discovery is not disabled.
     const ollamaBaseUrl = explicitOllama?.baseUrl;
     const hasExplicitOllamaConfig = Boolean(explicitOllama);
     // Only suppress warnings for implicit local probing when user has not
