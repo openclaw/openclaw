@@ -142,9 +142,9 @@ export async function getReplyFromConfig(
     normalizedChatType != null && normalizedChatType !== "direct"
       ? true
       : Boolean(resolveGroupSessionKey(sessionCtxForState));
-  const commandSource =
+  const livenessCommandSource =
     finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body ?? "";
-  const triggerBodyNormalizedForLiveness = stripStructuralPrefixes(commandSource).trim();
+  const triggerBodyNormalizedForLiveness = stripStructuralPrefixes(livenessCommandSource).trim();
   const livenessTriggers = sessionCfg?.livenessTriggers;
   if (commandAuth.isAuthorizedSender && livenessTriggers?.length) {
     const mentionStripped = isGroupForLiveness
