@@ -261,6 +261,38 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(setStatus.mock.calls.length).toBe(callsBeforeAbort);
   });
 
+  it("stops status publishing after handler deactivation", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const runInFlight = createDeferred();
+    processDiscordMessageMock.mockImplementation(async () => {
+      await runInFlight.promise;
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const setStatus = vi.fn();
+    const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
+
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+
+    const callsBeforeDeactivate = setStatus.mock.calls.length;
+    handler.deactivate();
+
+    runInFlight.resolve();
+    await runInFlight.promise;
+    await Promise.resolve();
+
+    expect(setStatus.mock.calls.length).toBe(callsBeforeDeactivate);
+  });
+
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
