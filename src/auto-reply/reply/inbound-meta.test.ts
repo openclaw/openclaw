@@ -331,4 +331,22 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("skips sender metadata block for Control UI messages", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      SenderId: "openclaw-control-ui",
+      SenderName: "Control UI",
+      MessageSid: "msg-123",
+    } as TemplateContext);
+
+    // Should still include conversation info
+    expect(text).toContain("Conversation info (untrusted metadata):");
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender_id"]).toBe("openclaw-control-ui");
+
+    // Should NOT include sender metadata block for Control UI
+    expect(text).not.toContain("Sender (untrusted metadata):");
+  });
 });

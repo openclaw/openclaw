@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { GATEWAY_CLIENT_IDS } from "../../gateway/protocol/client-info.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
@@ -149,7 +150,10 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     tag: safeTrim(ctx.SenderTag),
     e164: safeTrim(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  // Skip sender metadata for Control UI messages - these are internal system messages
+  // and the sender info (openclaw-control-ui) is not meaningful for the LLM.
+  const isControlUiMessage = ctx.SenderId === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  if (senderInfo?.label && !isControlUiMessage) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",
