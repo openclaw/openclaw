@@ -122,4 +122,39 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
     expect(resolved.writable).toBe(false);
   });
+
+  it("includes bundled skills dir as read-only mount when outside workspace", async () => {
+    const { resolveBundledSkillsDir } = await import("../skills/bundled-dir.js");
+    const bundledDir = resolveBundledSkillsDir();
+    if (!bundledDir) {
+      return;
+    }
+    const sandbox = createSandbox();
+    const mounts = buildSandboxFsMounts(sandbox);
+    const skillsMount = mounts.find((m) => m.source === "bundled-skills");
+    expect(skillsMount).toBeDefined();
+    expect(skillsMount!.hostRoot).toBe(path.resolve(bundledDir));
+    expect(skillsMount!.containerRoot).toBe("/openclaw-bundled-skills");
+    expect(skillsMount!.writable).toBe(false);
+  });
+
+  it("resolves bundled skills host path to container path via mount", async () => {
+    const { resolveBundledSkillsDir } = await import("../skills/bundled-dir.js");
+    const bundledDir = resolveBundledSkillsDir();
+    if (!bundledDir) {
+      return;
+    }
+    const sandbox = createSandbox();
+    const mounts = buildSandboxFsMounts(sandbox);
+    const skillFile = path.join(bundledDir, "skill-creator", "SKILL.md");
+    const resolved = resolveSandboxFsPathWithMounts({
+      filePath: skillFile,
+      cwd: sandbox.workspaceDir,
+      defaultWorkspaceRoot: sandbox.workspaceDir,
+      defaultContainerRoot: sandbox.containerWorkdir,
+      mounts,
+    });
+    expect(resolved.containerPath).toBe("/openclaw-bundled-skills/skill-creator/SKILL.md");
+    expect(resolved.writable).toBe(false);
+  });
 });

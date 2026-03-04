@@ -1,7 +1,8 @@
 import path from "node:path";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
+import { resolveBundledSkillsDir } from "../skills/bundled-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_BUNDLED_SKILLS_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext } from "./types.js";
@@ -10,7 +11,7 @@ export type SandboxFsMount = {
   hostRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: "workspace" | "agent" | "bind";
+  source: "workspace" | "agent" | "bind" | "bundled-skills";
 };
 
 export type SandboxResolvedFsPath = {
@@ -90,6 +91,22 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
       writable: parsed.writable,
       source: "bind",
     });
+  }
+
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (bundledSkillsDir) {
+    const resolved = path.resolve(bundledSkillsDir);
+    const alreadyMounted = mounts.some(
+      (m) => resolved === m.hostRoot || resolved.startsWith(m.hostRoot + path.sep),
+    );
+    if (!alreadyMounted) {
+      mounts.push({
+        hostRoot: resolved,
+        containerRoot: SANDBOX_BUNDLED_SKILLS_MOUNT,
+        writable: false,
+        source: "bundled-skills",
+      });
+    }
   }
 
   return dedupeMounts(mounts);

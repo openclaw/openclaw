@@ -163,8 +163,9 @@ export function execDockerRaw(
 
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveBundledSkillsDir } from "../skills/bundled-dir.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE, SANDBOX_BUNDLED_SKILLS_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
@@ -460,6 +461,10 @@ async function createSandboxContainer(params: {
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
   });
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (bundledSkillsDir) {
+    args.push("-v", `${bundledSkillsDir}:${SANDBOX_BUNDLED_SKILLS_MOUNT}:ro`);
+  }
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
