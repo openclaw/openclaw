@@ -52,7 +52,7 @@ import {
   validateConfigSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import { parseRestartRequestParams } from "./restart-request.js";
+import { parseDeliveryContextFromParams, parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -210,31 +210,6 @@ function resolveConfigRestartRequest(params: unknown): {
     deliveryContext,
     threadId,
   };
-}
-
-function parseDeliveryContextFromParams(
-  params: unknown,
-): { channel?: string; to?: string; accountId?: string } | undefined {
-  const raw = (params as { deliveryContext?: unknown }).deliveryContext;
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const channel =
-    typeof (raw as { channel?: unknown }).channel === "string"
-      ? (raw as { channel: string }).channel.trim() || undefined
-      : undefined;
-  const to =
-    typeof (raw as { to?: unknown }).to === "string"
-      ? (raw as { to: string }).to.trim() || undefined
-      : undefined;
-  const accountId =
-    typeof (raw as { accountId?: unknown }).accountId === "string"
-      ? (raw as { accountId: string }).accountId.trim() || undefined
-      : undefined;
-  if (!channel && !to) {
-    return undefined;
-  }
-  return { channel, to, accountId };
 }
 
 function buildConfigRestartSentinelPayload(params: {

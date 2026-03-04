@@ -11,7 +11,7 @@ import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
-import { parseRestartRequestParams } from "./restart-request.js";
+import { parseDeliveryContextFromParams, parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -23,21 +23,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     const actor = resolveControlPlaneActor(client);
     const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
     // Prefer live deliveryContext from params over extractDeliveryInfo() (see #18612).
-    const paramsDeliveryContextRaw = (params as { deliveryContext?: unknown }).deliveryContext;
-    const paramsDeliveryContext =
-      paramsDeliveryContextRaw && typeof paramsDeliveryContextRaw === "object"
-        ? (() => {
-            const dc = paramsDeliveryContextRaw as Record<string, unknown>;
-            const channel =
-              typeof dc.channel === "string" ? dc.channel.trim() || undefined : undefined;
-            const to = typeof dc.to === "string" ? dc.to.trim() || undefined : undefined;
-            const accountId =
-              typeof dc.accountId === "string" ? dc.accountId.trim() || undefined : undefined;
-            return channel || to ? { channel, to, accountId } : undefined;
-          })()
-        : undefined;
     const { deliveryContext: extractedDeliveryContext, threadId } = extractDeliveryInfo(sessionKey);
-    const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
+    const deliveryContext = parseDeliveryContextFromParams(params) ?? extractedDeliveryContext;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)

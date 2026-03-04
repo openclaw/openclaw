@@ -157,6 +157,12 @@ export function createGatewayTool(opts?: {
       // accurate sentinel without reading the (potentially stale) session
       // store. The store is frequently overwritten by heartbeat runs to
       // { channel: "webchat", to: "heartbeat" }. See #18612.
+      //
+      // Note: agentThreadId is intentionally excluded here. threadId is
+      // reliably derived server-side from the session key (via
+      // parseSessionThreadInfo), which encodes it as :thread:N or :topic:N.
+      // That parsing is not subject to heartbeat contamination, so there is
+      // no need to forward it through the RPC params.
       const liveDeliveryContextForRpc =
         opts?.agentChannel != null && String(opts.agentChannel).trim()
           ? {
