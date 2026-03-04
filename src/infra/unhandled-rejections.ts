@@ -60,6 +60,15 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "temporary failure in name resolution",
 ];
 
+// SQLite error codes that indicate transient failures (shouldn't crash the gateway)
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+  "SQLITE_PROTOCOL",
+]);
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -145,7 +154,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     return nested;
   })) {
     const code = extractErrorCodeOrErrno(candidate);
-    if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+    if (code && (TRANSIENT_NETWORK_CODES.has(code) || TRANSIENT_SQLITE_CODES.has(code))) {
       return true;
     }
 
