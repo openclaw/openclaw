@@ -1298,6 +1298,22 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("MZelda");
   });
 
+  it("allows text file starting with 'Rar!' through when not a valid RAR archive", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "Rar! What a find this is!\nMore exciting discoveries below.",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("Rar! What a find");
+  });
+
   it("handles file shorter than magic header length gracefully", async () => {
     const filePath = await createTempMediaFile({
       fileName: "tiny.dat",
@@ -1311,5 +1327,23 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("<file");
+  });
+
+  it("enforces that all binary signatures contain at least one non-printable byte", async () => {
+    // This test validates the INVARIANT documented in BINARY_SIGNATURES:
+    // every signature must contain at least one byte outside the printable ASCII
+    // range (< 0x20 or > 0x7E). This prevents false positives on text files.
+    const { BINARY_SIGNATURES } = await import("./apply.js");
+
+    for (const sig of BINARY_SIGNATURES) {
+      const hasNonPrintable = sig.bytes.some((byte: number) => byte < 0x20 || byte > 0x7e);
+      expect(hasNonPrintable).toBe(true);
+      if (!hasNonPrintable) {
+        throw new Error(
+          `${sig.name}: signature is all printable ASCII (0x20-0x7E). ` +
+            `Extend it to include non-printable bytes from the format header.`,
+        );
+      }
+    }
   });
 });

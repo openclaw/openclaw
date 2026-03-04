@@ -368,14 +368,20 @@ function resolveTextMimeFromName(name?: string): string | undefined {
  * start of a file that identify its format, regardless of extension or MIME type.
  * Each entry is a prefix match at byte offset 0.
  *
+ * INVARIANT: every signature MUST contain at least one non-printable byte
+ * (< 0x20 or > 0x7E). This prevents false positives on text files that happen
+ * to start with the same ASCII characters. If a format's short magic is all
+ * printable (e.g. RAR's "Rar!"), extend the signature to include subsequent
+ * non-printable bytes from the format header.
+ *
  * Adding a new format: append { name, bytes } to this array.
  * For complex validation (e.g. MZ/PE offset checks), use the special-case
  * block in hasBinaryFileSignature() below.
  */
-const BINARY_SIGNATURES: ReadonlyArray<{ name: string; bytes: readonly number[] }> = [
+export const BINARY_SIGNATURES: ReadonlyArray<{ name: string; bytes: readonly number[] }> = [
   // Archives
   { name: "ZIP", bytes: [0x50, 0x4b, 0x03, 0x04] }, // also .docx, .xlsx, .jar, .odt
-  { name: "RAR", bytes: [0x52, 0x61, 0x72, 0x21] },
+  { name: "RAR", bytes: [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07] }, // "Rar!" + 0x1A 0x07 (covers RAR4 + RAR5)
   { name: "7z", bytes: [0x37, 0x7a, 0xbc, 0xaf] },
   { name: "gzip", bytes: [0x1f, 0x8b] },
   // Documents
