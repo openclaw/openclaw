@@ -198,6 +198,21 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects npx wrapped restart commands with package spec", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "npx openclaw@latest gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects pnpm exec wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm exec openclaw gateway restart",
@@ -336,6 +351,21 @@ describe("detectGatewayManagementExecCommand", () => {
   it("detects bunx wrapped restart commands with --bun flag", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "bunx --bun openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects bunx wrapped restart commands with package spec", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "bunx openclaw@latest gateway restart",
       cwd: process.cwd(),
       env: process.env,
     });

@@ -166,6 +166,14 @@ function normalizeLower(token: string | undefined): string {
   return token?.trim().toLowerCase() ?? "";
 }
 
+function isOpenclawPackageExecutable(token: string | undefined): boolean {
+  const normalized = normalizeExecutableToken(token ?? "");
+  return (
+    normalized === "openclaw" ||
+    (normalized.startsWith("openclaw@") && normalized.length > "openclaw@".length)
+  );
+}
+
 function stripSurroundingQuotes(token: string): string {
   const trimmed = token.trim();
   if (trimmed.length >= 2) {
@@ -573,7 +581,7 @@ function consumeBunxOption(argv: string[], idx: number): number | null {
 
 function readPnpmCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
-  if (second && normalizeExecutableToken(second) === "openclaw") {
+  if (second && isOpenclawPackageExecutable(second)) {
     return argv.slice(2);
   }
 
@@ -604,7 +612,7 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
   }
 
   const commandToken = argv[idx]?.trim() ?? "";
-  if (normalizeExecutableToken(commandToken) === "openclaw") {
+  if (isOpenclawPackageExecutable(commandToken)) {
     return argv.slice(idx + 1);
   }
   if (normalizeLower(commandToken) !== "exec") {
@@ -633,7 +641,7 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
     break;
   }
 
-  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+  if (idx < argv.length && isOpenclawPackageExecutable(argv[idx])) {
     return argv.slice(idx + 1);
   }
   return null;
@@ -680,13 +688,13 @@ function readNpmExecLikeCliArgv(argv: string[], startIdx: number): string[] | nu
     if (!callArgv || callArgv.length === 0) {
       return null;
     }
-    if (normalizeExecutableToken(callArgv[0] ?? "") !== "openclaw") {
+    if (!isOpenclawPackageExecutable(callArgv[0])) {
       return null;
     }
     return callArgv.slice(1);
   }
 
-  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+  if (idx < argv.length && isOpenclawPackageExecutable(argv[idx])) {
     return argv.slice(idx + 1);
   }
   return null;
@@ -694,7 +702,7 @@ function readNpmExecLikeCliArgv(argv: string[], startIdx: number): string[] | nu
 
 function readBunxCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
-  if (second && normalizeExecutableToken(second) === "openclaw") {
+  if (second && isOpenclawPackageExecutable(second)) {
     return argv.slice(2);
   }
 
@@ -720,7 +728,7 @@ function readBunxCliArgv(argv: string[]): string[] | null {
     break;
   }
 
-  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+  if (idx < argv.length && isOpenclawPackageExecutable(argv[idx])) {
     return argv.slice(idx + 1);
   }
   return null;
@@ -763,7 +771,7 @@ function readCliArgv(argv: string[]): string[] | null {
       }
       break;
     }
-    if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+    if (idx < argv.length && isOpenclawPackageExecutable(argv[idx])) {
       return argv.slice(idx + 1);
     }
     return null;
