@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/img2txt-aly",
+  "version": "2026.3.3",
+  "description": "img2txt tool for aly",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/img2txt-aly",
+      "localPath": "extensions/img2txt-aly",
+      "defaultChoice": "local"
+    }
+  }
+}
