@@ -140,7 +140,7 @@ async function ensureRelayConnection() {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
+    const wsUrl = await buildRelayWsUrl(port)
     const wsProtocols = await buildRelayWsProtocols(port, gatewayToken)
 
     // Fast preflight: is the relay server up?

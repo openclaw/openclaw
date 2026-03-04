@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 type BackgroundUtilsModule = {
-  buildRelayWsUrl: (port: number, gatewayToken: string) => Promise<string>;
+  buildRelayWsUrl: (port: number) => Promise<string>;
   buildRelayWsProtocols: (port: number, gatewayToken: string) => Promise<string[]>;
   deriveRelayToken: (gatewayToken: string, port: number) => Promise<string>;
   isRetryableReconnectError: (err: unknown) => boolean;
@@ -27,8 +27,13 @@ async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
   }
 }
 
-const { buildRelayWsProtocols, buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectDelayMs } =
-  await loadBackgroundUtils();
+const {
+  buildRelayWsProtocols,
+  buildRelayWsUrl,
+  deriveRelayToken,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} = await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
   it("derives relay token as HMAC-SHA256 of gateway token and port", async () => {
@@ -41,7 +46,7 @@ describe("chrome extension background utils", () => {
   });
 
   it("builds websocket url without query token", async () => {
-    const url = await buildRelayWsUrl(18792, "test-token");
+    const url = await buildRelayWsUrl(18792);
     expect(url).toBe("ws://127.0.0.1:18792/extension");
   });
 
@@ -53,8 +58,6 @@ describe("chrome extension background utils", () => {
   });
 
   it("throws when gateway token is missing", async () => {
-    await expect(buildRelayWsUrl(18792, "")).rejects.toThrow(/Missing gatewayToken/);
-    await expect(buildRelayWsUrl(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
     await expect(buildRelayWsProtocols(18792, "")).rejects.toThrow(/Missing gatewayToken/);
     await expect(buildRelayWsProtocols(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
   });
