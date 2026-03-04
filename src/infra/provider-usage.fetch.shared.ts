@@ -42,19 +42,11 @@ export async function fetchJsonWithRetry(
       if (!retryRes.ok) {
         throw await parseProviderError(provider, retryRes);
       }
-      return retryRes;
-    },
-    policy,
-    providerErr,
-    onRetry ? (attempt, max, delayMs) => onRetry(attempt, max, delayMs) : undefined,
-  ).catch((err: unknown) => {
-    if (typeof err === "object" && err !== null && "httpStatus" in err && "raw" in err) {
-      const provErr = err as { httpStatus: number; raw: unknown };
-      return new Response(JSON.stringify(provErr.raw ?? null), {
-        status: provErr.httpStatus,
-        headers: {},
-      });
-    }
+      const provErr = err as { httpStatus: number; raw: unknown; message?: string };
+      const body = provErr.raw !== null 
+        ? JSON.stringify(provErr.raw)
+        : JSON.stringify({ error: provErr.message });
+      return new Response(body, { status: provErr.httpStatus });
     throw err;
   });
 }
