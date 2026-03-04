@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/compat";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
