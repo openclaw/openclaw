@@ -46,7 +46,7 @@ To enable the PolarDB-powered memory system, follow these steps:
 1. **Access the Console**: Visit the [Alibaba Cloud PolarDB Console](https://polardb.console.aliyun.com/cn-hangzhou/mem0).
 2. **Activate Mem0**: Enable the Mem0 service within your PolarDB instance and retrieve your unique `MEM0_API_KEY` and `MEM0_ORG_ID`.
 3. **Endpoint Details**:
-   - **Service Host**: `mem0test01.polardb.com` (Ensure your network allows outbound traffic to this host).
+   - - **Service Host**: The connection is managed via `handler.py`. Ensure the host (IP or Domain) is correctly configured in the `_get_client()` function.
 4. **Set Environment Variables**:
    - `/env set MEM0_API_KEY=your_key`
    - `/env set MEM0_ORG_ID=your_id`
