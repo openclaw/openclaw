@@ -41,12 +41,16 @@ export function checkBrowserOrigin(params: {
   const allowlist = new Set(
     (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
   );
-  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
+  // SECURITY: Removed wildcard "*" support (CWE-346) - explicit origins only
+  if (allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
+  // SECURITY: Host header fallback restricted to local clients only (H-2 fix)
+  // Prevents Host header injection attacks from remote clients
   if (
+    params.isLocalClient === true &&
     params.allowHostHeaderOriginFallback === true &&
     requestHost &&
     parsedOrigin.host === requestHost
