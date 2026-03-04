@@ -2,47 +2,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-const bufferSendPlugin: ChannelPlugin = {
-  id: "bufferchat",
-  meta: {
-    id: "bufferchat",
-    label: "BufferChat",
-    selectionLabel: "BufferChat",
-    docsPath: "/channels/bufferchat",
-    blurb: "Buffer send hydration test plugin.",
-  },
-  capabilities: { chatTypes: ["direct", "group"], media: true },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({ enabled: true }),
-    isConfigured: () => true,
-  },
-  actions: {
-    listActions: () => ["send"],
-    supportsAction: ({ action }) => action === "send",
-    handleAction: async ({ params }) =>
-      jsonResult({
-        ok: true,
-        message: params.message ?? null,
-        media: params.media ?? null,
-        filename: params.filename ?? null,
-        contentType: params.contentType ?? null,
-      }),
-  },
-};
-
-const cfg = {
+const slackConfig = {
   channels: {
-    bufferchat: {
+    slack: {
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    },
+  },
+} as OpenClawConfig;
+
+const telegramConfig = {
+  channels: {
+    telegram: {
       enabled: true,
+      botToken: "token-test",
     },
   },
 } as OpenClawConfig;
@@ -62,7 +43,7 @@ describe("runMessageAction send buffer hydration", () => {
     vi.restoreAllMocks();
   });
 
-  it("materializes host buffer payloads into media for dry-run sends", async () => {
+  it("materializes host buffer payloads into media for Slack dry-run sends", async () => {
     const saveMediaBufferSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
       id: "media-1",
       path: "/tmp/openclaw-outbound/test-buffer.txt",
@@ -71,15 +52,15 @@ describe("runMessageAction send buffer hydration", () => {
       createdAt: Date.now(),
     });
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bufferchat", source: "test", plugin: bufferSendPlugin }]),
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
     );
 
     const result = await runMessageAction({
-      cfg,
+      cfg: slackConfig,
       action: "send",
       params: {
-        channel: "bufferchat",
-        target: "channel:abc",
+        channel: "slack",
+        target: "#C12345678",
         message: "buffer payload",
         buffer: Buffer.from("hello").toString("base64"),
         filename: "test-buffer.txt",
@@ -100,17 +81,17 @@ describe("runMessageAction send buffer hydration", () => {
     expect(result.sendResult?.mediaUrl).toBe("/tmp/openclaw-outbound/test-buffer.txt");
   });
 
-  it("materializes sandbox buffer payloads into sandbox outbound for dry-run sends", async () => {
+  it("materializes sandbox buffer payloads into sandbox outbound for Telegram dry-run sends", async () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bufferchat", source: "test", plugin: bufferSendPlugin }]),
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
     );
     await withSandbox(async (sandboxDir) => {
       const result = await runMessageAction({
-        cfg,
+        cfg: telegramConfig,
         action: "send",
         params: {
-          channel: "bufferchat",
-          target: "channel:abc",
+          channel: "telegram",
+          target: "12345",
           message: "buffer payload",
           buffer: Buffer.from("hello").toString("base64"),
           filename: "sandbox-buffer.txt",
