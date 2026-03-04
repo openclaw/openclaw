@@ -1783,6 +1783,76 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.stream).toBe(true);
   });
 
+  it("does not apply sub2api gpt-5.2 responses compat to non-responses APIs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-completions",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-completions">,
+      initialPayload: {
+        stream: false,
+        messages: [
+          { role: "system", content: "system note" },
+          { role: "user", content: "hello" },
+        ],
+      },
+    });
+
+    expect(payload.input).toBeUndefined();
+    expect(payload.instructions).toBeUndefined();
+    expect(payload.messages).toEqual([
+      { role: "system", content: "system note" },
+      { role: "user", content: "hello" },
+    ]);
+    expect(payload.stream).toBe(false);
+  });
+
+  it("preserves messages when sub2api gpt-5.2 conversion would drop tool context", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        stream: false,
+        messages: [
+          { role: "system", content: "system note" },
+          { role: "assistant", content: "thinking" },
+          { role: "tool", content: "tool result", tool_call_id: "call_123" },
+          { role: "user", content: "continue" },
+        ],
+      },
+    });
+
+    expect(payload.instructions).toBe("system note");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "thinking" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue" }],
+      },
+    ]);
+    expect(payload.messages).toEqual([
+      { role: "system", content: "system note" },
+      { role: "assistant", content: "thinking" },
+      { role: "tool", content: "tool result", tool_call_id: "call_123" },
+      { role: "user", content: "continue" },
+    ]);
+    expect(payload.stream).toBe(true);
+  });
+
   it("downgrades required tool_choice to auto for sub2api-passthrough gpt-5.2 when tools are missing", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "sub2api-passthrough",

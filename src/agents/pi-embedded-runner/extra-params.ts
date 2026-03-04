@@ -763,7 +763,12 @@ type PayloadMessage = {
 type OpenAIResponsesInputItem = {
   type: "message";
   role: "user" | "assistant";
-  content: Array<{ type: "input_text"; text: string }>;
+  content: Array<{ type: "input_text" | "output_text"; text: string }>;
+};
+
+type NormalizeMessagesToResponsesInputResult = {
+  input: OpenAIResponsesInputItem[];
+  lossless: boolean;
 };
 
 type DebugOpenAIResponsesInputSummary = {
@@ -848,9 +853,13 @@ function logFinalOpenAIResponsesPayload(
 }
 
 function shouldApplySub2apiGpt52PayloadCompat(params: {
+  api?: unknown;
   provider: string;
   modelId: string;
 }): boolean {
+  if (params.api !== undefined && params.api !== "openai-responses") {
+    return false;
+  }
   const provider = params.provider.trim().toLowerCase();
   const modelId = params.modelId.trim().toLowerCase();
   return provider.startsWith("sub2api") && modelId === "gpt-5.2";
@@ -876,24 +885,51 @@ function extractPlainTextFromMessageContent(content: unknown): string {
   return chunks.join("\n").trim();
 }
 
-function normalizeMessagesToResponsesInput(messages: PayloadMessage[]): OpenAIResponsesInputItem[] {
+function hasMeaningfulMessageData(msg: PayloadMessage): boolean {
+  if (typeof msg.content === "string") {
+    return msg.content.trim().length > 0;
+  }
+  if (Array.isArray(msg.content)) {
+    return msg.content.length > 0;
+  }
+  if (msg.content != null) {
+    return true;
+  }
+  return Object.entries(msg).some(
+    ([key, value]) => key !== "role" && key !== "content" && value != null,
+  );
+}
+
+function normalizeMessagesToResponsesInput(
+  messages: PayloadMessage[],
+): NormalizeMessagesToResponsesInputResult {
   const normalized: OpenAIResponsesInputItem[] = [];
+  let lossless = true;
   for (const msg of messages) {
     const role = (msg.role ?? "").toLowerCase();
+    if (role === "system" || role === "developer") {
+      continue;
+    }
     if (role !== "user" && role !== "assistant") {
+      if (hasMeaningfulMessageData(msg)) {
+        lossless = false;
+      }
       continue;
     }
     const text = extractPlainTextFromMessageContent(msg.content).trim();
     if (!text) {
+      if (hasMeaningfulMessageData(msg)) {
+        lossless = false;
+      }
       continue;
     }
     normalized.push({
       type: "message",
       role,
-      content: [{ type: "input_text", text }],
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
     });
   }
-  return normalized;
+  return { input: normalized, lossless };
 }
 
 function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void {
@@ -919,13 +955,17 @@ function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void
 
   if (!Array.isArray(payloadObj.input) && messages) {
     const normalizedInput = normalizeMessagesToResponsesInput(messages);
-    if (normalizedInput.length > 0) {
-      payloadObj.input = normalizedInput;
+    if (normalizedInput.input.length > 0) {
+      payloadObj.input = normalizedInput.input;
     }
-  }
-
-  if (Array.isArray(payloadObj.input) && messages) {
-    delete payloadObj.messages;
+    if (Array.isArray(payloadObj.input) && normalizedInput.lossless) {
+      delete payloadObj.messages;
+    }
+  } else if (Array.isArray(payloadObj.input) && messages) {
+    const normalizedInput = normalizeMessagesToResponsesInput(messages);
+    if (normalizedInput.lossless) {
+      delete payloadObj.messages;
+    }
   }
 
   if (payloadObj.stream !== true) {
@@ -943,9 +983,14 @@ function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefin
         if (
           payload &&
           typeof payload === "object" &&
+          model.api === "openai-responses" &&
           typeof model.provider === "string" &&
           typeof model.id === "string" &&
-          shouldApplySub2apiGpt52PayloadCompat({ provider: model.provider, modelId: model.id })
+          shouldApplySub2apiGpt52PayloadCompat({
+            api: model.api,
+            provider: model.provider,
+            modelId: model.id,
+          })
         ) {
           const payloadObj = payload as Record<string, unknown>;
           normalizeSub2apiGpt52Payload(payloadObj);
@@ -955,8 +1000,8 @@ function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefin
               ? ((context as { messages?: PayloadMessage[] }).messages ?? [])
               : [];
             const normalizedInput = normalizeMessagesToResponsesInput(contextMessages);
-            if (normalizedInput.length > 0) {
-              payloadObj.input = normalizedInput;
+            if (normalizedInput.input.length > 0) {
+              payloadObj.input = normalizedInput.input;
             }
           }
 
