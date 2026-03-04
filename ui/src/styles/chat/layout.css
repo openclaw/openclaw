@@ -152,6 +152,49 @@
   z-index: 10;
 }
 
+/* Drag-over state */
+.chat-compose--dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Hidden file input */
+.chat-compose__file-input {
+  display: none;
+}
+
+/* Attach button */
+.chat-compose__attach {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  padding: 0;
+  border-radius: 8px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.chat-compose__attach:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.chat-compose__attach:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.chat-compose__attach svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* Image attachments preview */
 .chat-attachments {
   display: inline-flex;
@@ -467,6 +510,11 @@
 
   /* Mobile: full-width buttons */
   .chat-compose .chat-compose__actions .btn {
+    width: 100%;
+  }
+
+  /* Mobile: attach button sits above textarea */
+  .chat-compose__attach {
     width: 100%;
   }
 

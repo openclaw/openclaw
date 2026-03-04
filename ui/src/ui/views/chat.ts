@@ -162,6 +162,72 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/gif,image/webp";
+
+function readFileAsAttachment(file: File, props: ChatProps) {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const dataUrl = reader.result as string;
+    const newAttachment: ChatAttachment = {
+      id: generateAttachmentId(),
+      dataUrl,
+      mimeType: file.type,
+    };
+    const current = props.attachments ?? [];
+    props.onAttachmentsChange?.([...current, newAttachment]);
+  });
+  reader.readAsDataURL(file);
+}
+
+function handleFileSelect(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+
+  for (const file of Array.from(files)) {
+    if (file.type.startsWith("image/")) {
+      readFileAsAttachment(file, props);
+    }
+  }
+
+  // Reset so the same file can be re-selected
+  input.value = "";
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  compose?.classList.add("chat-compose--dragover");
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  compose?.classList.remove("chat-compose--dragover");
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
+  compose?.classList.remove("chat-compose--dragover");
+
+  const files = e.dataTransfer?.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+
+  for (const file of Array.from(files)) {
+    if (file.type.startsWith("image/")) {
+      readFileAsAttachment(file, props);
+    }
+  }
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -187,19 +253,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     if (!file) {
       continue;
     }
-
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
+    readFileAsAttachment(file, props);
   }
 }
 
@@ -420,9 +474,35 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div
+        class="chat-compose"
+        @dragover=${handleDragOver}
+        @dragleave=${handleDragLeave}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <input
+            type="file"
+            accept=${ACCEPTED_IMAGE_TYPES}
+            multiple
+            class="chat-compose__file-input"
+            @change=${(e: Event) => handleFileSelect(e, props)}
+          />
+          <button
+            class="btn chat-compose__attach"
+            type="button"
+            title="Attach images"
+            ?disabled=${!props.connected}
+            @click=${(e: Event) => {
+              const btn = e.currentTarget as HTMLElement;
+              const fileInput = btn.parentElement
+                ?.querySelector<HTMLInputElement>(".chat-compose__file-input");
+              fileInput?.click();
+            }}
+          >
+            ${icons.paperclip}
+          </button>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
