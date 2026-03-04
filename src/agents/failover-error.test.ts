@@ -22,6 +22,20 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
   });
 
+  it("infers rate_limit from weekly/monthly quota exhausted (zhipuai 1310)", () => {
+    // Full error as logged by zhipuai
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54",
+      }),
+    ).toBe("rate_limit");
+    // Generic "limit exhausted" phrase from other providers
+    expect(
+      resolveFailoverReasonFromError({ message: "API limit exhausted, please try again later" }),
+    ).toBe("rate_limit");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({
