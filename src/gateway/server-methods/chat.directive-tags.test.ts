@@ -148,6 +148,7 @@ async function runNonStreamingChatSend(params: {
   idempotencyKey: string;
   message?: string;
   client?: unknown;
+  isWebchatConnect?: boolean;
   expectBroadcast?: boolean;
 }) {
   await chatHandlers["chat.send"]({
@@ -161,7 +162,7 @@ async function runNonStreamingChatSend(params: {
     >[0]["respond"],
     req: {} as never,
     client: (params.client ?? null) as never,
-    isWebchatConnect: () => false,
+    isWebchatConnect: () => params.isWebchatConnect ?? false,
     context: params.context as GatewayRequestContext,
   });
 
@@ -378,6 +379,42 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         MessageThreadId: 42,
       }),
     );
+  });
+
+  it("chat.send keeps webchat origin routing for webchat clients", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-origin-routing-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:6812765697",
+        accountId: "default",
+        threadId: 42,
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:6812765697",
+      lastAccountId: "default",
+      lastThreadId: 42,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-origin-routing",
+      isWebchatConnect: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+      }),
+    );
+    expect(mockState.lastDispatchCtx?.OriginatingTo).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.AccountId).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MessageThreadId).toBeUndefined();
   });
 
   it("chat.send inherits Feishu routing metadata from session delivery context", async () => {

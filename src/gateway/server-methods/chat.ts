@@ -703,7 +703,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
-  "chat.send": async ({ params, respond, context, client }) => {
+  "chat.send": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -852,12 +852,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
         routeToCandidate.trim().length > 0;
-      const originatingChannel = hasDeliverableRoute
+      const webchatOrigin = isWebchatConnect(client?.connect);
+      const useDeliverableRoute = hasDeliverableRoute && !webchatOrigin;
+      const originatingChannel = useDeliverableRoute
         ? routeChannelCandidate
         : INTERNAL_MESSAGE_CHANNEL;
-      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const originatingTo = useDeliverableRoute ? routeToCandidate : undefined;
+      const accountId = useDeliverableRoute ? routeAccountIdCandidate : undefined;
+      const messageThreadId = useDeliverableRoute ? routeThreadIdCandidate : undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
