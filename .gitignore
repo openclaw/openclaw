@@ -121,3 +121,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+
+# SMT-LIB2 generated output
+verify-output/
