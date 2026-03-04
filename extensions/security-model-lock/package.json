@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/security-model-lock",
+  "version": "1.0.0",
+  "description": "Automatically switch to a secure model when sensitive tools are called",
+  "type": "module",
+  "main": "index.ts",
+  "private": true,
+  "dependencies": {
+    "openclaw": "workspace:*"
+  }
+}

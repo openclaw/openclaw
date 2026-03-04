@@ -1,0 +1,51 @@
+{
+  "$schema": "https://openclaw.ai/schema/config.v1.json",
+  "_comment": "OpenClaw 配置示例 - 安全模型锁定插件配置",
+  "_docs": "https://docs.openclaw.ai/configuration",
+
+  // ==========================================================================
+  // 插件配置
+  // ==========================================================================
+  "plugins": {
+    // 启用安全模型锁定插件
+    "security-model-lock": {
+      // 是否启用插件（默认：true）
+      "enabled": true,
+
+      // 敏感工具列表 - 当这些工具被调用时会触发安全模型锁定
+      // 默认包含 "weather"，可根据需要添加其他工具
+      "sensitiveTools": ["weather"],
+
+      // 安全模型配置 - 当敏感工具被调用时会自动切换到此模型
+      "secureModel": {
+        // Provider 可以是：ollama, openai, anthropic, local 等
+        "provider": "ollama",
+        // Model 是该 provider 下的具体模型名称
+        "model": "llama3.3:8b"
+      },
+
+      // 可选：自定义锁定提示消息
+      "lockNotice": "检测到敏感工具调用，已切换到安全模型。会话已锁定，无法切换回其他模型。"
+    }
+  },
+
+  // ==========================================================================
+  // 其他 OpenClaw 配置...
+  // ==========================================================================
+
+  // 代理默认配置
+  "agents": {
+    "defaults": {
+      // 默认模型（锁定触发前使用）
+      "model": {
+        "primary": "openai/gpt-4"
+      }
+    }
+  },
+
+  // Gateway 配置
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
+  }
+}
