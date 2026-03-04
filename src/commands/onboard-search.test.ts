@@ -135,6 +135,27 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
+  it("quickstart skips key prompt when config key exists", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "perplexity",
+            perplexity: { apiKey: "stored-pplx-key" },
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({ selectValue: "perplexity" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(result.tools?.web?.search?.provider).toBe("perplexity");
+    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("stored-pplx-key");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("quickstart skips key prompt when env var is available", async () => {
     const orig = process.env.BRAVE_API_KEY;
     process.env.BRAVE_API_KEY = "env-brave-key";
