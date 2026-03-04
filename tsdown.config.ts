@@ -63,6 +63,13 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: "src/plugin-sdk/compat.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/plugin-sdk/telegram.ts",
     outDir: "dist/plugin-sdk",
     env,

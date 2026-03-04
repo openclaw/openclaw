@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/compat";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const { sendMessageMattermostMock } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
@@ -237,6 +237,37 @@ describe("mattermostPlugin", () => {
         expect.objectContaining({
           mediaUrl: "/tmp/workspace/image.png",
           mediaLocalRoots: ["/tmp/workspace"],
+        }),
+      );
+    });
+
+    it("threads resolved cfg on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+      const cfg = {
+        channels: {
+          mattermost: {
+            botToken: "resolved-bot-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      } as OpenClawConfig;
+
+      await sendText({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
         }),
       );
     });

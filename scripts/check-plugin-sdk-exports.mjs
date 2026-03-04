@@ -43,6 +43,7 @@ const exportSet = new Set(exportedNames);
 
 const requiredSubpathEntries = [
   "core",
+  "compat",
   "telegram",
   "discord",
   "slack",
@@ -52,6 +53,8 @@ const requiredSubpathEntries = [
   "line",
   "account-id",
 ];
+
+const requiredRuntimeShimEntries = ["root-alias.cjs"];
 
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any of these are missing, plugins will fail at runtime with:
@@ -97,6 +100,14 @@ for (const entry of requiredSubpathEntries) {
   }
   if (!existsSync(dtsPath)) {
     console.error(`MISSING SUBPATH DTS: dist/plugin-sdk/${entry}.d.ts`);
+    missing += 1;
+  }
+}
+
+for (const entry of requiredRuntimeShimEntries) {
+  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  if (!existsSync(shimPath)) {
+    console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
   }
 }

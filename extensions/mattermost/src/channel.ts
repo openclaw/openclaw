@@ -12,7 +12,7 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -273,15 +273,17 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageMattermost(to, text, {
+        cfg,
         accountId: accountId ?? undefined,
         replyToId: replyToId ?? undefined,
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
       const result = await sendMessageMattermost(to, text, {
+        cfg,
         accountId: accountId ?? undefined,
         mediaUrl,
         mediaLocalRoots,
