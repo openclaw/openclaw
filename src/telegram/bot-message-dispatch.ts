@@ -43,6 +43,23 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
+// Cooldown window for user-facing error replies in Telegram groups.
+// This is intentionally conservative to avoid error spam in active group chats.
+const TELEGRAM_GROUP_ERROR_COOLDOWN_MS = 10 * 60 * 1000;
+
+// Tracks the last time we sent a user-facing error reply per Telegram chat.
+// Scoped to this process; a restart naturally clears the cooldown.
+const telegramGroupErrorCooldown = new Map<string, number>();
+
+function isWithinTelegramGroupErrorCooldown(chatId: string, now: number): boolean {
+  const last = telegramGroupErrorCooldown.get(chatId);
+  return last != null && now - last < TELEGRAM_GROUP_ERROR_COOLDOWN_MS;
+}
+
+function updateTelegramGroupErrorCooldown(chatId: string, now: number): void {
+  telegramGroupErrorCooldown.set(chatId, now);
+}
+
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
@@ -446,6 +463,14 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, text };
   };
   const sendPayload = async (payload: ReplyPayload) => {
+    const chatKey = String(chatId);
+    const now = Date.now();
+    if (isGroup && payload.isError === true && isWithinTelegramGroupErrorCooldown(chatKey, now)) {
+      // Treat suppressed errors as non-silent failures so fallback logic can still account
+      // for them without spamming the group with repeated error messages.
+      deliveryState.markNonSilentFailure();
+      return false;
+    }
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [payload],
@@ -453,6 +478,9 @@ export const dispatchTelegramMessage = async ({
     });
     if (result.delivered) {
       deliveryState.markDelivered();
+      if (isGroup && payload.isError === true) {
+        updateTelegramGroupErrorCooldown(chatKey, now);
+      }
     }
     return result.delivered;
   };
@@ -746,11 +774,18 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
   ) {
-    const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-      ...deliveryBaseOptions,
-    });
-    sentFallback = result.delivered;
+    const chatKey = String(chatId);
+    const now = Date.now();
+    if (!isGroup || !isWithinTelegramGroupErrorCooldown(chatKey, now)) {
+      const result = await deliverReplies({
+        replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+        ...deliveryBaseOptions,
+      });
+      sentFallback = result.delivered;
+      if (result.delivered && isGroup) {
+        updateTelegramGroupErrorCooldown(chatKey, now);
+      }
+    }
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;

@@ -1711,6 +1711,69 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("throttles isError payloads in Telegram groups", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Tool error: rate limited", isError: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const groupContext = createContext({
+      isGroup: true,
+      chatId: 9991,
+      msg: {
+        chat: { id: 9991, type: "group" },
+        message_id: 1,
+      } as unknown as TelegramMessageContext["msg"],
+    });
+
+    await dispatchWithContext({ context: groupContext });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+
+    // Second dispatch in the same group within cooldown window should suppress
+    // the error payload and not call deliverReplies again.
+    await dispatchWithContext({ context: groupContext });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles fallback error replies in Telegram groups", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onError?.(new Error("upstream failure"), { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const groupContext = createContext({
+      isGroup: true,
+      chatId: 9992,
+      msg: {
+        chat: { id: 9992, type: "group" },
+        message_id: 1,
+      } as unknown as TelegramMessageContext["msg"],
+    });
+
+    await dispatchWithContext({ context: groupContext });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("No response"),
+          }),
+        ],
+      }),
+    );
+
+    // Second dispatch in the same group within cooldown window should not send
+    // another fallback message.
+    deliverReplies.mockClear();
+    await dispatchWithContext({ context: groupContext });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("handles error block + response final — error delivered, response finalizes preview", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
