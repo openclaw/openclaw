@@ -20,7 +20,7 @@ import {
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
-import { botOpenIds } from "./monitor.state.js";
+import { accountAppIds, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
@@ -505,6 +505,19 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       : await fetchBotOpenIdForMonitor(account, { runtime, abortSignal });
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+
+  if (account.appId) {
+    const previousAppId = accountAppIds.get(accountId);
+    accountAppIds.set(accountId, account.appId);
+    if (previousAppId && previousAppId !== account.appId) {
+      const warn = runtime?.error ?? console.error;
+      warn(
+        `feishu[${accountId}]: appId changed (${previousAppId} → ${account.appId}). ` +
+          `Existing sessions may reference stale open_ids from the previous app. ` +
+          `If you see "open_id cross app" errors, remove affected sessions from sessions.json.`,
+      );
+    }
+  }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {

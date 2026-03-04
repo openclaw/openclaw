@@ -5,11 +5,29 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  toFeishuSendResult,
+  isCrossAppError,
+  FEISHU_CROSS_APP_ERROR_CODE,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+
+function isCrossAppResponse(response: { code?: number }): boolean {
+  return response.code === FEISHU_CROSS_APP_ERROR_CODE;
+}
+
+function throwCrossAppError(receiveId: string): never {
+  throw new Error(
+    `Feishu send failed: open_id "${receiveId}" belongs to a different app. ` +
+      `This usually happens after changing Feishu app credentials. ` +
+      `Restart the gateway to re-establish delivery routes, or manually ` +
+      `remove the affected session from sessions.json.`,
+  );
+}
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -249,14 +267,21 @@ export async function sendMessageFeishu(
       },
     });
     if (shouldFallbackFromReplyTarget(response)) {
-      const fallback = await client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-        },
-      });
+      let fallback;
+      try {
+        fallback = await client.im.message.create({
+          params: { receive_id_type: receiveIdType },
+          data: {
+            receive_id: receiveId,
+            content,
+            msg_type: msgType,
+          },
+        });
+      } catch (err) {
+        if (isCrossAppError(err)) throwCrossAppError(receiveId);
+        throw err;
+      }
+      if (isCrossAppResponse(fallback)) throwCrossAppError(receiveId);
       assertFeishuMessageApiSuccess(fallback, "Feishu send failed");
       return toFeishuSendResult(fallback, receiveId);
     }
@@ -264,14 +289,21 @@ export async function sendMessageFeishu(
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: msgType,
-    },
-  });
+  let response;
+  try {
+    response = await client.im.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: {
+        receive_id: receiveId,
+        content,
+        msg_type: msgType,
+      },
+    });
+  } catch (err) {
+    if (isCrossAppError(err)) throwCrossAppError(receiveId);
+    throw err;
+  }
+  if (isCrossAppResponse(response)) throwCrossAppError(receiveId);
   assertFeishuMessageApiSuccess(response, "Feishu send failed");
   return toFeishuSendResult(response, receiveId);
 }
@@ -301,14 +333,21 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       },
     });
     if (shouldFallbackFromReplyTarget(response)) {
-      const fallback = await client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "interactive",
-        },
-      });
+      let fallback;
+      try {
+        fallback = await client.im.message.create({
+          params: { receive_id_type: receiveIdType },
+          data: {
+            receive_id: receiveId,
+            content,
+            msg_type: "interactive",
+          },
+        });
+      } catch (err) {
+        if (isCrossAppError(err)) throwCrossAppError(receiveId);
+        throw err;
+      }
+      if (isCrossAppResponse(fallback)) throwCrossAppError(receiveId);
       assertFeishuMessageApiSuccess(fallback, "Feishu card send failed");
       return toFeishuSendResult(fallback, receiveId);
     }
@@ -316,14 +355,21 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: "interactive",
-    },
-  });
+  let response;
+  try {
+    response = await client.im.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: {
+        receive_id: receiveId,
+        content,
+        msg_type: "interactive",
+      },
+    });
+  } catch (err) {
+    if (isCrossAppError(err)) throwCrossAppError(receiveId);
+    throw err;
+  }
+  if (isCrossAppResponse(response)) throwCrossAppError(receiveId);
   assertFeishuMessageApiSuccess(response, "Feishu card send failed");
   return toFeishuSendResult(response, receiveId);
 }
