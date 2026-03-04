@@ -1,3 +1,4 @@
+import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import type { OHLCV, StrategyContext, StrategyDefinition, Signal } from "../shared/types.js";
 import { buildIndicatorLib } from "../strategy/backtest-engine.js";
 
@@ -20,6 +21,9 @@ type PaperEngineLike = {
     currentPrice: number,
   ): Record<string, unknown>;
   recordSnapshot(accountId: string): void;
+  getSnapshots?(
+    id: string,
+  ): Array<{ timestamp: number; equity: number; dailyPnl: number; dailyPnlPct: number }>;
 };
 
 type StrategyRegistryLike = {
@@ -35,9 +39,19 @@ export type PaperSchedulerConfig = {
   paperEngine: PaperEngineLike;
   strategyRegistry: StrategyRegistryLike;
   dataProvider?: DataProviderLike;
+  perfStore?: PerformanceSnapshotStore;
+  /** Lazy resolver for dataProvider — called on each tick if dataProvider is still unset. */
+  serviceResolver?: () => DataProviderLike | undefined;
   tickIntervalMs?: number; // default 60_000 (1 min)
   snapshotIntervalMs?: number; // default 3_600_000 (1 hour)
 };
+
+/** Returns true if `last` is null or from a different calendar day than now. */
+export function isNewDay(last: Date | null): boolean {
+  if (!last) return true;
+  const now = new Date();
+  return now.toDateString() !== last.toDateString();
+}
 
 export class PaperScheduler {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -45,6 +59,7 @@ export class PaperScheduler {
   private tickCount = 0;
   private errorCount = 0;
   private _deps: PaperSchedulerConfig;
+  private lastPerfSnapshotDate: Date | null = null;
 
   constructor(deps: PaperSchedulerConfig) {
     this._deps = deps;
@@ -83,6 +98,12 @@ export class PaperScheduler {
   }
 
   async tickAll(): Promise<{ ticked: number; signals: number; errors: number }> {
+    // Lazy service resolution: try to acquire dataProvider if not yet set
+    if (!this._deps.dataProvider && this._deps.serviceResolver) {
+      const resolved = this._deps.serviceResolver();
+      if (resolved) this._deps.dataProvider = resolved;
+    }
+
     const { paperEngine, strategyRegistry, dataProvider } = this._deps;
     if (!dataProvider) return { ticked: 0, signals: 0, errors: 0 };
 
@@ -158,7 +179,7 @@ export class PaperScheduler {
   }
 
   async snapshotAll(): Promise<{ snapshots: number }> {
-    const { paperEngine } = this._deps;
+    const { paperEngine, perfStore } = this._deps;
     const accounts = paperEngine.listAccounts();
     for (const acct of accounts) {
       try {
@@ -167,6 +188,79 @@ export class PaperScheduler {
         this.errorCount++;
       }
     }
+
+    // Write daily performance snapshot if new day
+    if (perfStore && isNewDay(this.lastPerfSnapshotDate)) {
+      try {
+        this.writeDailyPerfSnapshot();
+        this.lastPerfSnapshotDate = new Date();
+      } catch {
+        this.errorCount++;
+      }
+    }
+
     return { snapshots: accounts.length };
+  }
+
+  private writeDailyPerfSnapshot(): void {
+    const { paperEngine, perfStore } = this._deps;
+    if (!perfStore) return;
+
+    const accounts = paperEngine.listAccounts();
+    let totalPnl = 0;
+    let totalEquity = 0;
+    let totalInitialCapital = 0;
+    let peakEquity = 0;
+    const byStrategy: Record<string, number> = {};
+    const byMarket: Record<string, number> = {};
+    const bySymbol: Record<string, number> = {};
+
+    for (const acct of accounts) {
+      const state = paperEngine.getAccountState(acct.id);
+      if (!state) continue;
+
+      totalEquity += state.equity;
+      totalInitialCapital += acct.equity;
+
+      // Track per-position breakdowns
+      for (const pos of state.positions) {
+        const pnl = (pos as { unrealizedPnl?: number }).unrealizedPnl ?? 0;
+        const sym = (pos as { symbol?: string }).symbol ?? "unknown";
+        const stratId = (pos as { strategyId?: string }).strategyId ?? "manual";
+        bySymbol[sym] = (bySymbol[sym] ?? 0) + pnl;
+        byStrategy[stratId] = (byStrategy[stratId] ?? 0) + pnl;
+      }
+
+      // Get snapshots for daily PnL
+      const snapshots = paperEngine.getSnapshots?.(acct.id) ?? [];
+      if (snapshots.length > 0) {
+        totalPnl += snapshots[snapshots.length - 1]!.dailyPnl;
+      }
+
+      if (state.equity > peakEquity) peakEquity = state.equity;
+    }
+
+    const totalReturn =
+      totalInitialCapital > 0
+        ? ((totalEquity - totalInitialCapital) / totalInitialCapital) * 100
+        : 0;
+    const maxDrawdown = peakEquity > 0 ? ((totalEquity - peakEquity) / peakEquity) * 100 : 0;
+
+    const now = new Date();
+    const period = now.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    perfStore.addSnapshot({
+      id: `daily-${period}`,
+      period,
+      periodType: "daily",
+      totalPnl,
+      totalReturn,
+      sharpe: null, // Would need historical series to compute
+      maxDrawdown: maxDrawdown < 0 ? maxDrawdown : null,
+      byStrategyJson: Object.keys(byStrategy).length > 0 ? JSON.stringify(byStrategy) : null,
+      byMarketJson: Object.keys(byMarket).length > 0 ? JSON.stringify(byMarket) : null,
+      bySymbolJson: Object.keys(bySymbol).length > 0 ? JSON.stringify(bySymbol) : null,
+      createdAt: now.getTime(),
+    });
   }
 }

@@ -518,6 +518,79 @@ export async function gatherTraderData(
   };
 }
 
+/** Compute fitness decay data for L2/L3 strategies. */
+export function computeDecayData(deps: DataGatheringDeps) {
+  const { runtime } = deps;
+
+  const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
+    | StrategyRegistryLike
+    | undefined;
+  const paperEngine = runtime.services?.get?.("fin-paper-engine") as PaperEngineLike | undefined;
+
+  const strategies = strategyRegistry?.list() ?? [];
+  const l2l3 = strategies.filter((s) => s.level === "L2_PAPER" || s.level === "L3_LIVE");
+
+  return l2l3.map((s) => {
+    const snapshots = paperEngine?.getSnapshots?.("default") ?? [];
+
+    // Compute rolling Sharpe from equity snapshots
+    const dailyReturns = snapshots
+      .filter((snap) => snap.dailyPnlPct != null)
+      .map((snap) => snap.dailyPnlPct / 100);
+
+    const rollingSharpe7d = computeRollingSharpe(dailyReturns, 7);
+    const rollingSharpe30d = computeRollingSharpe(dailyReturns, 30);
+
+    // Compute current drawdown from equity snapshots
+    let peakEquity = 0;
+    let currentDrawdown = 0;
+    for (const snap of snapshots) {
+      if (snap.equity > peakEquity) peakEquity = snap.equity;
+    }
+    if (peakEquity > 0 && snapshots.length > 0) {
+      const lastEquity = snapshots[snapshots.length - 1]!.equity;
+      currentDrawdown = ((lastEquity - peakEquity) / peakEquity) * 100;
+    }
+
+    // Sharpe momentum = 7d - 30d (positive = improving)
+    const sharpeMomentum = rollingSharpe7d - rollingSharpe30d;
+
+    // Classify decay level
+    let decayLevel: "healthy" | "warning" | "degrading" | "critical";
+    if (rollingSharpe7d < -0.5 || currentDrawdown < -20) {
+      decayLevel = "critical";
+    } else if (rollingSharpe7d < 0 || currentDrawdown < -10) {
+      decayLevel = "degrading";
+    } else if (rollingSharpe7d < 0.5) {
+      decayLevel = "warning";
+    } else {
+      decayLevel = "healthy";
+    }
+
+    return {
+      strategyId: s.id,
+      strategyName: s.name,
+      decayLevel,
+      rollingSharpe7d,
+      rollingSharpe30d,
+      currentDrawdown,
+      sharpeMomentum,
+    };
+  });
+}
+
+function computeRollingSharpe(returns: number[], window: number): number {
+  if (returns.length === 0) return 0;
+  const slice = returns.slice(-window);
+  if (slice.length < 2) return 0;
+  const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
+  const variance = slice.reduce((a, r) => a + (r - mean) ** 2, 0) / (slice.length - 1);
+  const std = Math.sqrt(variance);
+  if (std === 0) return 0;
+  // Annualize: daily Sharpe * sqrt(252)
+  return (mean / std) * Math.sqrt(252);
+}
+
 /** Gather Strategy Tab data (merged Arena + Lab view). */
 export function gatherStrategyData(deps: DataGatheringDeps) {
   const { runtime, eventStore, riskConfig } = deps;
@@ -575,6 +648,9 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     l2l3: { minDays: 30, minSharpe: 1.5, maxDrawdown: -0.1, minWinRate: 0.5, minTrades: 50 },
   };
 
+  // Fitness decay data for L2/L3 strategies
+  const decayData = computeDecayData(deps);
+
   return {
     pipeline,
     strategies: strategyData,
@@ -586,6 +662,7 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
       totalCapital: fundState.totalCapital ?? 0,
     },
     gates,
+    decayData,
     events: {
       events: eventStore.listEvents(),
       pendingCount: eventStore.pendingCount(),

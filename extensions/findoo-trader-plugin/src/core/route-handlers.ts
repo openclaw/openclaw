@@ -5,6 +5,7 @@
  */
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import type {
   HttpReq,
   HttpRes,
@@ -44,6 +45,7 @@ export type RouteHandlerDeps = {
   runtime: RuntimeServices;
   templates: DashboardTemplates;
   registry?: ExchangeRegistry;
+  perfStore?: PerformanceSnapshotStore;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -616,6 +618,137 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     path: "/api/v1/finance/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherSettingData({ ...gatherDeps, healthStore }));
+    },
+  });
+
+  // ── OHLCV K-line Data ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/ohlcv",
+    handler: async (req: unknown, res: HttpRes) => {
+      try {
+        const url = (req as { url?: string }).url ?? "";
+        const qs = new URLSearchParams(url.split("?")[1] ?? "");
+        const symbol = qs.get("symbol");
+        if (!symbol) {
+          errorResponse(res, 400, "Missing required query parameter: symbol");
+          return;
+        }
+
+        const market = qs.get("market") ?? "crypto";
+        const timeframe = qs.get("timeframe") ?? "1h";
+        const limit = parseInt(qs.get("limit") ?? "300", 10);
+
+        const dataProvider = runtime.services?.get?.("fin-data-provider") as
+          | {
+              getOHLCV: (params: {
+                symbol: string;
+                market: string;
+                timeframe: string;
+                limit?: number;
+              }) => Promise<unknown[]>;
+            }
+          | undefined;
+        if (!dataProvider) {
+          errorResponse(res, 503, "Data provider service not available");
+          return;
+        }
+
+        const candles = await dataProvider.getOHLCV({ symbol, market, timeframe, limit });
+        jsonResponse(res, 200, { symbol, market, timeframe, candles });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── OrderBook Data ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/orderbook",
+    handler: async (req: unknown, res: HttpRes) => {
+      try {
+        const url = (req as { url?: string }).url ?? "";
+        const qs = new URLSearchParams(url.split("?")[1] ?? "");
+        const symbol = qs.get("symbol");
+        if (!symbol) {
+          errorResponse(res, 400, "Missing required query parameter: symbol");
+          return;
+        }
+        const exchangeId = qs.get("exchangeId") ?? undefined;
+        const limit = parseInt(qs.get("limit") ?? "20", 10);
+
+        const registry = deps.registry;
+        if (!registry) {
+          errorResponse(res, 404, "No exchanges configured");
+          return;
+        }
+
+        type OrderBookExchange = {
+          fetchOrderBook: (
+            symbol: string,
+            limit: number,
+          ) => Promise<{ bids: [number, number][]; asks: [number, number][]; timestamp?: number }>;
+        };
+        let exchange: OrderBookExchange | undefined;
+        let resolvedExchangeId = exchangeId;
+
+        if (exchangeId) {
+          try {
+            exchange = (await registry.getInstance(exchangeId)) as OrderBookExchange;
+          } catch {
+            errorResponse(res, 404, `Exchange "${exchangeId}" not found`);
+            return;
+          }
+        } else {
+          const exchanges = registry.listExchanges();
+          if (!exchanges || exchanges.length === 0) {
+            errorResponse(res, 404, "No exchanges configured");
+            return;
+          }
+          resolvedExchangeId = exchanges[0]!.id;
+          exchange = (await registry.getInstance(resolvedExchangeId)) as OrderBookExchange;
+        }
+
+        if (!exchange?.fetchOrderBook) {
+          errorResponse(res, 500, "Exchange does not support fetchOrderBook");
+          return;
+        }
+
+        const book = await exchange.fetchOrderBook(symbol, limit);
+        jsonResponse(res, 200, {
+          symbol,
+          exchangeId: resolvedExchangeId ?? "default",
+          bids: book.bids,
+          asks: book.asks,
+          timestamp: book.timestamp ?? Date.now(),
+        });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── Performance Snapshots ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/performance",
+    handler: async (req: unknown, res: HttpRes) => {
+      try {
+        const { perfStore } = deps;
+        if (!perfStore) {
+          errorResponse(res, 503, "Performance snapshot store not available");
+          return;
+        }
+
+        const url = (req as { url?: string }).url ?? "";
+        const ptMatch = url.match(/[?&]periodType=([^&]+)/);
+        const limitMatch = url.match(/[?&]limit=(\d+)/);
+        const periodType = ptMatch ? decodeURIComponent(ptMatch[1]!) : "daily";
+        const limit = limitMatch ? parseInt(limitMatch[1]!, 10) : 30;
+
+        const snapshots = perfStore.getLatest(periodType, limit);
+        jsonResponse(res, 200, { snapshots });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
     },
   });
 

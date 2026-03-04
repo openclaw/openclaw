@@ -11,6 +11,7 @@
       rel="stylesheet"
     />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
     <style>
       /*__SHARED_CSS__*/
     </style>
@@ -106,8 +107,59 @@
 
       <!-- CENTER COLUMN -->
       <main class="col-c">
+        <!-- K-line Chart -->
+        <div class="panel-card fade-up d1">
+          <div class="panel-card__head">
+            <div class="panel-card__title">K-line Chart</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="text" id="klineSymbol" value="BTC/USDT" class="order-input" style="width:100px;font-size:10px;padding:2px 6px" />
+              <select id="klineTf" class="order-input" style="width:60px;font-size:10px;padding:2px 4px">
+                <option value="1m">1m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="1h" selected>1h</option>
+                <option value="4h">4h</option>
+                <option value="1d">1d</option>
+              </select>
+              <button class="qa-btn" style="padding:2px 8px;font-size:10px;min-width:auto" id="klineLoad">Load</button>
+            </div>
+          </div>
+          <div id="klineChartContainer" style="height:260px;width:100%;background:var(--bg-card,#0d1117);border-radius:6px;overflow:hidden"></div>
+        </div>
+
+        <!-- Order Book -->
+        <div class="panel-card fade-up d2" id="orderbookPanel">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Order Book</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <select id="obLevels" class="order-input" style="width:50px;font-size:10px;padding:2px 4px">
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+              </select>
+              <span class="num" style="font-size:9px;color:var(--text-dim)" id="obMidPrice"></span>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;font-size:10px">
+            <!-- Bids (green / left) -->
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between;padding:2px 4px;color:var(--text-dim);font-weight:600;border-bottom:1px solid rgba(35,41,58,0.4);margin-bottom:2px">
+                <span>Price</span><span>Amount</span>
+              </div>
+              <div id="obBids"></div>
+            </div>
+            <!-- Asks (red / right) -->
+            <div style="flex:1">
+              <div style="display:flex;justify-content:space-between;padding:2px 4px;color:var(--text-dim);font-weight:600;border-bottom:1px solid rgba(35,41,58,0.4);margin-bottom:2px">
+                <span>Price</span><span>Amount</span>
+              </div>
+              <div id="obAsks"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Equity Curve -->
-        <div class="panel-card fade-up d2">
+        <div class="panel-card fade-up d3">
           <div class="panel-card__head">
             <div class="panel-card__title">Equity Curve</div>
             <div class="domain-indicator" id="domainIndicator">
@@ -970,10 +1022,159 @@
           $("estopModal").classList.add("open");
         });
 
+        // ── K-line Chart (TradingView Lightweight Charts) ──
+        var klineChart = null;
+        var klineSeries = null;
+
+        function initKlineChart() {
+          var container = $("klineChartContainer");
+          if (!container || typeof LightweightCharts === "undefined") return;
+          klineChart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 260,
+            layout: { background: { type: "solid", color: "#0d1117" }, textColor: "#8b949e" },
+            grid: { vertLines: { color: "rgba(35,41,58,0.3)" }, horzLines: { color: "rgba(35,41,58,0.3)" } },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            timeScale: { borderColor: "rgba(35,41,58,0.5)", timeVisible: true },
+            rightPriceScale: { borderColor: "rgba(35,41,58,0.5)" },
+          });
+          klineSeries = klineChart.addCandlestickSeries({
+            upColor: "#22c55e",
+            downColor: "#ef4444",
+            borderUpColor: "#22c55e",
+            borderDownColor: "#ef4444",
+            wickUpColor: "#22c55e",
+            wickDownColor: "#ef4444",
+          });
+
+          // Resize observer
+          var ro = new ResizeObserver(function () {
+            if (klineChart) klineChart.applyOptions({ width: container.clientWidth });
+          });
+          ro.observe(container);
+        }
+
+        function loadKlineData() {
+          var symbol = $("klineSymbol").value.trim();
+          var tf = $("klineTf").value;
+          if (!symbol) return;
+
+          fetch("/api/v1/finance/ohlcv?symbol=" + encodeURIComponent(symbol) + "&timeframe=" + tf + "&limit=300")
+            .then(function (r) {
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r.json();
+            })
+            .then(function (data) {
+              if (!klineSeries || !data.candles || !data.candles.length) return;
+              var mapped = data.candles.map(function (c) {
+                return {
+                  time: Math.floor((c.timestamp || c.time || 0) / 1000),
+                  open: c.open,
+                  high: c.high,
+                  low: c.low,
+                  close: c.close,
+                };
+              });
+              // Sort by time ascending
+              mapped.sort(function (a, b) { return a.time - b.time; });
+              klineSeries.setData(mapped);
+              klineChart.timeScale().fitContent();
+            })
+            .catch(function (e) {
+              console.warn("K-line load error:", e);
+            });
+        }
+
+        $("klineLoad").addEventListener("click", loadKlineData);
+        $("klineTf").addEventListener("change", loadKlineData);
+
+        // ── Order Book ──
+        var obInterval = null;
+
+        function loadOrderBook() {
+          var symbol = $("klineSymbol").value.trim();
+          var limit = $("obLevels").value;
+          if (!symbol) return;
+
+          fetch("/api/v1/finance/orderbook?symbol=" + encodeURIComponent(symbol) + "&limit=" + limit)
+            .then(function (r) {
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r.json();
+            })
+            .then(function (data) {
+              renderOrderBook(data.bids || [], data.asks || []);
+            })
+            .catch(function () {
+              // Silent fail — orderbook may not be available
+            });
+        }
+
+        function renderOrderBook(bids, asks) {
+          var bidsEl = $("obBids");
+          var asksEl = $("obAsks");
+
+          // Calculate max cumulative volume for depth bar scaling
+          var maxBidVol = 0;
+          var maxAskVol = 0;
+          var cumBid = 0;
+          var cumAsk = 0;
+          bids.forEach(function (b) { cumBid += b[1]; });
+          asks.forEach(function (a) { cumAsk += a[1]; });
+          maxBidVol = cumBid;
+          maxAskVol = cumAsk;
+
+          // Mid price
+          if (bids.length && asks.length) {
+            var mid = ((bids[0][0] || 0) + (asks[0][0] || 0)) / 2;
+            $("obMidPrice").textContent = "Mid: $" + fmt(mid, 2);
+          }
+
+          // Render bids (highest first)
+          var html = "";
+          var cumVol = 0;
+          bids.forEach(function (b) {
+            cumVol += b[1];
+            var depthPct = maxBidVol > 0 ? (cumVol / maxBidVol) * 100 : 0;
+            html +=
+              '<div style="display:flex;justify-content:space-between;padding:1px 4px;position:relative">' +
+              '<div style="position:absolute;right:0;top:0;bottom:0;width:' + depthPct + '%;background:rgba(34,197,94,0.1);border-radius:2px"></div>' +
+              '<span class="num" style="color:#22c55e;position:relative">' + fmt(b[0], 2) + '</span>' +
+              '<span class="num" style="position:relative">' + fmt(b[1], 4) + '</span>' +
+              '</div>';
+          });
+          bidsEl.innerHTML = html;
+
+          // Render asks (lowest first)
+          html = "";
+          cumVol = 0;
+          asks.forEach(function (a) {
+            cumVol += a[1];
+            var depthPct = maxAskVol > 0 ? (cumVol / maxAskVol) * 100 : 0;
+            html +=
+              '<div style="display:flex;justify-content:space-between;padding:1px 4px;position:relative">' +
+              '<div style="position:absolute;right:0;top:0;bottom:0;width:' + depthPct + '%;background:rgba(239,68,68,0.1);border-radius:2px"></div>' +
+              '<span class="num" style="color:#ef4444;position:relative">' + fmt(a[0], 2) + '</span>' +
+              '<span class="num" style="position:relative">' + fmt(a[1], 4) + '</span>' +
+              '</div>';
+          });
+          asksEl.innerHTML = html;
+        }
+
+        $("obLevels").addEventListener("change", loadOrderBook);
+
+        function startOrderBookRefresh() {
+          if (obInterval) clearInterval(obInterval);
+          obInterval = setInterval(loadOrderBook, 5000);
+        }
+
         // ── Boot ──
         renderAll();
         populateOrderSymbols();
         initEquityChart();
+        initKlineChart();
+        loadKlineData();
+        loadOrderBook();
+        startOrderBookRefresh();
         initSSE();
         $("botMsg").innerHTML = "Trader online. <em>" + new Date().toLocaleString() + "</em>";
       })();

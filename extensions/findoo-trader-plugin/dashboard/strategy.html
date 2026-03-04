@@ -164,6 +164,14 @@
           </div>
         </div>
 
+        <!-- Fitness Decay Monitor -->
+        <div class="panel-card fade-up d3" id="decaySection">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Fitness Decay Monitor</div>
+          </div>
+          <div id="decayList" style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 0"></div>
+        </div>
+
         <!-- Approval Queue -->
         <div class="panel-card fade-up d3" id="approvalSection">
           <div class="panel-card__head">
@@ -367,6 +375,7 @@
           allocations: pageData.allocations || {},
           gates: pageData.gates || {},
           events: pageData.events || {},
+          decayData: pageData.decayData || [],
           feedFilter: "all",
         };
 
@@ -612,6 +621,48 @@
           body.innerHTML = html;
         }
 
+        // ── Render: Fitness Decay Monitor ──
+        var decayColors = {
+          healthy: "var(--gain)",
+          warning: "var(--warn)",
+          degrading: "#ff8c00",
+          critical: "var(--loss)",
+        };
+        function renderDecay(decayData) {
+          var el = $("decayList");
+          if (!decayData || !decayData.length) {
+            el.innerHTML =
+              '<div style="font-size:10px;color:var(--text-dim);padding:8px 0;width:100%">No L2/L3 strategies to monitor</div>';
+            return;
+          }
+          var html = "";
+          decayData.forEach(function (d) {
+            var color = decayColors[d.decayLevel] || "var(--text-dim)";
+            html +=
+              '<div style="flex:1;min-width:180px;max-width:280px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+              '<span style="color:var(--text-hi);font-weight:600;font-size:11px">' + esc(d.strategyName || d.strategyId) + "</span>" +
+              '<span style="background:' + color + ";color:#000;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase\">" +
+              esc(d.decayLevel) + "</span>" +
+              "</div>" +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">' +
+              '<div><span class="dim">Sharpe 7d</span> <span class="num" style="color:' +
+              (d.rollingSharpe7d >= 0.5 ? "var(--gain)" : d.rollingSharpe7d >= 0 ? "var(--warn)" : "var(--loss)") +
+              '">' + (d.rollingSharpe7d != null ? d.rollingSharpe7d.toFixed(2) : "--") + "</span></div>" +
+              '<div><span class="dim">Sharpe 30d</span> <span class="num">' +
+              (d.rollingSharpe30d != null ? d.rollingSharpe30d.toFixed(2) : "--") + "</span></div>" +
+              '<div><span class="dim">Drawdown</span> <span class="loss num">' +
+              (d.currentDrawdown != null ? d.currentDrawdown.toFixed(1) + "%" : "--") + "</span></div>" +
+              '<div><span class="dim">Momentum</span> <span class="num" style="color:' +
+              (d.sharpeMomentum >= 0 ? "var(--gain)" : "var(--loss)") + '">' +
+              (d.sharpeMomentum != null ? (d.sharpeMomentum >= 0 ? "+" : "") + d.sharpeMomentum.toFixed(2) : "--") +
+              "</span></div>" +
+              "</div>" +
+              "</div>";
+          });
+          el.innerHTML = html;
+        }
+
         // ── Render: Evolution Feed ──
         function eventCategory(e) {
           var t = (e.type || e.action || "").toLowerCase();
@@ -665,6 +716,7 @@
           renderPipeline(state.pipeline);
           renderEvoStats(state.strategies);
           renderLeaderboard(state.strategies);
+          renderDecay(state.decayData);
           renderApprovals(state.events);
           renderBacktests(state.backtests);
           renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
@@ -746,6 +798,7 @@
           if (data.pipeline) state.pipeline = data.pipeline;
           if (data.strategies) state.strategies = data.strategies;
           if (data.backtests) state.backtests = data.backtests;
+          if (data.decayData) state.decayData = data.decayData;
           if (data.events) state.events = data.events;
           renderAll();
         }

@@ -12,7 +12,7 @@
  * SSE Streams: 4 (config, trading, events, fund)
  * CLI Commands: exchange list/add/remove, fund pipeline
  * Bot Commands: /fund, /risk, /lb, /alloc, /promote
- * Hook: before_tool_call risk gate
+ * Hooks: before_tool_call risk gate, before_prompt_build financial context
  * Notification: Telegram event routing + inline approval buttons
  */
 
@@ -21,11 +21,14 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { resolveConfig } from "./src/config.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
+import { AlertEngine } from "./src/core/alert-engine.js";
+import { JsonConfigStore } from "./src/core/config-store.js";
 import { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 import type { DataGatheringDeps } from "./src/core/data-gathering.js";
 import { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/core/exchange-registry.js";
 import { NotificationRouter } from "./src/core/notification-router.js";
+import { buildFinancialContext } from "./src/core/prompt-context.js";
 import { RiskController } from "./src/core/risk-controller.js";
 import { registerHttpRoutes } from "./src/core/route-handlers.js";
 import { registerSseRoutes } from "./src/core/sse-handlers.js";
@@ -53,6 +56,8 @@ import type { ExchangeConfig } from "./src/types.js";
 // Re-exports for external consumers (fin-evolution-engine, fin-monitoring, etc.)
 export { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
 export { AgentEventStore } from "./src/core/agent-event-store.js";
+export { AlertEngine } from "./src/core/alert-engine.js";
+export { JsonConfigStore } from "./src/core/config-store.js";
 export { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 export { ExchangeRegistry } from "./src/core/exchange-registry.js";
 export { LiveExecutor } from "./src/execution/live-executor.js";
@@ -63,6 +68,8 @@ export { PaperStore } from "./src/paper/paper-store.js";
 export { BacktestEngine } from "./src/strategy/backtest-engine.js";
 export { StrategyRegistry } from "./src/strategy/strategy-registry.js";
 export { NotificationRouter } from "./src/core/notification-router.js";
+export { buildFinancialContext } from "./src/core/prompt-context.js";
+export type { PromptContextDeps } from "./src/core/prompt-context.js";
 export { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 export { PaperScheduler } from "./src/paper/paper-scheduler.js";
 export { BacktestProgressStore } from "./src/strategy/backtest-progress-store.js";
@@ -116,6 +123,46 @@ const findooTraderPlugin = {
       id: "fin-event-store",
       start: () => {},
       instance: eventStore,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // ── Alert Engine ──
+
+    const alertEngine = new AlertEngine(api.resolvePath("state/findoo-alerts.sqlite"));
+    api.registerService({
+      id: "fin-alert-engine",
+      start: () => {},
+      instance: alertEngine,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // ── Agent Config Store ──
+
+    const agentConfigStore = new JsonConfigStore(
+      api.resolvePath("state/findoo-agent-config.json"),
+      {
+        heartbeatIntervalMs: 60000,
+        discoveryEnabled: true,
+        evolutionEnabled: false,
+        mutationRate: 0.1,
+        maxConcurrentStrategies: 5,
+      },
+    );
+    api.registerService({
+      id: "fin-agent-config",
+      start: () => {},
+      instance: agentConfigStore,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // ── Gate Config Store ──
+
+    const gateConfigStore = new JsonConfigStore(api.resolvePath("state/findoo-gate-config.json"), {
+      l0l1: { minDays: 7, minSharpe: 0.5, maxDrawdown: -0.2, minWinRate: 0.4, minTrades: 10 },
+      l1l2: { minDays: 14, minSharpe: 1.0, maxDrawdown: -0.15, minWinRate: 0.45, minTrades: 30 },
+      l2l3: { minDays: 30, minSharpe: 1.5, maxDrawdown: -0.1, minWinRate: 0.5, minTrades: 50 },
+    });
+    api.registerService({
+      id: "fin-gate-config",
+      start: () => {},
+      instance: gateConfigStore,
     } as Parameters<typeof api.registerService>[0]);
 
     // ── Exchange Health Store ──
@@ -325,24 +372,17 @@ const findooTraderPlugin = {
       strategyRegistry,
       tickIntervalMs: 60_000,
       snapshotIntervalMs: 3_600_000,
-    });
-
-    // Delayed start: inject dataProvider from runtime services after all plugins register
-    setTimeout(() => {
-      try {
-        const dp = (api.runtime as unknown as Record<string, unknown>).services as
-          | Map<string, { instance?: unknown }>
-          | undefined;
-        const dataSvc = dp?.get?.("fin-data-provider");
-        if (dataSvc?.instance) {
-          paperScheduler.deps.dataProvider =
-            dataSvc.instance as typeof paperScheduler.deps.dataProvider;
+      serviceResolver: () => {
+        try {
+          return runtime.services?.get?.("fin-data-provider") as
+            | typeof paperScheduler.deps.dataProvider
+            | undefined;
+        } catch {
+          return undefined;
         }
-      } catch {
-        // dataProvider unavailable — scheduler will no-op
-      }
-      paperScheduler.start();
-    }, 5_000);
+      },
+    });
+    paperScheduler.start();
 
     // ── Daily Brief Scheduler ──
 
@@ -469,6 +509,19 @@ const findooTraderPlugin = {
       },
       { name: "fin-risk-gate" },
     );
+
+    // ── Prompt context hook: inject financial state into every agent prompt ──
+
+    api.on("before_prompt_build", async () => {
+      const context = buildFinancialContext({
+        paperEngine,
+        strategyRegistry,
+        riskController,
+        exchangeRegistry: registry,
+      });
+      if (!context) return;
+      return { prependContext: context };
+    });
   },
 };
 
