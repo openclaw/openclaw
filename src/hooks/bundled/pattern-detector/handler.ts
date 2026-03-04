@@ -167,6 +167,10 @@ export function runPatternMatching(
     body = body.replace(/(?:Sender|Conversation info) \(untrusted[\s\S]*?(?=\n\n\S|$)/g, "");
     // Strip previous pattern detector output to avoid feedback loops
     body = body.replace(/Numero detectado:\s*\+?\d+/g, "");
+    // Strip WhatsApp message IDs that look like phone numbers (hex+decimal mix e.g. 3EB01411705151666EF660)
+    body = body.replace(/\b[0-9A-F]{20,}\b/gi, "");
+
+    log.debug(`[strip] body after all strips (${body.length} chars): ${body.slice(0, 300).replace(/\n/g, "\\n")}`);
   }
 
   const alerts: string[] = [];
@@ -372,7 +376,12 @@ export async function patternDetectorHandler(
   // 2. Inbound pattern matching (no cooldown — user messages are organic)
   const prompt = event.prompt;
   if (prompt) {
-    allAlerts.push(...runPatternMatching(prompt, patterns, "inbound"));
+    const inboundAlerts = runPatternMatching(prompt, patterns, "inbound");
+    if (inboundAlerts.length > 0) {
+      // Debug: log what the prompt looks like after stripping (first 500 chars)
+      log.debug(`[inbound] ${inboundAlerts.length} alerts from prompt (${prompt.length} chars). First 200 of prompt: ${prompt.slice(0, 200).replace(/\n/g, "\\n")}`);
+    }
+    allAlerts.push(...inboundAlerts);
   }
 
   // 3. Drain pending outbound alerts with cooldown dedup
