@@ -43,9 +43,21 @@ export function buildFtsQuery(raw: string): string | null {
   return quoted.join(" AND ");
 }
 
+/**
+ * Normalizes BM25 rank to a score in (0, 1]. Higher score = more relevant.
+ * - FTS5 bm25() returns negative values: more negative = more relevant.
+ *   We use relevance = -rank and score = relevance/(1+relevance).
+ * - Non-negative ranks (legacy): higher rank = less relevant, score = 1/(1+rank).
+ */
 export function bm25RankToScore(rank: number): number {
-  const normalized = Number.isFinite(rank) ? Math.max(0, rank) : 999;
-  return 1 / (1 + normalized);
+  if (!Number.isFinite(rank)) {
+    return 1 / (1 + 999);
+  }
+  if (rank < 0) {
+    const relevance = -rank;
+    return relevance / (1 + relevance);
+  }
+  return 1 / (1 + rank);
 }
 
 export async function mergeHybridResults(params: {

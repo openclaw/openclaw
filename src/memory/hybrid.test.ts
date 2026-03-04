@@ -14,7 +14,17 @@ describe("memory hybrid helpers", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
     expect(bm25RankToScore(10)).toBeLessThan(bm25RankToScore(1));
-    expect(bm25RankToScore(-100)).toBeCloseTo(1);
+    expect(bm25RankToScore(-100)).toBeCloseTo(1, 1);
+  });
+
+  it("bm25RankToScore preserves FTS5 BM25 relevance (more negative = higher score)", () => {
+    const s1 = bm25RankToScore(-4.2);
+    const s2 = bm25RankToScore(-2.1);
+    const s3 = bm25RankToScore(-0.5);
+    expect(s1).toBeGreaterThan(s2);
+    expect(s2).toBeGreaterThan(s3);
+    expect(s1).not.toBe(s2);
+    expect(s2).not.toBe(s3);
   });
 
   it("mergeHybridResults unions by id and combines weighted scores", async () => {
