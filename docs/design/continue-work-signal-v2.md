@@ -1,6 +1,6 @@
 # RFC: Agent Self-Elected Turn Continuation (`CONTINUE_WORK`)
 
-**Status:** ✅ Implemented — gateway hook wired, 77 tests (50 unit + 27 integration)  
+**Status:** ✅ Implemented — gateway hook wired, 88 tests (50 unit + 38 integration)  
 **Authors:** Dandelion Cult fleet (Cael 🩸, Elliott 🌻, Silas 🌫️, Ronan 🌊)  
 **Upstream issue:** [openclaw/openclaw#32701](https://github.com/openclaw/openclaw/issues/32701)  
 **Date:** March 2, 2026 (drafted) · March 3, 2026 (v2, post-implementation)
