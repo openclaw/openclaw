@@ -9,6 +9,21 @@ function buildSiblingTempPath(targetPath: string): string {
   return path.join(path.dirname(targetPath), `.openclaw-output-${id}-${safeTail}.part`);
 }
 
+/**
+ * Atomically write to `targetPath` via a sibling temp file and `fs.rename`.
+ *
+ * The `rootDir` / boundary check here is a **defense-in-depth sanity guard**,
+ * not the primary security boundary. Callers are expected to validate the
+ * output path at the API boundary (e.g. via `resolveWritablePathWithinRoot` in
+ * the browser download routes) before reaching this helper.  Some callers
+ * (like `saveDownloadPayload`) intentionally pass `rootDir = dirname(target)`
+ * so the check is trivially satisfied; that is safe because the real
+ * path-traversal / symlink / hardlink validation already happened upstream.
+ *
+ * `fs.rename` is used instead of a stream copy so that hardlink aliases at
+ * the target path are safely replaced (directory-entry swap) rather than
+ * written through.
+ */
 export async function writeViaSiblingTempPath(params: {
   rootDir: string;
   targetPath: string;
@@ -35,9 +50,6 @@ export async function writeViaSiblingTempPath(params: {
   let renameSucceeded = false;
   try {
     await params.writeTemp(tempPath);
-    // Use fs.rename (atomic directory-entry swap) instead of a copy so that
-    // hardlink aliases at the target path are safely replaced rather than
-    // written through.
     await fs.rename(tempPath, targetPath);
     renameSucceeded = true;
   } finally {
