@@ -203,21 +203,23 @@ function isUnknownDeviceIdError(error: unknown): boolean {
 
 function resolvePairedDeviceIdByAlias(
   paired: PairedDevice[] | undefined,
-  aliasOrName: string,
+  alias: string,
 ): { deviceId?: string; error?: string } {
-  const alias = aliasOrName.trim();
-  const devices = Array.isArray(paired) ? paired : [];
-  const matches = devices.filter((device) => (device.displayName ?? "").trim() === alias);
-  if (matches.length === 1) {
-    return { deviceId: matches[0]?.deviceId?.trim() };
+  const normalizedAlias = alias.trim();
+  const pairedDevices = Array.isArray(paired) ? paired : [];
+  const matchedDevices = pairedDevices.filter(
+    (device) => (device.displayName ?? "").trim() === normalizedAlias,
+  );
+  if (matchedDevices.length === 1) {
+    return { deviceId: matchedDevices[0]?.deviceId?.trim() };
   }
-  if (matches.length > 1) {
+  if (matchedDevices.length > 1) {
     return {
-      error: `Multiple paired devices match alias \"${alias}\". Use an exact deviceId from \`openclaw devices list\`.`,
+      error: `Multiple paired devices match alias "${normalizedAlias}". Use an exact deviceId from \`openclaw devices list\`.`,
     };
   }
   return {
-    error: `No paired device matches alias \"${alias}\". Use an exact deviceId from \`openclaw devices list\`.`,
+    error: `No paired device matches alias "${normalizedAlias}". Use an exact deviceId from \`openclaw devices list\`.`,
   };
 }
 
