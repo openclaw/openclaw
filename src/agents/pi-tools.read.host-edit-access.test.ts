@@ -67,4 +67,23 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       ).resolves.toBeUndefined();
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "does not throw on access for non-writable files when workspaceOnly is false",
+    async () => {
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-false-test-"));
+      const workspaceDir = path.join(tmpDir, "workspace");
+      const readonlyFile = path.join(workspaceDir, "readonly.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(readonlyFile, "secret", "utf8");
+      await fs.chmod(readonlyFile, 0o444);
+
+      createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: false });
+      expect(mocks.operations).toBeDefined();
+
+      // access no longer performs strict R/W checks here, so this should resolve
+      // and the downstream write step can emit the real EACCES/permission error.
+      await expect(mocks.operations!.access(readonlyFile)).resolves.toBeUndefined();
+    },
+  );
 });

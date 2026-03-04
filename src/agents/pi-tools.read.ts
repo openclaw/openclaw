@@ -609,7 +609,15 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
-        await fs.access(resolved);
+        // Avoid using strict R/W access checks here; the upstream edit tool
+        // turns *any* access error into a generic "File not found" error.
+        // Returning on access failure lets read/write report the real underlying
+        // error (ENOENT/EACCES/etc.) to the user.
+        try {
+          await fs.access(resolved);
+        } catch {
+          return;
+        }
       },
     } as const;
   }

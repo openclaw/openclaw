@@ -168,6 +168,25 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(content).toBe("after");
   });
 
+  it("should surface permission errors instead of generic file-not-found for non-writable outside files", async () => {
+    const outsideFile = path.join(tmpDir, "readonly-outside-edit.txt");
+    await fs.writeFile(outsideFile, "before");
+    await fs.chmod(outsideFile, 0o444);
+    const tool = toolsFor(false).find((candidate) => candidate.name === "edit");
+    expect(tool).toBeDefined();
+
+    const promise = tool!.execute("test-call-3c", {
+      path: outsideFile,
+      oldText: "before",
+      newText: "after",
+    });
+    await expect(promise).rejects.toBeInstanceOf(Error);
+
+    const error = await promise.catch((value) => value);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain("File not found");
+  });
+
   it("should block write outside workspace when workspaceOnly=true", async () => {
     const tools = toolsFor(true);
     const writeTool = tools.find((t) => t.name === "write");
