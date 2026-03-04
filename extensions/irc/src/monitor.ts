@@ -1,4 +1,4 @@
-import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk";
+import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/compat";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
