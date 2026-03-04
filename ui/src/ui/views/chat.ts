@@ -85,6 +85,15 @@ export type ChatProps = {
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
+const NEW_SESSION_CONFIRM_MESSAGE = "Start new session? Current context will be lost.";
+
+function handleNewSessionClick(props: ChatProps): void {
+  const confirmed = window.confirm(NEW_SESSION_CONFIRM_MESSAGE);
+  if (confirmed) {
+    props.onNewSession();
+  }
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
@@ -461,7 +470,7 @@ export function renderChat(props: ChatProps) {
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
+              @click=${canAbort ? props.onAbort : () => handleNewSessionClick(props)}
             >
               ${canAbort ? "Stop" : "New session"}
             </button>
