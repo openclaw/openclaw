@@ -30,7 +30,7 @@ export type FeishuMessageInfo = {
   createTime?: number;
 };
 
-function parseInteractiveCardContent(parsed: unknown): string {
+export function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
