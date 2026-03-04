@@ -34,7 +34,20 @@ type BedrockDiscoveryCacheEntry = {
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 let hasLoggedBedrockError = false;
 const INFERENCE_PROFILE_PAGE_SIZE = 100;
-const INFERENCE_PROFILE_REGION_PREFIXES = new Set(["us", "eu", "ap", "sa", "ca", "me", "af"]);
+const INFERENCE_PROFILE_LOCATION_PREFIXES = new Set([
+  "us",
+  "eu",
+  "ap",
+  "sa",
+  "ca",
+  "me",
+  "af",
+  "apac",
+  "latam",
+  "emea",
+  "global",
+]);
+const INFERENCE_PROFILE_REGION_PREFIX_PATTERN = /^[a-z]{2}(?:-[a-z0-9-]+)?$/;
 
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) {
@@ -117,6 +130,13 @@ function matchesFoundationProviderFilter(summary: BedrockModelSummary, filter: s
   return filter.includes(normalized);
 }
 
+function isInferenceProfileLocationPrefix(part: string): boolean {
+  if (INFERENCE_PROFILE_LOCATION_PREFIXES.has(part)) {
+    return true;
+  }
+  return INFERENCE_PROFILE_REGION_PREFIX_PATTERN.test(part);
+}
+
 function extractInferenceProviderId(summary: InferenceProfileSummary): string | undefined {
   const rawId = summary.inferenceProfileId?.trim().toLowerCase();
   if (!rawId) {
@@ -127,7 +147,7 @@ function extractInferenceProviderId(summary: InferenceProfileSummary): string | 
   if (parts.length === 0) {
     return undefined;
   }
-  if (parts.length > 1 && INFERENCE_PROFILE_REGION_PREFIXES.has(parts[0])) {
+  if (parts.length > 1 && isInferenceProfileLocationPrefix(parts[0])) {
     return parts[1];
   }
   return parts[0];
@@ -302,6 +322,7 @@ export async function discoverBedrockModels(params: {
         discovered.push(toModelDefinitionFromFoundationModel(summary, defaults));
       }
     } catch (error) {
+      log.warn(`Failed to list foundation models during Bedrock discovery: ${String(error)}`);
       partialFailures.push(error);
     }
 
@@ -314,6 +335,7 @@ export async function discoverBedrockModels(params: {
         discovered.push(toModelDefinitionFromInferenceProfile(summary, defaults));
       }
     } catch (error) {
+      log.warn(`Failed to list inference profiles during Bedrock discovery: ${String(error)}`);
       partialFailures.push(error);
     }
 

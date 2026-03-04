@@ -5,6 +5,16 @@ import {
 } from "@aws-sdk/client-bedrock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    warn: loggerMocks.warn,
+  }),
+}));
+
 const sendMock = vi.fn();
 const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
 
@@ -74,6 +84,7 @@ function setupDiscoveryResponses(params?: {
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    loggerMocks.warn.mockReset();
   });
 
   it("filters to active streaming text foundation models and maps modalities", async () => {
@@ -224,6 +235,44 @@ describe("bedrock discovery", () => {
     ]);
   });
 
+  it("matches provider filters for inference profiles with extended location prefixes", async () => {
+    const { discoverBedrockModels } = await loadDiscovery();
+    setupDiscoveryResponses({
+      foundation: { modelSummaries: [] },
+      inferencePages: [
+        {
+          inferenceProfileSummaries: [
+            {
+              inferenceProfileId: "apac.amazon.nova-lite-v1:0",
+              inferenceProfileName: "APAC Nova Lite",
+              status: "ACTIVE",
+            },
+            {
+              inferenceProfileId: "us-gov.amazon.nova-pro-v1:0",
+              inferenceProfileName: "US Gov Nova Pro",
+              status: "ACTIVE",
+            },
+            {
+              inferenceProfileId: "us-gov.anthropic.claude-3-5-sonnet-20241022-v2:0",
+              inferenceProfileName: "US Gov Claude",
+              status: "ACTIVE",
+            },
+          ],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: { providerFilter: ["amazon"] },
+      clientFactory,
+    });
+    expect(models.map((entry) => entry.id)).toEqual([
+      "apac.amazon.nova-lite-v1:0",
+      "us-gov.amazon.nova-pro-v1:0",
+    ]);
+  });
+
   it("uses configured defaults for context and max tokens", async () => {
     const { discoverBedrockModels } = await loadDiscovery();
     setupDiscoveryResponses({
@@ -254,6 +303,30 @@ describe("bedrock discovery", () => {
         id: "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
       }),
     ]);
+  });
+
+  it("logs partial failures when at least one discovery source succeeds", async () => {
+    const { discoverBedrockModels } = await loadDiscovery();
+    const foundationError = new Error("foundation-model discovery failed");
+    setupDiscoveryResponses({
+      foundationError,
+      inferencePages: [{ inferenceProfileSummaries: [baseInferenceProfileSummary] }],
+    });
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      clientFactory,
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+      }),
+    ]);
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      `Failed to list foundation models during Bedrock discovery: ${String(foundationError)}`,
+    );
   });
 
   it("caches results when refreshInterval is enabled", async () => {
