@@ -1,4 +1,4 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/compat";
+import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/matrix";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
