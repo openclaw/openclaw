@@ -297,6 +297,10 @@ export async function saveMediaSource(
   }
 }
 
+// Minimum file size to prevent saving empty or error content (e.g., Discord returning "null" string)
+// This helps catch cases where the remote server returns an error message instead of actual file content
+const MIN_VALID_FILE_SIZE = 4;
+
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
@@ -307,6 +311,24 @@ export async function saveMediaBuffer(
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
   }
+
+  // Validate minimum file size to catch error responses (e.g., "null" string from Discord)
+  if (buffer.byteLength < MIN_VALID_FILE_SIZE) {
+    throw new Error(
+      `Media file too small (${buffer.byteLength} bytes). Expected at least ${MIN_VALID_FILE_SIZE} bytes. ` +
+        "This may indicate a failed download or error response from the server.",
+    );
+  }
+
+  // Check for common error response patterns (e.g., ASCII "null" string)
+  const bufferStr = buffer.toString("ascii");
+  if (bufferStr === "null") {
+    throw new Error(
+      "Media content appears to be an error response ('null'). " +
+        "This may indicate a failed download or stale attachment URL from Discord.",
+    );
+  }
+
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
