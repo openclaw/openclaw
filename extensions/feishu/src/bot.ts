@@ -1227,9 +1227,7 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
-
-    // Fetch quoted/replied message content if parentId exists
+    // Fetch quoted/replied message content (and media) if parentId exists
     let quotedContent: string | undefined;
     if (ctx.parentId) {
       try {
@@ -1243,11 +1241,40 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
           );
+
+          // Download media from quoted message if it's a media type (#33798)
+          const quotedMediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
+          if (quotedMediaTypes.includes(quotedMsg.contentType)) {
+            try {
+              const quotedMediaList = await resolveFeishuMediaList({
+                cfg,
+                messageId: ctx.parentId,
+                messageType: quotedMsg.contentType,
+                content: quotedMsg.rawContent,
+                maxBytes: mediaMaxBytes,
+                log,
+                accountId: account.accountId,
+              });
+              if (quotedMediaList.length > 0) {
+                mediaList.push(...quotedMediaList);
+                log(
+                  `feishu[${account.accountId}]: downloaded ${quotedMediaList.length} media file(s) from quoted message`,
+                );
+              }
+            } catch (mediaErr) {
+              log(
+                `feishu[${account.accountId}]: failed to download media from quoted message: ${String(mediaErr)}`,
+              );
+            }
+          }
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    // Build media payload after quoted media has been resolved
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({
