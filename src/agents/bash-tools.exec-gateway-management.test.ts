@@ -530,6 +530,16 @@ describe("detectGatewayManagementExecCommand", () => {
     expect(detected).toBeNull();
   });
 
+  it("does not detect mixed-case cli command tokens", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw Gateway ReStart --JSON",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("does not detect gateway restart commands with unsupported flags", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw gateway restart --bogus",
@@ -936,6 +946,17 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect systemctl commands with unknown flags", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --bogus restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect systemctl restart commands with unit-file-only flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --runtime restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",

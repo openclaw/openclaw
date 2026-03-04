@@ -102,43 +102,16 @@ const GATEWAY_SERVICE_BOOLEAN_FLAGS = new Set(["--json"]);
 const GATEWAY_RESTART_EXTRA_FLAGS = new Set(["--hard"]);
 const SYSTEMCTL_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const SYSTEMCTL_BOOLEAN_OPTIONS = new Set([
-  "--all",
-  "--global",
-  "--legend",
   "--no-block",
   "--no-ask-password",
-  "--no-legend",
   "--no-pager",
-  "--no-reload",
-  "--no-wall",
   "--quiet",
-  "--runtime",
   "--system",
   "--user",
   "--wait",
   "-q",
 ]);
-const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
-  "-H",
-  "--host",
-  "-M",
-  "--machine",
-  "-n",
-  "--lines",
-  "-o",
-  "--output",
-  "--output-fields",
-  "-p",
-  "--property",
-  "-t",
-  "--type",
-  "--root",
-  "--state",
-  "--kill-whom",
-  "--signal",
-  "--job-mode",
-  "--when",
-]);
+const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set(["-H", "--host", "-M", "--machine", "--job-mode"]);
 const SHELL_CONTROL_TOKENS = new Set(["&&", "||", "&", ";", "|", ">", ">>", "<", "<<"]);
 const WINDOWS_FALLBACK_CONTROL_CHARS = new Set(["&", "|", ";", "<", ">"]);
 const SHELL_CONTROL_CHARS = new Set(["&", "|", ";", "<", ">", "$", "`", "(", ")"]);
@@ -812,16 +785,14 @@ function parseGatewayActionFromCliArgv(
       return null;
     }
 
-    const lower = token.toLowerCase();
-    if (CLI_HELP_OR_VERSION_FLAGS.has(lower)) {
+    if (CLI_HELP_OR_VERSION_FLAGS.has(token)) {
       return null;
     }
 
     if (token.startsWith("-")) {
-      const tokenLower = token.toLowerCase();
-      if (tokenLower.startsWith("--profile=")) {
+      if (token.startsWith("--profile=")) {
         requestedProfile = normalizeGatewayProfile(token.slice("--profile=".length));
-      } else if (tokenLower === "--profile") {
+      } else if (token === "--profile") {
         const next = cliArgv[idx + 1];
         if (next === undefined) {
           return null;
@@ -840,14 +811,14 @@ function parseGatewayActionFromCliArgv(
     break;
   }
 
-  if (gatewayIdx < 0 || normalizeLower(cliArgv[gatewayIdx]) !== "gateway") {
+  if (gatewayIdx < 0 || (cliArgv[gatewayIdx]?.trim() ?? "") !== "gateway") {
     return null;
   }
   if (gatewayIdx + 1 >= cliArgv.length) {
     return null;
   }
 
-  const actionToken = normalizeLower(cliArgv[gatewayIdx + 1]);
+  const actionToken = cliArgv[gatewayIdx + 1]?.trim() ?? "";
   let action: GatewayManagementAction | null = null;
   let complex = false;
   if (actionToken === "restart" || actionToken === "start" || actionToken === "stop") {
@@ -870,7 +841,7 @@ function parseGatewayActionFromCliArgv(
 
   const trailing = new Set<string>();
   for (const rawToken of cliArgv.slice(gatewayIdx + 2)) {
-    const token = normalizeLower(rawToken);
+    const token = rawToken.trim();
     if (!token) {
       continue;
     }
