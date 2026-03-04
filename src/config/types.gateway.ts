@@ -197,6 +197,20 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
 };
 
+export type GatewayHealthMonitorTimingConfig = {
+  /** Grace period before monitor starts checking channel freshness (ms). */
+  monitorStartupGraceMs?: number;
+  /** Per-channel grace after channel start before stale checks apply (ms). */
+  channelStartupGraceMs?: number;
+  /** Max age of latest channel event before stale-socket restart (ms). */
+  staleEventThresholdMs?: number;
+};
+
+export type GatewayHealthMonitorConfig = {
+  /** Health monitor timing overrides for stale-socket detection. */
+  timing?: GatewayHealthMonitorTimingConfig;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -364,4 +378,6 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /** Channel health monitor policy overrides. */
+  healthMonitor?: GatewayHealthMonitorConfig;
 };

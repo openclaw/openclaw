@@ -77,6 +77,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
+  "gateway.healthMonitor": "Gateway Health Monitor",
+  "gateway.healthMonitor.timing": "Gateway Health Monitor Timing",
+  "gateway.healthMonitor.timing.monitorStartupGraceMs": "Gateway Health Monitor Startup Grace (ms)",
+  "gateway.healthMonitor.timing.channelStartupGraceMs":
+    "Gateway Health Monitor Channel Startup Grace (ms)",
+  "gateway.healthMonitor.timing.staleEventThresholdMs":
+    "Gateway Health Monitor Stale Event Threshold (ms)",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
