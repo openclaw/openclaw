@@ -59,18 +59,6 @@ async function expectCompletedWithoutBootstrap(dir: string) {
   expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
 }
 
-function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
-  const names = files.map((file) => file.name);
-  expect(names).toContain("AGENTS.md");
-  expect(names).toContain("TOOLS.md");
-  expect(names).toContain("SOUL.md");
-  expect(names).toContain("IDENTITY.md");
-  expect(names).toContain("USER.md");
-  expect(names).not.toContain("HEARTBEAT.md");
-  expect(names).not.toContain("BOOTSTRAP.md");
-  expect(names).not.toContain("MEMORY.md");
-}
-
 describe("ensureAgentWorkspace", () => {
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
