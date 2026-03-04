@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 

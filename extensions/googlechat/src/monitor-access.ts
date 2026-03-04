@@ -7,8 +7,8 @@ import {
   resolveDmGroupAccessWithLists,
   resolveMentionGatingWithBypass,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/compat";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
