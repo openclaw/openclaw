@@ -103,6 +103,12 @@ export const icons = {
       <path d="m6 6 12 12" />
     </svg>
   `,
+  plus: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  `,
   check: html`
     <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
   `,
