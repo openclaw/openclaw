@@ -19,6 +19,10 @@ export type SlackThreadContextData = {
   threadStarterMedia: SlackMediaResult[] | null;
 };
 
+function normalizeForRetryCheck(value: string | undefined): string {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -103,11 +107,15 @@ export async function resolveSlackThreadContextData(params: {
 
       const historyParts: string[] = [];
       for (const historyMsg of threadHistory) {
+        // Avoid self-conditioning on stale assistant status/tool-capability claims
+        // when bootstrapping a new thread session from old thread history.
+        if (historyMsg.botId) {
+          continue;
+        }
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
         const msgSenderName =
           msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
-        const isBot = Boolean(historyMsg.botId);
-        const role = isBot ? "assistant" : "user";
+        const role = "user";
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
@@ -120,9 +128,24 @@ export async function resolveSlackThreadContextData(params: {
           }),
         );
       }
-      threadHistoryBody = historyParts.join("\n\n");
+      if (historyParts.length > 0) {
+        threadHistoryBody = historyParts.join("\n\n");
+      }
+
+      const normalizedCurrent = normalizeForRetryCheck(params.message.text);
+      const hasRepeatedQuestion =
+        normalizedCurrent.length >= 16 &&
+        threadHistory.some(
+          (entry) => !entry.botId && normalizeForRetryCheck(entry.text) === normalizedCurrent,
+        );
+      if (hasRepeatedQuestion) {
+        const retryHint =
+          "Retry policy: same question repeated in thread. Re-run live checks/tools now and avoid reusing a prior answer.";
+        threadHistoryBody = threadHistoryBody ? `${retryHint}\n\n${threadHistoryBody}` : retryHint;
+      }
+
       logVerbose(
-        `slack: populated thread history with ${threadHistory.length} messages for new session`,
+        `slack: populated thread history with ${historyParts.length}/${threadHistory.length} messages for new session`,
       );
     }
   }

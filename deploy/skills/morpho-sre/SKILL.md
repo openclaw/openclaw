@@ -13,6 +13,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Default scope: `dev-morpho` + `monitoring` namespace.
 - Print command target before execution: AWS identity, kube context, namespace.
 - Always include explicit Kubernetes context in commands: `kubectl --context "$K8S_CONTEXT" ...`
+- Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 
 ## Paths
 
