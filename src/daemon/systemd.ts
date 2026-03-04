@@ -214,7 +214,7 @@ export async function installSystemdService({
   });
   await fs.writeFile(unitPath, unit, "utf8");
 
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
