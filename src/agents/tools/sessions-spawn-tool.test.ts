@@ -164,4 +164,26 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
+
+  it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        attachments?: {
+          items?: {
+            properties?: {
+              content?: {
+                type?: string;
+                maxLength?: number;
+              };
+            };
+          };
+        };
+      };
+    };
+
+    const contentSchema = schema.properties?.attachments?.items?.properties?.content;
+    expect(contentSchema?.type).toBe("string");
+    expect(contentSchema?.maxLength).toBeUndefined();
+  });
 });
