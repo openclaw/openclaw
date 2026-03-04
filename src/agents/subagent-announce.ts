@@ -858,9 +858,13 @@ async function sendSubagentAnnounceDirectly(params: {
     // prefer completionDirectOrigin (from hooks like subagent_delivery_target)
     // over directOrigin (requester origin). This ensures hook-selected
     // completion targets are respected even on the agent delivery path.
+    // Only apply this for completion-mode delivery (expectsCompletionMessage),
+    // because non-completion announces set completionDirectOrigin to the raw
+    // requester origin rather than the hook result, which would bypass
+    // session-derived routing (e.g. webchat hints or partial origins).
     const routeViaParent = cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
     const effectiveOrigin =
-      routeViaParent && completionDirectOrigin
+      routeViaParent && params.expectsCompletionMessage && completionDirectOrigin
         ? completionDirectOrigin
         : normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
