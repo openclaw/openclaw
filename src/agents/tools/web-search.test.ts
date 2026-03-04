@@ -15,6 +15,8 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveParallelApiKey,
+  resolveParallelBaseUrl,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +271,35 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search parallel config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveParallelApiKey({ apiKey: "par-test-key" })).toBe("par-test-key");
+  });
+
+  it("falls back to PARALLEL_API_KEY env var", () => {
+    withEnv({ PARALLEL_API_KEY: "par-env-key" }, () => {
+      expect(resolveParallelApiKey({})).toBe("par-env-key");
+    });
+  });
+
+  it("returns undefined when no key is available", () => {
+    withEnv({ PARALLEL_API_KEY: undefined }, () => {
+      expect(resolveParallelApiKey({})).toBeUndefined();
+      expect(resolveParallelApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default baseUrl", () => {
+    expect(resolveParallelBaseUrl({})).toBe("https://api.parallel.ai");
+    expect(resolveParallelBaseUrl(undefined)).toBe("https://api.parallel.ai");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveParallelBaseUrl({ baseUrl: "https://custom.parallel.ai" })).toBe(
+      "https://custom.parallel.ai",
+    );
   });
 });

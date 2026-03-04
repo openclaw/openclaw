@@ -329,7 +329,19 @@ function resolveToolPolicies(params: {
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
   return Boolean(
-    search?.apiKey || search?.perplexity?.apiKey || env.BRAVE_API_KEY || env.PERPLEXITY_API_KEY,
+    search?.apiKey ||
+    search?.perplexity?.apiKey ||
+    search?.grok?.apiKey ||
+    search?.gemini?.apiKey ||
+    search?.kimi?.apiKey ||
+    search?.parallel?.apiKey ||
+    env.BRAVE_API_KEY ||
+    env.PERPLEXITY_API_KEY ||
+    env.XAI_API_KEY ||
+    env.GEMINI_API_KEY ||
+    env.KIMI_API_KEY ||
+    env.MOONSHOT_API_KEY ||
+    env.PARALLEL_API_KEY,
   );
 }
 

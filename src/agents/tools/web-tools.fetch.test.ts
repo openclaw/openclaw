@@ -367,7 +367,7 @@ describe("web_fetch extraction fallbacks", () => {
     const tool = createFirecrawlTool();
     await expect(
       executeFetch(tool, { url: "https://example.com/readability-empty" }),
-    ).rejects.toThrow("Readability and Firecrawl returned no content");
+    ).rejects.toThrow("Parallel, Readability, and Firecrawl returned no content");
   });
 
   it("uses firecrawl when direct fetch fails", async () => {

@@ -20,6 +20,127 @@ import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
+const SEARCH_PROVIDER_OPTIONS = [
+  { value: "brave", label: "Brave Search", hint: "Free tier available" },
+  { value: "parallel", label: "Parallel", hint: "LLM-optimized excerpts" },
+  { value: "perplexity", label: "Perplexity", hint: "AI-synthesized answers" },
+  { value: "grok", label: "Grok (xAI)", hint: "xAI web search" },
+  { value: "gemini", label: "Gemini", hint: "Google Search grounding" },
+  { value: "kimi", label: "Kimi (Moonshot)", hint: "Native web search" },
+  { value: "skip", label: "Skip", hint: "Configure later" },
+] as const;
+
+type SearchProviderValue = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+
+const PROVIDER_ENV_VARS: Record<Exclude<SearchProviderValue, "skip">, string> = {
+  brave: "BRAVE_API_KEY",
+  parallel: "PARALLEL_API_KEY",
+  perplexity: "PERPLEXITY_API_KEY or OPENROUTER_API_KEY",
+  grok: "XAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  kimi: "KIMI_API_KEY or MOONSHOT_API_KEY",
+};
+
+const PROVIDER_PLACEHOLDERS: Record<Exclude<SearchProviderValue, "skip">, string> = {
+  brave: "BSA...",
+  parallel: "par-...",
+  perplexity: "pplx-... or sk-or-...",
+  grok: "xai-...",
+  gemini: "AIza...",
+  kimi: "sk-...",
+};
+
+async function promptSearchProviderOnboarding(
+  config: OpenClawConfig,
+  prompter: WizardPrompter,
+  _opts: { flow: WizardFlow },
+): Promise<OpenClawConfig> {
+  await prompter.note(
+    [
+      "Web search lets your agent look things up online.",
+      "Pick a provider and paste an API key, or skip for now.",
+      "Docs: https://docs.openclaw.ai/tools/web",
+    ].join("\n"),
+    "Web search (optional)",
+  );
+
+  const provider = await prompter.select<SearchProviderValue>({
+    message: "Search provider",
+    options: [...SEARCH_PROVIDER_OPTIONS],
+    initialValue: "skip",
+  });
+
+  if (provider === "skip") {
+    return config;
+  }
+
+  const envHint = PROVIDER_ENV_VARS[provider];
+  const placeholder = PROVIDER_PLACEHOLDERS[provider];
+
+  const keyInput = await prompter.text({
+    message: `${provider} API key (leave blank to use ${envHint})`,
+    placeholder,
+  });
+  const key = (keyInput ?? "").trim();
+
+  const search: Record<string, unknown> = {
+    ...config.tools?.web?.search,
+    enabled: true,
+    provider,
+  };
+
+  if (key) {
+    if (provider === "brave") {
+      search.apiKey = key;
+    } else {
+      search[provider] = {
+        ...(config.tools?.web?.search as Record<string, Record<string, unknown>> | undefined)?.[
+          provider
+        ],
+        apiKey: key,
+      };
+    }
+  }
+
+  // Ensure web_search and web_fetch are in tools.alsoAllow so the agent can
+  // actually use them (profiles like "messaging" don't include web tools).
+  const existing = config.tools?.alsoAllow ?? [];
+  const alsoAllow = [...existing];
+  for (const tool of ["web_search", "web_fetch"]) {
+    if (!alsoAllow.includes(tool)) {
+      alsoAllow.push(tool);
+    }
+  }
+
+  // When the user picks Parallel as the search provider, also enable Parallel
+  // extract as the default web_fetch extractor (same API key, better extraction).
+  const fetch =
+    provider === "parallel"
+      ? {
+          ...config.tools?.web?.fetch,
+          parallel: {
+            ...((config.tools?.web?.fetch as Record<string, unknown> | undefined)?.parallel as
+              | Record<string, unknown>
+              | undefined),
+            enabled: true,
+          },
+        }
+      : config.tools?.web?.fetch;
+
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      alsoAllow,
+      web: {
+        ...config.tools?.web,
+        search,
+        fetch,
+      },
+    },
+  };
+}
+
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
@@ -517,6 +638,12 @@ export async function runOnboardingWizard(
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+  }
+
+  if (opts.skipWeb) {
+    await prompter.note("Skipping web search setup.", "Web search");
+  } else {
+    nextConfig = await promptSearchProviderOnboarding(nextConfig, prompter, { flow });
   }
 
   // Setup hooks (session memory on /new)

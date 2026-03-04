@@ -160,24 +160,46 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
   ) as ChannelsWizardMode;
 }
 
+const SEARCH_PROVIDER_OPTIONS = [
+  { value: "brave", label: "Brave Search", hint: "Free tier available" },
+  { value: "parallel", label: "Parallel", hint: "LLM-optimized excerpts" },
+  { value: "perplexity", label: "Perplexity", hint: "AI-synthesized answers" },
+  { value: "grok", label: "Grok (xAI)", hint: "xAI web search" },
+  { value: "gemini", label: "Gemini", hint: "Google Search grounding" },
+  { value: "kimi", label: "Kimi (Moonshot)", hint: "Native web search" },
+] as const;
+
+type SearchProviderValue = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+
+const PROVIDER_ENV_VARS: Record<SearchProviderValue, string> = {
+  brave: "BRAVE_API_KEY",
+  parallel: "PARALLEL_API_KEY",
+  perplexity: "PERPLEXITY_API_KEY or OPENROUTER_API_KEY",
+  grok: "XAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  kimi: "KIMI_API_KEY or MOONSHOT_API_KEY",
+};
+
+const PROVIDER_PLACEHOLDERS: Record<SearchProviderValue, string> = {
+  brave: "BSA...",
+  parallel: "par-...",
+  perplexity: "pplx-... or sk-or-...",
+  grok: "xai-...",
+  gemini: "AIza...",
+  kimi: "sk-...",
+};
+
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const existingProvider = existingSearch?.provider ?? "brave";
-  const hasPerplexityKey = Boolean(
-    existingSearch?.perplexity?.apiKey || process.env.PERPLEXITY_API_KEY,
-  );
-  const hasBraveKey = Boolean(existingSearch?.apiKey || process.env.BRAVE_API_KEY);
-  const hasSearchKey = existingProvider === "perplexity" ? hasPerplexityKey : hasBraveKey;
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider: Perplexity Search (recommended) or Brave Search.",
-      "Both return structured results (title, URL, snippet) for fast research.",
+      "Multiple providers are supported. Pick one and provide an API key.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -186,90 +208,91 @@ async function promptWebToolsConfig(
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue: existingSearch?.enabled ?? hasSearchKey,
+      initialValue: existingSearch?.enabled ?? true,
     }),
     runtime,
   );
 
-  let nextSearch = {
+  let nextSearch: Record<string, unknown> = {
     ...existingSearch,
     enabled: enableSearch,
   };
 
+  let selectedProvider: SearchProviderValue | undefined;
+  let selectedKey = "";
+
   if (enableSearch) {
+    const currentProvider = existingSearch?.provider ?? "brave";
     const providerChoice = guardCancel(
-      await select({
-        message: "Choose web search provider",
-        options: [
-          {
-            value: "perplexity",
-            label: "Perplexity Search",
-          },
-          {
-            value: "brave",
-            label: "Brave Search",
-          },
-        ],
-        initialValue: existingProvider,
+      await select<SearchProviderValue>({
+        message: "Search provider",
+        options: [...SEARCH_PROVIDER_OPTIONS],
+        initialValue: currentProvider,
       }),
       runtime,
     );
 
+    selectedProvider = providerChoice;
+    // Clean up stale keys from the previous provider to avoid orphaned credentials.
+    const oldProvider = existingSearch?.provider;
+    if (oldProvider && oldProvider !== providerChoice) {
+      if (oldProvider === "brave") {
+        delete nextSearch.apiKey;
+      } else {
+        delete nextSearch[oldProvider];
+      }
+    }
     nextSearch = { ...nextSearch, provider: providerChoice };
+    const envVarHint = PROVIDER_ENV_VARS[providerChoice];
+    const placeholder = PROVIDER_PLACEHOLDERS[providerChoice];
 
-    if (providerChoice === "perplexity") {
-      const hasKey = Boolean(existingSearch?.perplexity?.apiKey);
-      const keyInput = guardCancel(
-        await text({
-          message: hasKey
-            ? "Perplexity API key (leave blank to keep current or use PERPLEXITY_API_KEY)"
-            : "Perplexity API key (paste it here; leave blank to use PERPLEXITY_API_KEY)",
-          placeholder: hasKey ? "Leave blank to keep current" : "pplx-...",
-        }),
-        runtime,
-      );
-      const key = String(keyInput ?? "").trim();
-      if (key) {
+    // Resolve existing key for the selected provider
+    const existingKey =
+      providerChoice === "brave"
+        ? existingSearch?.apiKey
+        : (existingSearch as Record<string, Record<string, unknown>> | undefined)?.[providerChoice]
+            ?.apiKey;
+    const hasKey = Boolean(existingKey);
+
+    const keyInput = guardCancel(
+      await text({
+        message: hasKey
+          ? `${providerChoice} API key (leave blank to keep current or use ${envVarHint})`
+          : `${providerChoice} API key (paste it here; leave blank to use ${envVarHint})`,
+        placeholder: hasKey ? "Leave blank to keep current" : placeholder,
+      }),
+      runtime,
+    );
+    const key = String(keyInput ?? "").trim();
+    selectedKey = key;
+
+    if (key || hasKey) {
+      if (providerChoice === "brave") {
+        if (key) {
+          nextSearch = { ...nextSearch, apiKey: key };
+        }
+      } else {
+        const existing =
+          (existingSearch as Record<string, Record<string, unknown>> | undefined)?.[
+            providerChoice
+          ] ?? {};
         nextSearch = {
           ...nextSearch,
-          perplexity: { ...existingSearch?.perplexity, apiKey: key },
+          [providerChoice]: {
+            ...existing,
+            ...(key ? { apiKey: key } : {}),
+          },
         };
-      } else if (!hasKey && !process.env.PERPLEXITY_API_KEY) {
-        note(
-          [
-            "No key stored yet, so web_search will stay unavailable.",
-            "Store a key here or set PERPLEXITY_API_KEY in the Gateway environment.",
-            "Get your API key at: https://www.perplexity.ai/settings/api",
-            "Docs: https://docs.openclaw.ai/tools/web",
-          ].join("\n"),
-          "Web search",
-        );
       }
     } else {
-      const hasKey = Boolean(existingSearch?.apiKey);
-      const keyInput = guardCancel(
-        await text({
-          message: hasKey
-            ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-            : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-          placeholder: hasKey ? "Leave blank to keep current" : "BSA...",
-        }),
-        runtime,
+      note(
+        [
+          `No key stored yet, so web_search (${providerChoice}) will stay unavailable.`,
+          `Store a key here or set ${envVarHint} in the Gateway environment.`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
       );
-      const key = String(keyInput ?? "").trim();
-      if (key) {
-        nextSearch = { ...nextSearch, apiKey: key };
-      } else if (!hasKey && !process.env.BRAVE_API_KEY) {
-        note(
-          [
-            "No key stored yet, so web_search will stay unavailable.",
-            "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
-            "Get your API key at: https://brave.com/search/api/",
-            "Docs: https://docs.openclaw.ai/tools/web",
-          ].join("\n"),
-          "Web search",
-        );
-      }
     }
   }
 
@@ -281,10 +304,33 @@ async function promptWebToolsConfig(
     runtime,
   );
 
-  const nextFetch = {
-    ...existingFetch,
-    enabled: enableFetch,
-  };
+  // When the user picks Parallel, also enable Parallel extract (same API key).
+  const nextFetch =
+    selectedProvider === "parallel"
+      ? {
+          ...existingFetch,
+          enabled: enableFetch,
+          parallel: {
+            ...((existingFetch as Record<string, unknown> | undefined)?.parallel as
+              | Record<string, unknown>
+              | undefined),
+            enabled: true,
+            ...(selectedKey ? { apiKey: selectedKey } : {}),
+          },
+        }
+      : {
+          ...existingFetch,
+          enabled: enableFetch,
+          // Disable Parallel extract when switching away from Parallel.
+          ...((existingFetch as Record<string, unknown> | undefined)?.parallel
+            ? {
+                parallel: {
+                  ...(existingFetch as Record<string, Record<string, unknown>>).parallel,
+                  enabled: false,
+                },
+              }
+            : {}),
+        };
 
   return {
     ...nextConfig,
