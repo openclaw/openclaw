@@ -26,6 +26,23 @@ async function withRelayServer(
   }
 }
 
+function handleNonVersionRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.url?.startsWith("/json/version")) {
+    return false;
+  }
+  res.writeHead(404);
+  res.end("not found");
+  return true;
+}
+
+async function probeRelay(baseUrl: string, relayAuthToken: string): Promise<boolean> {
+  return await probeAuthenticatedOpenClawRelay({
+    baseUrl,
+    relayAuthHeader: "x-openclaw-relay-token",
+    relayAuthToken,
+  });
+}
+
 describe("extension-relay-auth", () => {
   const TEST_GATEWAY_TOKEN = "test-gateway-token";
   let prevGatewayToken: string | undefined;
@@ -63,9 +80,7 @@ describe("extension-relay-auth", () => {
     let seenToken: string | undefined;
     await withRelayServer(
       (req, res) => {
-        if (!req.url?.startsWith("/json/version")) {
-          res.writeHead(404);
-          res.end("not found");
+        if (handleNonVersionRequest(req, res)) {
           return;
         }
         const header = req.headers["x-openclaw-relay-token"];
@@ -75,11 +90,7 @@ describe("extension-relay-auth", () => {
       },
       async ({ port }) => {
         const token = resolveRelayAuthTokenForPort(port);
-        const ok = await probeAuthenticatedOpenClawRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-openclaw-relay-token",
-          relayAuthToken: token,
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, token);
         expect(ok).toBe(true);
         expect(seenToken).toBe(token);
       },
@@ -89,20 +100,14 @@ describe("extension-relay-auth", () => {
   it("rejects unauthenticated probe responses", async () => {
     await withRelayServer(
       (req, res) => {
-        if (!req.url?.startsWith("/json/version")) {
-          res.writeHead(404);
-          res.end("not found");
+        if (handleNonVersionRequest(req, res)) {
           return;
         }
         res.writeHead(401);
         res.end("Unauthorized");
       },
       async ({ port }) => {
-        const ok = await probeAuthenticatedOpenClawRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-openclaw-relay-token",
-          relayAuthToken: "irrelevant",
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, "irrelevant");
         expect(ok).toBe(false);
       },
     );
@@ -111,20 +116,14 @@ describe("extension-relay-auth", () => {
   it("rejects probe responses with wrong browser identity", async () => {
     await withRelayServer(
       (req, res) => {
-        if (!req.url?.startsWith("/json/version")) {
-          res.writeHead(404);
-          res.end("not found");
+        if (handleNonVersionRequest(req, res)) {
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ Browser: "FakeRelay" }));
       },
       async ({ port }) => {
-        const ok = await probeAuthenticatedOpenClawRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-openclaw-relay-token",
-          relayAuthToken: "irrelevant",
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, "irrelevant");
         expect(ok).toBe(false);
       },
     );

@@ -1,9 +1,11 @@
+import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
+import type { CliConfig } from "./types.cli.js";
 import type { CronConfig } from "./types.cron.js";
 import type {
   CanvasHostConfig,
@@ -23,6 +25,7 @@ import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { PolicyGuardrailsConfig } from "./types.policy.js";
+import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
@@ -34,6 +37,7 @@ export type OpenClawConfig = {
     lastTouchedAt?: string;
   };
   auth?: AuthConfig;
+  acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
     shellEnv?: {
@@ -59,6 +63,7 @@ export type OpenClawConfig = {
   };
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
+  cli?: CliConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
     channel?: "stable" | "beta" | "dev";
@@ -87,6 +92,7 @@ export type OpenClawConfig = {
       avatar?: string;
     };
   };
+  secrets?: SecretsConfig;
   skills?: SkillsConfig;
   policy?: PolicyGuardrailsConfig;
   plugins?: PluginsConfig;
@@ -115,6 +121,8 @@ export type OpenClawConfig = {
 export type ConfigValidationIssue = {
   path: string;
   message: string;
+  allowedValues?: string[];
+  allowedValuesHiddenCount?: number;
 };
 
 export type LegacyConfigIssue = {
