@@ -417,21 +417,30 @@ describe("provider usage loading", () => {
   });
 
   it("filters errors that are marked as ignored", async () => {
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      if (url.includes("api.anthropic.com/api/oauth/usage")) {
-        return makeResponse(500, "boom");
-      }
-      return makeResponse(404, "not found");
-    });
-    ignoredErrors.add("HTTP 500");
+    vi.useFakeTimers();
     try {
-      const summary = await loadUsageWithAuth(
-        [{ provider: "anthropic", token: "token-a" }],
-        mockFetch,
-      );
-      expect(summary.providers).toEqual([]);
+      const mockFetch = createProviderUsageFetch(async (url) => {
+        if (url.includes("api.anthropic.com/api/oauth/usage")) {
+          return makeResponse(500, "boom");
+        }
+        return makeResponse(404, "not found");
+      });
+      ignoredErrors.add("HTTP 500");
+      try {
+        const summaryPromise = loadProviderUsageSummary({
+          now: usageNow,
+          auth: [{ provider: "anthropic", token: "token-a" }],
+          fetch: mockFetch as unknown as typeof fetch,
+          timeoutMs: 60_000,
+        });
+        await vi.runAllTimersAsync();
+        const summary = await summaryPromise;
+        expect(summary.providers).toEqual([]);
+      } finally {
+        ignoredErrors.delete("HTTP 500");
+      }
     } finally {
-      ignoredErrors.delete("HTTP 500");
+      vi.useRealTimers();
     }
   });
 
