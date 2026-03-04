@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyPlaceholders, type PlaceholderContext } from "./placeholders.js";
+import {
+  applyPlaceholders,
+  type PlaceholderContext,
+} from "../../../src/agents/skills/placeholders.js";
 
 describe("applyPlaceholders", () => {
   it("replaces simple placeholders", () => {
