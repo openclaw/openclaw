@@ -165,7 +165,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     const mode = options?.mode ?? "snapshot";
-    streamText = mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
+    streamText =
+      mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -245,18 +246,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : [];
         const hasText = Boolean(text.trim());
         const hasMedia = mediaList.length > 0;
+        const skipTextForDuplicateFinal = info?.kind === "final" && hasText && finalTextDelivered;
+        const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
-        if (info?.kind === "final" && hasText && finalTextDelivered) {
-          if (!hasMedia) {
-            return;
-          }
-        }
-
-        if (!hasText && !hasMedia) {
+        if (!shouldDeliverText && !hasMedia) {
           return;
         }
 
-        if (hasText) {
+        if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
