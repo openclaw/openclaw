@@ -1,6 +1,9 @@
+import fs from "node:fs";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
+import { loadWorkspaceSkillEntries } from "../../agents/skills.js";
+import { applyPlaceholders, type PlaceholderContext } from "../../agents/skills/placeholders.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -235,9 +238,33 @@ export async function handleInlineActions(params: {
       }
     }
 
+    // Load skill entries to access SKILL.md content for placeholder expansion
+    const skillEntries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+    const matchedEntry = skillEntries.find(
+      (entry) => entry.skill.name === skillInvocation.command.skillName,
+    );
+
+    let skillContent = "";
+    if (matchedEntry) {
+      try {
+        skillContent = fs.readFileSync(matchedEntry.skill.filePath, "utf-8");
+        // Apply placeholder expansion
+        const placeholderContext: PlaceholderContext = {
+          CWD: workspaceDir,
+          ARGS: skillInvocation.args ?? "",
+          SELECTION: ctx.ReplyToBody ?? "",
+        };
+        skillContent = applyPlaceholders(skillContent, placeholderContext);
+      } catch {
+        // If we can't read the skill file, fall back to basic prompt
+        skillContent = "";
+      }
+    }
+
     const promptParts = [
       `Use the "${skillInvocation.command.skillName}" skill for this request.`,
-      skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
+      skillContent ? `\n\nSkill instructions (expanded):\n\n${skillContent}` : null,
+      skillInvocation.args ? `\n\nUser input:\n${skillInvocation.args}` : null,
     ].filter((entry): entry is string => Boolean(entry));
     const rewrittenBody = promptParts.join("\n\n");
     ctx.Body = rewrittenBody;
