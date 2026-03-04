@@ -262,7 +262,6 @@ export function createTelegramDraftStream(params: {
         streamState.stopped = true;
         return false;
       }
-    }
     if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
       return true;
     }
