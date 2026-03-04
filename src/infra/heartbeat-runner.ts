@@ -1069,7 +1069,8 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Cap at Node's signed-32-bit setTimeout limit (~24.8 days); scheduleNext re-fires on the next tick.
+    const delay = Math.min(Math.max(0, nextDue - now), 0x7fff_ffff);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
