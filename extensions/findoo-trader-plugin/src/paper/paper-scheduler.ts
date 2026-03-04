@@ -1,3 +1,4 @@
+import type { AgentWakeBridge } from "../core/agent-wake-bridge.js";
 import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import type { OHLCV, StrategyContext, StrategyDefinition, Signal } from "../shared/types.js";
 import { buildIndicatorLib } from "../strategy/backtest-engine.js";
@@ -43,10 +44,23 @@ export type PaperSchedulerConfig = {
   perfStore?: PerformanceSnapshotStore;
   /** Optional health monitor — runs condition checks after each snapshot cycle. */
   healthMonitor?: PaperHealthMonitor;
+  /** Optional wake bridge — notifies Agent of promotion-ready strategies. */
+  wakeBridge?: AgentWakeBridge;
   /** Lazy resolver for dataProvider — called on each tick if dataProvider is still unset. */
   serviceResolver?: () => DataProviderLike | undefined;
+  /** Lazy resolver for FundManager — called on snapshot to check promotions. */
+  fundManagerResolver?: () => FundManagerLike | undefined;
   tickIntervalMs?: number; // default 60_000 (1 min)
   snapshotIntervalMs?: number; // default 3_600_000 (1 hour)
+};
+
+type FundManagerLike = {
+  buildProfiles: (records: unknown[]) => Array<{ strategyId: string; currentLevel: string }>;
+  checkPromotion: (profile: { strategyId: string; currentLevel: string }) => {
+    eligible: boolean;
+    targetLevel?: string;
+    needsUserConfirmation?: boolean;
+  };
 };
 
 /** Returns true if `last` is null or from a different calendar day than now. */
@@ -136,7 +150,13 @@ export class PaperScheduler {
         const latestBar = ohlcv[ohlcv.length - 1]!;
         const indicators = buildIndicatorLib(ohlcv);
 
-        const portfolio = paperEngine.getAccountState("default") ?? {
+        // Resolve paper account dynamically (IDs are paper-{uuid}, not "default")
+        const accounts = paperEngine.listAccounts();
+        const activeAccountId = accounts[0]?.id;
+
+        const portfolio = (activeAccountId
+          ? paperEngine.getAccountState(activeAccountId)
+          : null) ?? {
           equity: 10000,
           cash: 10000,
           positions: [],
@@ -157,11 +177,11 @@ export class PaperScheduler {
 
         const signal = await record.definition.onBar(latestBar, ctx);
 
-        if (signal) {
+        if (signal && activeAccountId) {
           signals++;
           const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
           paperEngine.submitOrder(
-            "default",
+            activeAccountId,
             {
               symbol: signal.symbol || symbol,
               side: signal.action === "buy" ? "buy" : "sell",
@@ -213,7 +233,46 @@ export class PaperScheduler {
       }
     }
 
+    // Check L2 strategies for promotion eligibility → wake Agent
+    this.checkPromotions();
+
     return { snapshots: accounts.length };
+  }
+
+  /** Check L2 strategies for promotion eligibility and wake Agent if found. */
+  private checkPromotions(): void {
+    const { strategyRegistry, wakeBridge, fundManagerResolver } = this._deps;
+    if (!wakeBridge || !fundManagerResolver) return;
+
+    const fundManager = fundManagerResolver();
+    if (!fundManager) return;
+
+    try {
+      const l2 = strategyRegistry.list({ level: "L2_PAPER" }).filter((s) => s.level === "L2_PAPER");
+      if (l2.length === 0) return;
+
+      const profiles = fundManager.buildProfiles(l2 as unknown[]);
+      for (const profile of profiles) {
+        const check = fundManager.checkPromotion(profile);
+        if (!check.eligible || !check.targetLevel) continue;
+
+        if (check.needsUserConfirmation) {
+          const strategy = l2.find((s) => s.id === profile.strategyId);
+          wakeBridge.onApprovalNeeded({
+            strategyId: profile.strategyId,
+            strategyName: strategy?.name ?? profile.strategyId,
+          });
+        } else {
+          wakeBridge.onPromotionReady({
+            strategyId: profile.strategyId,
+            from: profile.currentLevel,
+            to: check.targetLevel,
+          });
+        }
+      }
+    } catch {
+      this.errorCount++;
+    }
   }
 
   private writeDailyPerfSnapshot(): void {

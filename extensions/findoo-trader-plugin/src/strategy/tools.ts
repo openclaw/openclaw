@@ -24,6 +24,7 @@ import { createTrendFollowingMomentum } from "./builtin-strategies/trend-followi
 import { createVolatilityMeanReversion } from "./builtin-strategies/volatility-mean-reversion.js";
 import type { StrategyRegistry } from "./strategy-registry.js";
 import type { BacktestConfig, StrategyContext, StrategyDefinition } from "./types.js";
+import { WalkForward } from "./walk-forward.js";
 
 type OhlcvBar = {
   timestamp: number;
@@ -53,6 +54,7 @@ export function registerStrategyTools(
 ): void {
   // Per-strategy tick memory, persisted across ticks
   const tickMemory = new Map<string, Map<string, unknown>>();
+  const walkForward = new WalkForward(engine);
 
   // --- fin_strategy_create ---
   api.registerTool(
@@ -395,6 +397,105 @@ export function registerStrategyTools(
     { names: ["fin_backtest_result"] },
   );
 
+  // --- fin_walk_forward_run ---
+  api.registerTool(
+    {
+      name: "fin_walk_forward_run",
+      label: "Run Walk-Forward Validation",
+      description:
+        "Run walk-forward validation for an L1_BACKTEST strategy. " +
+        "Required before L1 → L2 promotion. Splits data into train/test windows " +
+        "to verify out-of-sample performance.",
+      parameters: Type.Object({
+        strategyId: Type.String({ description: "Strategy ID" }),
+        capital: Type.Optional(Type.Number({ description: "Capital (default 10000)" })),
+        commission: Type.Optional(Type.Number({ description: "Commission rate (default 0.001)" })),
+        slippage: Type.Optional(Type.Number({ description: "Slippage bps (default 5)" })),
+        windows: Type.Optional(Type.Number({ description: "Number of windows (default 5)" })),
+        threshold: Type.Optional(Type.Number({ description: "Pass threshold (default 0.6)" })),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        try {
+          const strategyId = params.strategyId as string;
+          const record = registry.get(strategyId);
+          if (!record) return json({ error: `Strategy ${strategyId} not found` });
+          if (record.level !== "L1_BACKTEST") {
+            return json({
+              error: `Strategy ${strategyId} is ${record.level}, must be L1_BACKTEST for walk-forward`,
+            });
+          }
+
+          // Get data provider (same pattern as fin_backtest_run)
+          const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
+          const dataProvider = runtime.services?.get?.("fin-data-provider") as
+            | {
+                getOHLCV?: (
+                  paramsOrSymbol:
+                    | { symbol: string; market: string; timeframe: string; limit?: number }
+                    | string,
+                  timeframe?: string,
+                  limit?: number,
+                ) => Promise<OhlcvBar[]>;
+              }
+            | undefined;
+
+          if (!dataProvider?.getOHLCV) {
+            return json({
+              error: "Data provider not available. Load findoo-datahub-plugin first.",
+            });
+          }
+
+          const symbol = record.definition.symbols[0] ?? "BTC/USDT";
+          const timeframe = record.definition.timeframes[0] ?? "1d";
+          const market = record.definition.markets[0] ?? "crypto";
+
+          const getOHLCV = dataProvider.getOHLCV;
+          const ohlcv =
+            getOHLCV.length <= 1
+              ? await getOHLCV({ symbol, market, timeframe, limit: 1000 })
+              : await getOHLCV(symbol, timeframe, 1000);
+
+          if (!ohlcv || ohlcv.length < 100) {
+            return json({
+              error: `Insufficient data for walk-forward: got ${ohlcv?.length ?? 0} bars, need ≥100`,
+            });
+          }
+
+          const config: BacktestConfig = {
+            capital: (params.capital as number) ?? 10000,
+            commissionRate: (params.commission as number) ?? 0.001,
+            slippageBps: (params.slippage as number) ?? 5,
+            market,
+          };
+
+          const windows = (params.windows as number) ?? 5;
+          const threshold = (params.threshold as number) ?? 0.6;
+
+          const result = await walkForward.validate(record.definition, ohlcv, config, {
+            windows,
+            threshold,
+          });
+
+          registry.updateWalkForward(strategyId, result);
+
+          return json({
+            strategyId,
+            passed: result.passed,
+            ratio: result.ratio,
+            threshold,
+            windows: result.windows,
+            verdict: result.passed
+              ? "Walk-forward PASSED — strategy eligible for L2 promotion"
+              : "Walk-forward FAILED — strategy needs improvement before L2",
+          });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    },
+    { names: ["fin_walk_forward_run"] },
+  );
+
   // --- fin_strategy_tick ---
   api.registerTool(
     {
@@ -463,8 +564,12 @@ export function registerStrategyTools(
           const latestBar = ohlcv[ohlcv.length - 1]!;
           const indicators = buildIndicatorLib(ohlcv);
 
-          // Get paper engine portfolio state
-          const portfolio = paperEngine?.getAccountState?.("default") ?? {
+          // Get paper engine portfolio state (IDs are paper-{uuid}, not "default")
+          const paperAccounts = paperEngine?.listAccounts?.() ?? [];
+          const activeAccountId = paperAccounts[0]?.id;
+          const portfolio = (activeAccountId
+            ? paperEngine?.getAccountState?.(activeAccountId)
+            : null) ?? {
             equity: 10000,
             cash: 10000,
           };
@@ -519,10 +624,10 @@ export function registerStrategyTools(
           let orderResult: unknown = null;
 
           if (record.level === "L2_PAPER") {
-            if (paperEngine?.submitOrder) {
+            if (paperEngine?.submitOrder && activeAccountId) {
               const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
               orderResult = paperEngine.submitOrder(
-                "default",
+                activeAccountId,
                 {
                   symbol: signal.symbol || symbol,
                   side: signal.action === "buy" ? "buy" : "sell",
