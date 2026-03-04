@@ -103,6 +103,7 @@ vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
       },
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
     }),
   ),
 }));
@@ -343,6 +344,32 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
     expect(emojis).toContain("🏁");
+  });
+
+  it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {
+    const abortController = new AbortController();
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      abortController.abort();
+      throw new Error("aborted");
+    });
+
+    const ctx = await createBaseContext({
+      abortSignal: abortController.signal,
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          removeAckAfterReply: true,
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    await vi.waitFor(() => {
+      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
+    });
   });
 });
 

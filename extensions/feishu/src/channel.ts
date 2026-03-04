@@ -1,4 +1,4 @@
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildBaseChannelStatusSummary,
   createDefaultChannelRuntimeState,
@@ -6,7 +6,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/feishu";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -87,6 +87,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   groups: {
     resolveToolPolicy: resolveFeishuGroupToolPolicy,
+  },
+  mentions: {
+    stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
   },
   reload: { configPrefixes: ["channels.feishu"] },
   configSchema: {
