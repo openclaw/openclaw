@@ -5,6 +5,43 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+const HEARTBEAT_PROMPT_PREFIX = "Read HEARTBEAT.md if it exists (workspace context).";
+const POST_COMPACTION_AUDIT_PREFIX = "⚠️ Post-Compaction Audit:";
+
+function extractPlainTextContent(content: MessageContentItem[]): string {
+  return content
+    .filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text!.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function isSystemInjectedMaintenancePrompt(
+  message: Record<string, unknown>,
+  text: string,
+): boolean {
+  if (!text) {
+    return false;
+  }
+
+  const provider =
+    typeof message.Provider === "string"
+      ? message.Provider.trim().toLowerCase()
+      : typeof message.provider === "string"
+        ? message.provider.trim().toLowerCase()
+        : "";
+  if (provider === "heartbeat") {
+    return true;
+  }
+
+  return (
+    text.startsWith(HEARTBEAT_PROMPT_PREFIX) ||
+    text.startsWith(POST_COMPACTION_AUDIT_PREFIX) ||
+    (text.startsWith("System: [") && text.includes(POST_COMPACTION_AUDIT_PREFIX))
+  );
+}
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -59,6 +96,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       }
       return item;
     });
+
+    const plainText = extractPlainTextContent(content);
+    if (isSystemInjectedMaintenancePrompt(m, plainText)) {
+      role = "system";
+    }
   }
 
   return { role, content, timestamp, id };

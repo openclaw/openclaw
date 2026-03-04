@@ -110,6 +110,35 @@ describe("message-normalizer", () => {
 
       expect(result.content[0].args).toEqual({ foo: "bar" });
     });
+
+    it("marks heartbeat-injected user prompts as system", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content:
+          "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.\nCurrent time: 2026-02-25 10:00 (UTC)",
+      });
+
+      expect(result.role).toBe("system");
+    });
+
+    it("marks post-compaction audit prompts as system", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content:
+          "System: [2026-02-25 10:00:00] ⚠️ Post-Compaction Audit: The following required startup files were not read after context reset:\n  - WORKFLOW_AUTO.md",
+      });
+
+      expect(result.role).toBe("system");
+    });
+
+    it("keeps normal user messages as user", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Read the docs later, then remind me.",
+      });
+
+      expect(result.role).toBe("user");
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {
