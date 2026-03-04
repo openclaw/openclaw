@@ -245,6 +245,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   deps: ReturnType<typeof createDefaultDeps>;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommand(
     {
@@ -258,6 +259,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: "webchat",
       bestEffortDeliver: false,
+      abortSignal: params.abortSignal,
     },
     defaultRuntime,
     params.deps,
@@ -480,6 +482,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: abortController.signal,
       });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -716,6 +719,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: abortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
