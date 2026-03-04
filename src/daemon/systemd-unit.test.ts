@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
+import {
+  buildSystemdUnit,
+  parseSystemdEnvAssignment,
+  parseSystemdExecStart,
+} from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
   it("quotes arguments with whitespace", () => {
@@ -40,5 +44,14 @@ describe("buildSystemdUnit", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("parseSystemdEnvAssignment", () => {
+  it("unescapes quoted environment values", () => {
+    expect(parseSystemdEnvAssignment('"OPENCLAW_LABEL=My \\"Quoted\\" Bot"')).toEqual({
+      key: "OPENCLAW_LABEL",
+      value: 'My "Quoted" Bot',
+    });
   });
 });

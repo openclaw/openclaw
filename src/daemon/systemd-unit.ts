@@ -99,7 +99,7 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
         escapeNext = false;
         continue;
       }
-      if (ch === "\\\\") {
+      if (ch === "\\") {
         escapeNext = true;
         continue;
       }
