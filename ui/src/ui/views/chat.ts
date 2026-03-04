@@ -461,7 +461,17 @@ export function renderChat(props: ChatProps) {
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
+              @click=${
+                canAbort
+                  ? props.onAbort
+                  : () => {
+                      if (
+                        confirm("Start a new session? This will reset the current conversation.")
+                      ) {
+                        props.onNewSession();
+                      }
+                    }
+              }
             >
               ${canAbort ? "Stop" : "New session"}
             </button>
