@@ -1,0 +1,28 @@
+{
+  "name": "@openfinclaw/findoo-backtest-plugin",
+  "version": "2026.3.4",
+  "description": "Remote backtesting via Findoo Backtest Agent — L1 script + L2 Agent+LLM engines",
+  "keywords": [
+    "backtest",
+    "finance",
+    "quantitative",
+    "strategy",
+    "trading"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "type": "module",
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openfinclaw/findoo-backtest-plugin"
+    }
+  }
+}

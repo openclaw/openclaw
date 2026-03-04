@@ -1,0 +1,41 @@
+{
+  "id": "findoo-backtest-plugin",
+  "name": "Findoo Backtest",
+  "description": "Remote backtesting via Findoo Backtest Agent — L1 (script deterministic) and L2 (Agent+LLM intelligent) engines. Thin wrapper, zero local compute.",
+  "kind": "financial",
+  "version": "2026.3.4",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "backtestApiUrl": {
+        "type": "string",
+        "default": "http://localhost:8000",
+        "description": "Findoo Backtest Agent REST API base URL"
+      },
+      "backtestApiKey": {
+        "type": "string",
+        "description": "Optional API key for authentication",
+        "sensitive": true
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "default": 2000,
+        "minimum": 500,
+        "maximum": 30000
+      },
+      "pollTimeoutMs": {
+        "type": "number",
+        "default": 120000,
+        "minimum": 5000,
+        "maximum": 600000
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "default": 30000,
+        "minimum": 1000,
+        "maximum": 120000
+      }
+    }
+  }
+}
