@@ -263,6 +263,7 @@ function readSystemctlDetail(result: { stdout: string; stderr: string }): string
   // isSystemctlMissing) can see the unit status from stdout even when
   // execFileUtf8 populates stderr with the Node error message fallback.
   return `${result.stderr} ${result.stdout}`.trim();
+  return [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
