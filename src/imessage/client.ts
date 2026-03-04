@@ -82,6 +82,13 @@ export class IMessageRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
+
+    // [lilac-start] handle EPIPE when child dies before stdin.write()
+    child.stdin.on("error", (err) => {
+      this.failAll(err instanceof Error ? err : new Error(String(err)));
+    });
+    // [lilac-end]
+
     this.reader = createInterface({ input: child.stdout });
 
     this.reader.on("line", (line) => {
