@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
-import { resolveAgentRoute } from "./resolve-route.js";
+import { pickFirstExistingAgentId, resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
   const resolveDiscordGuildRoute = (cfg: OpenClawConfig) =>
@@ -807,5 +807,23 @@ describe("binding evaluation cache scalability", () => {
     } finally {
       listBindingsSpy.mockRestore();
     }
+  });
+});
+
+describe("pickFirstExistingAgentId", () => {
+  test("returns exact configured agent id when present", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "knuth", model: "x" }] },
+    };
+    expect(pickFirstExistingAgentId(cfg, "knuth")).toBe("knuth");
+  });
+
+  test("falls back to default agent when requested id is missing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, model: "x" }],
+      },
+    };
+    expect(pickFirstExistingAgentId(cfg, "not-exist")).toBe("main");
   });
 });
