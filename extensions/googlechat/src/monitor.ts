@@ -329,7 +329,6 @@ async function processMessageWithPipeline(params: {
           config,
           statusSink,
           typingMessageName,
-          replyToMode,
         });
         // Only use typing message for first delivery
         typingMessageName = undefined;
@@ -377,12 +376,13 @@ async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
-  replyToMode?: "off" | "first" | "all";
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
-  // Only thread outbound messages when replyToMode is not "off".
-  const thread = params.replyToMode !== "off" ? payload.replyToId : undefined;
+  // Trust the upstream reply threading pipeline (applyReplyToMode) which already
+  // strips implicit replyToId when replyToMode is "off" while preserving explicit
+  // reply tags/directives. Do not apply a second filter here.
+  const thread = payload.replyToId;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
