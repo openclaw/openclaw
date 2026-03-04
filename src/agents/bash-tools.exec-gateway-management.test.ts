@@ -333,6 +333,118 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects bunx wrapped restart commands with --bun flag", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "bunx --bun openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects bunx wrapped restart commands with package option", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "bunx -p openclaw openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("does not detect bunx-wrapped commands with unknown bunx flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "bunx --bogus openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("marks npm exec -c gateway restart command chains as complex", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'npm exec -c "openclaw gateway restart && echo ok"',
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: true,
+    });
+  });
+
+  it("marks unsupported shell tokens around gateway restart as complex", () => {
+    const withAmp = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart & echo ok",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+    const withRedirect = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart > /tmp/out",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+    const withUnspacedRedirect = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart>/tmp/out",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(withAmp).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: true,
+    });
+    expect(withRedirect).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: true,
+    });
+    expect(withUnspacedRedirect).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: true,
+    });
+  });
+
+  it("marks systemctl gateway restart commands with unsupported shell tokens as complex", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway.service > /tmp/out",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "systemctl",
+      hard: false,
+      complex: true,
+    });
+  });
+
   it("marks chained restart commands as complex", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw gateway restart && echo ok",

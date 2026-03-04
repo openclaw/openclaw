@@ -78,6 +78,8 @@ const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--test-pattern",
   "--workspace-concurrency",
 ]);
+const BUNX_BOOLEAN_OPTIONS = new Set(["--bun", "--no-install", "--verbose", "--silent"]);
+const BUNX_OPTIONS_WITH_VALUE = new Set(["-p", "--package"]);
 const NPM_EXEC_BOOLEAN_OPTIONS = new Set(["--include-workspace-root", "--workspaces"]);
 const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "-c",
@@ -131,6 +133,7 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
 ]);
 const SHELL_CONTROL_TOKENS = new Set(["&&", "||", "&", ";", "|", ">", ">>", "<", "<<"]);
 const WINDOWS_FALLBACK_CONTROL_CHARS = new Set(["&", "|", ";", "<", ">"]);
+const SHELL_CONTROL_CHARS = new Set(["&", "|", ";", "<", ">", "$", "`", "(", ")"]);
 
 export type GatewayManagementExecSource = "openclaw-cli" | "systemctl" | "launchctl" | "schtasks";
 
@@ -173,6 +176,10 @@ function basenameLower(token: string): string {
   return (pieces[pieces.length - 1] ?? "").trim().toLowerCase();
 }
 
+function stripTrailingShellControlChars(token: string): string {
+  return token.replace(/[&|;<>]+$/g, "");
+}
+
 function hasUnquotedWindowsFallbackControlChar(command: string): boolean {
   let inSingle = false;
   let inDouble = false;
@@ -186,6 +193,15 @@ function hasUnquotedWindowsFallbackControlChar(command: string): boolean {
       continue;
     }
     if (!inSingle && !inDouble && WINDOWS_FALLBACK_CONTROL_CHARS.has(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasShellControlChar(token: string): boolean {
+  for (const ch of token) {
+    if (SHELL_CONTROL_CHARS.has(ch)) {
       return true;
     }
   }
@@ -484,6 +500,50 @@ function consumeNpmExecOption(
   return shortFlag === "-c" ? { consumed: 2, call: next } : { consumed: 2 };
 }
 
+function consumeBunxOption(argv: string[], idx: number): number | null {
+  const token = argv[idx]?.trim() ?? "";
+  if (!token.startsWith("-")) {
+    return 0;
+  }
+
+  if (token.startsWith("--")) {
+    const equalsIdx = token.indexOf("=");
+    const rawFlag = equalsIdx === -1 ? token : token.slice(0, equalsIdx);
+    const flag = rawFlag.toLowerCase();
+    const hasInlineValue = equalsIdx !== -1;
+    const inlineValue = hasInlineValue ? token.slice(equalsIdx + 1).trim() : "";
+
+    if (BUNX_BOOLEAN_OPTIONS.has(flag)) {
+      return hasInlineValue ? null : 1;
+    }
+    if (!BUNX_OPTIONS_WITH_VALUE.has(flag)) {
+      return null;
+    }
+    if (hasInlineValue) {
+      return inlineValue ? 1 : null;
+    }
+    const next = argv[idx + 1]?.trim() ?? "";
+    if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
+      return null;
+    }
+    return 2;
+  }
+
+  const shortFlag = token.slice(0, 2).toLowerCase();
+  const hasInlineValue = token.length > 2;
+  if (!BUNX_OPTIONS_WITH_VALUE.has(shortFlag)) {
+    return null;
+  }
+  if (hasInlineValue) {
+    return token.slice(2).trim() ? 1 : null;
+  }
+  const next = argv[idx + 1]?.trim() ?? "";
+  if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
+    return null;
+  }
+  return 2;
+}
+
 function readPnpmCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
   if (second && normalizeExecutableToken(second) === "openclaw") {
@@ -605,6 +665,40 @@ function readNpmExecLikeCliArgv(argv: string[], startIdx: number): string[] | nu
   return null;
 }
 
+function readBunxCliArgv(argv: string[]): string[] | null {
+  const second = argv[1]?.trim();
+  if (second && normalizeExecutableToken(second) === "openclaw") {
+    return argv.slice(2);
+  }
+
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-")) {
+      const consumed = consumeBunxOption(argv, idx);
+      if (consumed === null) {
+        return null;
+      }
+      idx += consumed;
+      continue;
+    }
+    break;
+  }
+
+  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+    return argv.slice(idx + 1);
+  }
+  return null;
+}
+
 function readCliArgv(argv: string[]): string[] | null {
   if (argv.length === 0) {
     return null;
@@ -621,6 +715,9 @@ function readCliArgv(argv: string[]): string[] | null {
     }
     if (first === "npx") {
       return readNpmExecLikeCliArgv(argv, 1);
+    }
+    if (first === "bunx") {
+      return readBunxCliArgv(argv);
     }
 
     let idx = 1;
@@ -663,6 +760,7 @@ function parseGatewayActionFromCliArgv(
   action: GatewayManagementAction;
   hard: boolean;
   json: boolean;
+  complex: boolean;
 } | null {
   if (cliArgv.length < 2) {
     return null;
@@ -714,8 +812,24 @@ function parseGatewayActionFromCliArgv(
     return null;
   }
 
-  const actionRaw = normalizeLower(cliArgv[gatewayIdx + 1]);
-  if (actionRaw !== "restart" && actionRaw !== "start" && actionRaw !== "stop") {
+  const actionToken = normalizeLower(cliArgv[gatewayIdx + 1]);
+  let action: GatewayManagementAction | null = null;
+  let complex = false;
+  if (actionToken === "restart" || actionToken === "start" || actionToken === "stop") {
+    action = actionToken as GatewayManagementAction;
+  } else {
+    for (const candidate of ["restart", "start", "stop"] as const) {
+      if (actionToken.startsWith(candidate) && actionToken.length > candidate.length) {
+        const nextChar = actionToken[candidate.length] ?? "";
+        if (nextChar && !/[a-z0-9]/.test(nextChar)) {
+          action = candidate;
+          complex = true;
+          break;
+        }
+      }
+    }
+  }
+  if (!action) {
     return null;
   }
 
@@ -729,6 +843,10 @@ function parseGatewayActionFromCliArgv(
       return null;
     }
     if (!token.startsWith("-")) {
+      if (SHELL_CONTROL_TOKENS.has(token) || hasShellControlChar(token)) {
+        complex = true;
+        break;
+      }
       return null;
     }
     trailing.add(token);
@@ -738,13 +856,13 @@ function parseGatewayActionFromCliArgv(
     if (GATEWAY_SERVICE_BOOLEAN_FLAGS.has(token)) {
       continue;
     }
-    if (actionRaw === "restart" && GATEWAY_RESTART_EXTRA_FLAGS.has(token)) {
+    if (action === "restart" && GATEWAY_RESTART_EXTRA_FLAGS.has(token)) {
       continue;
     }
     return null;
   }
 
-  const hard = actionRaw === "restart" && trailing.has("--hard");
+  const hard = action === "restart" && trailing.has("--hard");
   const json = trailing.has("--json");
 
   // `openclaw --profile X gateway ...` must only be intercepted when X targets this
@@ -756,7 +874,7 @@ function parseGatewayActionFromCliArgv(
     }
   }
 
-  return { action: actionRaw, hard, json };
+  return { action, hard, json, complex };
 }
 
 function consumeSystemctlOption(argv: string[], idx: number): number | null {
@@ -962,6 +1080,111 @@ function detectGatewayManagementExecCommandFromWindowsFallback(params: {
   };
 }
 
+function parseGatewayActionFromSystemctlFallbackArgv(
+  argv: string[],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): GatewayManagementAction | null {
+  if (platform !== "linux") {
+    return null;
+  }
+  if (normalizeExecutableToken(argv[0] ?? "") !== "systemctl") {
+    return null;
+  }
+  if (hasSystemctlHelpOrVersion(argv)) {
+    return null;
+  }
+  if (hasSystemctlRemoteScope(argv)) {
+    return null;
+  }
+
+  const positionals = collectSystemctlPositionals(argv);
+  if (!positionals || positionals.length < 2) {
+    return null;
+  }
+
+  const actionToken = normalizeLower(positionals[0]);
+  let action: GatewayManagementAction | null = null;
+  if (actionToken === "restart" || actionToken === "start" || actionToken === "stop") {
+    action = actionToken as GatewayManagementAction;
+  } else {
+    for (const candidate of ["restart", "start", "stop"] as const) {
+      if (actionToken.startsWith(candidate) && actionToken.length > candidate.length) {
+        const nextChar = actionToken[candidate.length] ?? "";
+        if (nextChar && !/[a-z0-9]/.test(nextChar)) {
+          action = candidate;
+          break;
+        }
+      }
+    }
+  }
+  if (!action) {
+    return null;
+  }
+
+  const targets = positionals.slice(1).map((token) => stripTrailingShellControlChars(token));
+  if (!targets.some((target) => isGatewaySystemdUnitToken(target, env))) {
+    return null;
+  }
+
+  return action;
+}
+
+function detectGatewayManagementExecCommandFromShellFallback(params: {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): GatewayManagementExecCommand | null {
+  if (params.platform === "win32") {
+    return null;
+  }
+
+  const argv = splitShellArgs(params.command);
+  if (!argv || argv.length === 0) {
+    return null;
+  }
+
+  const cliArgv = readCliArgv(argv);
+  if (cliArgv) {
+    const parsed = parseGatewayActionFromCliArgv(cliArgv, params.env);
+    if (parsed) {
+      return {
+        action: parsed.action,
+        source: "openclaw-cli",
+        hard: parsed.hard,
+        complex: true,
+        ...(parsed.json ? { json: true } : {}),
+      };
+    }
+  }
+
+  const systemctlAction = parseGatewayActionFromSystemctlFallbackArgv(
+    argv,
+    params.env,
+    params.platform,
+  );
+  if (systemctlAction) {
+    return {
+      action: systemctlAction,
+      source: "systemctl",
+      hard: false,
+      complex: true,
+    };
+  }
+
+  const launchctlAction = parseGatewayActionFromLaunchctlArgv(argv, params.env, params.platform);
+  if (launchctlAction) {
+    return {
+      action: launchctlAction,
+      source: "launchctl",
+      hard: false,
+      complex: true,
+    };
+  }
+
+  return null;
+}
+
 export function detectGatewayManagementExecCommand(params: {
   command: string;
   cwd: string;
@@ -978,6 +1201,14 @@ export function detectGatewayManagementExecCommand(params: {
     platform,
   });
   if (!analysis.ok || analysis.segments.length === 0) {
+    const fallback = detectGatewayManagementExecCommandFromShellFallback({
+      command: params.command,
+      env: identityEnv,
+      platform,
+    });
+    if (fallback) {
+      return fallback;
+    }
     return detectGatewayManagementExecCommandFromWindowsFallback({
       command: params.command,
       env: identityEnv,
@@ -999,7 +1230,7 @@ export function detectGatewayManagementExecCommand(params: {
           action: parsed.action,
           source: "openclaw-cli",
           hard: parsed.hard,
-          complex,
+          complex: complex || parsed.complex,
           ...(parsed.json ? { json: true } : {}),
         };
       }
