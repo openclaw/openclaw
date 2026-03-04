@@ -1234,4 +1234,35 @@ describe("applyMediaUnderstanding", () => {
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
+
+  it("allows text file starting with 'SQLite' through when MIME is absent (no false positive)", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "SQLite discussion points for the Q3 planning meeting\nAction items below",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("SQLite discussion points");
+  });
+
+  it("handles file shorter than magic header length gracefully", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "tiny.dat",
+      content: "Hi",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+  });
 });

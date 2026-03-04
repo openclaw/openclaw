@@ -59,20 +59,59 @@ const EXTRA_TEXT_MIMES = [
  */
 const BINARY_EXTENSIONS = new Set([
   // Archives
-  ".zip", ".gz", ".tar", ".rar", ".7z", ".bz2", ".xz", ".zst",
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".bz2",
+  ".xz",
+  ".zst",
   // Executables & libraries
-  ".exe", ".dll", ".so", ".dylib", ".msi", ".deb", ".rpm", ".dmg", ".app",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".msi",
+  ".deb",
+  ".rpm",
+  ".dmg",
+  ".app",
   // Office / document containers
-  ".msg", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-  ".odt", ".ods", ".odp",
+  ".msg",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".odt",
+  ".ods",
+  ".odp",
   // Media (not already handled by kind checks)
-  ".psd", ".ai", ".sketch", ".fig",
+  ".psd",
+  ".ai",
+  ".sketch",
+  ".fig",
   // Databases & data
-  ".db", ".sqlite", ".sqlite3", ".mdb",
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".mdb",
   // Other binary formats
-  ".class", ".pyc", ".pyo", ".wasm", ".o", ".a", ".lib",
-  ".iso", ".img", ".vmdk", ".qcow2",
-  ".pak", ".cab",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+  ".o",
+  ".a",
+  ".lib",
+  ".iso",
+  ".img",
+  ".vmdk",
+  ".qcow2",
+  ".pak",
+  ".cab",
 ]);
 
 const TEXT_EXT_MIME = new Map<string, string>([
@@ -327,6 +366,8 @@ function resolveTextMimeFromName(name?: string): string | undefined {
 /**
  * Check for well-known binary file signatures (magic bytes) in the buffer
  * header. This catches binary files even when MIME type is missing or wrong.
+ * Magic bytes (also called "file signatures") are unique byte sequences at the start
+ * of a file that identify its format, regardless of extension or MIME type.
  */
 function hasBinaryFileSignature(buffer?: Buffer): boolean {
   if (!buffer || buffer.length < 4) {
@@ -337,12 +378,7 @@ function hasBinaryFileSignature(buffer?: Buffer): boolean {
     return true;
   }
   // OLE2 Compound Document (.msg, .doc, .xls, .ppt)
-  if (
-    buffer[0] === 0xd0 &&
-    buffer[1] === 0xcf &&
-    buffer[2] === 0x11 &&
-    buffer[3] === 0xe0
-  ) {
+  if (buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) {
     return true;
   }
   // ELF binary
@@ -374,8 +410,28 @@ function hasBinaryFileSignature(buffer?: Buffer): boolean {
   ) {
     return true;
   }
-  // SQLite
-  if (buffer.length >= 6 && buffer.subarray(0, 6).toString("ascii") === "SQLite") {
+  // SQLite magic header: "SQLite format 3\0" (16 bytes, null-terminated)
+  // Only 6 bytes ("SQLite") would false-positive on text files starting with the word "SQLite"
+  // Spec: https://www.sqlite.org/fileformat.html#magic_header_string
+  if (
+    buffer.length >= 16 &&
+    buffer[0] === 0x53 &&
+    buffer[1] === 0x51 &&
+    buffer[2] === 0x4c &&
+    buffer[3] === 0x69 &&
+    buffer[4] === 0x74 &&
+    buffer[5] === 0x65 &&
+    buffer[6] === 0x20 &&
+    buffer[7] === 0x66 &&
+    buffer[8] === 0x6f &&
+    buffer[9] === 0x72 &&
+    buffer[10] === 0x6d &&
+    buffer[11] === 0x61 &&
+    buffer[12] === 0x74 &&
+    buffer[13] === 0x20 &&
+    buffer[14] === 0x33 &&
+    buffer[15] === 0x00
+  ) {
     return true;
   }
   return false;
@@ -474,7 +530,8 @@ async function extractFileBlocks(params: {
     // injected into the prompt as text. Only checked when MIME is absent or
     // uninformative — a known textual MIME (e.g. application/vnd.api+json)
     // should still be allowed through even on a .bin file. (#33320)
-    const mimeIsAbsentOrGeneric = !normalizedRawMime || normalizedRawMime === "application/octet-stream";
+    const mimeIsAbsentOrGeneric =
+      !normalizedRawMime || normalizedRawMime === "application/octet-stream";
     if (!forcedTextMimeResolved && mimeIsAbsentOrGeneric) {
       if (isBinaryFileExtension(nameHint)) {
         logVerbose(
@@ -483,9 +540,7 @@ async function extractFileBlocks(params: {
         continue;
       }
       if (hasBinaryFileSignature(bufferResult?.buffer)) {
-        logVerbose(
-          `media: file attachment skipped (binary signature) index=${attachment.index}`,
-        );
+        logVerbose(`media: file attachment skipped (binary signature) index=${attachment.index}`);
         continue;
       }
     }
