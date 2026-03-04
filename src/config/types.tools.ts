@@ -425,6 +425,16 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Automatically search memory before each agent turn and prepend results to prompt. */
+  autoRecall?:
+    | boolean
+    | {
+        enabled?: boolean;
+        /** Max results to inject (default: 5). */
+        maxResults?: number;
+        /** Minimum score threshold (default: 0.3). */
+        minScore?: number;
+      };
 };
 
 export type ToolsConfig = {
