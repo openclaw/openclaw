@@ -13,6 +13,7 @@ export type MemoryConfig = {
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  captureMinChars?: number;
   captureMaxChars?: number;
 };
 
@@ -20,6 +21,7 @@ export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "o
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
+export const DEFAULT_CAPTURE_MIN_CHARS = 10;
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
@@ -97,7 +99,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMinChars", "captureMaxChars"],
       "memory config",
     );
 
@@ -109,6 +111,12 @@ export const memoryConfigSchema = {
 
     const model = resolveEmbeddingModel(embedding);
 
+    const captureMinChars =
+      typeof cfg.captureMinChars === "number" ? Math.floor(cfg.captureMinChars) : undefined;
+    if (typeof captureMinChars === "number" && (captureMinChars < 1 || captureMinChars > 1000)) {
+      throw new Error("captureMinChars must be between 1 and 1000");
+    }
+
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
     if (
@@ -116,6 +124,12 @@ export const memoryConfigSchema = {
       (captureMaxChars < 100 || captureMaxChars > 10_000)
     ) {
       throw new Error("captureMaxChars must be between 100 and 10000");
+    }
+
+    const resolvedMinChars = captureMinChars ?? DEFAULT_CAPTURE_MIN_CHARS;
+    const resolvedMaxChars = captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
+    if (resolvedMinChars > resolvedMaxChars) {
+      throw new Error("captureMinChars must be less than or equal to captureMaxChars");
     }
 
     return {
@@ -130,7 +144,8 @@ export const memoryConfigSchema = {
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
-      captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      captureMinChars: resolvedMinChars,
+      captureMaxChars: resolvedMaxChars,
     };
   },
   uiHints: {
@@ -169,6 +184,12 @@ export const memoryConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Automatically inject relevant memories into context",
+    },
+    captureMinChars: {
+      label: "Capture Min Chars",
+      help: "Minimum message length eligible for auto-capture",
+      advanced: true,
+      placeholder: String(DEFAULT_CAPTURE_MIN_CHARS),
     },
     captureMaxChars: {
       label: "Capture Max Chars",
