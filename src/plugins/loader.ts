@@ -405,10 +405,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
   // not eagerly load every channel runtime dependency.
   let resolvedRuntime: PluginRuntime | null = null;
+  const resolveRuntime = (): PluginRuntime => {
+    resolvedRuntime ??= createPluginRuntime();
+    return resolvedRuntime;
+  };
   const runtime = new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
-      resolvedRuntime ??= createPluginRuntime();
-      return Reflect.get(resolvedRuntime, prop, receiver);
+      return Reflect.get(resolveRuntime(), prop, receiver);
+    },
+    set(_target, prop, value, receiver) {
+      return Reflect.set(resolveRuntime(), prop, value, receiver);
+    },
+    has(_target, prop) {
+      return Reflect.has(resolveRuntime(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(resolveRuntime() as object);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    },
+    defineProperty(_target, prop, attributes) {
+      return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
+    },
+    deleteProperty(_target, prop) {
+      return Reflect.deleteProperty(resolveRuntime() as object, prop);
+    },
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
   const { registry, createApi } = createPluginRegistry({
