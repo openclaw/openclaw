@@ -10,44 +10,60 @@ const log = createSubsystemLogger("gateway/global-proxy");
 let applied = false;
 
 /**
- * Collect the first proxy URL found in channel configurations.
+ * Collect the first proxy URL found in enabled channel configurations.
  *
- * When a proxy is configured for any channel (e.g. `channels.telegram.proxy`
+ * When a proxy is configured for any enabled channel (e.g. `channels.telegram.proxy`
  * or `channels.discord.proxy`), the gateway process itself — and any
  * third-party library that relies on `globalThis.fetch` — must also go
  * through that proxy.  Node's built-in `fetch` does not honor `HTTP_PROXY` /
  * `HTTPS_PROXY` env vars, so we need to install a proxy-aware undici
  * dispatcher globally.
+ *
+ * Channels with `enabled: false` are skipped so a stale/unreachable proxy
+ * from a disabled channel does not affect unrelated outbound requests.
  */
 function resolveFirstChannelProxy(cfg: ReturnType<typeof loadConfig>): string | undefined {
-  const telegramProxy = cfg.channels?.telegram?.proxy?.trim();
-  if (telegramProxy) {
-    return telegramProxy;
-  }
+  const telegram = cfg.channels?.telegram;
+  // Skip disabled channels (enabled defaults to true when not set)
+  if (telegram && telegram.enabled !== false) {
+    const telegramProxy = telegram.proxy?.trim();
+    if (telegramProxy) {
+      return telegramProxy;
+    }
 
-  // Check telegram accounts
-  const telegramAccounts = cfg.channels?.telegram?.accounts;
-  if (telegramAccounts) {
-    for (const acct of Object.values(telegramAccounts)) {
-      const p = (acct as { proxy?: string })?.proxy?.trim();
-      if (p) {
-        return p;
+    // Check per-account proxy settings
+    const telegramAccounts = telegram.accounts;
+    if (telegramAccounts) {
+      for (const acct of Object.values(telegramAccounts)) {
+        const account = acct as { enabled?: boolean; proxy?: string };
+        if (account.enabled !== false) {
+          const p = account.proxy?.trim();
+          if (p) {
+            return p;
+          }
+        }
       }
     }
   }
 
-  const discordProxy = cfg.channels?.discord?.proxy?.trim();
-  if (discordProxy) {
-    return discordProxy;
-  }
+  const discord = cfg.channels?.discord;
+  if (discord && discord.enabled !== false) {
+    const discordProxy = discord.proxy?.trim();
+    if (discordProxy) {
+      return discordProxy;
+    }
 
-  // Check discord accounts
-  const discordAccounts = cfg.channels?.discord?.accounts;
-  if (discordAccounts) {
-    for (const acct of Object.values(discordAccounts)) {
-      const p = (acct as { proxy?: string })?.proxy?.trim();
-      if (p) {
-        return p;
+    // Check per-account proxy settings
+    const discordAccounts = discord.accounts;
+    if (discordAccounts) {
+      for (const acct of Object.values(discordAccounts)) {
+        const account = acct as { enabled?: boolean; proxy?: string };
+        if (account.enabled !== false) {
+          const p = account.proxy?.trim();
+          if (p) {
+            return p;
+          }
+        }
       }
     }
   }
