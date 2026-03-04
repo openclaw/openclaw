@@ -126,6 +126,50 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("does not warn when sender-based groups define per-group allowFrom", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100111": { allowFrom: ["111"] },
+            "-100222": { allowFrom: ["222"] },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns when sender-based groups are missing per-group allowFrom and no fallback exists", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100111": { allowFrom: ["111"] },
+            "-100222": {},
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom (and allowFrom) is empty"),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

@@ -1342,6 +1342,28 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     );
   };
 
+  const collectGroupScopes = (
+    scope?: Record<string, unknown>,
+  ): Array<[string, Record<string, unknown>]> => {
+    if (!scope) {
+      return [];
+    }
+    const groups: Array<[string, Record<string, unknown>]> = [];
+    for (const key of ["groups", "rooms"] as const) {
+      const entry = scope[key];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      for (const [groupId, groupConfig] of Object.entries(entry as Record<string, unknown>)) {
+        if (!groupConfig || typeof groupConfig !== "object" || Array.isArray(groupConfig)) {
+          continue;
+        }
+        groups.push([groupId, groupConfig as Record<string, unknown>]);
+      }
+    }
+    return groups;
+  };
+
   const checkAccount = (
     account: Record<string, unknown>,
     prefix: string,
@@ -1393,8 +1415,21 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       const fallbackToAllowFrom = allowsGroupAllowFromFallback(channelName);
       const effectiveGroupAllowFrom =
         groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
+      const inheritedGroupAllowFrom =
+        effectiveGroupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
+      const accountGroupScopes = collectGroupScopes(account);
+      const groupScopes =
+        accountGroupScopes.length > 0 ? accountGroupScopes : collectGroupScopes(parent);
+      const allGroupsCoveredByPerGroupAllowFrom =
+        groupScopes.length > 0 &&
+        groupScopes.every(([, group]) => {
+          const perGroupAllowFrom = group.allowFrom as Array<string | number> | undefined;
+          return (
+            hasAllowFromEntries(perGroupAllowFrom) || hasAllowFromEntries(inheritedGroupAllowFrom)
+          );
+        });
 
-      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom) && !allGroupsCoveredByPerGroupAllowFrom) {
         if (fallbackToAllowFrom) {
           warnings.push(
             `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
