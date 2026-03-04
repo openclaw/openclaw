@@ -136,7 +136,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: HookContext,
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -155,6 +158,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolName: name,
               params,
               toolCallId,
+              ctx: hookContext,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
@@ -180,7 +184,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
                   params: isPlainObject(afterParams) ? afterParams : {},
                   result,
                 },
-                { toolName: name },
+                {
+                  toolName: name,
+                  agentId: hookContext?.agentId,
+                  sessionKey: hookContext?.sessionKey,
+                  sessionId: hookContext?.sessionId,
+                },
               );
             } catch (hookErr) {
               logDebug(
@@ -226,7 +235,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
                   params: isPlainObject(params) ? params : {},
                   error: described.message,
                 },
-                { toolName: normalizedName },
+                {
+                  toolName: normalizedName,
+                  agentId: hookContext?.agentId,
+                  sessionKey: hookContext?.sessionKey,
+                  sessionId: hookContext?.sessionId,
+                },
               );
             } catch (hookErr) {
               logDebug(

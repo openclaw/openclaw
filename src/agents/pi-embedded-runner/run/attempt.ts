@@ -404,6 +404,7 @@ export async function runEmbeddedAttempt(
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
           sessionKey: params.sessionKey ?? params.sessionId,
+          sessionId: params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -660,6 +661,11 @@ export async function runEmbeddedAttempt(
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        hookContext: {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+        },
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
@@ -677,6 +683,7 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
               loopDetection: clientToolLoopDetection,
             },
           )

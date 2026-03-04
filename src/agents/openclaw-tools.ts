@@ -27,6 +27,7 @@ export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
+  agentSessionId?: string;
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
   /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
@@ -181,6 +182,7 @@ export function createOpenClawTools(options?: {
         config: options?.config,
       }),
       sessionKey: options?.agentSessionKey,
+      sessionId: options?.agentSessionId,
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       sandboxed: options?.sandboxed,

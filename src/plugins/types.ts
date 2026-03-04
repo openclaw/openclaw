@@ -61,6 +61,7 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   messageChannel?: string;
   agentAccountId?: string;
   sandboxed?: boolean;
@@ -473,6 +474,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   toolName: string;
 };
 
