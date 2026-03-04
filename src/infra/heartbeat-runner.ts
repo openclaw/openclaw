@@ -1049,7 +1049,7 @@ export function startHeartbeatRunner(opts: {
         // Config unchanged — keep existing schedule (even if overdue, let it fire)
         return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
       }
-      // Config changed — recompute from original base, preserving elapsed countdown
+      // Config changed — recompute from original cold-start base with a fresh jitter sample
       const recomputed = prevState.scheduledAt + intervalMs + Math.floor(Math.random() * jitterMs);
       return { nextDueMs: Math.max(now, recomputed), scheduledAt: prevState.scheduledAt };
     }
