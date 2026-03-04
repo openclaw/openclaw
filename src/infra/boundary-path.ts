@@ -302,13 +302,68 @@ function handleLexicalStatDisposition(params: {
   return "resolve-link";
 }
 
+function isWorkspaceSymlinkAllowed(params: {
+  rootCanonicalPath: string;
+  linkCanonical: string;
+  boundaryLabel: string;
+}): boolean {
+  // Allow symlinks between sibling workspace directories under .openclaw/
+  if (params.boundaryLabel !== "workspace root") {
+    return false;
+  }
+
+  // Check if both paths are under .openclaw/workspace*
+  const rootParts = params.rootCanonicalPath.split(path.sep);
+  const linkParts = params.linkCanonical.split(path.sep);
+
+  // Find .openclaw in both paths
+  const rootOpenclawIdx = rootParts.findIndex((p) => p === ".openclaw");
+  const linkOpenclawIdx = linkParts.findIndex((p) => p === ".openclaw");
+
+  if (rootOpenclawIdx === -1 || linkOpenclawIdx === -1) {
+    return false;
+  }
+
+  // Check if they share the same .openclaw parent path
+  const rootOpenclawParent = rootParts.slice(0, rootOpenclawIdx + 1).join(path.sep);
+  const linkOpenclawParent = linkParts.slice(0, linkOpenclawIdx + 1).join(path.sep);
+
+  if (rootOpenclawParent !== linkOpenclawParent) {
+    return false;
+  }
+
+  // Check if both are workspace directories (workspace or workspace-*)
+  const rootWorkspaceDir = rootParts[rootOpenclawIdx + 1];
+  const linkWorkspaceDir = linkParts[linkOpenclawIdx + 1];
+
+  if (!rootWorkspaceDir || !linkWorkspaceDir) {
+    return false;
+  }
+
+  const isRootWorkspace =
+    rootWorkspaceDir === "workspace" || rootWorkspaceDir.startsWith("workspace-");
+  const isLinkWorkspace =
+    linkWorkspaceDir === "workspace" || linkWorkspaceDir.startsWith("workspace-");
+
+  return isRootWorkspace && isLinkWorkspace;
+}
+
 function applyResolvedSymlinkHop(params: {
   state: LexicalTraversalState;
   linkCanonical: string;
   rootCanonicalPath: string;
   boundaryLabel: string;
 }): void {
-  if (!isPathInside(params.rootCanonicalPath, params.linkCanonical)) {
+  const isInside = isPathInside(params.rootCanonicalPath, params.linkCanonical);
+  const isWorkspaceAllowed =
+    !isInside &&
+    isWorkspaceSymlinkAllowed({
+      rootCanonicalPath: params.rootCanonicalPath,
+      linkCanonical: params.linkCanonical,
+      boundaryLabel: params.boundaryLabel,
+    });
+
+  if (!isInside && !isWorkspaceAllowed) {
     throw symlinkEscapeError({
       boundaryLabel: params.boundaryLabel,
       rootCanonicalPath: params.rootCanonicalPath,
@@ -776,6 +831,18 @@ function assertInsideBoundary(params: {
   if (isPathInside(params.rootCanonicalPath, params.candidatePath)) {
     return;
   }
+
+  // Allow workspace symlinks between sibling directories under .openclaw/
+  if (
+    isWorkspaceSymlinkAllowed({
+      rootCanonicalPath: params.rootCanonicalPath,
+      linkCanonical: params.candidatePath,
+      boundaryLabel: params.boundaryLabel,
+    })
+  ) {
+    return;
+  }
+
   throw new Error(
     `Path resolves outside ${params.boundaryLabel} (${shortPath(params.rootCanonicalPath)}): ${shortPath(params.absolutePath)}`,
   );
