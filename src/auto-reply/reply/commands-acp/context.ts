@@ -74,6 +74,14 @@ function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefin
   return match[1];
 }
 
+function parseDiscordParentChannelFromContext(raw: unknown): string | undefined {
+  const parentId = normalizeString(raw);
+  if (!parentId) {
+    return undefined;
+  }
+  return parentId;
+}
+
 export function resolveAcpCommandParentConversationId(
   params: HandleCommandsParams,
 ): string | undefined {
@@ -89,6 +97,10 @@ export function resolveAcpCommandParentConversationId(
     const threadId = resolveAcpCommandThreadId(params);
     if (!threadId) {
       return undefined;
+    }
+    const fromContext = parseDiscordParentChannelFromContext(params.ctx.ThreadParentId);
+    if (fromContext && fromContext !== threadId) {
+      return fromContext;
     }
     const fromParentSession = parseDiscordParentChannelFromSessionKey(params.ctx.ParentSessionKey);
     if (fromParentSession && fromParentSession !== threadId) {

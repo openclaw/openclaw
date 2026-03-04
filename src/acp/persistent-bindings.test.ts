@@ -110,6 +110,47 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.record.conversation.conversationId).toBe("channel-parent-1");
   });
 
+  it("respects explicit thread-level ACP disable and does not inherit parent binding", () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        discord: {
+          guilds: {
+            "guild-1": {
+              channels: {
+                "thread-123": {
+                  bindings: {
+                    acp: {
+                      enabled: false,
+                    },
+                  },
+                },
+                "channel-parent-1": {
+                  bindings: {
+                    acp: {
+                      enabled: true,
+                      agentId: "codex",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-123",
+      parentConversationId: "channel-parent-1",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
   it("resolves telegram forum topic bindings using canonical conversation ids", () => {
     const cfg = {
       ...baseCfg,

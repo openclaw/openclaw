@@ -59,11 +59,18 @@ function findDiscordChannelBinding(params: {
   cfg: OpenClawConfig;
   accountId: string;
   conversationCandidates: string[];
-}): {
-  channelId: string;
-  binding: AcpBindingConfigShape;
-  channelConfig: DiscordGuildChannelConfig;
-} | null {
+}):
+  | {
+      kind: "binding";
+      channelId: string;
+      binding: AcpBindingConfigShape;
+      channelConfig: DiscordGuildChannelConfig;
+    }
+  | {
+      kind: "explicit-disabled";
+      channelId: string;
+    }
+  | null {
   const discordConfig = resolveDiscordAccountConfig(params.cfg, params.accountId);
   const guilds = discordConfig.guilds;
   if (!guilds || typeof guilds !== "object") {
@@ -80,11 +87,22 @@ function findDiscordChannelBinding(params: {
         continue;
       }
       const rawBinding = channelConfig.bindings?.acp;
+      if (
+        rawBinding &&
+        typeof rawBinding === "object" &&
+        (rawBinding as { enabled?: boolean }).enabled === false
+      ) {
+        return {
+          kind: "explicit-disabled",
+          channelId: candidate,
+        };
+      }
       const binding = normalizeBindingConfig(rawBinding);
       if (!binding) {
         continue;
       }
       return {
+        kind: "binding",
         channelId: candidate,
         binding,
         channelConfig,
@@ -182,6 +200,9 @@ export function resolveConfiguredAcpBindingRecord(params: {
       ),
     });
     if (!resolved) {
+      return null;
+    }
+    if (resolved.kind === "explicit-disabled") {
       return null;
     }
     const spec = toConfiguredBindingSpec({

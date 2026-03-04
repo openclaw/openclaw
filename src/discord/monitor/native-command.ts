@@ -1614,6 +1614,7 @@ async function dispatchDiscordCommandInteraction(params: {
     // preserve the real Discord target separately.
     OriginatingChannel: "discord" as const,
     OriginatingTo: isDirectMessage ? `user:${user.id}` : `channel:${channelId}`,
+    ThreadParentId: isThreadChannel ? threadParentId : undefined,
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({

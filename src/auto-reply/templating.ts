@@ -153,6 +153,11 @@ export type MsgContext = {
    */
   OriginatingTo?: string;
   /**
+   * Provider-specific parent conversation id for threaded contexts.
+   * For Discord threads, this is the parent channel id.
+   */
+  ThreadParentId?: string;
+  /**
    * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".
    */
