@@ -47,17 +47,19 @@ async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
   text: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId } = params;
+  const { cfg, to, text, replyToMessageId, replyInThread, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId });
+    return sendMarkdownCardFeishu({ cfg, to, text, replyToMessageId, replyInThread, accountId });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId });
+  return sendMessageFeishu({ cfg, to, text, replyToMessageId, replyInThread, accountId });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -65,7 +67,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, accountId }) => {
+  sendText: async ({ cfg, to, text, replyToId, threadId, accountId }) => {
+    // Map outbound context to Feishu API params
+    const replyToMessageId = replyToId ?? (typeof threadId === "string" ? threadId : undefined);
+    // Enable reply_in_thread when threadId is explicitly provided
+    const replyInThread = threadId != null;
+
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
@@ -76,6 +83,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           cfg,
           to,
           mediaUrl: localImagePath,
+          replyToMessageId,
+          replyInThread,
           accountId: accountId ?? undefined,
         });
         return { channel: "feishu", ...result };
@@ -89,17 +98,25 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       cfg,
       to,
       text,
+      replyToMessageId,
+      replyInThread,
       accountId: accountId ?? undefined,
     });
     return { channel: "feishu", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, replyToId, threadId, accountId, mediaLocalRoots }) => {
+    // Map outbound context to Feishu API params
+    const replyToMessageId = replyToId ?? (typeof threadId === "string" ? threadId : undefined);
+    const replyInThread = threadId != null;
+
     // Send text first if provided
     if (text?.trim()) {
       await sendOutboundText({
         cfg,
         to,
         text,
+        replyToMessageId,
+        replyInThread,
         accountId: accountId ?? undefined,
       });
     }
@@ -111,6 +128,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           cfg,
           to,
           mediaUrl,
+          replyToMessageId,
+          replyInThread,
           accountId: accountId ?? undefined,
           mediaLocalRoots,
         });
@@ -124,6 +143,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           cfg,
           to,
           text: fallbackText,
+          replyToMessageId,
+          replyInThread,
           accountId: accountId ?? undefined,
         });
         return { channel: "feishu", ...result };
@@ -135,6 +156,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       cfg,
       to,
       text: text ?? "",
+      replyToMessageId,
+      replyInThread,
       accountId: accountId ?? undefined,
     });
     return { channel: "feishu", ...result };
