@@ -144,6 +144,21 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Configuration for automatic AI response when the bot is added to a new channel.
+   * When enabled, the bot will trigger an AI run upon joining a channel, allowing
+   * it to greet users and ask about configuration preferences (e.g. requireMention,
+   * user allowlists) without requiring a manual first message.
+   */
+  onBotJoinChannel?: {
+    /** If true, trigger an AI response when the bot joins a new channel. Default: false. */
+    enabled?: boolean;
+    /**
+     * Custom prompt used to seed the AI response on join.
+     * Defaults to a greeting + configuration preference prompt.
+     */
+    prompt?: string;
+  };
 };
 
 export type SlackConfig = {

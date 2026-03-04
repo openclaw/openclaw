@@ -513,6 +513,13 @@ export const SlackAccountSchema = z
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    onBotJoinChannel: z
+      .object({
+        enabled: z.boolean().optional(),
+        prompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

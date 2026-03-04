@@ -1,12 +1,25 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
+import type { ResolvedSlackAccount } from "../../accounts.js";
+import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMemberChannelEvent } from "../types.js";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 
-export function registerSlackMemberEvents(params: { ctx: SlackMonitorContext }) {
-  const { ctx } = params;
+const DEFAULT_BOT_JOIN_PROMPT =
+  "I've just been added to this channel. I'd like to set myself up properly here. " +
+  "Could you let me know: " +
+  "1) Should I require a direct @mention to respond, or respond to all messages in this channel? " +
+  "2) Should I respond to messages from everyone, or only specific users?";
+
+export function registerSlackMemberEvents(params: {
+  ctx: SlackMonitorContext;
+  account: ResolvedSlackAccount;
+  handleSlackMessage?: SlackMessageHandler;
+}) {
+  const { ctx, account, handleSlackMessage } = params;
 
   ctx.app.event(
     "member_joined_channel",
@@ -42,6 +55,30 @@ export function registerSlackMemberEvents(params: { ctx: SlackMonitorContext }) 
           sessionKey,
           contextKey: `slack:member:joined:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
         });
+
+        // When the bot itself joins a channel and onBotJoinChannel is enabled,
+        // trigger an AI response so the bot can greet users and ask about
+        // configuration preferences (requireMention, user allowlists, etc.)
+        // without requiring a manual first message from a human.
+        const isBotJoin = Boolean(ctx.botUserId && payload.user === ctx.botUserId);
+        const onBotJoinCfg = account.config.onBotJoinChannel;
+        if (isBotJoin && onBotJoinCfg?.enabled && handleSlackMessage && channelId) {
+          const prompt = onBotJoinCfg.prompt?.trim() || DEFAULT_BOT_JOIN_PROMPT;
+          // Infer channel_type from channel ID prefix if not provided by the event.
+          const resolvedChannelType = channelType ?? (channelId.startsWith("D") ? "im" : "channel");
+          // Synthetic message acts as the trigger for the AI run.
+          // We use wasMentioned: true to bypass mention-gating, and a placeholder
+          // user ID that differs from the bot's own ID so it passes bot-message checks.
+          const syntheticMessage: SlackMessageEvent = {
+            type: "message",
+            channel: channelId,
+            channel_type: resolvedChannelType as SlackMessageEvent["channel_type"],
+            user: "SYSTEM_BOT_JOIN",
+            text: prompt,
+            ts: String(Date.now() / 1000),
+          };
+          await handleSlackMessage(syntheticMessage, { source: "app_mention", wasMentioned: true });
+        }
       } catch (err) {
         ctx.runtime.error?.(danger(`slack join handler failed: ${String(err)}`));
       }
