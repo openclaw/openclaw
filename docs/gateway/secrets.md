@@ -250,8 +250,8 @@ Example provider config for a user-managed external wrapper:
 
 External vendor patterns that fit this contract:
 
-- 1Password Environments: wrapper can call `op environment read $OP_ENVIRONMENT_ID` once per batch and map keys to ids. Note: this command requires 1Password CLI `2.33-beta.02` or newer.
-- Bitwarden Secrets: wrapper can call `bws secret list` once per batch and map secret keys to ids.
+- 1Password Environments: wrapper can call `op environment read $OP_ENVIRONMENT_ID` once per batch and map keys to ids. Use an `op` version that includes `environment read` (`2.33-beta.02` introduced it; prefer current stable when available).
+- Bitwarden Secrets: wrapper can call `bws secret list` once per batch and map secret keys to ids. This fetches all secrets available to the token, so use a project-scoped service account/token with least-privilege access.
 
 ### HashiCorp Vault CLI
 
