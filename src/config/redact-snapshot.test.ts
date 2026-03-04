@@ -254,6 +254,24 @@ describe("redactConfigSnapshot", () => {
     expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
   });
 
+  it("keeps file-shaped payloads redacted when the file secret ref id looks token-like", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "file",
+            provider: "default",
+            id: "/sk_proj_abcdefghijklmnopqrstuvwxyz123456",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
+  });
+
   it("keeps exec-shaped payloads redacted when the exec secret ref id looks inline", () => {
     const snapshot = makeSnapshot({
       channels: {
