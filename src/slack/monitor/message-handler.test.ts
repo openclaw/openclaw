@@ -148,4 +148,72 @@ describe("createSlackMessageHandler", () => {
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
+
+  it("flushes pending thread buffered keys when a different user posts in the same thread", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000100",
+        thread_ts: "1709000000.000001",
+        text: "first buffered thread message",
+      } as never,
+      { source: "message" },
+    );
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U222",
+        ts: "1709000000.000200",
+        thread_ts: "1709000000.000001",
+        text: "second buffered thread message",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000001:U111");
+  });
+
+  it("keeps same-user thread buffering on a single key", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000100",
+        thread_ts: "1709000000.000001",
+        text: "first buffered thread message",
+      } as never,
+      { source: "message" },
+    );
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000200",
+        thread_ts: "1709000000.000001",
+        text: "second buffered thread message",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(flushKeyMock).not.toHaveBeenCalled();
+  });
 });
