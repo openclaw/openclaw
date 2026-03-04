@@ -98,6 +98,7 @@ describe("CronService", () => {
     expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
 
     cron.stop();
+    await vi.advanceTimersByTimeAsync(1);
     await store.cleanup();
   });
 });
