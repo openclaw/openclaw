@@ -24,10 +24,26 @@ export async function handleSlackMessageAction(params: {
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;
   const resolveChannelId = () => {
-    const channelId =
-      readStringParam(actionParams, "channelId") ??
-      readStringParam(actionParams, "to", { required: true });
-    return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+    const channelId = readStringParam(actionParams, "channelId");
+    if (channelId) {
+      return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
+    }
+
+    const to = readStringParam(actionParams, "to");
+    if (to) {
+      return normalizeChannelId ? normalizeChannelId(to) : to;
+    }
+
+    if (action === "react" || action === "reactions") {
+      const currentChannelId = ctx.toolContext?.currentChannelId;
+      if (currentChannelId) {
+        return currentChannelId;
+      }
+    }
+
+    return readStringParam(actionParams, "channelId", {
+      required: true,
+    });
   };
 
   if (action === "send") {

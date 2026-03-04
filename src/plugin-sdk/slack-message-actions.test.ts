@@ -9,6 +9,83 @@ function createInvokeSpy() {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("falls back to toolContext.currentChannelId for react actions when target is omitted", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "react",
+        cfg: {},
+        params: {
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        toolContext: {
+          currentChannelId: "C123",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        channelId: "C123",
+        messageId: "123.456",
+        emoji: "✅",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("falls back to toolContext.currentChannelId for reactions actions when target is omitted", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "reactions",
+        cfg: {},
+        params: {
+          messageId: "123.456",
+        },
+        toolContext: {
+          currentChannelId: "C999",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "reactions",
+        channelId: "C999",
+        messageId: "123.456",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("does not resolve fallback for reactions when explicit target is missing and no context exists", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "react",
+          cfg: {},
+          params: {
+            messageId: "123.456",
+            emoji: "✅",
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow(/channelId required/);
+  });
+
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
 

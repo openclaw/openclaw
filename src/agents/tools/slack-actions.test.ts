@@ -123,6 +123,20 @@ describe("handleSlackAction", () => {
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
+  it("rejects user targets for react actions", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "react",
+          channelId: "user:U123",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        slackConfig(),
+      ),
+    ).rejects.toThrow(/Slack channel id is required/);
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleSlackAction(
       {
