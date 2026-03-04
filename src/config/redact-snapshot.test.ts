@@ -196,6 +196,28 @@ describe("redactConfigSnapshot", () => {
     });
   });
 
+  it("keeps exec SecretRef metadata visible for structured IDs", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "exec",
+            provider: "default",
+            id: "providers/googlechat/serviceAccount",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toEqual({
+      source: "exec",
+      provider: "default",
+      id: "providers/googlechat/serviceAccount",
+    });
+  });
+
   it("keeps env-shaped payloads redacted when the secret ref id is invalid", () => {
     const snapshot = makeSnapshot({
       channels: {
@@ -222,6 +244,24 @@ describe("redactConfigSnapshot", () => {
             source: "file",
             provider: "default",
             id: '/{"private_key":"inline-secret"}',
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
+  });
+
+  it("keeps exec-shaped payloads redacted when the exec secret ref id looks inline", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "exec",
+            provider: "default",
+            id: "sk-proj-abcdef1234567890ghijklmnopqrstuvwxyz",
           },
         },
       },
