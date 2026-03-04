@@ -21,11 +21,18 @@ import {
   installDaemonServiceAndEmit,
 } from "./response.js";
 import { parsePort } from "./shared.js";
+import { resolveDaemonServiceEnv } from "./systemd-scope.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
+  const serviceEnv = resolveDaemonServiceEnv({ system: opts.system });
+
+  if (opts.system && process.platform !== "linux") {
+    fail("--system is only supported on Linux.");
+    return;
+  }
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
@@ -52,7 +59,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const service = resolveGatewayService();
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ env: serviceEnv });
   } catch (err) {
     fail(`Gateway service check failed: ${String(err)}`);
     return;
@@ -144,7 +151,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: serviceEnv,
     port,
     token,
     runtime: runtimeRaw,
@@ -166,12 +173,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: serviceEnv,
         stdout,
         programArguments,
         workingDirectory,
         environment,
       });
     },
+    env: serviceEnv,
   });
 }
