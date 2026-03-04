@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { resolveLogPrefix } from "../../logging/logger.js";
 import { clamp } from "../../utils.js";
 import {
   ErrorCodes,
@@ -14,7 +15,8 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
-const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
+// Matches both default ("openclaw-YYYY-MM-DD.log") and per-profile ("openclaw-<profile>-YYYY-MM-DD.log") log files
+const ROLLING_LOG_RE = /^openclaw(-[a-z0-9_-]+)?-\d{4}-\d{2}-\d{2}\.log$/;
 
 function isRollingLogFile(file: string): boolean {
   return ROLLING_LOG_RE.test(path.basename(file));
@@ -35,9 +37,16 @@ async function resolveLogFile(file: string): Promise<string> {
     return file;
   }
 
+  // Only pick files belonging to this profile's prefix to avoid cross-profile log leaks
+  const profilePrefix = resolveLogPrefix();
   const candidates = await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && ROLLING_LOG_RE.test(entry.name))
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          ROLLING_LOG_RE.test(entry.name) &&
+          entry.name.startsWith(`${profilePrefix}-`),
+      )
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
         const fileStat = await fs.stat(fullPath).catch(() => null);
