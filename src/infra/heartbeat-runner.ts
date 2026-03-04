@@ -576,12 +576,22 @@ async function resolveHeartbeatPreflight(params: {
     notifyTargets: [],
   };
 
-  if (shouldBypassFileGates) {
-    return basePreflight;
-  }
-
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+
+  if (shouldBypassFileGates) {
+    // Bypass skips empty-file gating but we still read HEARTBEAT.md for notify
+    // targets so cron/wake/exec heartbeats can deliver alerts to configured
+    // notify: destinations when non-OK.
+    try {
+      const content = await fs.readFile(heartbeatFilePath, "utf-8");
+      const notifyTargets = extractHeartbeatNotifyTargets(content);
+      return { ...basePreflight, notifyTargets };
+    } catch {
+      return basePreflight;
+    }
+  }
+
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
@@ -917,7 +927,12 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
-      if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+      if (
+        !shouldSkipMain &&
+        visibility.showAlerts &&
+        preflight.notifyTargets.length > 0 &&
+        previewText?.trim()
+      ) {
         await deliverHeartbeatNotifyTargets({
           cfg,
           notifyTargets: preflight.notifyTargets,
@@ -965,7 +980,12 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
-        if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+        if (
+          !shouldSkipMain &&
+          visibility.showAlerts &&
+          preflight.notifyTargets.length > 0 &&
+          previewText?.trim()
+        ) {
           await deliverHeartbeatNotifyTargets({
             cfg,
             notifyTargets: preflight.notifyTargets,
@@ -1012,7 +1032,12 @@ export async function runHeartbeatOnce(opts: {
       deps: opts.deps,
     });
 
-    if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+    if (
+      !shouldSkipMain &&
+      visibility.showAlerts &&
+      preflight.notifyTargets.length > 0 &&
+      previewText?.trim()
+    ) {
       await deliverHeartbeatNotifyTargets({
         cfg,
         notifyTargets: preflight.notifyTargets,
