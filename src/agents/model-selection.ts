@@ -91,8 +91,11 @@ function resolveProviderScopedModelShorthand(params: {
     };
   }
 
-  const resolvedModel = matches.values().next().value;
-  return { ref: normalizeModelRef(params.provider, resolvedModel) };
+  const resolvedMatch = matches.values().next();
+  if (resolvedMatch.done) {
+    return null;
+  }
+  return { ref: normalizeModelRef(params.provider, resolvedMatch.value) };
 }
 
 export function modelKey(provider: string, model: string) {
