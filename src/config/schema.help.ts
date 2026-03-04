@@ -658,6 +658,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.kimi.baseUrl":
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
   "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
+  "tools.web.search.parallel.apiKey": "Parallel API key (fallback: PARALLEL_API_KEY env var).",
+  "tools.web.search.parallel.baseUrl":
+    'Parallel base URL override (default: "https://api.parallel.ai").',
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
   "tools.web.search.perplexity.baseUrl":
