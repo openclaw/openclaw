@@ -1441,6 +1441,110 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 });
 
+describe("runReplyAgent fallback notice persistence", () => {
+  it("clears stale fallback notice when model drifts without fallback attempts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-drift-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      fallbackNoticeSelectedModel: "anthropic/claude-opus-4-5",
+      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
+      fallbackNoticeReason: "rate limit",
+      modelProvider: "deepinfra",
+      model: "moonshotai/Kimi-K2.5",
+    };
+    await saveSessionStore(storePath, { [sessionKey]: sessionEntry });
+
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("openai-codex", "gpt-5.3"),
+        provider: "openai-codex",
+        model: "gpt-5.3",
+        attempts: [],
+      }),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openai-codex",
+          model: "gpt-5.3",
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingTo: "channel:C1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "discord",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(persisted[sessionKey]?.fallbackNoticeActiveModel).toBeUndefined();
+    expect(persisted[sessionKey]?.fallbackNoticeReason).toBeUndefined();
+  });
+});
+
 describe("runReplyAgent response usage footer", () => {
   function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
     const typing = createMockTypingController();

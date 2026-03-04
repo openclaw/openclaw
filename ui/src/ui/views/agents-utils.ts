@@ -195,6 +195,20 @@ export function resolveModelLabel(model?: unknown): string {
   return "-";
 }
 
+export function formatPrimaryModelDisplay(
+  primaryModel?: string | null,
+  fallbacks?: string[] | null,
+): string {
+  const primary = primaryModel?.trim();
+  if (!primary) {
+    return "-";
+  }
+  const fallbackCount = Array.isArray(fallbacks)
+    ? fallbacks.filter((entry) => entry.trim().length > 0).length
+    : 0;
+  return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
+}
+
 export function normalizeModelValue(label: string): string {
   const match = label.match(/^(.+) \(\+\d+ fallback\)$/);
   return match ? match[1] : label;
@@ -431,7 +445,8 @@ function compilePattern(pattern: string): CompiledPattern {
     return { kind: "exact", value: normalized };
   }
   const escaped = normalized.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-  return { kind: "regex", value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`) };
+  const wildcardPattern = escaped.split("\\*").join(".*");
+  return { kind: "regex", value: new RegExp(`^${wildcardPattern}$`) };
 }
 
 function compilePatterns(patterns?: string[]): CompiledPattern[] {

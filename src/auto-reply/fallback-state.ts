@@ -47,7 +47,7 @@ export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): 
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)
-    : "selected model unavailable";
+    : "runtime model differs from selected model";
   const moreAttempts = attempts.length > 1 ? ` (+${attempts.length - 1} more attempts)` : "";
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
 }
@@ -141,7 +141,7 @@ export function resolveFallbackTransition(params: {
     activeModel: normalizeFallbackModelRef(params.state?.fallbackNoticeActiveModel),
     reason: normalizeFallbackModelRef(params.state?.fallbackNoticeReason),
   };
-  const fallbackActive = selectedModelRef !== activeModelRef;
+  const fallbackActive = selectedModelRef !== activeModelRef && params.attempts.length > 0;
   const fallbackTransitioned =
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||

@@ -335,4 +335,21 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
   });
+
+  it("keeps agentMeta provider/model from this run when lastAssistant metadata is stale", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        lastAssistant: {
+          stopReason: "end_turn",
+          provider: "bailian",
+          model: "qwen3.5-plus",
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.meta.agentMeta?.provider).toBe("anthropic");
+    expect(result.meta.agentMeta?.model).toBe("test-model");
+  });
 });

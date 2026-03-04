@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { live } from "lit/directives/live.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -19,13 +21,12 @@ import {
   agentBadgeText,
   buildAgentContext,
   buildModelOptions,
+  formatPrimaryModelDisplay,
   normalizeAgentLabel,
-  normalizeModelValue,
   parseFallbackList,
   resolveAgentConfig,
   resolveAgentEmoji,
   resolveEffectiveModelFallbacks,
-  resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
 
@@ -429,20 +430,14 @@ function renderAgentOverview(params: {
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
     workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
-  const model = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
-  const defaultModel = resolveModelLabel(config.defaults?.model);
-  const modelPrimary =
-    resolveModelPrimary(config.entry?.model) || (model !== "-" ? normalizeModelValue(model) : null);
-  const defaultPrimary =
-    resolveModelPrimary(config.defaults?.model) ||
-    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
+  const modelPrimary = resolveModelPrimary(config.entry?.model);
+  const defaultPrimary = resolveModelPrimary(config.defaults?.model);
   const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
   const modelFallbacks = resolveEffectiveModelFallbacks(
     config.entry?.model,
     config.defaults?.model,
   );
+  const model = formatPrimaryModelDisplay(effectivePrimary, modelFallbacks);
   const fallbackText = modelFallbacks ? modelFallbacks.join(", ") : "";
   const identityName =
     agentIdentity?.name?.trim() ||
@@ -461,7 +456,9 @@ function renderAgentOverview(params: {
       : "";
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
 
-  return html`
+  return keyed(
+    agent.id,
+    html`
     <section class="card">
       <div class="card-title">Overview</div>
       <div class="card-sub">Workspace paths and identity metadata.</div>
@@ -499,7 +496,7 @@ function renderAgentOverview(params: {
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${effectivePrimary ?? ""}
+              .value=${live(effectivePrimary ?? "")}
               ?disabled=${!configForm || configLoading || configSaving}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
@@ -519,7 +516,7 @@ function renderAgentOverview(params: {
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Fallbacks (comma-separated)</span>
             <input
-              .value=${fallbackText}
+              .value=${live(fallbackText)}
               ?disabled=${!configForm || configLoading || configSaving}
               placeholder="provider/model, provider/model"
               @input=${(e: Event) =>
@@ -544,5 +541,6 @@ function renderAgentOverview(params: {
         </div>
       </div>
     </section>
-  `;
+  `,
+  );
 }

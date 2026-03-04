@@ -106,7 +106,9 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  if (!ALLOWED_FILE_NAMES.has(name)) {
+
+  const isSafeExtension = /^[a-zA-Z0-9_\-.]+\.(txt|md|json|js|ts|csv|yaml|yml|log)$/i.test(name);
+  if (!ALLOWED_FILE_NAMES.has(name) && !isSafeExtension) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }

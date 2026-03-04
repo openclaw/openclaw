@@ -19,8 +19,13 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { applyAuthProfileConfig } from "../onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -272,6 +277,62 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+function isOpenAICodexProvider(provider?: string): boolean {
+  const requested = provider?.trim();
+  if (!requested) {
+    return false;
+  }
+  return normalizeProviderId(requested) === "openai-codex";
+}
+
+async function loginWithBuiltinOpenAICodexOAuth(params: {
+  agentDir: string;
+  runtime: RuntimeEnv;
+  prompter: ReturnType<typeof createClackPrompter>;
+  setDefault: boolean;
+}) {
+  const creds = await loginOpenAICodexOAuth({
+    prompter: params.prompter,
+    runtime: params.runtime,
+    isRemote: isRemoteEnvironment(),
+    openUrl: async (url) => {
+      await openUrl(url);
+    },
+    localBrowserMessage: "Complete sign-in in browser…",
+  });
+
+  if (!creds) {
+    return;
+  }
+
+  const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
+    syncSiblingAgents: true,
+  });
+  const email =
+    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : undefined;
+
+  await updateConfig((cfg) => {
+    let next = applyAuthProfileConfig(cfg, {
+      profileId,
+      provider: "openai-codex",
+      mode: "oauth",
+      ...(email ? { email } : {}),
+    });
+    if (params.setDefault) {
+      next = applyOpenAICodexModelDefault(next).next;
+    }
+    return next;
+  });
+
+  logConfigUpdated(params.runtime);
+  params.runtime.log(`Auth profile: ${profileId} (openai-codex/oauth)`);
+  params.runtime.log(
+    params.setDefault
+      ? `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`
+      : `Default model available: ${OPENAI_CODEX_DEFAULT_MODEL} (use --set-default to apply)`,
+  );
+}
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -282,6 +343,17 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const prompter = createClackPrompter();
+
+  if (isOpenAICodexProvider(opts.provider)) {
+    await loginWithBuiltinOpenAICodexOAuth({
+      agentDir,
+      runtime,
+      prompter,
+      setDefault: Boolean(opts.setDefault),
+    });
+    return;
+  }
 
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
@@ -290,7 +362,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const prompter = createClackPrompter();
   const requestedProvider = resolveRequestedLoginProviderOrThrow(providers, opts.provider);
   const selectedProvider =
     requestedProvider ??

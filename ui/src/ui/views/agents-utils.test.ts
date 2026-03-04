@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatPrimaryModelDisplay,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -42,6 +43,24 @@ describe("resolveEffectiveModelFallbacks", () => {
     };
 
     expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([]);
+  });
+});
+
+describe("formatPrimaryModelDisplay", () => {
+  it("renders primary model with fallback count", () => {
+    expect(formatPrimaryModelDisplay("openai-codex/gpt-5.3-codex", ["bailian/kimi-k2.5"])).toBe(
+      "openai-codex/gpt-5.3-codex (+1 fallback)",
+    );
+  });
+
+  it("renders primary model without suffix when fallbacks are empty", () => {
+    expect(formatPrimaryModelDisplay("openai-codex/gpt-5.3-codex", [])).toBe(
+      "openai-codex/gpt-5.3-codex",
+    );
+  });
+
+  it("returns dash when primary model is missing", () => {
+    expect(formatPrimaryModelDisplay(null, ["bailian/kimi-k2.5"])).toBe("-");
   });
 });
 

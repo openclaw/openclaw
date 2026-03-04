@@ -1235,8 +1235,8 @@ export async function runEmbeddedPiAgent(
           const promptTokens = derivePromptTokens(lastRunPromptUsage);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            provider: lastAssistant?.provider ?? provider,
-            model: lastAssistant?.model ?? model.id,
+            provider,
+            model: model.id,
             usage,
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,

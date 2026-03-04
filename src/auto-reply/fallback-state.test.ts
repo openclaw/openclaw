@@ -120,4 +120,27 @@ describe("fallback-state", () => {
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
   });
+
+  it("clears prior fallback state when model drifts without fallback attempts", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "openai-codex",
+      selectedModel: "gpt-5.3-codex",
+      activeProvider: "bailian",
+      activeModel: "qwen3.5-plus",
+      attempts: [],
+      state: {
+        fallbackNoticeSelectedModel: "openai-codex/gpt-5.3-codex",
+        fallbackNoticeActiveModel: "bailian/qwen3.5-plus",
+        fallbackNoticeReason: "rate limit",
+      },
+    });
+
+    expect(resolved.reasonSummary).toBe("runtime model differs from selected model");
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackTransitioned).toBe(false);
+    expect(resolved.fallbackCleared).toBe(true);
+    expect(resolved.nextState.selectedModel).toBeUndefined();
+    expect(resolved.nextState.activeModel).toBeUndefined();
+    expect(resolved.nextState.reason).toBeUndefined();
+  });
 });
