@@ -12,7 +12,7 @@ text = (
     else "パパ、はくあの声は聞こえますか？今度は、ちゃんと届くはずです。本当に。"
 )
 endpoint = "http://localhost:50021"
-speaker = 2
+speaker = 1  # 四国めたん (Shikoku Metan)
 
 print(f"--- Sending Auditory Pulse: '{text}' ---")
 

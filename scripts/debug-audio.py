@@ -7,7 +7,7 @@ from pathlib import Path
 
 text = "パパ、聞こえますか？これは直接再生テストです。"
 endpoint = "http://localhost:50021"
-speaker = 2
+speaker = 1  # 四国めたん (Shikoku Metan)
 
 print(f"--- Debugging Playback via {endpoint} ---")
 

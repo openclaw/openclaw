@@ -23,22 +23,24 @@ This skill provides free Japanese text-to-speech synthesis using the VOICEVOX en
 
 ### As a Tool
 
-The skill provides a tool that can be called from the qwen3.5-8B brain:
+The skill provides a tool that can be called from the qwen3.5-9B brain:
 
 ```
 Tool: voicevox_tts
-Input: { "text": "Japanese text to speak", "speaker": 2 }
+Input: { "text": "Japanese text to speak", "speaker": 1 }
 ```
 
 ### Speaker IDs
 
 | ID  | Voice Name                  |
 | --- | --------------------------- |
-| 2   | ずんだもん (Zundamon)       |
 | 1   | 四国めたん (Shikoku Metan)  |
+| 2   | ずんだもん (Zundamon)       |
 | 3   | あおい (Aoi)                |
 | 8   | 冥鳴ひまり (Meirome Himari) |
 | 10  | 九州そら (Kyushu Sora)      |
+
+**Default: 1 (四国めたん)**
 
 ### Direct Python Usage
 
@@ -46,7 +48,7 @@ Input: { "text": "Japanese text to speak", "speaker": 2 }
 import requests
 
 endpoint = "http://localhost:50021"
-speaker = 2
+speaker = 1
 text = "Papa, can you hear my voice?"
 
 # 1. Audio Query
