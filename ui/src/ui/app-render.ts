@@ -681,9 +681,10 @@ export function renderApp(state: AppViewState) {
                     if (profile) {
                       tools.profile = profile;
                     }
-                    if (Object.keys(tools).length > 0) {
-                      newEntry.tools = tools;
+                    if (Object.keys(tools).length === 0) {
+                      return; // No meaningful change – agent already inherits defaults
                     }
+                    newEntry.tools = tools;
                     list.push(newEntry);
                     updateConfigFormValue(state, ["agents", "list"], list);
                     return;
@@ -721,9 +722,10 @@ export function renderApp(state: AppViewState) {
                     if (deny.length > 0) {
                       tools.deny = deny;
                     }
-                    if (Object.keys(tools).length > 0) {
-                      newEntry.tools = tools;
+                    if (Object.keys(tools).length === 0) {
+                      return; // No meaningful override to persist
                     }
+                    newEntry.tools = tools;
                     list.push(newEntry);
                     updateConfigFormValue(state, ["agents", "list"], list);
                     return;
