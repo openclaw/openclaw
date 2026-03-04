@@ -15,6 +15,7 @@ import {
   resolveDefaultAgentIdFromRaw,
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -42,6 +43,9 @@ function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
   const channelHeartbeat: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(legacyHeartbeat)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     if (CHANNEL_HEARTBEAT_KEYS.has(key)) {
       channelHeartbeat[key] = value;
       continue;
@@ -59,6 +63,33 @@ function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
     agentHeartbeat: Object.keys(agentHeartbeat).length > 0 ? agentHeartbeat : null,
     channelHeartbeat: Object.keys(channelHeartbeat).length > 0 ? channelHeartbeat : null,
   };
+}
+
+function mergeLegacyIntoDefaults(params: {
+  raw: Record<string, unknown>;
+  rootKey: "agents" | "channels";
+  fieldKey: string;
+  legacyValue: Record<string, unknown>;
+  changes: string[];
+  movedMessage: string;
+  mergedMessage: string;
+}) {
+  const root = ensureRecord(params.raw, params.rootKey);
+  const defaults = ensureRecord(root, "defaults");
+  const existing = getRecord(defaults[params.fieldKey]);
+  if (!existing) {
+    defaults[params.fieldKey] = params.legacyValue;
+    params.changes.push(params.movedMessage);
+  } else {
+    // defaults stays authoritative; legacy top-level config only fills gaps.
+    const merged = structuredClone(existing);
+    mergeMissing(merged, params.legacyValue);
+    defaults[params.fieldKey] = merged;
+    params.changes.push(params.mergedMessage);
+  }
+
+  root.defaults = defaults;
+  params.raw[params.rootKey] = root;
 }
 
 // NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
@@ -119,24 +150,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         return;
       }
 
-      const agents = ensureRecord(raw, "agents");
-      const defaults = ensureRecord(agents, "defaults");
-      const existing = getRecord(defaults.memorySearch);
-      if (!existing) {
-        defaults.memorySearch = legacyMemorySearch;
-        changes.push("Moved memorySearch → agents.defaults.memorySearch.");
-      } else {
-        // agents.defaults stays authoritative; legacy top-level config only fills gaps.
-        const merged = structuredClone(existing);
-        mergeMissing(merged, legacyMemorySearch);
-        defaults.memorySearch = merged;
-        changes.push(
+      mergeLegacyIntoDefaults({
+        raw,
+        rootKey: "agents",
+        fieldKey: "memorySearch",
+        legacyValue: legacyMemorySearch,
+        changes,
+        movedMessage: "Moved memorySearch → agents.defaults.memorySearch.",
+        mergedMessage:
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-        );
-      }
-
-      agents.defaults = defaults;
-      raw.agents = agents;
+      });
       delete raw.memorySearch;
     },
   },
@@ -302,45 +325,29 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       const { agentHeartbeat, channelHeartbeat } = splitLegacyHeartbeat(legacyHeartbeat);
 
       if (agentHeartbeat) {
-        const agents = ensureRecord(raw, "agents");
-        const defaults = ensureRecord(agents, "defaults");
-        const existing = getRecord(defaults.heartbeat);
-        if (!existing) {
-          defaults.heartbeat = agentHeartbeat;
-          changes.push("Moved heartbeat → agents.defaults.heartbeat.");
-        } else {
-          // agents.defaults stays authoritative; legacy top-level config only fills gaps.
-          const merged = structuredClone(existing);
-          mergeMissing(merged, agentHeartbeat);
-          defaults.heartbeat = merged;
-          changes.push(
+        mergeLegacyIntoDefaults({
+          raw,
+          rootKey: "agents",
+          fieldKey: "heartbeat",
+          legacyValue: agentHeartbeat,
+          changes,
+          movedMessage: "Moved heartbeat → agents.defaults.heartbeat.",
+          mergedMessage:
             "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-          );
-        }
-
-        agents.defaults = defaults;
-        raw.agents = agents;
+        });
       }
 
       if (channelHeartbeat) {
-        const channels = ensureRecord(raw, "channels");
-        const defaults = ensureRecord(channels, "defaults");
-        const existing = getRecord(defaults.heartbeat);
-        if (!existing) {
-          defaults.heartbeat = channelHeartbeat;
-          changes.push("Moved heartbeat visibility → channels.defaults.heartbeat.");
-        } else {
-          // channels.defaults stays authoritative; legacy top-level config only fills gaps.
-          const merged = structuredClone(existing);
-          mergeMissing(merged, channelHeartbeat);
-          defaults.heartbeat = merged;
-          changes.push(
+        mergeLegacyIntoDefaults({
+          raw,
+          rootKey: "channels",
+          fieldKey: "heartbeat",
+          legacyValue: channelHeartbeat,
+          changes,
+          movedMessage: "Moved heartbeat visibility → channels.defaults.heartbeat.",
+          mergedMessage:
             "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-          );
-        }
-
-        channels.defaults = defaults;
-        raw.channels = channels;
+        });
       }
 
       if (!agentHeartbeat && !channelHeartbeat) {
