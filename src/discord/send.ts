@@ -57,12 +57,6 @@ export {
   hasAnyGuildPermissionDiscord,
   fetchMemberGuildPermissionsDiscord,
 } from "./send.permissions.js";
-export {
-  fetchReactionsDiscord,
-  reactMessageDiscord,
-  removeOwnReactionsDiscord,
-  removeReactionDiscord,
-} from "./send.reactions.js";
 export type {
   DiscordChannelCreate,
   DiscordChannelEdit,
