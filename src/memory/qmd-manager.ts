@@ -889,7 +889,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const absPath = this.resolveReadPath(relPath);
     if (!absPath.endsWith(".md")) {
-      throw new Error("path required");
+      throw new Error("only .md files are supported");
     }
     const statResult = await statRegularFile(absPath);
     if (statResult.missing) {

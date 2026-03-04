@@ -25,7 +25,7 @@ export async function statRegularFile(absPath: string): Promise<RegularFileStatR
     throw err;
   }
   if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new Error("path required");
+    throw new Error("path must be a regular file (not a symlink or directory)");
   }
   return { missing: false, stat };
 }
