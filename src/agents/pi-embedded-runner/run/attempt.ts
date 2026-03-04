@@ -777,7 +777,13 @@ export async function runEmbeddedAttempt(
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
     });
-    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+    const configuredBootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(
+      params.config,
+    );
+    const bootstrapPromptWarningMode =
+      skipContextInjection && contextInjectionMode === "first-message-only"
+        ? "off"
+        : configuredBootstrapPromptWarningMode;
     const bootstrapPromptWarning = buildBootstrapPromptWarning({
       analysis: bootstrapAnalysis,
       mode: bootstrapPromptWarningMode,
