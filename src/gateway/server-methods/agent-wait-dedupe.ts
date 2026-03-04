@@ -117,7 +117,16 @@ export function readTerminalSnapshotFromDedupeEntry(
 export function readTerminalSnapshotFromGatewayDedupe(params: {
   dedupe: Map<string, DedupeEntry>;
   runId: string;
+  ignoreAgentTerminalSnapshot?: boolean;
 }): AgentWaitTerminalSnapshot | null {
+  if (params.ignoreAgentTerminalSnapshot) {
+    const chatEntry = params.dedupe.get(`chat:${params.runId}`);
+    if (!chatEntry) {
+      return null;
+    }
+    return readTerminalSnapshotFromDedupeEntry(chatEntry);
+  }
+
   const agentEntry = params.dedupe.get(`agent:${params.runId}`);
   const agentSnapshot = agentEntry ? readTerminalSnapshotFromDedupeEntry(agentEntry) : null;
   if (agentEntry) {
@@ -145,6 +154,7 @@ export async function waitForTerminalGatewayDedupe(params: {
   runId: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  ignoreAgentTerminalSnapshot?: boolean;
 }): Promise<AgentWaitTerminalSnapshot | null> {
   const initial = readTerminalSnapshotFromGatewayDedupe(params);
   if (initial) {

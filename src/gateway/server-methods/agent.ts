@@ -765,10 +765,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
+    const hasActiveChatRun = context.chatAbortControllers.has(runId);
 
     const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
       dedupe: context.dedupe,
       runId,
+      ignoreAgentTerminalSnapshot: hasActiveChatRun,
     });
     if (cachedGatewaySnapshot) {
       respond(true, {
@@ -783,16 +785,19 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lifecycleAbortController = new AbortController();
     const dedupeAbortController = new AbortController();
-    const lifecyclePromise = waitForAgentJob({
-      runId,
-      timeoutMs,
-      signal: lifecycleAbortController.signal,
-    });
+    const lifecyclePromise = hasActiveChatRun
+      ? Promise.resolve<Awaited<ReturnType<typeof waitForAgentJob>> | null>(null)
+      : waitForAgentJob({
+          runId,
+          timeoutMs,
+          signal: lifecycleAbortController.signal,
+        });
     const dedupePromise = waitForTerminalGatewayDedupe({
       dedupe: context.dedupe,
       runId,
       timeoutMs,
       signal: dedupeAbortController.signal,
+      ignoreAgentTerminalSnapshot: hasActiveChatRun,
     });
 
     const first = await Promise.race([

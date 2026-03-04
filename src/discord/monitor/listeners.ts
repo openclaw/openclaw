@@ -240,7 +240,7 @@ export class DiscordMessageListener extends MessageCreateListener {
     const channelId = data.channel_id;
     const context = {
       channelId,
-      messageId: (data as { id?: string }).id,
+      messageId: (data as { message?: { id?: string } }).message?.id,
       guildId: (data as { guild_id?: string }).guild_id,
     } satisfies Record<string, unknown>;
     // Serialize messages within the same channel to preserve ordering,

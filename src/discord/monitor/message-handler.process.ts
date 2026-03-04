@@ -721,6 +721,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let dispatchAborted = false;
   try {
     if (isProcessAborted(abortSignal)) {
+      dispatchAborted = true;
       return;
     }
     dispatchResult = await dispatchInboundMessage({
