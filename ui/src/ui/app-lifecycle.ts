@@ -18,6 +18,7 @@ import {
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { setupKeyboardShortcuts, getTabForIndex } from "./keyboard-shortcuts.ts";
+import { addRecentSession } from "./recent-sessions.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {

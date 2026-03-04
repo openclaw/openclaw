@@ -1525,10 +1525,32 @@ function renderScheduleFields(props: CronProps) {
           aria-describedby=${ifDefined(
             props.fieldErrors.cronExpr ? errorIdForField("cronExpr") : undefined,
           )}
-          @input=${(e: Event) =>
-            props.onFormChange({ cronExpr: (e.target as HTMLInputElement).value })}
+          @input=${(e: Event) => {
+            const value = (e.target as HTMLInputElement).value;
+            props.onFormChange({ cronExpr: value });
+            
+            // Real-time validation
+            const debouncedValidate = debounce(() => {
+              const result = validateField("cron", value);
+              const input = e.target as HTMLInputElement;
+              if (result.valid) {
+                input.style.borderColor = "var(--color-success, #10b981)";
+              } else if (value.trim()) {
+                input.style.borderColor = "var(--color-danger, #dc2626)";
+              } else {
+                input.style.borderColor = "";
+              }
+            }, 300);
+            debouncedValidate();
+          }}
           placeholder=${t("cron.form.expressionPlaceholder")}
         />
+        <div class="cron-help">
+          ${t("cron.form.jitterHelp")}
+          ${form.cronExpr && !props.fieldErrors.cronExpr ? html`
+            <span style="color: var(--color-success, #10b981);"> ✓ Valid cron expression</span>
+          ` : nothing}
+        </div>
         ${renderFieldError(props.fieldErrors.cronExpr, errorIdForField("cronExpr"))}
       </label>
       <label class="field">
@@ -1542,7 +1564,6 @@ function renderScheduleFields(props: CronProps) {
         />
         <div class="cron-help">${t("cron.form.timezoneHelp")}</div>
       </label>
-      <div class="cron-help cron-span-2">${t("cron.form.jitterHelp")}</div>
     </div>
   `;
 }

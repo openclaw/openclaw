@@ -356,6 +356,14 @@ export function renderApp(state: AppViewState) {
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
+                  // Track recent session access
+                  try {
+                    import("./recent-sessions.ts").then(({ addRecentSession }) => {
+                      addRecentSession(next);
+                    });
+                  } catch (err) {
+                    // Silent fail - not critical
+                  }
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
