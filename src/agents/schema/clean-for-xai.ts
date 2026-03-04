@@ -52,5 +52,9 @@ export function isXaiProvider(modelProvider?: string, modelId?: string): boolean
   if (provider === "openrouter" && modelId?.toLowerCase().startsWith("x-ai/")) {
     return true;
   }
+  // Venice proxies xAI/Grok models; model IDs start with "grok-"
+  if (provider === "venice" && modelId?.toLowerCase().startsWith("grok-")) {
+    return true;
+  }
   return false;
 }

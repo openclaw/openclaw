@@ -18,6 +18,26 @@ describe("isXaiProvider", () => {
     expect(isXaiProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });
 
+  it("matches venice with grok model id", () => {
+    expect(isXaiProvider("venice", "grok-4.1-fast")).toBe(true);
+  });
+
+  it("matches venice with grok-41-fast model id (Venice catalog id)", () => {
+    expect(isXaiProvider("venice", "grok-41-fast")).toBe(true);
+  });
+
+  it("matches venice with grok-code-fast-1 model id", () => {
+    expect(isXaiProvider("venice", "grok-code-fast-1")).toBe(true);
+  });
+
+  it("does not match venice with non-grok model id", () => {
+    expect(isXaiProvider("venice", "llama-3.3-70b")).toBe(false);
+  });
+
+  it("does not match venice without model id", () => {
+    expect(isXaiProvider("venice")).toBe(false);
+  });
+
   it("does not match openai provider", () => {
     expect(isXaiProvider("openai")).toBe(false);
   });
