@@ -299,6 +299,64 @@ After approval, you can chat normally.
 }
 ```
 
+### Support `@bot`, `@all`, and plain-text mention triggers together
+
+Use this when you want all of these to trigger replies:
+
+- `@BotName`
+- Feishu builtin `@all`
+- plain-text nicknames (for example: "Jarvis")
+- plain-text "everyone"/"all"
+
+```json5
+{
+  channels: {
+    feishu: {
+      groupPolicy: "open",
+      requireMention: true,
+      triggerKeywords: {
+        enabled: true,
+        keywords: ["all", "everyone", "jarvis", "javis"],
+      },
+      groups: {
+        "*": {
+          requireMention: true,
+          triggerKeywords: {
+            enabled: true,
+            keywords: ["all", "everyone", "jarvis", "javis"],
+          },
+        },
+      },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "main",
+        groupChat: {
+          mentionPatterns: [
+            "@?jarvis",
+            "@?javis",
+            "@_all",
+            "@all",
+            "@everyone",
+            "@(?:all|everyone)",
+            "all",
+            "everyone",
+            "jarvis",
+            "javis",
+          ],
+        },
+      },
+    ],
+  },
+}
+```
+
+> With `requireMention: true`, group messages trigger when either mention patterns or
+> trigger keywords match.
+> For non-@ text triggers, ensure Feishu permission `im:message.group_msg` is granted.
+
 ### Allow all groups, no @mention required
 
 ```json5
@@ -391,7 +449,9 @@ openclaw pairing list feishu
 1. Ensure the bot is added to the group
 2. Ensure you @mention the bot (default behavior)
 3. Check `groupPolicy` is not set to `"disabled"`
-4. Check logs: `openclaw logs --follow`
+4. If relying on plain-text triggers, verify `im:message.group_msg` permission is enabled
+5. Verify your `mentionPatterns` and `triggerKeywords` match real chat text
+6. Check logs: `openclaw logs --follow`
 
 ### Bot does not receive messages
 
@@ -527,23 +587,25 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                           | Description                     | Default   |
-| ------------------------------------------------- | ------------------------------- | --------- |
-| `channels.feishu.enabled`                         | Enable/disable channel          | `true`    |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`) | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                          | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                      | -         |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM policy                       | `pairing` |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)     | -         |
-| `channels.feishu.groupPolicy`                     | Group policy                    | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                 | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`    |
-| `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`      |
-| `channels.feishu.streaming`                       | Enable streaming card output    | `true`    |
-| `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`    |
+| Setting                                            | Description                     | Default   |
+| -------------------------------------------------- | ------------------------------- | --------- |
+| `channels.feishu.enabled`                          | Enable/disable channel          | `true`    |
+| `channels.feishu.domain`                           | API domain (`feishu` or `lark`) | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`              | App ID                          | -         |
+| `channels.feishu.accounts.<id>.appSecret`          | App Secret                      | -         |
+| `channels.feishu.accounts.<id>.domain`             | Per-account API domain override | `feishu`  |
+| `channels.feishu.dmPolicy`                         | DM policy                       | `pairing` |
+| `channels.feishu.allowFrom`                        | DM allowlist (open_id list)     | -         |
+| `channels.feishu.groupPolicy`                      | Group policy                    | `open`    |
+| `channels.feishu.groupAllowFrom`                   | Group allowlist                 | -         |
+| `channels.feishu.groups.<chat_id>.requireMention`  | Require @mention                | `true`    |
+| `channels.feishu.triggerKeywords`                  | Group text trigger keywords     | -         |
+| `channels.feishu.groups.<chat_id>.triggerKeywords` | Per-group text trigger keywords | -         |
+| `channels.feishu.groups.<chat_id>.enabled`         | Enable group                    | `true`    |
+| `channels.feishu.textChunkLimit`                   | Message chunk size              | `2000`    |
+| `channels.feishu.mediaMaxMb`                       | Media size limit                | `30`      |
+| `channels.feishu.streaming`                        | Enable streaming card output    | `true`    |
+| `channels.feishu.blockStreaming`                   | Enable block streaming          | `true`    |
 
 ---
 

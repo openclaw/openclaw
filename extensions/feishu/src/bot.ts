@@ -18,12 +18,14 @@ import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } fr
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
+  resolveFeishuTriggerKeywords,
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { matchesTriggerKeywords } from "./trigger-keywords.js";
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -71,6 +73,59 @@ const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+const BACKSPACE_CHAR = "\u0008";
+
+function normalizeMentionPattern(pattern: string): string {
+  if (!pattern.includes(BACKSPACE_CHAR)) {
+    return pattern;
+  }
+  return pattern.split(BACKSPACE_CHAR).join("\\b");
+}
+
+function normalizeMentionText(text: string): string {
+  return (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "").toLowerCase();
+}
+
+function buildMentionRegexesFromConfig(cfg: ClawdbotConfig, agentId?: string): RegExp[] {
+  const cfgAny = cfg as any;
+  const agents = Array.isArray(cfgAny?.agents?.list) ? cfgAny.agents.list : [];
+  const agent = agentId ? agents.find((entry: any) => entry?.id === agentId) : agents[0];
+  const agentPatterns = Array.isArray(agent?.groupChat?.mentionPatterns)
+    ? agent.groupChat.mentionPatterns
+    : undefined;
+  const globalPatterns = Array.isArray(cfgAny?.messages?.groupChat?.mentionPatterns)
+    ? cfgAny.messages.groupChat.mentionPatterns
+    : undefined;
+  const patterns = (agentPatterns ?? globalPatterns ?? []) as string[];
+
+  return patterns
+    .map((pattern) => normalizeMentionPattern(String(pattern)))
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern, "i");
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is RegExp => Boolean(value));
+}
+
+function matchesMentionWithExplicitLocal(params: {
+  text: string;
+  mentionRegexes: RegExp[];
+  explicit: { hasAnyMention: boolean; isExplicitlyMentioned: boolean };
+}): boolean {
+  const cleaned = normalizeMentionText(params.text);
+  const explicit = params.explicit.isExplicitlyMentioned;
+  if (params.explicit.hasAnyMention) {
+    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+  }
+  if (!cleaned) {
+    return explicit;
+  }
+  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+}
 
 type SenderNameResult = {
   name?: string;
@@ -194,12 +249,35 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
 function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
+  botOpenId?: string,
 ): string {
   if (!mentions || mentions.length === 0) return text;
   let result = text;
   for (const mention of mentions) {
+    if (!botOpenId || mention.id.open_id !== botOpenId) {
+      continue;
+    }
     result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
     result = result.replace(new RegExp(mention.key, "g"), "").trim();
+  }
+  return result;
+}
+
+function expandMentionPlaceholders(
+  text: string,
+  mentions?: FeishuMessageEvent["message"]["mentions"],
+): string {
+  if (!mentions || mentions.length === 0 || !text) {
+    return text;
+  }
+  let result = text;
+  for (const mention of mentions) {
+    const key = mention.key?.trim();
+    const name = mention.name?.trim();
+    if (!key || !name) {
+      continue;
+    }
+    result = result.split(key).join(`@${name}`);
   }
   return result;
 }
@@ -440,7 +518,10 @@ export function parseFeishuMessageEvent(
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
-  const content = stripBotMention(rawContent, event.message.mentions);
+  const content = expandMentionPlaceholders(
+    stripBotMention(rawContent, event.message.mentions, botOpenId),
+    event.message.mentions,
+  );
 
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
@@ -451,6 +532,7 @@ export function parseFeishuMessageEvent(
     mentionedBot,
     rootId: event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
+    rawContent,
     content,
     contentType: event.message.message_type,
   };
@@ -495,6 +577,7 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+  const core = getFeishuRuntime();
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
@@ -537,6 +620,7 @@ export async function handleFeishuMessage(params: {
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  let wasMentioned = ctx.mentionedBot;
 
   if (isGroup) {
     const groupPolicy = feishuCfg?.groupPolicy ?? "open";
@@ -576,10 +660,38 @@ export async function handleFeishuMessage(params: {
       globalConfig: feishuCfg,
       groupConfig,
     });
+    const triggerKeywords = resolveFeishuTriggerKeywords({
+      isDirectMessage: false,
+      globalConfig: feishuCfg,
+      groupConfig,
+    });
+    const routeForMention = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: account.accountId,
+      peer: {
+        kind: "group",
+        id: ctx.chatId,
+      },
+    });
+    const mentionRegexes = buildMentionRegexesFromConfig(cfg, routeForMention.agentId);
+    const expandedForMention = expandMentionPlaceholders(ctx.rawContent, event.message.mentions);
+    const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
+    const mentionMatched = matchesMentionWithExplicitLocal({
+      text: expandedForMention,
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: ctx.mentionedBot,
+        canResolveExplicit: true,
+      },
+    });
+    const keywordMatched = matchesTriggerKeywords(expandedForMention, triggerKeywords);
+    wasMentioned = mentionMatched || keywordMatched;
 
-    if (requireMention && !ctx.mentionedBot) {
+    if (requireMention && !wasMentioned) {
       log(
-        `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
+        `feishu[${account.accountId}]: message in group ${ctx.chatId} did not match mention/keyword trigger, recording to history`,
       );
       if (chatHistories) {
         recordPendingHistoryEntryIfEnabled({
@@ -600,7 +712,6 @@ export async function handleFeishuMessage(params: {
   }
 
   try {
-    const core = getFeishuRuntime();
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
       ctx.content,
       cfg,
@@ -907,7 +1018,7 @@ export async function handleFeishuMessage(params: {
       MessageSid: ctx.messageId,
       ReplyToBody: quotedContent ?? undefined,
       Timestamp: Date.now(),
-      WasMentioned: ctx.mentionedBot,
+      WasMentioned: isGroup ? wasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "feishu" as const,
       OriginatingTo: feishuTo,

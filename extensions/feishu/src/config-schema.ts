@@ -100,9 +100,18 @@ const FeishuToolsConfigSchema = z
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 
+const TriggerKeywordsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    keywords: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    triggerKeywords: TriggerKeywordsSchema,
     tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -136,6 +145,7 @@ export const FeishuAccountConfigSchema = z
     groupPolicy: GroupPolicySchema.optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     requireMention: z.boolean().optional(),
+    triggerKeywords: TriggerKeywordsSchema,
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
@@ -171,6 +181,7 @@ export const FeishuConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     requireMention: z.boolean().optional().default(true),
+    triggerKeywords: TriggerKeywordsSchema,
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
     topicSessionMode: TopicSessionModeSchema,
     historyLimit: z.number().int().min(0).optional(),

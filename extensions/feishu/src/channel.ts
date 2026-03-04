@@ -98,6 +98,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           items: { oneOf: [{ type: "string" }, { type: "number" }] },
         },
         requireMention: { type: "boolean" },
+        triggerKeywords: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            keywords: { type: "array", items: { type: "string" } },
+          },
+        },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
@@ -118,6 +125,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+              triggerKeywords: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                  keywords: { type: "array", items: { type: "string" } },
+                },
+              },
             },
           },
         },

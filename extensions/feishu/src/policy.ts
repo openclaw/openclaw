@@ -4,7 +4,7 @@ import type {
   GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk";
 import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk";
-import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
+import type { FeishuConfig, FeishuGroupConfig, TriggerKeywordsConfig } from "./types.js";
 
 export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
 
@@ -81,4 +81,15 @@ export function resolveFeishuReplyPolicy(params: {
     params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
 
   return { requireMention };
+}
+
+export function resolveFeishuTriggerKeywords(params: {
+  isDirectMessage: boolean;
+  globalConfig?: FeishuConfig;
+  groupConfig?: FeishuGroupConfig;
+}): TriggerKeywordsConfig | undefined {
+  if (params.isDirectMessage) {
+    return undefined;
+  }
+  return params.groupConfig?.triggerKeywords ?? params.globalConfig?.triggerKeywords;
 }

@@ -10,6 +10,10 @@ import type { MentionTarget } from "./mention.js";
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
+export type TriggerKeywordsConfig = {
+  enabled?: boolean;
+  keywords?: string[];
+};
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
@@ -40,6 +44,8 @@ export type FeishuMessageContext = {
   mentionedBot: boolean;
   rootId?: string;
   parentId?: string;
+  /** Raw message text before stripping bot @mentions (used for mention/keyword gating). */
+  rawContent: string;
   content: string;
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */

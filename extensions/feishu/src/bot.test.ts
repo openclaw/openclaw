@@ -262,4 +262,158 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
   });
+
+  it("accepts group messages when mentionPatterns match without @mention", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      messages: {
+        groupChat: {
+          // Text trigger without @.
+          mentionPatterns: ["李维斯"],
+        },
+      },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          requireMention: true,
+          // Keep keywords off for this test - mentionPatterns should be enough.
+          triggerKeywords: { enabled: false, keywords: ["所有人", "李维斯"] },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-alice" } },
+      message: {
+        message_id: "msg-group-mentionpatterns-text",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "李维斯 在吗？" }),
+        mentions: [],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+      chatHistories: new Map(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts group messages when triggerKeywords match without @mention", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          requireMention: true,
+          triggerKeywords: { enabled: true, keywords: ["所有人", "李维斯"] },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-alice" } },
+      message: {
+        message_id: "msg-group-triggerkeywords-text",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "所有人 看一下" }),
+        mentions: [],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+      chatHistories: new Map(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts group messages when @all is used (Feishu builtin @_all)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      messages: {
+        groupChat: {
+          // Match @all via the expanded "@所有人" form.
+          mentionPatterns: ["@(?:所有人|全体成员|全员|all|everyone)"],
+        },
+      },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          requireMention: true,
+          triggerKeywords: { enabled: false, keywords: [] },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-alice" } },
+      message: {
+        message_id: "msg-group-atall",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_all 大家看一下" }),
+        mentions: [{ key: "@_all", name: "所有人", id: { user_id: "all" } }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+      chatHistories: new Map(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips group messages that only @mention other users", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      messages: { groupChat: { mentionPatterns: ["李维斯"] } },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          requireMention: true,
+          triggerKeywords: { enabled: true, keywords: ["所有人", "李维斯"] },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-alice" } },
+      message: {
+        message_id: "msg-group-at-other-user",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_user_1 你好" }),
+        mentions: [{ key: "@_user_1", name: "Alice", id: { open_id: "ou-someone" } }],
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
+      chatHistories: new Map(),
+    });
+
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
 });

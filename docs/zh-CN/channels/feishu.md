@@ -305,6 +305,65 @@ openclaw pairing approve feishu <配对码>
 }
 ```
 
+### 同时支持 `@机器人`、`@所有人`、以及纯文字提及触发
+
+适用于以下目标：
+
+- `@机器人名称` 可触发
+- 飞书内置 `@所有人` 可触发
+- 纯文字提及昵称（如“贾维斯”“假维斯”“jarvis”）可触发
+- 纯文字“所有人”可触发
+
+```json5
+{
+  channels: {
+    feishu: {
+      groupPolicy: "open",
+      requireMention: true, // 仍然开启群聊触发门控
+      triggerKeywords: {
+        enabled: true,
+        keywords: ["所有人", "贾维斯", "假维斯", "jarvis", "javis"],
+      },
+      groups: {
+        "*": {
+          requireMention: true,
+          triggerKeywords: {
+            enabled: true,
+            keywords: ["所有人", "贾维斯", "假维斯", "jarvis", "javis"],
+          },
+        },
+      },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "main",
+        groupChat: {
+          mentionPatterns: [
+            "@?贾维斯",
+            "@?假维斯",
+            "@?jarvis",
+            "@?javis",
+            "@_all",
+            "@所有人",
+            "@(?:所有人|全体成员|全员|all|everyone)",
+            "所有人",
+            "贾维斯",
+            "假维斯",
+            "jarvis",
+            "javis",
+          ],
+        },
+      },
+    ],
+  },
+}
+```
+
+> 说明：`requireMention=true` 时，消息会先做“提及匹配”或“关键词匹配”；任一命中即触发回复。
+> 对于“非 @ 文本触发”，请确保飞书开放平台已开通敏感权限 `im:message.group_msg`，否则群消息正文可能不会下发。
+
 ### 允许所有群组，无需 @提及
 
 需要为特定群组配置：
@@ -399,7 +458,9 @@ openclaw pairing list feishu
 1. 检查机器人是否已添加到群组
 2. 检查是否 @了机器人（默认需要 @提及）
 3. 检查 `groupPolicy` 是否为 `"disabled"`
-4. 查看日志：`openclaw logs --follow`
+4. 如果依赖“纯文字提及”触发，确认已开通 `im:message.group_msg`
+5. 检查 `mentionPatterns` 和 `triggerKeywords` 是否覆盖了实际文案
+6. 查看日志：`openclaw logs --follow`
 
 ### 机器人收不到消息
 
@@ -578,23 +639,25 @@ openclaw pairing list feishu
 
 主要选项：
 
-| 配置项                                            | 说明                           | 默认值    |
-| ------------------------------------------------- | ------------------------------ | --------- |
-| `channels.feishu.enabled`                         | 启用/禁用渠道                  | `true`    |
-| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`） | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | 应用 App ID                    | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | 应用 App Secret                | -         |
-| `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖            | `feishu`  |
-| `channels.feishu.dmPolicy`                        | 私聊策略                       | `pairing` |
-| `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）     | -         |
-| `channels.feishu.groupPolicy`                     | 群组策略                       | `open`    |
-| `channels.feishu.groupAllowFrom`                  | 群组白名单                     | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                 | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                 | `true`    |
-| `channels.feishu.textChunkLimit`                  | 消息分块大小                   | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                   | `30`      |
-| `channels.feishu.streaming`                       | 启用流式卡片输出               | `true`    |
-| `channels.feishu.blockStreaming`                  | 启用块级流式                   | `true`    |
+| 配置项                                             | 说明                           | 默认值    |
+| -------------------------------------------------- | ------------------------------ | --------- |
+| `channels.feishu.enabled`                          | 启用/禁用渠道                  | `true`    |
+| `channels.feishu.domain`                           | API 域名（`feishu` 或 `lark`） | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`              | 应用 App ID                    | -         |
+| `channels.feishu.accounts.<id>.appSecret`          | 应用 App Secret                | -         |
+| `channels.feishu.accounts.<id>.domain`             | 单账号 API 域名覆盖            | `feishu`  |
+| `channels.feishu.dmPolicy`                         | 私聊策略                       | `pairing` |
+| `channels.feishu.allowFrom`                        | 私聊白名单（open_id 列表）     | -         |
+| `channels.feishu.groupPolicy`                      | 群组策略                       | `open`    |
+| `channels.feishu.groupAllowFrom`                   | 群组白名单                     | -         |
+| `channels.feishu.groups.<chat_id>.requireMention`  | 是否需要 @提及                 | `true`    |
+| `channels.feishu.triggerKeywords`                  | 群聊文字触发关键词             | -         |
+| `channels.feishu.groups.<chat_id>.triggerKeywords` | 群级覆盖的文字触发关键词       | -         |
+| `channels.feishu.groups.<chat_id>.enabled`         | 是否启用该群组                 | `true`    |
+| `channels.feishu.textChunkLimit`                   | 消息分块大小                   | `2000`    |
+| `channels.feishu.mediaMaxMb`                       | 媒体大小限制                   | `30`      |
+| `channels.feishu.streaming`                        | 启用流式卡片输出               | `true`    |
+| `channels.feishu.blockStreaming`                   | 启用块级流式                   | `true`    |
 
 ---
 
