@@ -34,3 +34,38 @@ export function formatChannelAllowFrom(params: {
   }
   return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
 }
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+export function resolveChannelAccountEnabled(params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+}): boolean {
+  if (params.plugin.config.isEnabled) {
+    return params.plugin.config.isEnabled(params.account, params.cfg);
+  }
+  const enabled = asRecord(params.account)?.enabled;
+  return enabled !== false;
+}
+
+export async function resolveChannelAccountConfigured(params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+  readAccountConfiguredField?: boolean;
+}): Promise<boolean> {
+  if (params.plugin.config.isConfigured) {
+    return await params.plugin.config.isConfigured(params.account, params.cfg);
+  }
+  if (params.readAccountConfiguredField) {
+    const configured = asRecord(params.account)?.configured;
+    return configured !== false;
+  }
+  return true;
+}

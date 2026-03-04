@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
+import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -48,6 +49,19 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
 }
 
+async function assertInstallBoundaryPaths(params: {
+  installBaseDir: string;
+  candidatePaths: string[];
+}): Promise<void> {
+  for (const candidatePath of params.candidatePaths) {
+    await assertCanonicalPathWithinBase({
+      baseDir: params.installBaseDir,
+      candidatePath,
+      boundaryLabel: "install directory",
+    });
+  }
+}
+
 export async function installPackageDir(params: {
   sourceDir: string;
   targetDir: string;
@@ -60,11 +74,21 @@ export async function installPackageDir(params: {
   afterCopy?: () => void | Promise<void>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
+  const installBaseDir = path.dirname(params.targetDir);
+  await fs.mkdir(installBaseDir, { recursive: true });
+  await assertInstallBoundaryPaths({
+    installBaseDir,
+    candidatePaths: [params.targetDir],
+  });
   let backupDir: string | null = null;
   if (params.mode === "update" && (await fileExists(params.targetDir))) {
     const backupRoot = path.join(path.dirname(params.targetDir), ".openclaw-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(params.targetDir)}-${Date.now()}`);
     await fs.mkdir(backupRoot, { recursive: true });
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [backupDir],
+    });
     await fs.rename(params.targetDir, backupDir);
   }
 
@@ -72,11 +96,19 @@ export async function installPackageDir(params: {
     if (!backupDir) {
       return;
     }
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir, backupDir],
+    });
     await fs.rm(params.targetDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rename(backupDir, params.targetDir).catch(() => undefined);
   };
 
   try {
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir],
+    });
     await fs.cp(params.sourceDir, params.targetDir, { recursive: true });
   } catch (err) {
     await rollback();
@@ -94,7 +126,7 @@ export async function installPackageDir(params: {
     await sanitizeManifestForNpmInstall(params.targetDir);
     params.logger?.info?.(params.depsLogMessage);
     const npmRes = await runCommandWithTimeout(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"],
       {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         cwd: params.targetDir,
@@ -114,4 +146,21 @@ export async function installPackageDir(params: {
   }
 
   return { ok: true };
+}
+
+export async function installPackageDirWithManifestDeps(params: {
+  sourceDir: string;
+  targetDir: string;
+  mode: "install" | "update";
+  timeoutMs: number;
+  logger?: { info?: (message: string) => void };
+  copyErrorPrefix: string;
+  depsLogMessage: string;
+  manifestDependencies?: Record<string, unknown>;
+  afterCopy?: () => void | Promise<void>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  return installPackageDir({
+    ...params,
+    hasDeps: Object.keys(params.manifestDependencies ?? {}).length > 0,
+  });
 }

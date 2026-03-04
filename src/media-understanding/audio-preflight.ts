@@ -2,13 +2,11 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAudioAttachment } from "./attachments.js";
+import { runAudioTranscription } from "./audio-transcription-runner.js";
 import {
   type ActiveMediaModel,
-  buildProviderRegistry,
-  createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
-  runCapability,
 } from "./runner.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -50,31 +48,17 @@ export async function transcribeFirstAudio(params: {
     logVerbose(`audio-preflight: transcribing attachment ${firstAudio.index} for mention check`);
   }
 
-  const providerRegistry = buildProviderRegistry(params.providers);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
-  });
-
   try {
-    const result = await runCapability({
-      capability: "audio",
-      cfg,
+    const { transcript } = await runAudioTranscription({
       ctx,
-      attachments: cache,
-      media: attachments,
+      cfg,
+      attachments,
       agentDir: params.agentDir,
-      providerRegistry,
-      config: audioConfig,
+      providers: params.providers,
       activeModel: params.activeModel,
+      localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
     });
-
-    if (!result || result.outputs.length === 0) {
-      return undefined;
-    }
-
-    // Extract transcript from first audio output
-    const audioOutput = result.outputs.find((output) => output.kind === "audio.transcription");
-    if (!audioOutput || !audioOutput.text) {
+    if (!transcript) {
       return undefined;
     }
 
@@ -83,18 +67,16 @@ export async function transcribeFirstAudio(params: {
 
     if (shouldLogVerbose()) {
       logVerbose(
-        `audio-preflight: transcribed ${audioOutput.text.length} chars from attachment ${firstAudio.index}`,
+        `audio-preflight: transcribed ${transcript.length} chars from attachment ${firstAudio.index}`,
       );
     }
 
-    return audioOutput.text;
+    return transcript;
   } catch (err) {
     // Log but don't throw - let the message proceed with text-only mention check
     if (shouldLogVerbose()) {
       logVerbose(`audio-preflight: transcription failed: ${String(err)}`);
     }
     return undefined;
-  } finally {
-    await cache.cleanup();
   }
 }
