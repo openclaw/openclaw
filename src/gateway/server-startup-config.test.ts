@@ -15,9 +15,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import { prepareGatewayStartupConfig } from "./server-startup-config.js";
 
-function createInvalidSnapshot(
-  issue: ConfigFileSnapshot["issues"][number],
-): ConfigFileSnapshot {
+function createInvalidSnapshot(issue: ConfigFileSnapshot["issues"][number]): ConfigFileSnapshot {
   return {
     path: "/tmp/openclaw.json",
     exists: true,
