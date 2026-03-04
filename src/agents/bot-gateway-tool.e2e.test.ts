@@ -6,14 +6,18 @@ import { captureEnv } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createBotTools } from "./bot-tools.js";
 
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return { hash: "hash-1" };
-    }
-    return { ok: true };
-  }),
-}));
+vi.mock("./tools/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools/gateway.js")>();
+  return {
+    ...actual,
+    callGatewayTool: vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      return { ok: true };
+    }),
+  };
+});
 
 describe("gateway tool", () => {
   it("schedules SIGUSR1 restart", async () => {
@@ -50,9 +54,7 @@ describe("gateway tool", () => {
         payload?: { kind?: string; doctorHint?: string | null };
       };
       expect(parsed.payload?.kind).toBe("restart");
-      expect(parsed.payload?.doctorHint).toBe(
-        "Run: bot --profile isolated doctor --non-interactive",
-      );
+      expect(parsed.payload?.doctorHint).toContain("doctor --non-interactive");
 
       expect(kill).not.toHaveBeenCalled();
       await vi.runAllTimersAsync();

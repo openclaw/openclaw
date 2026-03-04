@@ -162,7 +162,8 @@ describe("installSkill download extraction safety (tar.bz2)", () => {
       mockDownloadResponse();
       mockTarExtractionFlow({
         listOutput: "link\nlink/pwned.txt\n",
-        verboseListOutput: "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
+        verboseListOutput:
+          "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n-rw-r--r--  0 0 0 0 Jan  1 00:00 link/pwned.txt\n",
         extract: "reject",
       });
 

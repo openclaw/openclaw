@@ -507,7 +507,7 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error("expected npm pack call");
     }
     const [argv, options] = packCall;
-    expect(argv).toEqual(["npm", "pack", "@bot/voice-call@0.0.1", "--ignore-scripts"]);
+    expect(argv).toEqual(["npm", "pack", "@bot/voice-call@0.0.1", "--ignore-scripts", "--json"]);
     const optionsObj = typeof options === "object" ? options : undefined;
     expect(optionsObj?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
 

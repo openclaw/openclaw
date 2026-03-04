@@ -204,7 +204,7 @@ describe("bot-tools: subagents (sessions_spawn lifecycle)", () => {
 
     // Second call: main agent trigger (not "Sub-agent announce step." anymore)
     const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
-    expect(second?.sessionKey).toBe("main");
+    expect(second?.sessionKey).toBe("agent:main:main");
     expect(second?.message).toContain("subagent task");
 
     // No direct send to external channel (main agent handles delivery)
@@ -292,8 +292,10 @@ describe("bot-tools: subagents (sessions_spawn lifecycle)", () => {
           deliver?: boolean;
         }
       | undefined;
-    expect(second?.sessionKey).toBe("discord:group:req");
-    expect(second?.deliver).toBe(true);
+    expect(second?.sessionKey).toBe("agent:main:discord:group:req");
+    // Without a `to` address, external delivery is not possible;
+    // the announce is injected into the requester session for internal routing.
+    expect(second?.deliver).toBe(false);
     expect(second?.message).toContain("subagent task");
 
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
@@ -357,8 +359,9 @@ describe("bot-tools: subagents (sessions_spawn lifecycle)", () => {
 
     // Second call: main agent trigger
     const second = agentCalls[1]?.params as { sessionKey?: string; deliver?: boolean } | undefined;
-    expect(second?.sessionKey).toBe("discord:group:req");
-    expect(second?.deliver).toBe(true);
+    expect(second?.sessionKey).toBe("agent:main:discord:group:req");
+    // Without a `to` address, external delivery is not possible.
+    expect(second?.deliver).toBe(false);
 
     // No direct send to external channel (main agent handles delivery)
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
@@ -513,10 +516,11 @@ describe("bot-tools: subagents (sessions_spawn lifecycle)", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const announceParams = agentCalls[1]?.params as
-      | { accountId?: string; channel?: string; deliver?: boolean }
+      | { accountId?: string; channel?: string; deliver?: boolean; sessionKey?: string }
       | undefined;
-    expect(announceParams?.deliver).toBe(true);
-    expect(announceParams?.channel).toBe("whatsapp");
-    expect(announceParams?.accountId).toBe("kev");
+    // Without a `to` address, external delivery is not possible; the announce
+    // is injected into the requester session for internal routing.
+    expect(announceParams?.deliver).toBe(false);
+    expect(announceParams?.sessionKey).toBe("agent:main:main");
   });
 });

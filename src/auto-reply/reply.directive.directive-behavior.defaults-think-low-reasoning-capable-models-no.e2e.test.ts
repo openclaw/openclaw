@@ -80,7 +80,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: low");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -103,7 +103,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

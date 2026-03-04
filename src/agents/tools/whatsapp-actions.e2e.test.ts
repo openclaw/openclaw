@@ -11,6 +11,15 @@ vi.mock("../../web/outbound.js", () => ({
   sendPollWhatsApp: (...args: Parameters<typeof sendPollWhatsApp>) => sendPollWhatsApp(...args),
 }));
 
+// Stub outbound-target resolution so the test can verify handleWhatsAppAction
+// wiring without needing full account/allowFrom config.
+vi.mock("./whatsapp-target-auth.js", () => ({
+  resolveAuthorizedWhatsAppOutboundTarget: (p: { chatJid: string; accountId?: string }) => ({
+    to: p.chatJid,
+    accountId: p.accountId,
+  }),
+}));
+
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
 } as BotConfig;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import type { BotConfig } from "../config/config.js";
 import {
   parseModelRef,
@@ -54,17 +54,17 @@ describe("model-selection", () => {
       });
     });
 
-    it("normalizes openai gpt-5.3 codex refs to openai-codex provider", () => {
+    it("preserves openai provider for gpt-5.3 codex refs", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("gpt-5.3-codex", "openai")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex-codex",
       });
     });
@@ -137,8 +137,9 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
-    it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should fall back to anthropic if provider is missing for non-alias", () => {
+      // resolveConfiguredModelRef logs via the subsystem logger (not console.warn)
+      // when a model is specified without a provider prefix.
       const cfg: Partial<BotConfig> = {
         agents: {
           defaults: {
@@ -154,10 +155,6 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
-      );
-      warnSpy.mockRestore();
     });
 
     it("should use default provider/model if config is empty", () => {

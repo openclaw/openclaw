@@ -156,12 +156,15 @@ describe("exec tool backgrounding", () => {
   });
 
   it("uses default timeout when timeout is omitted", async () => {
+    // Background commands bypass the default timeout (backgroundTimeoutBypass)
+    // so an explicit timeout must be passed in the tool call params to enforce it.
     const customBash = createExecTool({ timeoutSec: 0.2, backgroundMs: 10 });
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
       command: longDelayCmd,
       background: true,
+      timeout: 0.2,
     });
 
     const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -497,7 +500,7 @@ describe("buildDockerExecArgs", () => {
       tty: false,
     });
 
-    expect(args).toContain("sh");
+    expect(args).toContain("/bin/sh");
     expect(args).toContain("-lc");
   });
 

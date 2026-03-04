@@ -25,6 +25,20 @@ export function formatMention(params: {
     roleId ? { kind: "role" as const, id: roleId } : null,
     channelId ? { kind: "channel" as const, id: channelId } : null,
   ].filter((entry): entry is { kind: "user" | "role" | "channel"; id: string } => Boolean(entry));
+  if (values.length === 0) {
+    // When a param was explicitly provided but normalizeSnowflake rejected it
+    // (non-numeric ID), fall back to a plain-text reference.
+    if (params.channelId != null) {
+      return `#${String(params.channelId)}`;
+    }
+    if (params.userId != null) {
+      return `@${String(params.userId)}`;
+    }
+    if (params.roleId != null) {
+      return `@&${String(params.roleId)}`;
+    }
+    throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
+  }
   if (values.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }

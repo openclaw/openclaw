@@ -51,8 +51,24 @@ describe("exec approvals", () => {
         return { decision: "allow-once" };
       }
       if (method === "node.invoke") {
+        const p = params as { command?: string; params?: Record<string, unknown> };
+        if (p.command === "system.run.prepare") {
+          const cmdArgv = p.params?.command as string[] | undefined;
+          return {
+            payload: {
+              cmdText: (p.params?.rawCommand as string) ?? "ls -la",
+              plan: {
+                argv: cmdArgv ?? ["sh", "-c", "ls -la"],
+                rawCommand: (p.params?.rawCommand as string) ?? "ls -la",
+                cwd: p.params?.cwd,
+                agentId: p.params?.agentId,
+                sessionKey: p.params?.sessionKey,
+              },
+            },
+          };
+        }
         invokeParams = params;
-        return { ok: true };
+        return { payload: { success: true, stdout: "" } };
       }
       return { ok: true };
     });
@@ -98,12 +114,28 @@ describe("exec approvals", () => {
     };
 
     const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approvals.node.get") {
         return { file: approvalsFile };
       }
       if (method === "node.invoke") {
+        const p = params as { command?: string; params?: Record<string, unknown> };
+        if (p.command === "system.run.prepare") {
+          const cmdArgv = p.params?.command as string[] | undefined;
+          return {
+            payload: {
+              cmdText: (p.params?.rawCommand as string) ?? `"${exePath}" --help`,
+              plan: {
+                argv: cmdArgv ?? [exePath, "--help"],
+                rawCommand: (p.params?.rawCommand as string) ?? `"${exePath}" --help`,
+                cwd: p.params?.cwd,
+                agentId: p.params?.agentId,
+                sessionKey: p.params?.sessionKey,
+              },
+            },
+          };
+        }
         return { payload: { success: true, stdout: "ok" } };
       }
       // exec.approval.request should NOT be called when allowlist is satisfied

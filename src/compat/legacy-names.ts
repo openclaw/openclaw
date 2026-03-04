@@ -2,7 +2,7 @@ export const PROJECT_NAME = "@hanzo/bot" as const;
 
 export const LEGACY_PROJECT_NAMES = [] as const;
 
-export const MANIFEST_KEY = PROJECT_NAME;
+export const MANIFEST_KEY = "bot" as const;
 
 export const LEGACY_MANIFEST_KEYS = LEGACY_PROJECT_NAMES;
 

@@ -84,9 +84,7 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
-        void processDiscordMessage(ctx).catch((err) => {
-          params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
-        });
+        await processDiscordMessage(ctx);
         return;
       }
       const combinedBaseText = entries
@@ -130,9 +128,7 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      void processDiscordMessage(ctx).catch((err) => {
-        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
-      });
+      await processDiscordMessage(ctx);
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));

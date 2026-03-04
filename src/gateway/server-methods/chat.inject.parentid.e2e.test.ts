@@ -50,6 +50,9 @@ describe("gateway chat.inject transcript writes", () => {
       params: { sessionKey: "k1", message: "hello" },
       respond,
       context,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
     });
 
     expect(respond).toHaveBeenCalled();

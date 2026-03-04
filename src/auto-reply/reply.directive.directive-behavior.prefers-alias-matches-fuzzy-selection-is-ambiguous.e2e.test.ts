@@ -68,7 +68,7 @@ describe("directive behavior", () => {
   it("stores auth profile overrides on /model directive", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      const authDir = path.join(home, ".bot", "agents", "main", "agent");
+      const authDir = path.join(home, ".hanzo", "bot", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
         path.join(authDir, "auth-profiles.json"),

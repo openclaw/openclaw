@@ -7,7 +7,7 @@ import type { BotConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import { runWithModelFallback } from "./model-fallback.js";
+import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
 
 function makeCfg(overrides: Partial<BotConfig> = {}): BotConfig {
   return {
@@ -45,7 +45,7 @@ async function expectFallsBackToHaiku(params: {
 }
 
 describe("runWithModelFallback", () => {
-  it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
+  it("normalizes openai gpt-5.3 codex provider before running", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockResolvedValueOnce("ok");
 
@@ -58,22 +58,23 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.3-codex");
   });
 
-  it("does not fall back on non-auth errors", async () => {
+  it("falls back even on non-auth errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-      }),
-    ).rejects.toThrow("bad request");
-    expect(run).toHaveBeenCalledTimes(1);
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts[0]?.error).toBe("bad request");
   });
 
   it("falls back on auth errors", async () => {
@@ -113,11 +114,26 @@ describe("runWithModelFallback", () => {
   });
 
   it("falls back on credential validation errors", async () => {
-    await expectFallsBackToHaiku({
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('No credentials found for profile "anthropic:default".'))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
       provider: "anthropic",
       model: "claude-opus-4",
-      firstError: new Error('No credentials found for profile "anthropic:default".'),
+      run,
     });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    // Cross-provider request falls back to configured primary (openai/gpt-4.1-mini)
+    // because the requested provider differs from the config provider and the model
+    // is not part of the configured fallback chain.
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
@@ -142,6 +158,12 @@ describe("runWithModelFallback", () => {
     };
 
     saveAuthProfileStore(store, tempDir);
+
+    // Suppress probe attempts by pre-populating the throttle map with a recent
+    // timestamp.  Without this, the probe logic would allow attempting the
+    // cooldown provider despite all profiles being unavailable.
+    const probeKey = _probeThrottleInternals.resolveProbeThrottleKey(provider, tempDir);
+    _probeThrottleInternals.lastProbeAttempt.set(probeKey, Date.now());
 
     const cfg = makeCfg({
       agents: {
@@ -173,6 +195,7 @@ describe("runWithModelFallback", () => {
       expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
       expect(result.attempts[0]?.reason).toBe("rate_limit");
     } finally {
+      _probeThrottleInternals.lastProbeAttempt.delete(probeKey);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

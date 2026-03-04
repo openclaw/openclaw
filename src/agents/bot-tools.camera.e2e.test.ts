@@ -9,6 +9,15 @@ vi.mock("../media/image-ops.js", () => ({
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
+vi.mock("../cli/nodes-camera.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/nodes-camera.js")>();
+  return {
+    ...actual,
+    cameraTempPath: (opts: { kind: string; facing?: string; ext: string }) =>
+      `/tmp/bot-camera-${opts.kind}-${opts.facing ?? "none"}.${opts.ext.replace(/^\./, "")}`,
+    writeCameraPayloadToFile: vi.fn(async () => {}),
+  };
+});
 
 import "./test-helpers/fast-core-tools.js";
 import { createBotTools } from "./bot-tools.js";
@@ -94,11 +103,31 @@ describe("nodes run", () => {
   });
 
   it("passes invoke and command timeouts", async () => {
+    let invokeCount = 0;
     callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
+        invokeCount += 1;
+        if (invokeCount === 1) {
+          // First invoke is system.run.prepare
+          expect(params).toMatchObject({
+            nodeId: "mac-1",
+            command: "system.run.prepare",
+          });
+          return {
+            payload: {
+              plan: {
+                argv: ["echo", "hi"],
+                rawCommand: "echo hi",
+                cwd: "/tmp",
+              },
+              cmdText: "echo hi",
+            },
+          };
+        }
+        // Second invoke is system.run
         expect(params).toMatchObject({
           nodeId: "mac-1",
           command: "system.run",
@@ -134,15 +163,29 @@ describe("nodes run", () => {
   });
 
   it("requests approval and retries with allow-once decision", async () => {
-    let invokeCalls = 0;
+    let prepareCount = 0;
+    let runCount = 0;
     let approvalId: string | null = null;
     callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
-        invokeCalls += 1;
-        if (invokeCalls === 1) {
+        const cmd = (params as { command?: string })?.command;
+        if (cmd === "system.run.prepare") {
+          prepareCount += 1;
+          return {
+            payload: {
+              plan: {
+                argv: ["echo", "hi"],
+                rawCommand: "echo hi",
+              },
+              cmdText: "echo hi",
+            },
+          };
+        }
+        runCount += 1;
+        if (runCount === 1) {
           throw new Error("SYSTEM_RUN_DENIED: approval required");
         }
         expect(params).toMatchObject({
@@ -183,15 +226,25 @@ describe("nodes run", () => {
       node: "mac-1",
       command: ["echo", "hi"],
     });
-    expect(invokeCalls).toBe(2);
+    expect(prepareCount).toBe(1);
+    expect(runCount).toBe(2);
   });
 
   it("fails with user denied when approval decision is deny", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
+        const cmd = (params as { command?: string })?.command;
+        if (cmd === "system.run.prepare") {
+          return {
+            payload: {
+              plan: { argv: ["echo", "hi"], rawCommand: "echo hi" },
+              cmdText: "echo hi",
+            },
+          };
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {
@@ -220,11 +273,28 @@ describe("nodes run", () => {
       throw new Error("missing nodes tool");
     }
 
-    callGateway.mockImplementation(async ({ method }) => {
+    const makePrepareHandler = () => (params: Record<string, unknown>) => {
+      const cmd = (params as { command?: string })?.command;
+      if (cmd === "system.run.prepare") {
+        return {
+          payload: {
+            plan: { argv: ["echo", "hi"], rawCommand: "echo hi" },
+            cmdText: "echo hi",
+          },
+        };
+      }
+      return null;
+    };
+
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
+        const prepareResult = makePrepareHandler()(params as Record<string, unknown>);
+        if (prepareResult) {
+          return prepareResult;
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {
@@ -240,11 +310,15 @@ describe("nodes run", () => {
       }),
     ).rejects.toThrow("exec denied: approval timed out");
 
-    callGateway.mockImplementation(async ({ method }) => {
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
       }
       if (method === "node.invoke") {
+        const prepareResult = makePrepareHandler()(params as Record<string, unknown>);
+        if (prepareResult) {
+          return prepareResult;
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {

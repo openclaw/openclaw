@@ -175,7 +175,7 @@ describe("gateway server models + voicewake", () => {
 
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+    const firstEventP = onceMessage(
       nodeWs,
       (o) => o.type === "event" && o.event === "voicewake.changed",
     );
@@ -197,7 +197,7 @@ describe("gateway server models + voicewake", () => {
       "computer",
     ]);
 
-    const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+    const broadcastP = onceMessage(
       nodeWs,
       (o) => o.type === "event" && o.event === "voicewake.changed",
     );
