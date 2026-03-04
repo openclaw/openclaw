@@ -429,10 +429,10 @@ function resolveApiKeyFromProfiles(params: {
       if (keyRef?.source === "env" && keyRef.id.trim()) {
         return keyRef.id.trim();
       }
-      // exec/keychain SecretRefs cannot be resolved synchronously.
+      // exec/file SecretRefs cannot be resolved synchronously.
       // Return a sentinel so normalizeProviders knows auth is configured
       // without persisting the actual secret to models.json (#34335).
-      if (keyRef?.source === "exec") {
+      if (keyRef?.source === "exec" || keyRef?.source === "file") {
         return REDACTED_API_KEY_SENTINEL;
       }
       continue;
@@ -445,7 +445,7 @@ function resolveApiKeyFromProfiles(params: {
       if (tokenRef?.source === "env" && tokenRef.id.trim()) {
         return tokenRef.id.trim();
       }
-      if (tokenRef?.source === "exec") {
+      if (tokenRef?.source === "exec" || tokenRef?.source === "file") {
         return REDACTED_API_KEY_SENTINEL;
       }
       continue;
