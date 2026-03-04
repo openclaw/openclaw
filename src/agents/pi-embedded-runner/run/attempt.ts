@@ -245,25 +245,67 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
   }
-  if (allowedToolNames.has(trimmed)) {
+  const resolveAllowed = (candidate: string): string | null => {
+    if (!candidate) {
+      return null;
+    }
+    if (allowedToolNames.has(candidate)) {
+      return candidate;
+    }
+    const normalized = normalizeToolName(candidate);
+    if (allowedToolNames.has(normalized)) {
+      return normalized;
+    }
+    const folded = candidate.toLowerCase();
+    let caseInsensitiveMatch: string | null = null;
+    for (const name of allowedToolNames) {
+      if (name.toLowerCase() !== folded) {
+        continue;
+      }
+      if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+        return null;
+      }
+      caseInsensitiveMatch = name;
+    }
+    return caseInsensitiveMatch;
+  };
+
+  const direct = resolveAllowed(trimmed);
+  if (direct) {
+    return direct;
+  }
+
+  const lowered = trimmed.toLowerCase();
+  const functionPrefixMatches =
+    lowered.startsWith("functions.") ||
+    lowered.startsWith("function.") ||
+    lowered.startsWith("functions_") ||
+    lowered.startsWith("function_") ||
+    lowered.startsWith("functions") ||
+    lowered.startsWith("function");
+
+  if (!functionPrefixMatches) {
     return trimmed;
   }
-  const normalized = normalizeToolName(trimmed);
-  if (allowedToolNames.has(normalized)) {
-    return normalized;
+
+  const withoutPrefix = trimmed.replace(/^functions?[._]?/i, "");
+  const candidates = new Set<string>();
+  const afterColon = withoutPrefix.split(":")[0] ?? "";
+  const afterDot = afterColon.split(".")[0] ?? "";
+  const compact = afterDot.trim();
+  if (compact) {
+    candidates.add(compact);
+    candidates.add(compact.replace(/\d+$/, ""));
   }
-  const folded = trimmed.toLowerCase();
-  let caseInsensitiveMatch: string | null = null;
-  for (const name of allowedToolNames) {
-    if (name.toLowerCase() !== folded) {
-      continue;
+
+  for (const candidate of candidates) {
+    const resolved = resolveAllowed(candidate);
+    if (resolved) {
+      return resolved;
     }
-    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-      return trimmed;
-    }
-    caseInsensitiveMatch = name;
   }
-  return caseInsensitiveMatch ?? trimmed;
+
+  return trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {

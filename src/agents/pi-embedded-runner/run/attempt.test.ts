@@ -224,6 +224,29 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("normalizes function-style tool names with malformed suffixes when canonical tools are allowed", async () => {
+    const partialRead = { type: "toolCall", name: " functions.read:0 " };
+    const messageExec = { type: "toolCall", name: "functions.exec2" };
+    const finalWrite = { type: "toolCall", name: "functionswrite3" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialRead] },
+      message: { role: "assistant", content: [messageExec] },
+    };
+    const { baseFn, finalMessage } = createEventStream({ event, finalToolCall: finalWrite });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "exec", "write"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialRead.name).toBe("read");
+    expect(messageExec.name).toBe("exec");
+    expect(finalWrite.name).toBe("write");
+    expect(result).toBe(finalMessage);
+  });
+
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
