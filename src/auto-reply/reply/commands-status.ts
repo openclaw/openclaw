@@ -77,8 +77,12 @@ function formatChannelHealthEntry(entry: ChannelHealthEntry): string | null {
   return `✅ ${channelId}`;
 }
 
-export function buildChannelHealthSummaryLine(entries: ReadonlyArray<ChannelHealthEntry>): string | undefined {
-  const parts = entries.map(formatChannelHealthEntry).filter((entry): entry is string => Boolean(entry));
+export function buildChannelHealthSummaryLine(
+  entries: ReadonlyArray<ChannelHealthEntry>,
+): string | undefined {
+  const parts = entries
+    .map(formatChannelHealthEntry)
+    .filter((entry): entry is string => Boolean(entry));
   if (parts.length === 0) {
     return undefined;
   }
@@ -164,7 +168,7 @@ export async function buildStatusReply(params: {
   }
 
   const channelPlugins = listChannelPlugins();
-  const channelHealthResults = await Promise.allSettled(
+  const channelHealthResults = await Promise.allSettled<ChannelHealthEntry>(
     channelPlugins.map(async (plugin) => {
       const accountIds = plugin.config.listAccountIds(cfg);
       const accountId = resolveChannelDefaultAccountId({
@@ -172,17 +176,25 @@ export async function buildStatusReply(params: {
         cfg,
         accountIds,
       });
-      const snapshot = await buildChannelAccountSnapshot({
+      const fullSnapshot = await buildChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
       });
-      return { id: plugin.id, snapshot } satisfies ChannelHealthEntry;
+      const snapshot: ChannelHealthSnapshot = {
+        configured: fullSnapshot.configured,
+        enabled: fullSnapshot.enabled,
+        connected: fullSnapshot.connected,
+        running: fullSnapshot.running,
+        lastError: fullSnapshot.lastError,
+      };
+      return { id: plugin.id, snapshot };
     }),
   );
   const channelHealthEntries = channelHealthResults
-    .filter((result): result is PromiseFulfilledResult<ChannelHealthEntry> =>
-      result.status === "fulfilled",
+    .filter(
+      (result): result is PromiseFulfilledResult<ChannelHealthEntry> =>
+        result.status === "fulfilled",
     )
     .map((result) => result.value);
   const channelsLine = buildChannelHealthSummaryLine(channelHealthEntries);
