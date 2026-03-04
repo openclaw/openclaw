@@ -14,6 +14,11 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Print command target before execution: AWS identity, kube context, namespace.
 - Always include explicit Kubernetes context in commands: `kubectl --context "$K8S_CONTEXT" ...`
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
+- Linear ticket mutation guardrail (Slack threads):
+  - Trigger: explicit ask to create/update/comment a Linear issue/ticket (e.g., `PLA-318`).
+  - Mandatory: run a live Linear mutation attempt before replying.
+  - Never answer with “can’t directly edit Linear” without executing a live command.
+  - On failure: include exact failing command + exact error text + next unblock step.
 
 ## Paths
 
@@ -27,6 +32,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Auto PR helper: `/home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh`
 - Grafana API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh`
 - BetterStack API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`
+- Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
 
@@ -72,6 +78,27 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 aws sts get-caller-identity
 export K8S_CONTEXT="${K8S_CONTEXT:-$(kubectl config current-context)}"
 kubectl --context "$K8S_CONTEXT" get ns | sed -n '1,20p'
+```
+
+## Linear Ticket Ops Guardrail
+
+- For ticket update asks (example: “update PLA-318”), execute live mutation via helper script:
+
+```bash
+# Inspect issue
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get PLA-318
+
+# Update description from file (preferred for long context)
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue update-description PLA-318 --file /tmp/pla-318.md
+
+# Add comment
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue add-comment PLA-318 --file /tmp/pla-318-comment.md
+```
+
+- If asked to “verify Linear write access”, run:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh probe-write PLA-318
 ```
 
 ## DB Query Guardrail (Slack Threads)
@@ -293,6 +320,18 @@ Use this flow only when:
 - secret-pattern scan in staged diff before push
 - authenticated push + `gh pr create`
 - Slack DM warning to operator before PR creation (`AUTO_PR_NOTIFY_*`)
+
+After creating a PR, always run:
+
+```bash
+# keep Linear/PR linkage consistent + tracking label
+gh pr edit <pr-number> --add-label openclaw-sre
+```
+
+PR convention requirement:
+
+- Always keep the same Linear/PR rule for tracking: branch/title must carry the Linear ticket key.
+- Always add label `openclaw-sre`.
 
 If gate fails, report blocked reason and fallback manual next step.
 

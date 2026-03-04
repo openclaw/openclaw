@@ -141,6 +141,7 @@ spec:
               cp /seed-skills/lib-outbox.sh /state/skills/morpho-sre/scripts/lib-outbox.sh
               cp /seed-skills/lib-linear-preflight.sh /state/skills/morpho-sre/scripts/lib-linear-preflight.sh
               cp /seed-skills/lib-linear-ticket.sh /state/skills/morpho-sre/scripts/lib-linear-ticket.sh
+              cp /seed-skills/linear-ticket-api.sh /state/skills/morpho-sre/scripts/linear-ticket-api.sh
               cp /seed-skills/lib-rca-prompt.sh /state/skills/morpho-sre/scripts/lib-rca-prompt.sh
               cp /seed-skills/lib-rca-llm.sh /state/skills/morpho-sre/scripts/lib-rca-llm.sh
               cp /seed-skills/lib-rca-crossreview.sh /state/skills/morpho-sre/scripts/lib-rca-crossreview.sh
@@ -177,6 +178,7 @@ spec:
               chmod +x /state/skills/morpho-sre/scripts/lib-outbox.sh
               chmod +x /state/skills/morpho-sre/scripts/lib-linear-preflight.sh
               chmod +x /state/skills/morpho-sre/scripts/lib-linear-ticket.sh
+              chmod +x /state/skills/morpho-sre/scripts/linear-ticket-api.sh
               chmod +x /state/skills/morpho-sre/scripts/lib-rca-prompt.sh
               chmod +x /state/skills/morpho-sre/scripts/lib-rca-llm.sh
               chmod +x /state/skills/morpho-sre/scripts/lib-rca-crossreview.sh
@@ -647,6 +649,8 @@ spec:
               value: eu-west-3
             - name: SCOPE_NAMESPACES
               value: morpho-dev,monitoring
+            - name: LINEAR_LOOKUP_CMD
+              value: /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh
             - name: PROMETHEUS_URL
               value: http://prometheus-stack-kube-prom-prometheus.monitoring:9090
             - name: INCIDENT_STATE_DIR
