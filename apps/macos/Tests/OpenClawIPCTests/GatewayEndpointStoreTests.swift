@@ -61,6 +61,21 @@ import Testing
         #expect(token == nil)
     }
 
+    @Test func resolveGatewayTokenUsesRemoteConfigToken() {
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: true,
+            root: [
+                "gateway": [
+                    "remote": [
+                        "token": "  remote-token  ",
+                    ],
+                ],
+            ],
+            env: [:],
+            launchdSnapshot: nil)
+        #expect(token == "remote-token")
+    }
+
     @Test func resolveGatewayPasswordFallsBackToLaunchd() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
