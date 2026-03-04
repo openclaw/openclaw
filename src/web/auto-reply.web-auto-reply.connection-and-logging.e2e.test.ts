@@ -203,7 +203,11 @@ describe("web auto-reply connection", () => {
 
   it("clears stale auth when logged-out close reasons are reported", async () => {
     const sessionModule = await import("./session.js");
+    const waitForCredsSpy = vi
+      .spyOn(sessionModule, "waitForCredsSaveQueue")
+      .mockResolvedValue(undefined);
     const logoutSpy = vi.spyOn(sessionModule, "logoutWeb").mockResolvedValue(true);
+    let closeSpy: ReturnType<typeof vi.fn> | undefined;
 
     try {
       const closeResolvers: Array<(reason?: unknown) => void> = [];
@@ -212,7 +216,8 @@ describe("web auto-reply connection", () => {
         const onClose = new Promise<unknown>((res) => {
           closeResolvers.push(res);
         });
-        return { close: vi.fn(), onClose };
+        closeSpy = vi.fn(async () => {});
+        return { close: closeSpy, onClose };
       });
 
       const { runtime, run } = startMonitorWebChannel({
@@ -234,11 +239,24 @@ describe("web auto-reply connection", () => {
       await run;
 
       expect(logoutSpy).toHaveBeenCalledTimes(1);
+      expect(waitForCredsSpy).toHaveBeenCalledTimes(1);
       expect(listenerFactory).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session logged out"));
+      if (!closeSpy) {
+        throw new Error("expected listener close spy");
+      }
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      const logoutArgs = logoutSpy.mock.calls[0]?.[0] as { authDir: string };
+      expect(waitForCredsSpy).toHaveBeenCalledWith(logoutArgs.authDir);
+      const closeOrder = closeSpy.mock.invocationCallOrder[0];
+      const waitOrder = waitForCredsSpy.mock.invocationCallOrder[0];
+      const logoutOrder = logoutSpy.mock.invocationCallOrder[0];
+      expect(closeOrder).toBeLessThan(waitOrder);
+      expect(waitOrder).toBeLessThan(logoutOrder);
     } finally {
       logoutSpy.mockRestore();
+      waitForCredsSpy.mockRestore();
     }
   });
 

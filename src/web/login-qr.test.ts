@@ -69,5 +69,6 @@ describe("login-qr", () => {
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     expect(logoutWebMock).not.toHaveBeenCalled();
     expect(waitForCredsSaveQueueMock).toHaveBeenCalledTimes(1);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledWith(expect.any(String));
   });
 });

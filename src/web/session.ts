@@ -31,17 +31,28 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
-let credsSaveQueue: Promise<void> = Promise.resolve();
+const credsSaveQueues = new Map<string, Promise<void>>();
+function getCredsSaveQueue(authDir: string): Promise<void> {
+  return credsSaveQueues.get(authDir) ?? Promise.resolve();
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  credsSaveQueue = credsSaveQueue
+  const nextQueue = getCredsSaveQueue(authDir)
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     });
+  credsSaveQueues.set(authDir, nextQueue);
+  void nextQueue.finally(() => {
+    // Keep memory bounded: clear settled queue slots once no newer queue replaced them.
+    if (credsSaveQueues.get(authDir) === nextQueue) {
+      credsSaveQueues.delete(authDir);
+    }
+  });
 }
 
 async function safeSaveCreds(
@@ -83,8 +94,12 @@ async function safeSaveCreds(
   }
 }
 
-export async function waitForCredsSaveQueue(): Promise<void> {
-  await credsSaveQueue;
+export async function waitForCredsSaveQueue(authDir?: string): Promise<void> {
+  if (authDir) {
+    await getCredsSaveQueue(authDir);
+    return;
+  }
+  await Promise.all(credsSaveQueues.values());
 }
 
 /**

@@ -22,7 +22,13 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import {
+  formatError,
+  getWebAuthAgeMs,
+  logoutWeb,
+  readWebSelfId,
+  waitForCredsSaveQueue,
+} from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -401,7 +407,9 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
+      await closeListener();
       try {
+        await waitForCredsSaveQueue(account.authDir);
         const cleared = await logoutWeb({
           authDir: account.authDir,
           isLegacyAuthDir: account.isLegacyAuthDir,
@@ -422,7 +430,6 @@ export async function monitorWebChannel(
       runtime.error(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );
-      await closeListener();
       break;
     }
 

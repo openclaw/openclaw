@@ -270,4 +270,65 @@ describe("web session", () => {
     await waitPromise;
     expect(drained).toBe(true);
   });
+
+  it("waitForCredsSaveQueue can scope waits to a single auth dir", async () => {
+    let releaseA: (() => void) | undefined;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = () => resolve();
+    });
+    let releaseB: (() => void) | undefined;
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = () => resolve();
+    });
+
+    const saveCredsA = vi.fn(async () => {
+      await gateA;
+    });
+    const saveCredsB = vi.fn(async () => {
+      await gateB;
+    });
+    useMultiFileAuthStateMock
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsA,
+      })
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsB,
+      });
+
+    await createWaSocket(false, false, { authDir: "/tmp/wa-auth-a" });
+    const sockA = getLastSocket();
+    await createWaSocket(false, false, { authDir: "/tmp/wa-auth-b" });
+    const sockB = getLastSocket();
+
+    sockA.ev.emit("creds.update", {});
+    sockB.ev.emit("creds.update", {});
+    await flushCredsUpdate();
+
+    let drainedB = false;
+    const waitB = waitForCredsSaveQueue("/tmp/wa-auth-b").then(() => {
+      drainedB = true;
+    });
+    await flushCredsUpdate();
+    expect(drainedB).toBe(false);
+
+    releaseB?.();
+    await waitB;
+    expect(drainedB).toBe(true);
+
+    let drainedA = false;
+    const waitA = waitForCredsSaveQueue("/tmp/wa-auth-a").then(() => {
+      drainedA = true;
+    });
+    await flushCredsUpdate();
+    expect(drainedA).toBe(false);
+
+    releaseA?.();
+    await waitA;
+    expect(drainedA).toBe(true);
+
+    expect(saveCredsA).toHaveBeenCalledTimes(1);
+    expect(saveCredsB).toHaveBeenCalledTimes(1);
+  });
 });

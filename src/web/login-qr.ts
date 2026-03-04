@@ -89,7 +89,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
     info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
   );
   closeSocket(login.sock);
-  await waitForCredsSaveQueue();
+  await waitForCredsSaveQueue(login.authDir);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
