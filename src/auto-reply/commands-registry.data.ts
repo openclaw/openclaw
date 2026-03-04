@@ -271,6 +271,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "groupid",
+      nativeName: "groupid",
+      description: "Show the current group's chat ID (Telegram only).",
+      textAlias: "/groupid",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "session",
       nativeName: "session",
       description: "Manage session-level settings (for example /session idle).",
