@@ -19,12 +19,22 @@ export async function execFileUtf8(
       }
 
       const e = error as { code?: unknown; message?: unknown };
+      const stdoutText = String(stdout ?? "");
       const stderrText = String(stderr ?? "");
       resolve({
-        stdout: String(stdout ?? ""),
+        stdout: stdoutText,
         stderr:
           stderrText ||
-          (typeof e.message === "string" ? e.message : typeof error === "string" ? error : ""),
+          // Only fall back to the Node.js error message when the child
+          // produced no output at all — otherwise callers lose the real
+          // stdout/stderr in favour of Node's "Command failed: …" wrapper.
+          (stdoutText
+            ? ""
+            : typeof e.message === "string"
+              ? e.message
+              : typeof error === "string"
+                ? error
+                : ""),
         code: typeof e.code === "number" ? e.code : 1,
       });
     });
