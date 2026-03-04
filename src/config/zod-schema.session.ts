@@ -23,6 +23,64 @@ const SessionResetConfigSchema = z
 
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
+const SessionRelayRoutingModeSchema = z.enum(["read-write", "read-only"]);
+
+const SessionRelayRoutingTargetSchema = z
+  .object({
+    channel: z.string().min(1),
+    to: z.string().min(1),
+    accountId: z.string().optional(),
+  })
+  .strict();
+
+export const SessionRelayRoutingMatchSchema = z
+  .object({
+    channel: z.string().min(1).optional(),
+    chatIdPattern: z.string().min(1).optional(),
+    senderPattern: z.string().min(1).optional(),
+  })
+  .strict();
+
+const SessionRelayRoutingRuleSchema = z
+  .object({
+    mode: SessionRelayRoutingModeSchema,
+    relayTo: z.string().min(1).optional(),
+    match: SessionRelayRoutingMatchSchema.optional(),
+  })
+  .strict();
+
+export const SessionRelayRoutingSchema = z
+  .object({
+    defaultMode: SessionRelayRoutingModeSchema.optional(),
+    targets: z.record(z.string(), SessionRelayRoutingTargetSchema).optional(),
+    rules: z.array(SessionRelayRoutingRuleSchema).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    const targets = val.targets ?? {};
+    for (const [index, rule] of (val.rules ?? []).entries()) {
+      if (rule.mode !== "read-only") {
+        continue;
+      }
+      const relayTo = rule.relayTo?.trim();
+      if (!relayTo) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: 'relayTo is required when mode is "read-only"',
+        });
+        continue;
+      }
+      if (!Object.hasOwn(targets, relayTo)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: `relayTo "${relayTo}" must reference an existing targets key`,
+        });
+      }
+    }
+  });
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -55,6 +113,7 @@ export const SessionSchema = z
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    relayRouting: SessionRelayRoutingSchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
