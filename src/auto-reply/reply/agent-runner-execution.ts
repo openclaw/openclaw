@@ -310,20 +310,18 @@ export async function runAgentTurnWithFallback(params: {
 
               return result;
             } catch (err) {
-              // The user explicitly configured a codex-cli backend, but the model
-              // was auto-routed to it based on API detection (isCodexAutoFallback).
-              // When the CLI binary is unavailable or fails to launch, fall through
-              // to the embedded runner. Warn at error level since the embedded runner
-              // does not support tool calls for codex models — the user will get
-              // text-only output, which is a visible degradation.
-              // Emit a terminal lifecycle error for the CLI run so downstream
-              // consumers don't stall on the open "start" event from line 250.
+              // The user has a codex-cli backend in their config, but this
+              // particular model was auto-routed to it (isCodexAutoFallback)
+              // rather than the user explicitly requesting CLI execution.
+              // When the CLI binary is missing or crashes, fall through to
+              // the embedded runner which provides text-only output (no tool
+              // calls for codex models).
               if (isCodexAutoFallback) {
-                defaultRuntime.error(
-                  `Codex CLI backend failed, falling back to embedded runner (tool calls will be unavailable): ${String(err)}`,
+                defaultRuntime.log(
+                  `Codex CLI unavailable, falling back to embedded runner (tool calls will not be available): ${String(err)}`,
                 );
-                // Close the CLI lifecycle so downstream consumers don't stall on an
-                // open "start" event. The embedded runner will emit its own lifecycle.
+                // Close the CLI lifecycle so downstream consumers don't stall
+                // on the open "start" event. The embedded runner emits its own.
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -336,19 +334,17 @@ export async function runAgentTurnWithFallback(params: {
                 });
                 lifecycleTerminalEmitted = true;
               } else {
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: String(err),
-                    },
-                  });
-                  lifecycleTerminalEmitted = true;
-                }
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: String(err),
+                  },
+                });
+                lifecycleTerminalEmitted = true;
                 throw err;
               }
             } finally {
