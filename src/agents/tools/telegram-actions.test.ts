@@ -26,7 +26,8 @@ vi.mock("../../telegram/send.js", () => ({
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
-  pinMessageTelegram: (...args: Parameters<typeof pinMessageTelegram>) => pinMessageTelegram(...args),
+  pinMessageTelegram: (...args: Parameters<typeof pinMessageTelegram>) =>
+    pinMessageTelegram(...args),
   unpinMessageTelegram: (...args: Parameters<typeof unpinMessageTelegram>) =>
     unpinMessageTelegram(...args),
 }));
