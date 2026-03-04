@@ -15,6 +15,7 @@ let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 export const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
+  documentBatchFlushMs: 25,
 } as const;
 
 const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 150_000;
