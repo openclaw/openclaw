@@ -36,7 +36,7 @@ The general pattern is the same regardless of which tool you use:
 
 [Doppler](https://www.doppler.com/) injects secrets as environment variables before your process starts.
 
-### DopplerSetup
+### Doppler Setup
 
 1. Install the Doppler CLI and authenticate:
 
