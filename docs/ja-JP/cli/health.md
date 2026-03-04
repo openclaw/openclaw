@@ -1,6 +1,10 @@
 ---
 x-i18n:
-  source_path: "docs/cli/health.md"
+  generated_at: "2026-03-04T06:16:36Z"
+  model: claude-opus-4-6
+  provider: anthropic
+  source_hash: 82a78a5a97123f7a5736699ae8d793592a736f336c5caced9eba06d14d973fd7
+  source_path: cli/health.md
   workflow: 15
 summary: "`openclaw health`（RPC経由のゲートウェイヘルスエンドポイント）のCLIリファレンス"
 read_when:
