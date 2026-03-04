@@ -6,6 +6,7 @@ import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   normalizeProviders,
+  REDACTED_API_KEY_SENTINEL,
   type ProviderConfig,
   resolveImplicitBedrockProvider,
   resolveImplicitCopilotProvider,
@@ -159,7 +160,14 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    // Do not preserve a stale plaintext key when the current auth source is
+    // a SecretRef (sentinel).  The runtime async path will resolve the real
+    // credential at request time.  (#34335)
+    if (
+      typeof existing.apiKey === "string" &&
+      existing.apiKey &&
+      newEntry.apiKey !== REDACTED_API_KEY_SENTINEL
+    ) {
       preserved.apiKey = existing.apiKey;
     }
     if (typeof existing.baseUrl === "string" && existing.baseUrl) {

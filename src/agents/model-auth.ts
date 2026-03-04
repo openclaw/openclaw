@@ -17,6 +17,7 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { REDACTED_API_KEY_SENTINEL } from "./models-config.providers.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -52,7 +53,12 @@ export function getCustomProviderApiKey(
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  return normalizeOptionalSecretInput(entry?.apiKey);
+  const apiKey = normalizeOptionalSecretInput(entry?.apiKey);
+  // Filter out the sentinel used for SecretRef-backed providers (#34335).
+  if (apiKey === REDACTED_API_KEY_SENTINEL) {
+    return undefined;
+  }
+  return apiKey;
 }
 
 function resolveProviderAuthOverride(
