@@ -351,6 +351,131 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects wake request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/wake", {
+        text: "Ping",
+        sessionKey: "agent:main:dm:u99999",
+      });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("hooks.allowRequestSessionKey");
+    });
+  });
+
+  test("accepts wake request sessionKey when allowRequestSessionKey is enabled", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+    };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", {
+        text: "Targeted ping",
+        sessionKey: "hook:my-session",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; mode?: string };
+      expect(body.ok).toBe(true);
+      // Event is enqueued under the canonicalized session key, not main
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+    });
+  });
+
+  test("rejects wake sessionKey that does not match allowedSessionKeyPrefixes", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/wake", {
+        text: "Bad prefix",
+        sessionKey: "agent:main:main",
+      });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("must start with");
+    });
+  });
+
+  test("wake without sessionKey bypasses policy check and succeeds", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", { text: "No key" });
+      expect(res.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("rejects mapped wake sessionKey that violates allowedSessionKeyPrefixes", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-bad" },
+          action: "wake",
+          textTemplate: "Wake: {{payload.msg}}",
+          sessionKey: "agent:main:main",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/mapped-wake-bad", { msg: "hello" });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("must start with");
+    });
+  });
+
+  test("accepts mapped wake sessionKey that passes policy", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-ok" },
+          action: "wake",
+          textTemplate: "Wake: {{payload.msg}}",
+          sessionKey: "hook:wake:{{payload.id}}",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/mapped-wake-ok", { msg: "hello", id: "99" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+    });
+  });
+
+  test("mapped wake without sessionKey bypasses policy and succeeds", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-nokey" },
+          action: "wake",
+          textTemplate: "Wake: {{payload.msg}}",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/mapped-wake-nokey", { msg: "hello" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+    });
+  });
+
   test("throttles repeated hook auth failures and resets after success", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
