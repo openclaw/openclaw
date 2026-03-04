@@ -237,7 +237,7 @@ State persists inside the sandbox across stop/start cycles.
 
 ## Troubleshooting
 
-### Gateway not running after reconnect
+### Gateway not running after sandbox restart
 
 The gateway process does not survive a sandbox restart. After `daytona ssh openclaw`, restart it:
 
