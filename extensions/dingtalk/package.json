@@ -1,0 +1,34 @@
+{
+  "name": "@openclaw/dingtalk",
+  "version": "2026.3.2",
+  "description": "OpenClaw DingTalk channel plugin",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dingtalk-stream": "^2.1.4",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dingtalk",
+      "label": "DingTalk",
+      "selectionLabel": "DingTalk (钉钉)",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
+      "blurb": "钉钉/DingTalk enterprise messaging via Stream mode.",
+      "aliases": [
+        "dingding"
+      ],
+      "order": 36,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/dingtalk",
+      "localPath": "extensions/dingtalk",
+      "defaultChoice": "npm"
+    }
+  }
+}
