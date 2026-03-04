@@ -1242,30 +1242,29 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
           );
 
-          // Download media from quoted message if it's a media type (#33798)
-          const quotedMediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
-          if (quotedMediaTypes.includes(quotedMsg.contentType)) {
-            try {
-              const quotedMediaList = await resolveFeishuMediaList({
-                cfg,
-                messageId: ctx.parentId,
-                messageType: quotedMsg.contentType,
-                content: quotedMsg.rawContent,
-                maxBytes: mediaMaxBytes,
-                log,
-                accountId: account.accountId,
-              });
-              if (quotedMediaList.length > 0) {
-                mediaList.push(...quotedMediaList);
-                log(
-                  `feishu[${account.accountId}]: downloaded ${quotedMediaList.length} media file(s) from quoted message`,
-                );
-              }
-            } catch (mediaErr) {
+          // Download media from quoted message (#33798)
+          // resolveFeishuMediaList internally filters non-media types,
+          // so no outer type guard is needed here.
+          try {
+            const quotedMediaList = await resolveFeishuMediaList({
+              cfg,
+              messageId: ctx.parentId,
+              messageType: quotedMsg.contentType,
+              content: quotedMsg.rawContent,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (quotedMediaList.length > 0) {
+              mediaList.push(...quotedMediaList);
               log(
-                `feishu[${account.accountId}]: failed to download media from quoted message: ${String(mediaErr)}`,
+                `feishu[${account.accountId}]: downloaded ${quotedMediaList.length} media file(s) from quoted message`,
               );
             }
+          } catch (mediaErr) {
+            log(
+              `feishu[${account.accountId}]: failed to download media from quoted message: ${String(mediaErr)}`,
+            );
           }
         }
       } catch (err) {
