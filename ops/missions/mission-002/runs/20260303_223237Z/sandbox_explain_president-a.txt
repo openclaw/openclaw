@@ -1,0 +1,26 @@
+Effective sandbox:
+  agentId: president-a
+  sessionKey: agent:president-a:main
+  mainSessionKey: agent:president-a:main
+  runtime: direct
+  mode: off scope: agent perSession: false
+  workspaceAccess: none workspaceRoot: /home/spryguy/.openclaw/sandboxes
+
+Sandbox tool policy:
+  allow (default): exec, process, read, write, edit, apply_patch, image, sessions_list, sessions_history, sessions_send, sessions_spawn, subagents, session_status
+  deny  (default): browser, canvas, nodes, cron, gateway, telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage
+
+Elevated:
+  enabled: true
+  channel: (unknown)
+  allowedByConfig: false
+
+Fix-it:
+  - tools.sandbox.tools.allow
+  - tools.sandbox.tools.deny
+  - agents.list[].tools.sandbox.tools.allow
+  - agents.list[].tools.sandbox.tools.deny
+  - tools.elevated.enabled
+
+Docs: https://docs.openclaw.ai/sandbox
+

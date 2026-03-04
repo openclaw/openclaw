@@ -1,0 +1,10 @@
+{
+  "mission": "mission-002",
+  "status": "INIT",
+  "owner": "voltaris",
+  "updatedUtc": "2026-03-03T22:32:37Z",
+  "latestRunDir": "ops/missions/mission-002/runs/20260303_223237Z",
+  "links": {
+    "issue": "https://github.com/THESPRYGUY/openclaw-CyborgClaw/issues/4"
+  }
+}
