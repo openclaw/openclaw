@@ -83,6 +83,42 @@ describe("thread-level session keys", () => {
     expect(sessionKey).not.toContain("1770408522.168859");
   });
 
+  it("keeps one thread session key across different users in the same Slack thread", async () => {
+    const ctx = buildCtx({ replyToMode: "off" });
+    ctx.resolveUserName = async () => ({ name: "RoomUser" });
+    const account = createSlackTestAccount({ replyToMode: "off" });
+
+    const first = await prepareSlackMessage({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        user: "U1",
+        text: "thread starter reply",
+        ts: "1770408522.168859",
+        thread_ts: "1770408518.451689",
+      }),
+      opts: { source: "message" },
+    });
+    const second = await prepareSlackMessage({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        user: "U2",
+        text: "same thread, different user",
+        ts: "1770408523.168859",
+        thread_ts: "1770408518.451689",
+      }),
+      opts: { source: "message" },
+    });
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    const firstSessionKey = first!.ctxPayload.SessionKey as string;
+    const secondSessionKey = second!.ctxPayload.SessionKey as string;
+    expect(firstSessionKey).toBe(secondSessionKey);
+    expect(firstSessionKey).toContain(":thread:1770408518.451689");
+  });
+
   it("keeps top-level channel messages on the per-channel session regardless of replyToMode", async () => {
     for (const mode of ["all", "first", "off"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
