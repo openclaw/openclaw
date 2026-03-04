@@ -474,6 +474,10 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     description: normalizeOptionalText(input.description),
     enabled,
     deleteAfterRun,
+    maxRunsPerDay:
+      typeof input.maxRunsPerDay === "number" && input.maxRunsPerDay > 0
+        ? input.maxRunsPerDay
+        : undefined,
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
@@ -510,6 +514,11 @@ export function applyJobPatch(
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if (typeof patch.maxRunsPerDay === "number" && patch.maxRunsPerDay > 0) {
+    job.maxRunsPerDay = patch.maxRunsPerDay;
+  } else if (patch.maxRunsPerDay === 0 || patch.maxRunsPerDay === null) {
+    job.maxRunsPerDay = undefined;
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {
@@ -813,6 +822,48 @@ function mergeCronFailureAlert(
   return next;
 }
 
+/**
+ * Resolve the calendar date string (YYYY-MM-DD) for a given timestamp
+ * in the job's configured timezone (or system default).
+ */
+export function resolveCalendarDate(nowMs: number, tz?: string): string {
+  const timezone = typeof tz === "string" && tz.trim() ? tz.trim() : undefined;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(nowMs));
+    const year = parts.find((p) => p.type === "year")?.value;
+    const month = parts.find((p) => p.type === "month")?.value;
+    const day = parts.find((p) => p.type === "day")?.value;
+    if (year && month && day) {
+      return `${year}-${month}-${day}`;
+    }
+  } catch {
+    // Fall through to ISO fallback on invalid timezone.
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Check whether a job has exceeded its maxRunsPerDay limit for the current
+ * calendar day. Returns true if the job should be skipped.
+ */
+export function isJobAtDailyLimit(job: CronJob, nowMs: number): boolean {
+  const maxRuns = job.maxRunsPerDay;
+  if (typeof maxRuns !== "number" || maxRuns <= 0) {
+    return false;
+  }
+  const today = resolveCalendarDate(
+    nowMs,
+    job.schedule.kind === "cron" ? job.schedule.tz : undefined,
+  );
+  const runsToday = job.state?.runsTodayDate === today ? (job.state.runsToday ?? 0) : 0;
+  return runsToday >= maxRuns;
+}
+
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
   if (!job.state) {
     job.state = {};
@@ -823,7 +874,14 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (opts.forced) {
     return true;
   }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
+  if (!job.enabled || typeof job.state.nextRunAtMs !== "number" || nowMs < job.state.nextRunAtMs) {
+    return false;
+  }
+  // Skip if daily run limit has been reached.
+  if (isJobAtDailyLimit(job, nowMs)) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {

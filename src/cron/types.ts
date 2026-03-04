@@ -128,6 +128,10 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Number of successful runs completed on the current calendar day (reset daily). */
+  runsToday?: number;
+  /** Calendar date string (YYYY-MM-DD) for the current runsToday counter. */
+  runsTodayDate?: string;
 };
 
 export type CronJob = CronJobBase<

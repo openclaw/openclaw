@@ -2448,6 +2448,7 @@ public struct CronJob: Codable, Sendable {
     public let description: String?
     public let enabled: Bool
     public let deleteafterrun: Bool?
+    public let maxrunsperday: Int?
     public let createdatms: Int
     public let updatedatms: Int
     public let schedule: AnyCodable
@@ -2466,6 +2467,7 @@ public struct CronJob: Codable, Sendable {
         description: String?,
         enabled: Bool,
         deleteafterrun: Bool?,
+        maxrunsperday: Int?,
         createdatms: Int,
         updatedatms: Int,
         schedule: AnyCodable,
@@ -2483,6 +2485,7 @@ public struct CronJob: Codable, Sendable {
         self.description = description
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
+        self.maxrunsperday = maxrunsperday
         self.createdatms = createdatms
         self.updatedatms = updatedatms
         self.schedule = schedule
@@ -2502,6 +2505,7 @@ public struct CronJob: Codable, Sendable {
         case description
         case enabled
         case deleteafterrun = "deleteAfterRun"
+        case maxrunsperday = "maxRunsPerDay"
         case createdatms = "createdAtMs"
         case updatedatms = "updatedAtMs"
         case schedule
@@ -2561,6 +2565,7 @@ public struct CronAddParams: Codable, Sendable {
     public let description: String?
     public let enabled: Bool?
     public let deleteafterrun: Bool?
+    public let maxrunsperday: AnyCodable?
     public let schedule: AnyCodable
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -2575,6 +2580,7 @@ public struct CronAddParams: Codable, Sendable {
         description: String?,
         enabled: Bool?,
         deleteafterrun: Bool?,
+        maxrunsperday: AnyCodable?,
         schedule: AnyCodable,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -2588,6 +2594,7 @@ public struct CronAddParams: Codable, Sendable {
         self.description = description
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
+        self.maxrunsperday = maxrunsperday
         self.schedule = schedule
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -2603,6 +2610,7 @@ public struct CronAddParams: Codable, Sendable {
         case description
         case enabled
         case deleteafterrun = "deleteAfterRun"
+        case maxrunsperday = "maxRunsPerDay"
         case schedule
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"

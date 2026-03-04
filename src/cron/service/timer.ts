@@ -15,9 +15,11 @@ import type {
 } from "../types.js";
 import {
   computeJobNextRunAtMs,
+  isJobAtDailyLimit,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
+  resolveCalendarDate,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
@@ -286,6 +288,7 @@ export function applyJobResult(
     startedAt: number;
     endedAt: number;
   },
+  opts?: { forced?: boolean },
 ): boolean {
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -330,6 +333,26 @@ export function applyJobResult(
   } else {
     job.state.consecutiveErrors = 0;
     job.state.lastFailureAlertAtMs = undefined;
+
+    // Track successful runs per calendar day for maxRunsPerDay deduplication.
+    // Forced runs bypass the daily limit check (isJobDue) and should not
+    // consume a quota slot — otherwise a force-run would silently block
+    // the next scheduled execution for the rest of the day.
+    if (
+      result.status === "ok" &&
+      typeof job.maxRunsPerDay === "number" &&
+      job.maxRunsPerDay > 0 &&
+      !opts?.forced
+    ) {
+      const tz = job.schedule.kind === "cron" ? job.schedule.tz : undefined;
+      const today = resolveCalendarDate(result.endedAt, tz);
+      if (job.state.runsTodayDate === today) {
+        job.state.runsToday = (job.state.runsToday ?? 0) + 1;
+      } else {
+        job.state.runsTodayDate = today;
+        job.state.runsToday = 1;
+      }
+    }
   }
 
   const shouldDelete =
@@ -732,7 +755,15 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  return typeof next === "number" && Number.isFinite(next) && nowMs >= next;
+  if (typeof next !== "number" || !Number.isFinite(next) || nowMs < next) {
+    return false;
+  }
+  // Enforce maxRunsPerDay in the scheduler path — skip jobs that have
+  // already hit their daily limit so they aren't selected by collectRunnableJobs.
+  if (isJobAtDailyLimit(job, nowMs)) {
+    return false;
+  }
+  return true;
 }
 
 function collectRunnableJobs(
@@ -1066,13 +1097,18 @@ export async function executeJob(
   }
 
   const endedAt = state.deps.nowMs();
-  const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
-    delivered: coreResult.delivered,
-    startedAt,
-    endedAt,
-  });
+  const shouldDelete = applyJobResult(
+    state,
+    job,
+    {
+      status: coreResult.status,
+      error: coreResult.error,
+      delivered: coreResult.delivered,
+      startedAt,
+      endedAt,
+    },
+    { forced: _opts.forced },
+  );
 
   emitJobFinished(state, job, coreResult, startedAt);
 
