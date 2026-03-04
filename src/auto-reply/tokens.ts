@@ -69,9 +69,6 @@ export function isSilentReplyPrefixText(
   if (!normalized) {
     return false;
   }
-  if (normalized.length < 2) {
-    return false;
-  }
   if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
@@ -79,14 +76,21 @@ export function isSilentReplyPrefixText(
   if (!tokenUpper.startsWith(normalized)) {
     return false;
   }
+  // Any prefix that already contains an underscore is unambiguously part of the
+  // silent token (e.g. "NO_", "NO_RE", "HEARTBEAT_").
   if (normalized.includes("_")) {
     return true;
   }
-  // Allow the exact pre-underscore segment of the token (e.g. "NO" for "NO_REPLY",
-  // "HEARTBEAT" for "HEARTBEAT_OK") — streaming can transiently emit that fragment
-  // before the underscore arrives.
+  // Also allow prefixes up to and including the full pre-underscore segment.
+  // During streaming, tokens can arrive as partial fragments: "N", "NO", etc.
+  // We hold back any all-uppercase prefix that matches the token to avoid leaking
+  // fragments like "NO" before "_REPLY" arrives. This is safe because:
+  // - The check requires trimmed text to be STRICTLY uppercase (mixed case → false)
+  // - The text must be an exact prefix of the token
+  // - Real model replies almost never consist of just "N" or "NO" in all-caps
+  //   as their entire accumulated output
   const underscoreIdx = tokenUpper.indexOf("_");
-  if (underscoreIdx > 0 && normalized === tokenUpper.slice(0, underscoreIdx)) {
+  if (underscoreIdx > 0 && normalized.length <= underscoreIdx) {
     return true;
   }
   return false;
