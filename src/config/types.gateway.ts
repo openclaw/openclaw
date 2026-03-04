@@ -317,6 +317,39 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/**
+ * Configuration for a peer gateway in a multi-gateway setup.
+ *
+ * When multiple openclaw gateways run on the same host (e.g. one per bot),
+ * peer configuration enables cross-gateway session routing via sessions_send.
+ * Without peers, sessions_send can only reach sessions on the local gateway.
+ *
+ * @example
+ * ```json
+ * {
+ *   "gateway": {
+ *     "peers": [
+ *       { "url": "ws://127.0.0.1:18790", "token": "peer-token", "name": "kairos" },
+ *       { "url": "ws://127.0.0.1:18791", "name": "maia", "agentIds": ["main"] }
+ *     ]
+ *   }
+ * }
+ * ```
+ */
+export type GatewayPeerConfig = {
+  /** WebSocket URL of the peer gateway (ws:// or wss://). */
+  url: string;
+  /** Auth token for the peer gateway (when it requires token auth). */
+  token?: SecretInput;
+  /** Human-readable name for this peer (used in logs and error messages). */
+  name?: string;
+  /**
+   * Optional agent ID filter. When set, this peer is only consulted for
+   * sessions belonging to the listed agent IDs. Omit to allow any agent.
+   */
+  agentIds?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -358,6 +391,14 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /**
+   * Peer gateways for cross-gateway session routing.
+   *
+   * When sessions_send targets a session not found locally, the gateway
+   * queries configured peers and relays the message to the owning gateway.
+   * Only needed in multi-gateway setups (e.g. multiple bots on different ports).
+   */
+  peers?: GatewayPeerConfig[];
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
