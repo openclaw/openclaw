@@ -278,8 +278,7 @@ export function handleMessageEnd(
     (assistantMessage.content as Array<{ type?: string }>).some(
       (block) => block?.type === "toolCall",
     );
-  const userFacingRawText =
-    hasToolCalls && ctx.state.emittedAssistantUpdate ? "" : rawText;
+  const userFacingRawText = hasToolCalls && ctx.state.emittedAssistantUpdate ? "" : rawText;
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(userFacingRawText, { thinking: false, final: false }),

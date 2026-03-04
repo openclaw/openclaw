@@ -165,7 +165,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
-    // When true, drop this message's text from assistantTexts (e.g. tool-use rounds). 
+    // When true, drop this message's text from assistantTexts (e.g. tool-use rounds).
     discardThisMessage?: boolean;
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered, discardThisMessage } = args;
