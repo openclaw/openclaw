@@ -62,6 +62,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { setGlobalUPCManager, UPCManager } from "../security/upc-manager.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -72,7 +73,6 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { UPCManager } from "../security/upc-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -719,9 +719,14 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
-  const upcManager = new UPCManager({
-    enabled: runtimeConfig.upcConfig?.enabled ?? false,
-  });
+  const upcConfig = (cfgAtStart as { upc?: { enabled?: boolean; credential?: string } }).upc;
+  const upcManager = new UPCManager();
+  if (upcConfig?.enabled && typeof upcConfig.credential === "string") {
+    upcManager.setUPC(upcConfig.credential);
+  } else if (upcConfig?.enabled) {
+    upcManager.importConfig({ enabled: true });
+  }
+  setGlobalUPCManager(upcManager);
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
@@ -772,11 +777,6 @@ export async function startGatewayServer(
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
       ...secretsHandlers,
-      ...Object.fromEntries(
-        Object.entries(coreGatewayHandlers).filter(([key]) =>
-          key.startsWith("security.upc.")
-        )
-      ),
     },
     broadcast,
     context: {

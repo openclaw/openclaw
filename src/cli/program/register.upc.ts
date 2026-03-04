@@ -10,17 +10,20 @@
  */
 
 import type { Command } from "commander";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
-import { CONFIG_PATH } from "../config/paths.js";
-import { danger, info, success, warn } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
-import { callGatewayFromCli } from "./gateway-rpc.js";
-import { hashUpcCredential } from "../gateway/server-methods/upc.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
+import { CONFIG_PATH } from "../../config/paths.js";
+import { danger, info, success, warn } from "../../globals.js";
+import { defaultRuntime } from "../../runtime.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
+import { shortenHomePath } from "../../utils.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
+import { callGatewayFromCli, type GatewayRpcOpts } from "../gateway-rpc.js";
+
+type UpcCommandOptions = GatewayRpcOpts & {
+  duration?: string;
+  timeWindowMinutes?: string;
+};
 
 export function registerUpcCommand(program: Command) {
   program
@@ -80,7 +83,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/upc", "docs.openclaw.ai/cli/upc")
 /**
  * Handle `openclaw upc set <credential>` - Set or update the UPC credential.
  */
-async function handleUpcSet(credential: string | undefined, opts: unknown) {
+async function handleUpcSet(credential: string | undefined, opts: UpcCommandOptions) {
   if (!credential || credential.trim().length === 0) {
     danger("Error: Credential is required.");
     danger("Usage: openclaw upc set <credential>");
@@ -95,25 +98,25 @@ async function handleUpcSet(credential: string | undefined, opts: unknown) {
   }
 
   try {
-    // Hash the credential
-    const hash = await hashUpcCredential(trimmedCred);
-
     // Read current config
     const snapshot = readConfigFileSnapshot();
+
+    // Call gateway when available so credential handling stays server-side.
+    try {
+      await callGatewayFromCli("upc.set", opts, { credential: trimmedCred }, { progress: false });
+    } catch {
+      // Ignore gateway reachability issues; we'll still persist config locally.
+    }
 
     // Update config with UPC settings
     const updated = {
       ...snapshot.resolved,
       upc: {
-        ...(snapshot.resolved.upc ?? {}),
+        ...snapshot.resolved.upc,
         enabled: true,
-        credential: hash,
-        duration:
-          (opts as any)?.duration ?? snapshot.resolved.upc?.duration ?? "once-per-session",
-        timeWindowMinutes:
-          (opts as any)?.timeWindowMinutes ??
-          snapshot.resolved.upc?.timeWindowMinutes ??
-          undefined,
+        credential: trimmedCred,
+        duration: opts.duration ?? snapshot.resolved.upc?.duration ?? "once-per-session",
+        timeWindowMinutes: opts.timeWindowMinutes ?? snapshot.resolved.upc?.timeWindowMinutes,
       },
     };
 
@@ -139,16 +142,10 @@ async function handleUpcSet(credential: string | undefined, opts: unknown) {
  */
 async function handleUpcReset() {
   try {
-    // Call gateway to clear UPC verification state
-    const result = await callGatewayFromCli("upc.clear", {}, { contextKey: "*" });
-
-    if (result?.status === "cleared") {
-      success("UPC verification state cleared.");
-    } else {
-      info("Failed to clear UPC verification state on gateway.");
-    }
+    await callGatewayFromCli("upc.clear", {}, {}, { progress: false });
+    success("UPC verification state reset.");
   } catch (err) {
-    warn(`Could not clear UPC on gateway (might not be running): ${String(err)}`);
+    warn(`Could not reset UPC verification state through gateway: ${String(err)}`);
   }
 }
 
@@ -180,18 +177,14 @@ async function handleUpcStatus() {
       info(`Limited to channels: ${upc.requireUpcForChannels.join(", ")}`);
     }
 
-    // Try to get status from gateway
+    // Try to get live status from gateway.
     try {
-      const status = await callGatewayFromCli(
-        "upc.status",
-        {},
-        { contextKey: "cli" },
-      );
-      if (status?.isVerified) {
-        info(`Current context verified: yes`);
-      } else {
-        info(`Current context verified: no`);
-      }
+      const status = (await callGatewayFromCli("upc.status", {}, {}, { progress: false })) as {
+        enabled?: boolean;
+        hasUPC?: boolean;
+      };
+      info(`Gateway enabled: ${status.enabled ? "yes" : "no"}`);
+      info(`Gateway credential configured: ${status.hasUPC ? "yes" : "no"}`);
     } catch {
       warn("Could not retrieve gateway status (gateway might not be running)");
     }
@@ -209,10 +202,16 @@ async function handleUpcDisable() {
   try {
     const snapshot = readConfigFileSnapshot();
 
+    try {
+      await callGatewayFromCli("upc.disable", {}, {}, { progress: false });
+    } catch {
+      // Keep local config in sync even when gateway is unavailable.
+    }
+
     const updated = {
       ...snapshot.resolved,
       upc: {
-        ...(snapshot.resolved.upc ?? {}),
+        ...snapshot.resolved.upc,
         enabled: false,
       },
     };

@@ -3,12 +3,11 @@ import crypto from "node:crypto";
 /**
  * UPC (User Protocol Credential) Manager
  * Handles secure credential storage, hashing, and verification with rate limiting.
- * Uses simple string hashing for portability (not cryptographic password hashing).
  */
 
 interface UPCConfig {
   enabled: boolean;
-  credentialHash?: string; // SHA-256 hash of the UPC
+  credentialHash?: string; // scrypt hash of the UPC
 }
 
 interface RateLimitEntry {
@@ -106,7 +105,10 @@ export class UPCManager {
    * Verify a UPC input against the stored credential
    * Includes rate limiting and session tracking
    */
-  verifyUPC(input: string, sessionId: string): {
+  verifyUPC(
+    input: string,
+    sessionId: string,
+  ): {
     verified: boolean;
     remainingAttempts?: number;
     error?: string;
@@ -172,8 +174,7 @@ export class UPCManager {
     }
 
     // Verify the credential
-    const inputHash = this.hashCredential(input);
-    const isValid = inputHash === this.config.credentialHash;
+    const isValid = this.verifyCredential(input, this.config.credentialHash!);
 
     if (isValid) {
       // Mark session as verified
@@ -242,10 +243,7 @@ export class UPCManager {
    */
   markSessionVerified(sessionId: string, expiryMs?: number): void {
     this.verifiedSessionIds.add(sessionId);
-    this.verifiedSessionExpiryMs.set(
-      sessionId,
-      expiryMs || Date.now() + VERIFICATION_EXPIRY_MS,
-    );
+    this.verifiedSessionExpiryMs.set(sessionId, expiryMs || Date.now() + VERIFICATION_EXPIRY_MS);
   }
 
   /**
@@ -255,6 +253,15 @@ export class UPCManager {
     this.verifiedSessionIds.delete(sessionId);
     this.verifiedSessionExpiryMs.delete(sessionId);
     this.rateLimitBySessionId.delete(sessionId);
+  }
+
+  /**
+   * Clear all cached verification and rate-limit state while keeping credential config.
+   */
+  clearAllVerifications(): void {
+    this.verifiedSessionIds.clear();
+    this.verifiedSessionExpiryMs.clear();
+    this.rateLimitBySessionId.clear();
   }
 
   /**
@@ -286,11 +293,32 @@ export class UPCManager {
   }
 
   /**
-   * Hash a credential using SHA-256
-   * @private
+   * Hash a credential using scrypt with per-credential random salt.
    */
   private hashCredential(credential: string): string {
-    return crypto.createHash("sha256").update(credential).digest("hex");
+    const salt = crypto.randomBytes(16).toString("hex");
+    const derived = crypto.scryptSync(credential, salt, 64).toString("hex");
+    return `scrypt$${salt}$${derived}`;
+  }
+
+  /**
+   * Verify input against stored hash. Supports legacy SHA-256 hashes for compatibility.
+   */
+  private verifyCredential(input: string, storedHash: string): boolean {
+    if (storedHash.startsWith("scrypt$")) {
+      const [, salt, expectedHex] = storedHash.split("$");
+      if (!salt || !expectedHex) {
+        return false;
+      }
+      const actual = crypto.scryptSync(input, salt, 64);
+      const expected = Buffer.from(expectedHex, "hex");
+      return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
+    }
+
+    const legacyHash = crypto.createHash("sha256").update(input).digest("hex");
+    const expected = Buffer.from(storedHash, "utf8");
+    const actual = Buffer.from(legacyHash, "utf8");
+    return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
   }
 
   /**

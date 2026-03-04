@@ -202,6 +202,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "upc",
+        description: "Manage Private UPC (User Protocol Credential)",
+        hasSubcommands: false,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.upc.js");
+      mod.registerUpcCommand(program);
+    },
+  },
 ];
 
 function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {

@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState, useCallback } from 'react';
+import { useCallback, useState } from "react";
 
 export interface UPCChallenge {
   challengeId: string;
@@ -18,13 +18,15 @@ export interface UseUPCVerificationReturn {
   handleToolCall: (toolName: string, taskDescription: string) => Promise<string | null>;
 }
 
+type UPCGatewayClient = {
+  call: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+};
+
 /**
  * Hook for managing UPC verification flow in the UI
  * Handles showing the verification modal and submitting the code word
  */
-export function useUPCVerification(
-  gatewayClient: any // Replace with actual gateway client type
-): UseUPCVerificationReturn {
+export function useUPCVerification(gatewayClient: UPCGatewayClient): UseUPCVerificationReturn {
   const [challenge, setChallenge] = useState<UPCChallenge | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -41,17 +43,20 @@ export function useUPCVerification(
 
   const verifyUPC = useCallback(
     async (upc: string) => {
-      if (!challenge) throw new Error('No active challenge');
+      if (!challenge) {
+        throw new Error("No active challenge");
+      }
 
       setIsVerifying(true);
       try {
-        const response = await gatewayClient.call('security.upc.verify', {
-          challengeId: challenge.challengeId,
-          credential: upc,
-        });
+        const response = (await gatewayClient.call("upc.verify", {
+          upcInput: upc,
+          taskName: challenge.toolName,
+          taskDescription: challenge.taskDescription,
+        })) as { verified?: boolean; error?: string };
 
         if (!response.verified) {
-          throw new Error(response.message || 'Verification failed');
+          throw new Error(response.error || "Verification failed");
         }
 
         closeChallenge();
@@ -59,48 +64,43 @@ export function useUPCVerification(
         setIsVerifying(false);
       }
     },
-    [challenge, gatewayClient, closeChallenge]
+    [challenge, gatewayClient, closeChallenge],
   );
 
   const handleToolCall = useCallback(
     async (toolName: string, taskDescription: string): Promise<string | null> => {
       try {
-        // Check if tool requires UPC verification
-        const statusResponse = await gatewayClient.call('security.upc.getStatus');
+        const statusResponse = (await gatewayClient.call("upc.status")) as {
+          hasUPC?: boolean;
+          enabled?: boolean;
+        };
 
         if (!statusResponse.hasUPC || !statusResponse.enabled) {
-          // No UPC set up, allow the call
           return null;
         }
 
-        // Request a verification challenge
-        const challengeResponse = await gatewayClient.call(
-          'security.upc.requestChallenge',
-          {
-            toolName,
-            taskDescription,
-          }
-        );
+        const challengeResponse = (await gatewayClient.call("upc.approval.create", {
+          taskName: toolName,
+          taskDescription,
+        })) as { id?: string };
 
-        if (challengeResponse.requiresVerification) {
-          // Show the verification modal and wait for response
-          showChallenge({
-            challengeId: challengeResponse.challengeId,
-            toolName,
-            taskDescription,
-          });
-
-          // Return the challenge ID so the caller knows verification is pending
-          return challengeResponse.challengeId;
+        if (!challengeResponse.id || challengeResponse.id === "not-needed") {
+          return null;
         }
 
-        return null;
+        showChallenge({
+          challengeId: challengeResponse.id,
+          toolName,
+          taskDescription,
+        });
+
+        return challengeResponse.id;
       } catch (err) {
-        console.error('Failed to check UPC requirement:', err);
+        console.error("Failed to check UPC requirement:", err);
         return null;
       }
     },
-    [gatewayClient, showChallenge]
+    [gatewayClient, showChallenge],
   );
 
   return {
