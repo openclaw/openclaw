@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+﻿import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { validateConfig } from "./src/config.js";
 import { generateHeartbeat } from "./src/heartbeat.js";
@@ -32,7 +32,7 @@ export default function register(api: OpenClawPluginApi) {
   api.registerHttpRoute({
     path: "/iris-dashboard",
     match: "prefix",
-    auth: "gateway",
+    auth: "plugin",
     handler: async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
       // 1. Try UI + static assets
       if (handleUi(req, res)) return true;
