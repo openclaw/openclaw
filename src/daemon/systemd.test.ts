@@ -63,6 +63,18 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("treats system scope status as available without --user", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["status"]);
+      const err = new Error("degraded") as Error & { code?: number };
+      err.code = 3;
+      cb(err, "", "");
+    });
+    await expect(isSystemdUserServiceAvailable({ OPENCLAW_SYSTEMD_SYSTEM: "1" })).resolves.toBe(
+      true,
+    );
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
@@ -138,6 +150,18 @@ describe("isSystemdServiceEnabled", () => {
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
   });
+
+  it("uses system scope is-enabled when OPENCLAW_SYSTEMD_SYSTEM is set", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", "openclaw-gateway.service"]);
+      cb(null, "enabled", "");
+    });
+    const result = await isSystemdServiceEnabled({
+      env: { OPENCLAW_SYSTEMD_SYSTEM: "1" },
+    });
+    expect(result).toBe(true);
+  });
 });
 
 describe("systemd runtime parsing", () => {
@@ -194,6 +218,14 @@ describe("resolveSystemdUserUnitPath", () => {
         OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
       },
       expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+    {
+      name: "uses /etc/systemd/system in system scope",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_SYSTEM: "1",
+      },
+      expected: "/etc/systemd/system/openclaw-gateway.service",
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
@@ -386,6 +418,25 @@ describe("systemd service control", () => {
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
     await restartSystemdService({ stdout, env: { USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("uses system scope commands when OPENCLAW_SYSTEMD_SYSTEM is set", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["restart", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { OPENCLAW_SYSTEMD_SYSTEM: "1" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
