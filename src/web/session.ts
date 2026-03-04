@@ -32,6 +32,12 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+// Export for login-qr.ts to wait for pending creds writes before restarting socket
+export async function waitForCredsSaveQueue(): Promise<void> {
+  await credsSaveQueue;
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
