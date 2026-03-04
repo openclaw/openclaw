@@ -306,7 +306,9 @@ export function triggerOpenClawRestart(): RestartAttempt {
   const tried: string[] = [];
   if (process.platform !== "darwin") {
     if (process.platform === "win32") {
-      const taskName = resolveGatewayWindowsTaskName(process.env.OPENCLAW_PROFILE);
+      const taskName =
+        process.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+        resolveGatewayWindowsTaskName(process.env.OPENCLAW_PROFILE);
       if (!isBatchSafe(taskName)) {
         return {
           ok: false,
@@ -314,7 +316,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
           detail: `unsafe task name for batch script: ${taskName}`,
         };
       }
-      const port = DEFAULT_GATEWAY_PORT;
+      const port = Number(process.env.OPENCLAW_GATEWAY_PORT) || DEFAULT_GATEWAY_PORT;
       const tmpDir = os.tmpdir();
       const filename = `openclaw-restart-${Date.now()}.bat`;
       const scriptPath = path.join(tmpDir, filename);
@@ -336,6 +338,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"'
   goto port_released
 )
 :port_released
+timeout /t 1 /nobreak >nul
 schtasks /Run /TN "${taskName}"
 del "%~f0"
 `;

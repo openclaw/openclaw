@@ -160,6 +160,18 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("does not kickstart on win32 with only OPENCLAW_TASK_SCRIPT (script-only install)", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_TASK_SCRIPT = "C:\\Users\\test\\.openclaw\\gateway.cmd";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns failed when win32 schtasks restart fails", () => {
     clearSupervisorHints();
     setPlatform("win32");

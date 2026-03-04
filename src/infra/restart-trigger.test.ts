@@ -80,6 +80,34 @@ describe("triggerOpenClawRestart on win32", () => {
     delete process.env.OPENCLAW_PROFILE;
   });
 
+  it("prefers OPENCLAW_WINDOWS_TASK_NAME over profile-derived name", () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "My Custom Task";
+
+    const result = triggerOpenClawRestart();
+
+    expect(result.ok).toBe(true);
+    const scriptContent = writeFileSyncMock.mock.calls[0][1] as string;
+    expect(scriptContent).toContain('schtasks /End /TN "My Custom Task"');
+    expect(scriptContent).toContain('schtasks /Run /TN "My Custom Task"');
+
+    delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
+  });
+
+  it("uses OPENCLAW_GATEWAY_PORT in port polling", () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    process.env.OPENCLAW_GATEWAY_PORT = "19999";
+
+    const result = triggerOpenClawRestart();
+
+    expect(result.ok).toBe(true);
+    const scriptContent = writeFileSyncMock.mock.calls[0][1] as string;
+    expect(scriptContent).toContain(":19999");
+    expect(scriptContent).not.toContain(":18789");
+
+    delete process.env.OPENCLAW_GATEWAY_PORT;
+  });
+
   it("returns failure when writeFileSync throws", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     writeFileSyncMock.mockImplementation(() => {

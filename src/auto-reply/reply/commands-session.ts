@@ -13,6 +13,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { hasSupervisorHint } from "../../infra/supervisor-markers.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -440,7 +441,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
-  if (hasSigusr1Listener && process.platform !== "win32") {
+  // Skip SIGUSR1 on Windows when running under a supervisor (schtasks); use schtasks restart instead.
+  const skipSigusr1 = process.platform === "win32" && hasSupervisorHint(process.env);
+  if (hasSigusr1Listener && !skipSigusr1) {
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,

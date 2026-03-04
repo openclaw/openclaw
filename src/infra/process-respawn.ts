@@ -35,11 +35,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   if (isLikelySupervisedProcess(process.env)) {
     // On macOS under launchd or Windows under schtasks, actively kickstart
     // the supervised service to bypass restart delays.
-    const hasWindowsTaskMarker =
-      process.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() || process.env.OPENCLAW_TASK_SCRIPT?.trim();
     const shouldKickstart =
       (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) ||
-      (process.platform === "win32" && hasWindowsTaskMarker);
+      (process.platform === "win32" && !!process.env.OPENCLAW_WINDOWS_TASK_NAME?.trim());
     if (shouldKickstart) {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
