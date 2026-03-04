@@ -2,6 +2,10 @@ export function parseTelegramReplyToMessageId(replyToId?: string | null): number
   if (!replyToId) {
     return undefined;
   }
+  // UUID from webchat — not a valid Telegram message ID
+  if (replyToId.includes("-")) {
+    return undefined;
+  }
   const parsed = Number.parseInt(replyToId, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
