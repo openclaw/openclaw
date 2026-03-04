@@ -73,6 +73,17 @@ async function promptSearchProviderOnboarding(
     provider,
   };
 
+  // Clean up stale keys from the previous provider to avoid orphaned credentials
+  // (mirrors the same cleanup in configure.wizard.ts).
+  const oldProvider = (config.tools?.web?.search as Record<string, unknown> | undefined)?.provider;
+  if (oldProvider && typeof oldProvider === "string" && oldProvider !== provider) {
+    if (oldProvider === "brave") {
+      delete search.apiKey;
+    } else {
+      delete search[oldProvider];
+    }
+  }
+
   if (key) {
     if (provider === "brave") {
       search.apiKey = key;
