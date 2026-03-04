@@ -1,6 +1,10 @@
 ---
 x-i18n:
-  source_path: "docs/start/quickstart.md"
+  generated_at: "2026-03-04T06:16:36Z"
+  model: claude-opus-4-6
+  provider: anthropic
+  source_hash: c03779abfcd92ec98e7eb4e7367f4a2a42e284fc78822e3eff4fdd301ecf697d
+  source_path: start/quickstart.md
   workflow: 15
 summary: "クイックスタートはスタートガイドに移動しました。"
 read_when:
