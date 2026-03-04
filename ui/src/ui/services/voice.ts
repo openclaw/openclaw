@@ -16,15 +16,18 @@ interface SpeechRecognitionConstructor {
 
 let recognition: SpeechRecognitionLike | null = null;
 let lastTranscript = "";
+// true once the browser fires onend (natural timeout or explicit stop)
+let recognitionEnded = false;
 
 export async function startRecording(): Promise<void> {
-  // use web speech api if available
   const win = window as unknown as Record<string, unknown>;
   const SpeechRec = (win.SpeechRecognition ?? win.webkitSpeechRecognition) as
     | SpeechRecognitionConstructor
     | undefined;
   if (SpeechRec) {
     recognition = new SpeechRec();
+    lastTranscript = "";
+    recognitionEnded = false;
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.addEventListener("result", (ev: Event) => {
@@ -39,6 +42,10 @@ export async function startRecording(): Promise<void> {
     recognition.addEventListener("error", (e: Event) => {
       console.warn("speech recognition error", e);
     });
+    // Track natural end so stopRecording() can resolve immediately
+    recognition.onend = () => {
+      recognitionEnded = true;
+    };
     recognition.start();
     return;
   }
@@ -47,17 +54,45 @@ export async function startRecording(): Promise<void> {
 
 export async function stopRecording(): Promise<string> {
   if (!recognition) {
-    return Promise.reject(new Error("not recording"));
+    return "";
+  }
+  // Recognition already ended naturally — resolve immediately
+  if (recognitionEnded) {
+    const t = lastTranscript;
+    lastTranscript = "";
+    recognitionEnded = false;
+    recognition = null;
+    return t;
   }
   return new Promise<string>((resolve) => {
-    recognition!.onend = () => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       const t = lastTranscript;
       lastTranscript = "";
+      recognitionEnded = false;
       recognition = null;
       resolve(t);
     };
+    recognition!.onend = finish;
     recognition!.stop();
+    // Safety timeout — resolve even if onend never fires
+    setTimeout(finish, 3000);
   });
+}
+
+// Warm up speechSynthesis on first user interaction so later automated calls aren't blocked.
+// Call this once from a click handler (e.g. the audio toggle button).
+export function primeSpeechSynthesis(): void {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    return;
+  }
+  // Speak an empty utterance to unlock the audio context
+  const utter = new SpeechSynthesisUtterance("");
+  window.speechSynthesis.speak(utter);
 }
 
 /**

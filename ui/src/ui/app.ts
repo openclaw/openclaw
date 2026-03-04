@@ -151,6 +151,10 @@ export class OpenClawApp extends LitElement {
 
   toggleAudioOutput() {
     this.audioOutputEnabled = !this.audioOutputEnabled;
+    if (this.audioOutputEnabled) {
+      // Prime speechSynthesis on the user gesture so later automated TTS isn't blocked
+      void import("./services/voice.ts").then((m) => m.primeSpeechSynthesis());
+    }
   }
   @state() password = "";
   @state() tab: Tab = "chat";
