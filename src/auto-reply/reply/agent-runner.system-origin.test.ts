@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { isSystemOriginRun } from "./agent-runner.js";
 
 describe("isSystemOriginRun", () => {
-  it("treats rewritten messageProvider as system-origin when session provider is system", () => {
+  it("does not treat rewritten user messageProvider as system-origin via session fallback", () => {
     expect(
       isSystemOriginRun({
         messageProvider: "telegram",
         sessionProvider: "system",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("treats rewritten messageProvider as system-origin when source provider is system", () => {
@@ -26,6 +26,14 @@ describe("isSystemOriginRun", () => {
     expect(isSystemOriginRun({ messageProvider: "cron" })).toBe(true);
     expect(isSystemOriginRun({ messageProvider: "hook" })).toBe(true);
     expect(isSystemOriginRun({ messageProvider: "system" })).toBe(true);
+  });
+
+  it("falls back to session provider when message-level providers are missing", () => {
+    expect(
+      isSystemOriginRun({
+        sessionProvider: "system",
+      }),
+    ).toBe(true);
   });
 
   it("does not classify normal channel providers as system-origin", () => {

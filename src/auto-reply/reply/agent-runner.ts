@@ -66,16 +66,19 @@ export function isSystemOriginRun(params: {
   sessionProvider?: string;
   sessionSurface?: string;
 }): boolean {
-  const providers = [
-    params.messageProvider,
-    params.sourceMessageProvider,
-    params.sessionProvider,
-    params.sessionSurface,
-  ];
-  return providers.some((provider) => {
+  const normalizeProvider = (provider?: string): string | undefined => {
     const normalized = provider?.trim().toLowerCase();
-    return Boolean(normalized && SYSTEM_MESSAGE_PROVIDERS.has(normalized));
-  });
+    return normalized || undefined;
+  };
+  const messageProviders = [
+    normalizeProvider(params.messageProvider),
+    normalizeProvider(params.sourceMessageProvider),
+  ];
+  const hasMessageLevelProvider = messageProviders.some(Boolean);
+  const providers = hasMessageLevelProvider
+    ? messageProviders
+    : [normalizeProvider(params.sessionProvider), normalizeProvider(params.sessionSurface)];
+  return providers.some((provider) => Boolean(provider && SYSTEM_MESSAGE_PROVIDERS.has(provider)));
 }
 
 export async function runReplyAgent(params: {
