@@ -17,12 +17,22 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+type FeishuMonitorStatusSink = (patch: {
+  connected?: boolean;
+  lastConnectedAt?: number;
+  lastDisconnect?: { at: number; status?: number; error?: string };
+  lastEventAt?: number;
+  lastInboundAt?: number;
+  lastError?: string | null;
+}) => void;
+
 export type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  statusSink?: FeishuMonitorStatusSink;
 };
 
 export async function monitorWebSocket({
@@ -31,6 +41,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
@@ -46,11 +57,19 @@ export async function monitorWebSocket({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: "abort" },
+      });
       cleanup();
       resolve();
     };
 
     if (abortSignal?.aborted) {
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: "aborted-before-start" },
+      });
       cleanup();
       resolve();
       return;
@@ -61,7 +80,18 @@ export async function monitorWebSocket({
     try {
       wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
+      statusSink?.({
+        connected: true,
+        lastConnectedAt: Date.now(),
+        lastEventAt: Date.now(),
+        lastError: null,
+      });
     } catch (err) {
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: String(err) },
+        lastError: String(err),
+      });
       cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
@@ -75,6 +105,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -89,6 +120,13 @@ export async function monitorWebhook({
   const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
 
   server.on("request", (req, res) => {
+    const now = Date.now();
+    statusSink?.({
+      connected: true,
+      lastEventAt: now,
+      lastInboundAt: now,
+      lastError: null,
+    });
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
     });
@@ -138,11 +176,19 @@ export async function monitorWebhook({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: "abort" },
+      });
       cleanup();
       resolve();
     };
 
     if (abortSignal?.aborted) {
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: "aborted-before-start" },
+      });
       cleanup();
       resolve();
       return;
@@ -152,10 +198,21 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      statusSink?.({
+        connected: true,
+        lastConnectedAt: Date.now(),
+        lastEventAt: Date.now(),
+        lastError: null,
+      });
     });
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: { at: Date.now(), error: String(err) },
+        lastError: String(err),
+      });
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });
