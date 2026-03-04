@@ -40,9 +40,16 @@ The app manages a per‑user LaunchAgent labeled `ai.openclaw.gateway`
 ```bash
 launchctl kickstart -k gui/$UID/ai.openclaw.gateway
 launchctl bootout gui/$UID/ai.openclaw.gateway
+launchctl bootstrap gui/$UID "$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
 ```
 
 Replace the label with `ai.openclaw.<profile>` when running a named profile.
+
+Usage guidance:
+
+- Use `kickstart -k` only when the service is already loaded and you want a quick restart.
+- Use `bootout + bootstrap` when the service is not loaded (common for `.nop`) or after plist edits/version upgrades.
+- `kickstart` takes a service label (`ai.openclaw.gateway`), while `bootstrap` takes a plist path.
 
 If the LaunchAgent isn’t installed, enable it from the app or run
 `openclaw gateway install`.

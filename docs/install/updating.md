@@ -196,7 +196,14 @@ openclaw logs --follow
 
 If you’re supervised:
 
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/ai.openclaw.gateway` (use `ai.openclaw.<profile>`; legacy `com.openclaw.*` still works)
+- macOS launchd (app-bundled LaunchAgent):
+  - Quick restart for an already-loaded service: `launchctl kickstart -k gui/$UID/ai.openclaw.gateway` (use `ai.openclaw.<profile>`; legacy `com.openclaw.*` still works).
+  - For unloaded jobs (common with `.nop`) or after plist edits/version upgrades, do a full reload:
+    ```bash
+    launchctl bootout gui/$UID/ai.openclaw.gateway
+    launchctl bootstrap gui/$UID "$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
+    ```
+  - `kickstart` uses a service label; `bootstrap` uses a plist file path.
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` only work if the service is installed; otherwise run `openclaw gateway install`.
