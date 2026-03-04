@@ -31,6 +31,8 @@
 | `src/cron/isolated-agent/delivery-target.ts`     | Pass `allowSendTo` in cron delivery                                                  |
 | `extensions/whatsapp/src/channel.ts`             | Pass `allowSendTo` in plugin adapter                                                 |
 | `extensions/whatsapp/src/resolve-target.test.ts` | Update plugin adapter tests                                                          |
+| `src/plugin-sdk/index.ts`                        | Export `resolveWhatsAppConfigAllowSendTo` from barrel                                |
+| `src/config/zod-schema.providers-whatsapp.ts`    | Add `allowSendTo` to WhatsApp config validation schema                               |
 
 ---
 
