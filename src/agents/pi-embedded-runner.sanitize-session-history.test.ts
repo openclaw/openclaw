@@ -330,6 +330,55 @@ describe("sanitizeSessionHistory", () => {
     expect(assistants[1]?.usage).toBeDefined();
   });
 
+  it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer without usage" }],
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
+  });
+
+  it("normalizes mixed partial assistant usage fields to numeric totals", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with partial usage" }],
+        usage: {
+          output: 3,
+          cache_read_input_tokens: 9,
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      ...makeZeroUsageSnapshot(),
+      input: 0,
+      output: 3,
+      cacheRead: 9,
+      cacheWrite: 0,
+      totalTokens: 12,
+    });
+  });
+
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
