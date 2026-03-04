@@ -363,7 +363,7 @@ export function shortenHomeInString(input: string): string {
   if (!display) {
     return input;
   }
-  return input.split(display.home).join(display.prefix);
+  return input.replaceAll(display.home, display.prefix);
 }
 
 export function displayPath(input: string): string {
