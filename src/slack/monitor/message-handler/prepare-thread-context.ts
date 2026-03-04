@@ -162,7 +162,7 @@ export async function resolveSlackThreadContextData(params: {
       }
       threadHistoryBody = historyParts.join("\n\n");
       logVerbose(
-        `slack: populated thread history with ${threadHistory.length} messages for new session`,
+        `slack: populated thread history with ${threadHistory.length} messages for new or stale session`,
       );
     }
   }
