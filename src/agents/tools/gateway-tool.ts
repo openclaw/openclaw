@@ -3,6 +3,7 @@ import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { validateGatewayConfig } from "../../cli/gateway-cli/validate.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -35,6 +36,7 @@ const GATEWAY_ACTIONS = [
   "restart",
   "config.get",
   "config.schema",
+  "config.validate",
   "config.apply",
   "config.patch",
   "update.run",
@@ -59,6 +61,8 @@ const GatewayToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
+  // config.validate
+  configPath: Type.Optional(Type.String()),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -74,7 +78,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, apply config, validate config, or update the gateway in-place (SIGUSR1). Use config.validate to check a config file for errors without touching the running gateway (pass optional configPath). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -175,6 +179,14 @@ export function createGatewayTool(opts?: {
       if (action === "config.schema") {
         const result = await callGatewayTool("config.schema", gatewayOpts, {});
         return jsonResult({ ok: true, result });
+      }
+      if (action === "config.validate") {
+        const configPathOverride =
+          typeof params.configPath === "string" && params.configPath.trim()
+            ? params.configPath.trim()
+            : undefined;
+        const result = await validateGatewayConfig(configPathOverride);
+        return jsonResult({ ok: result.valid, result });
       }
       if (action === "config.apply") {
         const { raw, baseHash, sessionKey, note, restartDelayMs } =

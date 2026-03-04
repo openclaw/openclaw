@@ -25,6 +25,7 @@ import {
   renderBeaconLines,
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
+import { addGatewayValidateCommand } from "./validate.js";
 
 function runGatewayCommand(action: () => Promise<void>, label?: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -96,6 +97,7 @@ export function registerGatewayCli(program: Command) {
         () =>
           `\n${theme.heading("Examples:")}\n${formatHelpExamples([
             ["openclaw gateway run", "Run the gateway in the foreground."],
+            ["openclaw gateway validate", "Validate config without restarting the gateway."],
             ["openclaw gateway status", "Show service status and probe reachability."],
             ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
             ["openclaw gateway call health", "Call a gateway RPC method directly."],
@@ -106,6 +108,8 @@ export function registerGatewayCli(program: Command) {
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
   );
+
+  addGatewayValidateCommand(gateway);
 
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe the Gateway",
