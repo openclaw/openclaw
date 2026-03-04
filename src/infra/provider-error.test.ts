@@ -48,12 +48,12 @@ describe("parseProviderError", () => {
     });
 
     it("negative numeric retry-after → retryAfterMs = 0, not negative", async () => {
-    const res = mockResponse(429, { "retry-after": "-5" });
-    const err = await parseProviderError("anthropic", res);
-    expect(err.retryAfterMs).toBe(0);
-  });
+      const res = mockResponse(429, { "retry-after": "-5" });
+      const err = await parseProviderError("anthropic", res);
+      expect(err.retryAfterMs).toBe(0);
+    });
 
-  it("HTTP-date retry-after header → retryAfterMs > 0", async () => {
+    it("HTTP-date retry-after header → retryAfterMs > 0", async () => {
       const future = new Date(Date.now() + 60000).toUTCString();
       const res = mockResponse(429, { "retry-after": future });
       const err = await parseProviderError("openai", res);
@@ -321,12 +321,17 @@ describe("retryWithBackoff", () => {
     const fn = vi.fn(async (): Promise<string> => {
       fnCalls++;
       if (fnCalls === 1) throw secondErr; // attempt 1 retry: fails with 8000ms retry-after
-      return "ok";               // attempt 2 retry: succeeds
+      return "ok"; // attempt 2 retry: succeeds
     });
 
-    const promise = retryWithBackoff(fn, DEFAULT_RETRY_POLICY, firstErr, (_attempt, _max, delayMs) => {
-      delays.push(delayMs);
-    });
+    const promise = retryWithBackoff(
+      fn,
+      DEFAULT_RETRY_POLICY,
+      firstErr,
+      (_attempt, _max, delayMs) => {
+        delays.push(delayMs);
+      },
+    );
     await vi.runAllTimersAsync();
     const result = await promise;
     expect(result).toBe("ok");
