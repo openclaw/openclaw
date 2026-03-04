@@ -262,6 +262,9 @@ export async function waitForWebLogin(
 
     if (login.error) {
       if (login.errorStatus === DisconnectReason.loggedOut) {
+        // Ensure the active socket is down and pending creds writes are drained before auth cleanup.
+        closeSocket(login.sock);
+        await waitForCredsSaveQueue(login.authDir);
         await logoutWeb({
           authDir: login.authDir,
           isLegacyAuthDir: login.isLegacyAuthDir,

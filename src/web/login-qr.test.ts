@@ -71,4 +71,37 @@ describe("login-qr", () => {
     expect(waitForCredsSaveQueueMock).toHaveBeenCalledTimes(1);
     expect(waitForCredsSaveQueueMock).toHaveBeenCalledWith(expect.any(String));
   });
+
+  it("drains creds queue before clearing auth on logged-out errors", async () => {
+    waitForWaConnectionMock.mockRejectedValueOnce({
+      error: { output: { statusCode: 401 } },
+      date: new Date(),
+    });
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+    expect(result.connected).toBe(false);
+    expect(result.message).toContain("logged out");
+
+    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledTimes(1);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledWith(expect.any(String));
+    expect(logoutWebMock).toHaveBeenCalledTimes(1);
+
+    const firstSocket = (await createWaSocketMock.mock.results[0]?.value) as
+      | { ws?: { close: ReturnType<typeof vi.fn> } }
+      | undefined;
+    if (!firstSocket?.ws?.close) {
+      throw new Error("expected login socket close spy");
+    }
+
+    expect(firstSocket.ws.close).toHaveBeenCalled();
+    const closeOrder = firstSocket.ws.close.mock.invocationCallOrder[0];
+    const waitOrder = waitForCredsSaveQueueMock.mock.invocationCallOrder[0];
+    const logoutOrder = logoutWebMock.mock.invocationCallOrder[0];
+    expect(closeOrder).toBeLessThan(waitOrder);
+    expect(waitOrder).toBeLessThan(logoutOrder);
+  });
 });
