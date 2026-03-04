@@ -121,6 +121,13 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
+            Button {
+                Task { @MainActor in
+                    CompanyDeskManager.shared.show()
+                }
+            } label: {
+                Label("Open Company Desk", systemImage: "building.2")
+            }
             if self.state.canvasEnabled {
                 Button {
                     Task { @MainActor in

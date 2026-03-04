@@ -77,6 +77,7 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
+        case chatInject = "chat.inject"
         case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
@@ -620,6 +621,17 @@ extension GatewayConnection {
         return try await self.requestDecoded(
             method: .chatSend,
             params: params,
+            timeoutMs: Double(timeoutMs))
+    }
+
+    func chatInject(sessionKey: String, note: String, timeoutMs: Int = 10000) async throws {
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
+        try await self.requestVoid(
+            method: .chatInject,
+            params: [
+                "sessionKey": AnyCodable(resolvedKey),
+                "note": AnyCodable(note),
+            ],
             timeoutMs: Double(timeoutMs))
     }
 
