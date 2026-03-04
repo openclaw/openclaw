@@ -98,7 +98,7 @@ export function listSkillCommandsForAgents(params: {
     });
   }
 
-  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
+  for (const { workspaceDir } of workspaceFilters.values()) {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       eligibility: { remote: getRemoteSkillEligibility(), sandbox: getSandboxSkillEligibility() },
