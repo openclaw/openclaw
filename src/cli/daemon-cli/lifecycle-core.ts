@@ -2,8 +2,10 @@ import type { Writable } from "node:stream";
 import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import type { GatewayServiceEnv } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
+import { isSystemdSystemScope } from "../../daemon/systemd-scope.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
@@ -18,6 +20,7 @@ import {
 
 type DaemonLifecycleOptions = {
   json?: boolean;
+  env?: GatewayServiceEnv;
 };
 
 type RestartPostCheckContext = {
@@ -27,11 +30,17 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
-async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
+async function maybeAugmentSystemdHints(
+  hints: string[],
+  env: GatewayServiceEnv,
+): Promise<string[]> {
   if (process.platform !== "linux") {
     return hints;
   }
-  const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
+  if (isSystemdSystemScope(env)) {
+    return hints;
+  }
+  const systemdAvailable = await isSystemdUserServiceAvailable(env).catch(() => false);
   if (systemdAvailable) {
     return hints;
   }
@@ -64,8 +73,9 @@ async function handleServiceNotLoaded(params: {
   renderStartHints: () => string[];
   json: boolean;
   emit: ReturnType<typeof createActionIO>["emit"];
+  env: GatewayServiceEnv;
 }) {
-  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  const hints = await maybeAugmentSystemdHints(params.renderStartHints(), params.env);
   params.emit({
     ok: true,
     result: "not-loaded",
@@ -85,9 +95,10 @@ async function resolveServiceLoadedOrFail(params: {
   serviceNoun: string;
   service: GatewayService;
   fail: ReturnType<typeof createActionIO>["fail"];
+  env: GatewayServiceEnv;
 }): Promise<boolean | null> {
   try {
-    return await params.service.isLoaded({ env: process.env });
+    return await params.service.isLoaded({ env: params.env });
   } catch (err) {
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
@@ -100,30 +111,32 @@ export async function runServiceUninstall(params: {
   opts?: DaemonLifecycleOptions;
   stopBeforeUninstall: boolean;
   assertNotLoadedAfterUninstall: boolean;
+  env?: GatewayServiceEnv;
 }) {
   const json = Boolean(params.opts?.json);
+  const env = params.env ?? params.opts?.env ?? (process.env as GatewayServiceEnv);
   const { stdout, emit, fail } = createActionIO({ action: "uninstall", json });
 
-  if (resolveIsNixMode(process.env)) {
+  if (resolveIsNixMode(env as NodeJS.ProcessEnv)) {
     fail("Nix mode detected; service uninstall is disabled.");
     return;
   }
 
   let loaded = false;
   try {
-    loaded = await params.service.isLoaded({ env: process.env });
+    loaded = await params.service.isLoaded({ env });
   } catch {
     loaded = false;
   }
   if (loaded && params.stopBeforeUninstall) {
     try {
-      await params.service.stop({ env: process.env, stdout });
+      await params.service.stop({ env, stdout });
     } catch {
       // Best-effort stop; final loaded check gates success when enabled.
     }
   }
   try {
-    await params.service.uninstall({ env: process.env, stdout });
+    await params.service.uninstall({ env, stdout });
   } catch (err) {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
@@ -131,7 +144,7 @@ export async function runServiceUninstall(params: {
 
   loaded = false;
   try {
-    loaded = await params.service.isLoaded({ env: process.env });
+    loaded = await params.service.isLoaded({ env });
   } catch {
     loaded = false;
   }
@@ -151,14 +164,17 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
+  env?: GatewayServiceEnv;
 }) {
   const json = Boolean(params.opts?.json);
+  const env = params.env ?? params.opts?.env ?? (process.env as GatewayServiceEnv);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
+    env,
   });
   if (loaded === null) {
     return;
@@ -171,11 +187,12 @@ export async function runServiceStart(params: {
       renderStartHints: params.renderStartHints,
       json,
       emit,
+      env,
     });
     return;
   }
   try {
-    await params.service.restart({ env: process.env, stdout });
+    await params.service.restart({ env, stdout });
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
@@ -184,7 +201,7 @@ export async function runServiceStart(params: {
 
   let started = true;
   try {
-    started = await params.service.isLoaded({ env: process.env });
+    started = await params.service.isLoaded({ env });
   } catch {
     started = true;
   }
@@ -199,14 +216,17 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
+  env?: GatewayServiceEnv;
 }) {
   const json = Boolean(params.opts?.json);
+  const env = params.env ?? params.opts?.env ?? (process.env as GatewayServiceEnv);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
+    env,
   });
   if (loaded === null) {
     return;
@@ -224,7 +244,7 @@ export async function runServiceStop(params: {
     return;
   }
   try {
-    await params.service.stop({ env: process.env, stdout });
+    await params.service.stop({ env, stdout });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
@@ -232,7 +252,7 @@ export async function runServiceStop(params: {
 
   let stopped = false;
   try {
-    stopped = await params.service.isLoaded({ env: process.env });
+    stopped = await params.service.isLoaded({ env });
   } catch {
     stopped = false;
   }
@@ -250,14 +270,17 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  env?: GatewayServiceEnv;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
+  const env = params.env ?? params.opts?.env ?? (process.env as GatewayServiceEnv);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
+    env,
   });
   if (loaded === null) {
     return false;
@@ -270,6 +293,7 @@ export async function runServiceRestart(params: {
       renderStartHints: params.renderStartHints,
       json,
       emit,
+      env,
     });
     return false;
   }
@@ -278,12 +302,12 @@ export async function runServiceRestart(params: {
   if (params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {
-      const command = await params.service.readCommand(process.env);
+      const command = await params.service.readCommand(env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = loadConfig();
       const configToken = resolveGatewayCredentialsFromConfig({
         cfg,
-        env: process.env,
+        env: env as NodeJS.ProcessEnv,
         modeOverride: "local",
       }).token;
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
@@ -305,13 +329,13 @@ export async function runServiceRestart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    await params.service.restart({ env, stdout });
     if (params.postRestartCheck) {
       await params.postRestartCheck({ json, stdout, warnings, fail });
     }
     let restarted = true;
     try {
-      restarted = await params.service.isLoaded({ env: process.env });
+      restarted = await params.service.isLoaded({ env });
     } catch {
       restarted = true;
     }
