@@ -149,6 +149,36 @@ describe("buildInlineProviderModels", () => {
       name: "claude-opus-4.5",
     });
   });
+
+  it("merges provider-level headers into inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      proxy: {
+        baseUrl: "https://proxy.example.com",
+        api: "anthropic-messages",
+        headers: { "User-Agent": "custom-agent/1.0" },
+        models: [makeModel("claude-sonnet-4-6")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
+  });
+
+  it("omits headers when neither provider nor model specifies them", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      plain: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("some-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toBeUndefined();
+  });
 });
 
 describe("resolveModel", () => {
@@ -169,6 +199,28 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("http://localhost:9000");
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
+  });
+
+  it("includes provider headers in provider fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // Requesting a non-listed model forces the providerCfg fallback branch.
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
+    });
   });
 
   it("prefers matching configured model metadata for fallback token limits", () => {
@@ -378,5 +430,81 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+  });
+
+  it("applies provider baseUrl override to registry-found models", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://my-proxy.example.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
+  });
+
+  it("applies provider headers override to registry-found models", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            headers: { "X-Custom-Auth": "token-123" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("does not override when no provider config exists", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 });
