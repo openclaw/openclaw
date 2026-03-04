@@ -324,7 +324,7 @@ Designed for environments where you want everything under a local prefix (defaul
 </AccordionGroup>
 
 <Note>
-If `-InstallMethod git` is used and Git is missing, the script exits and prints the Git for Windows link.
+If Git is missing, the script exits for both `-InstallMethod git` and default `npm` installs, and prints the Git for Windows link.
 </Note>
 
 ---
