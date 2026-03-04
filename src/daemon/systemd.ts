@@ -351,6 +351,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
+  // Exit code 4 means the unit file could not be found (not-found state)
+  // This should be treated as "not enabled" rather than an error
+  if (res.code === 4) {
+    return false;
+  }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
