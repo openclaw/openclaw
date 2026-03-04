@@ -28,7 +28,21 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+## Install
+
+### macOS
+
+```bash
+brew install --cask steipete/tap/codexbar
+```
+
+Or download from [GitHub Releases](https://github.com/steipete/CodexBar/releases).
+
+### Linux
+
+Download `CodexBarCLI-v<tag>-linux-<arch>.tar.gz` from [GitHub Releases](https://github.com/steipete/CodexBar/releases), extract and add to PATH.
+
+For Omarchy users: community Waybar module and TUI available.
 
 ## Quick start
 
