@@ -59,7 +59,11 @@ export function wrapStreamFnWithHooks(
             const allowedNames = new Set(result.tools.map((t) => t.name));
             filteredTools = (context.tools ?? []).filter((t) => allowedNames.has(t.name));
           }
+          // Spread original context to preserve any extra fields (e.g. provider
+          // metadata) that upstream wrappers may have attached. Only override
+          // the fields the hook explicitly modified.
           effectiveContext = {
+            ...context,
             systemPrompt: result.systemPrompt ?? context.systemPrompt,
             messages: (result.messages ?? context.messages) as Message[],
             tools: filteredTools,
