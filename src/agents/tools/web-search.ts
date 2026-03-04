@@ -364,8 +364,6 @@ type PerplexitySearchApiResponse = {
   id?: string;
 };
 
-type PerplexityBaseUrlHint = "direct" | "openrouter";
-
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
