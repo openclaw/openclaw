@@ -216,7 +216,7 @@ export function lookupContextTokens(
 
   // Fallback to legacy behavior where we check for a bare modelId match.
   // This supports cases where the provider is not yet known or for generic aliases.
-  return MODEL_CACHE.get(modelId);
+  return MODEL_CACHE.get(modelId.toLowerCase().trim());
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {

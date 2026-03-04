@@ -254,6 +254,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
   defaultModel: string;
+  defaultProvider?: string;
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   sessionEntry?: SessionEntry;
