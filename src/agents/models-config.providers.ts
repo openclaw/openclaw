@@ -752,7 +752,7 @@ export function buildDeepseekProvider(): ProviderConfig {
         reasoning: true,
         input: ["text"],
         cost: DEEPSEEK_DEFAULT_COST,
-        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        contextWindow: 131072, // R1 支持 128K 上下文，不同于 V3 的 64K
         maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
       },
     ],
@@ -787,7 +787,7 @@ export function buildZhipuProvider(): ProviderConfig {
         id: "glm-4-flash",
         name: "GLM-4-Flash",
         reasoning: false,
-        input: ["text", "image"],
+        input: ["text"], // glm-4-flash 是纯文本模型，多模态版本为 glm-4v-flash
         cost: ZHIPU_DEFAULT_COST,
         contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
         maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
