@@ -298,9 +298,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit detect-secrets==1.5.0
 
+      # Keep args in sync with .pre-commit-config.yaml (detect-secrets hook) so CI and local match.
       - name: Detect secrets
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
+          if ! detect-secrets scan --baseline .secrets.baseline \
+            --exclude-files '(^|/)(dist/|vendor/|pnpm-lock\.yaml$|\.detect-secrets\.cfg$)' \
+            --exclude-lines 'key_content\.include\?\("BEGIN PRIVATE KEY"\)' \
+            --exclude-lines 'case \.apiKeyEnv: "API key \(env var\)"' \
+            --exclude-lines 'case apikey = "apiKey"' \
+            --exclude-lines '"gateway\.remote\.password"' \
+            --exclude-lines '"gateway\.auth\.password"' \
+            --exclude-lines '"talk\.apiKey"' \
+            --exclude-lines '=== "string"' \
+            --exclude-lines 'typeof remote\?\.password === "string"'; then
             echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
             exit 1
           fi

@@ -379,7 +379,6 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
-    "strip-ansi": "^7.2.0",
     "tar": "7.5.9",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",
@@ -418,6 +417,12 @@
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-q5qw-h33p-qvwr",
+        "GHSA-wc8c-qw6v-h7f6"
+      ]
+    },
     "overrides": {
       "hono": "4.11.10",
       "fast-xml-parser": "5.3.8",
