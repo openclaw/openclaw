@@ -11,7 +11,7 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 5000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 /** Hard cap to prevent unbounded memory growth in long-running processes. */
-const MAX_CACHE_ENTRIES = 500;
+const MAX_CACHE_ENTRIES = 1000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
@@ -39,11 +39,18 @@ class DefaultSentMessageCache implements SentMessageCache {
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
-      this.textCache.set(`${scope}:${textKey}`, Date.now());
+      const cacheKey = `${scope}:${textKey}`;
+      // Delete before re-setting so the key moves to the end of iteration order.
+      // Map preserves insertion order; without this, re-set keys keep their
+      // original position and the LRU eviction in evictOldest is incorrect.
+      this.textCache.delete(cacheKey);
+      this.textCache.set(cacheKey, Date.now());
     }
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
-      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
+      const cacheKey = `${scope}:${messageIdKey}`;
+      this.messageIdCache.delete(cacheKey);
+      this.messageIdCache.set(cacheKey, Date.now());
     }
     this.cleanup();
   }
