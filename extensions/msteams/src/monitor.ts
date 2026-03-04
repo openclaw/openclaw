@@ -62,6 +62,30 @@ export function applyMSTeamsWebhookTimeouts(
   httpServer.headersTimeout = headersTimeoutMs;
 }
 
+/**
+ * Attempt to repair a JSON string that contains invalid bare-backslash escape
+ * sequences such as \p, \q, \c (not defined by RFC 8259).
+ *
+ * The repair regex uses alternation so that already-valid `\\` pairs are
+ * consumed first and left untouched, while only lone bare-backslash escapes
+ * are double-escaped.
+ *
+ * Examples:
+ *   "\\q"  (valid JSON: literal \q)   → unchanged
+ *   "\q"   (invalid JSON: bare \q)    → "\\q"
+ *   "\\\q" (valid \\ + invalid \q)   → "\\\\q"
+ */
+const REPAIR_BARE_ESCAPE_RE = /(\\.)+|\\([^"\\/bfnrtu])/g;
+
+function repairJsonEscapes(raw: string): string {
+  return raw.replace(
+    REPAIR_BARE_ESCAPE_RE,
+    (match: string, _doubled: string | undefined, invalid: string | undefined) =>
+      // If the invalid-escape group matched, repair it; otherwise leave \\\\ pairs untouched.
+      invalid !== undefined ? "\\\\" + invalid : match,
+  );
+}
+
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -79,7 +103,7 @@ export async function monitorMSTeamsProvider(
     log.error("msteams credentials not configured");
     return { app: null, shutdown: async () => {} };
   }
-  const appId = creds.appId; // Extract for use in closures
+  const appId = creds.appId;
 
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: console.log,
@@ -115,7 +139,7 @@ export async function monitorMSTeamsProvider(
     }
     const mapping = resolved
       .filter((entry) => entry.resolved && entry.id)
-      .map((entry) => `${entry.input}→${entry.id}`);
+      .map((entry) => `${entry.input}\u2192${entry.id}`);
     summarizeMapping(label, mapping, unresolved, runtime);
     return { additions, unresolved };
   };
@@ -182,8 +206,8 @@ export async function monitorMSTeamsProvider(
           }
           mapping.push(
             entry.channelId
-              ? `${entry.input}→${entry.teamId}/${entry.channelId}`
-              : `${entry.input}→${entry.teamId}`,
+              ? `${entry.input}\u2192${entry.teamId}/${entry.channelId}`
+              : `${entry.input}\u2192${entry.teamId}`,
           );
           const existing = nextTeams[entry.teamId] ?? {};
           const mergedChannels = {
@@ -244,13 +268,11 @@ export async function monitorMSTeamsProvider(
 
   log.info(`starting provider (port ${port})`);
 
-  // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
 
-  // Auth configuration - create early so adapter is available for deliverReplies
   const tokenProvider = new MsalTokenProvider(authConfig);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
@@ -267,7 +289,6 @@ export async function monitorMSTeamsProvider(
     log,
   });
 
-  // Create Express server
   const expressApp = express.default();
 
   // Use raw body parser so we can repair invalid JSON escape sequences that some
@@ -283,10 +304,11 @@ export async function monitorMSTeamsProvider(
       try {
         req.body = JSON.parse(rawText);
       } catch {
-        // Attempt to repair invalid escape sequences by double-escaping bare
-        // backslashes (e.g. \p → \\p). This recovers payloads sent by certain
-        // Teams clients that violate the JSON spec.
-        const fixed = rawText.replace(/\\([^"\\/bfnrtu])/g, "\\\\$1");
+        // Attempt to repair invalid escape sequences.
+        // IMPORTANT: the alternation /(\\)+|\([^...])/ consumes valid \\\\ pairs
+        // first so that they are never misidentified as bare-backslash escapes.
+        // See repairJsonEscapes() above for full explanation.
+        const fixed = repairJsonEscapes(rawText);
         try {
           req.body = JSON.parse(fixed);
           log.warn("msteams: repaired invalid JSON escape sequences in Bot Framework activity");
@@ -316,7 +338,6 @@ export async function monitorMSTeamsProvider(
   });
   expressApp.use(authorizeJWT(authConfig));
 
-  // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
     void adapter
@@ -326,7 +347,6 @@ export async function monitorMSTeamsProvider(
       });
   };
 
-  // Listen on configured path and /api/messages (standard Bot Framework path)
   expressApp.post(configuredPath, messageHandler);
   if (configuredPath !== "/api/messages") {
     expressApp.post("/api/messages", messageHandler);
@@ -337,7 +357,6 @@ export async function monitorMSTeamsProvider(
     fallback: "/api/messages",
   });
 
-  // Start listening and fail fast if bind/listen fails.
   const httpServer = expressApp.listen(port);
   await new Promise<void>((resolve, reject) => {
     const onListening = () => {
@@ -371,7 +390,6 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Keep this task alive until close so gateway runtime does not treat startup as exit.
   await keepHttpServerTaskAlive({
     server: httpServer,
     abortSignal: opts.abortSignal,
