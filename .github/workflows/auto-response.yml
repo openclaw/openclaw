@@ -84,7 +84,10 @@ jobs:
               const message = String(
                 error?.response?.data?.message ?? error?.message ?? "",
               ).toLowerCase();
-              return message.includes("rate limit exceeded");
+              return (
+                message.includes("rate limit exceeded") ||
+                message.includes("secondary rate limit")
+              );
             };
             const bugSubtypeLabelSpecs = {
               regression: {
