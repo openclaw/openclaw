@@ -98,6 +98,8 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

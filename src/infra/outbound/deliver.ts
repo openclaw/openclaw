@@ -132,6 +132,8 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
   mediaLocalRoots?: readonly string[];
 };
 
@@ -205,6 +207,8 @@ function createChannelOutboundContextBase(
     gifPlayback: params.gifPlayback,
     deps: params.deps,
     silent: params.silent,
+    unfurlLinks: params.unfurlLinks,
+    unfurlMedia: params.unfurlMedia,
     mediaLocalRoots: params.mediaLocalRoots,
   };
 }
@@ -222,6 +226,8 @@ type DeliverOutboundPayloadsCoreParams = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -537,6 +543,8 @@ async function deliverOutboundPayloadsCore(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    unfurlLinks: params.unfurlLinks,
+    unfurlMedia: params.unfurlMedia,
     mediaLocalRoots,
   });
   const configuredTextLimit = handler.chunker
