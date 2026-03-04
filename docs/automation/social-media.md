@@ -95,7 +95,7 @@ xurl search "your-brand OR @yourhandle" -n 20
 Xiaohongshu doesn't offer a public posting API, so OpenClaw uses
 [browser automation](/tools/browser) to create posts through the web interface.
 
-### Prerequisites
+### Browser Setup
 
 1. Set up the OpenClaw browser: `openclaw browser start`
 2. Log in to Xiaohongshu manually in the browser first (session persists)
