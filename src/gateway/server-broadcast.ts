@@ -5,6 +5,7 @@ import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 const ADMIN_SCOPE = "operator.admin";
 const APPROVALS_SCOPE = "operator.approvals";
 const PAIRING_SCOPE = "operator.pairing";
+const OPERATOR_ONLY_EVENTS = new Set(["agent", "chat"]);
 
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
@@ -39,11 +40,15 @@ export type GatewayBroadcastToConnIdsFn = (
 ) => void;
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  const role = client.connect.role ?? "operator";
+  if (OPERATOR_ONLY_EVENTS.has(event) && role !== "operator") {
+    return false;
+  }
+
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }
