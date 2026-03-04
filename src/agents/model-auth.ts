@@ -294,6 +294,19 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
   }
 
+  // 国内大模型 Provider：Deepseek、智谱、DashScope（千问 API Key）
+  if (normalized === "deepseek") {
+    return pick("DEEPSEEK_API_KEY");
+  }
+
+  if (normalized === "zhipu") {
+    return pick("ZHIPU_API_KEY") ?? pick("GLM_API_KEY");
+  }
+
+  if (normalized === "dashscope") {
+    return pick("DASHSCOPE_API_KEY") ?? pick("QWEN_API_KEY");
+  }
+
   if (normalized === "huggingface") {
     return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
   }
@@ -312,6 +325,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
     moonshot: "MOONSHOT_API_KEY",
     minimax: "MINIMAX_API_KEY",
+    deepseek: "DEEPSEEK_API_KEY",
+    zhipu: "ZHIPU_API_KEY",
+    dashscope: "DASHSCOPE_API_KEY",
     nvidia: "NVIDIA_API_KEY",
     xiaomi: "XIAOMI_API_KEY",
     synthetic: "SYNTHETIC_API_KEY",

@@ -58,6 +58,13 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
   }
+  // 国内大模型别名映射
+  if (normalized === "glm" || normalized === "chatglm" || normalized === "bigmodel") {
+    return "zhipu";
+  }
+  if (normalized === "tongyi" || normalized === "bailian") {
+    return "dashscope";
+  }
   return normalized;
 }
 

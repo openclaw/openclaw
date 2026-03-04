@@ -187,6 +187,39 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Deepseek — https://api.deepseek.com（国内直连）
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
+const DEEPSEEK_DEFAULT_CONTEXT_WINDOW = 65536;
+const DEEPSEEK_DEFAULT_MAX_TOKENS = 8192;
+const DEEPSEEK_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+// 智谱 (Zhipu / GLM) — https://open.bigmodel.cn
+const ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+const ZHIPU_DEFAULT_CONTEXT_WINDOW = 128000;
+const ZHIPU_DEFAULT_MAX_TOKENS = 4096;
+const ZHIPU_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+// DashScope（阿里云百炼 / 千问 API Key 模式）
+const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const DASHSCOPE_DEFAULT_CONTEXT_WINDOW = 131072;
+const DASHSCOPE_DEFAULT_MAX_TOKENS = 8192;
+const DASHSCOPE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
 const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
@@ -698,6 +731,153 @@ function buildQwenPortalProvider(): ProviderConfig {
   };
 }
 
+// Deepseek — https://api.deepseek.com，OpenAI 兼容接口，国内直连
+export function buildDeepseekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek V3",
+        reasoning: false,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "deepseek-reasoner",
+        name: "DeepSeek R1",
+        reasoning: true,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+// 智谱 (Zhipu / GLM) — https://open.bigmodel.cn，OpenAI 兼容接口
+export function buildZhipuProvider(): ProviderConfig {
+  return {
+    baseUrl: ZHIPU_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "glm-4-plus",
+        name: "GLM-4-Plus",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4-air",
+        name: "GLM-4-Air",
+        reasoning: false,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4-flash",
+        name: "GLM-4-Flash",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-4-flashx",
+        name: "GLM-4-FlashX",
+        reasoning: false,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: ZHIPU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-z1-air",
+        name: "GLM-Z1-Air",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: 16000,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-z1-flash",
+        name: "GLM-Z1-Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: ZHIPU_DEFAULT_COST,
+        contextWindow: 16000,
+        maxTokens: ZHIPU_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+// DashScope（阿里云百炼 / 千问）— https://dashscope.aliyuncs.com，OpenAI 兼容模式
+export function buildDashScopeProvider(): ProviderConfig {
+  return {
+    baseUrl: DASHSCOPE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "qwen-max",
+        name: "Qwen Max",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DASHSCOPE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen-plus",
+        name: "Qwen Plus",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DASHSCOPE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen-turbo",
+        name: "Qwen Turbo",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DASHSCOPE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen-coder-plus",
+        name: "Qwen Coder Plus",
+        reasoning: false,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DASHSCOPE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwq-plus",
+        name: "QwQ Plus",
+        reasoning: true,
+        input: ["text"],
+        cost: DASHSCOPE_DEFAULT_COST,
+        contextWindow: DASHSCOPE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DASHSCOPE_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildSyntheticProvider(): ProviderConfig {
   return {
     baseUrl: SYNTHETIC_BASE_URL,
@@ -1113,6 +1293,30 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  // Deepseek — 国内直连，最简单的 API Key 认证
+  const deepseekKey =
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+  if (deepseekKey) {
+    providers.deepseek = { ...buildDeepseekProvider(), apiKey: deepseekKey };
+  }
+
+  // 智谱 (Zhipu / GLM) — 国内直连，API Key 认证
+  const zhipuKey =
+    resolveEnvApiKeyVarName("zhipu") ??
+    resolveApiKeyFromProfiles({ provider: "zhipu", store: authStore });
+  if (zhipuKey) {
+    providers.zhipu = { ...buildZhipuProvider(), apiKey: zhipuKey };
+  }
+
+  // DashScope（千问 API Key 模式）— 国内直连，显式模型目录
+  const dashscopeKey =
+    resolveEnvApiKeyVarName("dashscope") ??
+    resolveApiKeyFromProfiles({ provider: "dashscope", store: authStore });
+  if (dashscopeKey) {
+    providers.dashscope = { ...buildDashScopeProvider(), apiKey: dashscopeKey };
   }
 
   const openrouterKey =
