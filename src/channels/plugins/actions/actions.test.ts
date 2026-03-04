@@ -847,7 +847,10 @@ describe("signalMessageActions", () => {
         cfg: createSignalAccountOverrideCfg(),
         accountId: "work",
         params: { to: "+15550001111", messageId: "123", emoji: "👍" },
-        expectedArgs: ["+15550001111", 123, "👍", { accountId: "work" }],
+        expectedRecipient: "+15550001111",
+        expectedTimestamp: 123,
+        expectedEmoji: "👍",
+        expectedOptions: { accountId: "work" },
       },
       {
         name: "normalizes uuid recipients",
@@ -858,7 +861,10 @@ describe("signalMessageActions", () => {
           messageId: "123",
           emoji: "🔥",
         },
-        expectedArgs: ["123e4567-e89b-12d3-a456-426614174000", 123, "🔥", { accountId: undefined }],
+        expectedRecipient: "123e4567-e89b-12d3-a456-426614174000",
+        expectedTimestamp: 123,
+        expectedEmoji: "🔥",
+        expectedOptions: {},
       },
       {
         name: "passes groupId and targetAuthor for group reactions",
@@ -870,17 +876,13 @@ describe("signalMessageActions", () => {
           messageId: "123",
           emoji: "✅",
         },
-        expectedArgs: [
-          "",
-          123,
-          "✅",
-          {
-            accountId: undefined,
-            groupId: "group-id",
-            targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
-            targetAuthorUuid: undefined,
-          },
-        ],
+        expectedRecipient: "",
+        expectedTimestamp: 123,
+        expectedEmoji: "✅",
+        expectedOptions: {
+          groupId: "group-id",
+          targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+        },
       },
     ] as const;
 
@@ -890,7 +892,15 @@ describe("signalMessageActions", () => {
         cfg: testCase.cfg,
         accountId: testCase.accountId,
       });
-      expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(...testCase.expectedArgs);
+      expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(
+        testCase.expectedRecipient,
+        testCase.expectedTimestamp,
+        testCase.expectedEmoji,
+        expect.objectContaining({
+          cfg: testCase.cfg,
+          ...testCase.expectedOptions,
+        }),
+      );
     }
   });
 

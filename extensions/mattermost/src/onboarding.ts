@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
@@ -5,8 +6,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+} from "openclaw/plugin-sdk/compat";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,

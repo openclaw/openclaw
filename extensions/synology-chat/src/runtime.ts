@@ -4,7 +4,7 @@
  * Used by channel.ts to access dispatch functions.
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/compat";
 
 let runtime: PluginRuntime | null = null;
 
