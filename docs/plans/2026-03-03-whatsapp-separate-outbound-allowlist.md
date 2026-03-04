@@ -519,7 +519,7 @@ In `~/.openclaw/openclaw.json`, on the `default` account:
 ```json
 {
   "dmPolicy": "allowlist",
-  "allowFrom": ["+886920010612"],
+  "allowFrom": ["+1555XXXXXXX"],
   "allowSendTo": ["*"]
 }
 ```
