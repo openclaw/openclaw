@@ -18,6 +18,38 @@ export default defineConfig({
         replacement: path.join(repoRoot, "src", "plugin-sdk", "account-id.ts"),
       },
       {
+        find: "openclaw/plugin-sdk/core",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "core.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/telegram",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "telegram.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/discord",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "discord.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/slack",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "slack.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/signal",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "signal.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/imessage",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "imessage.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/whatsapp",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "whatsapp.ts"),
+      },
+      {
+        find: "openclaw/plugin-sdk/line",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "line.ts"),
+      },
+      {
         find: "openclaw/plugin-sdk/keyed-async-queue",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "keyed-async-queue.ts"),
       },

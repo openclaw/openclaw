@@ -115,6 +115,7 @@ const baseParams = () => ({
   },
   textLimit: 4000,
   ackReactionScope: "group-mentions",
+  typingReaction: "",
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
