@@ -56,7 +56,7 @@ import {
   matchesMessagingToolDeliveryTarget,
   resolveCronDeliveryBestEffort,
 } from "./delivery-dispatch.js";
-import { resolveDeliveryTarget } from "./delivery-target.js";
+import { resolveDeliveryTarget, type DeliveryTargetResolution } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
   pickLastDeliverablePayload,
@@ -334,12 +334,18 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+  const resolvedDelivery: DeliveryTargetResolution = deliveryRequested
+    ? await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
+        channel: deliveryPlan.channel ?? "last",
+        to: deliveryPlan.to,
+        accountId: deliveryPlan.accountId,
+        sessionKey: params.job.sessionKey,
+      })
+    : {
+        ok: false,
+        mode: "implicit",
+        error: new Error("cron delivery not requested"),
+      };
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
