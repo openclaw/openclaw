@@ -1155,4 +1155,83 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
   });
+
+  it("skips .msg file with no MIME type via binary extension check", async () => {
+    const ole2Magic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const filePath = await createTempMediaFile({
+      fileName: "message.msg",
+      content: ole2Magic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips file with ZIP magic bytes and unknown extension when MIME is absent", async () => {
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+    const filePath = await createTempMediaFile({
+      fileName: "data.unknown",
+      content: zipMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("allows binary-extension file through when explicit textual MIME is provided", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "data.msg",
+      content: '{"ok":true}',
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/vnd.api+json",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain('"ok":true');
+  });
+
+  it("falls back to text heuristic for unknown extension with non-binary content and no MIME", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "data.xyz",
+      content: "hello world\nline two",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("hello world");
+  });
+
+  it("skips ELF binary with generic application/octet-stream MIME", async () => {
+    const elfMagic = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
+    const filePath = await createTempMediaFile({
+      fileName: "program.out",
+      content: elfMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/octet-stream",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
 });
