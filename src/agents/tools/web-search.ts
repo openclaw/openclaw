@@ -924,13 +924,18 @@ async function runPerplexitySearchApi(params: {
       const data = (await res.json()) as PerplexitySearchApiResponse;
       const results = Array.isArray(data.results) ? data.results : [];
 
-      return results.map((entry) => ({
-        title: entry.title ?? "",
-        url: entry.url ?? "",
-        description: entry.snippet ?? "",
-        published: entry.date ?? undefined,
-        siteName: resolveSiteName(entry.url ?? ""),
-      }));
+      return results.map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.url ?? "";
+        const snippet = entry.snippet ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.date ?? undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
     },
   );
 }
@@ -1197,6 +1202,12 @@ async function runWebSearch(params: {
       provider: params.provider,
       count: results.length,
       tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       results,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
@@ -1421,11 +1432,12 @@ export function createWebSearchTool(options?: {
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
       const language = readStringParam(params, "language");
+      const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
-      // For Brave, the unified `language` field maps to `search_lang`
+      // For Brave, accept both `language` (unified) and `search_lang`
       const normalizedBraveLanguageParams =
         provider === "brave"
-          ? normalizeBraveLanguageParams({ search_lang: language, ui_lang })
+          ? normalizeBraveLanguageParams({ search_lang: search_lang || language, ui_lang })
           : { search_lang: language, ui_lang };
       if (normalizedBraveLanguageParams.invalidField === "search_lang") {
         return jsonResult({
@@ -1445,6 +1457,13 @@ export function createWebSearchTool(options?: {
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
       const rawFreshness = readStringParam(params, "freshness");
+      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness, provider) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({

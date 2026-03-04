@@ -256,8 +256,13 @@ describe("web_search perplexity Search API", () => {
     expect(body.query).toBe("test");
     expect(result?.details).toMatchObject({
       provider: "perplexity",
+      externalContent: { untrusted: true, source: "web_search", wrapped: true },
       results: expect.arrayContaining([
-        expect.objectContaining({ title: "Test", url: "https://example.com" }),
+        expect.objectContaining({
+          title: expect.stringContaining("Test"),
+          url: "https://example.com",
+          description: expect.stringContaining("Test snippet"),
+        }),
       ]),
     });
   });
