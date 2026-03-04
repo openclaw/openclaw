@@ -98,7 +98,11 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when no events arrive beyond threshold", () => {
+  it("treats channels with no events since start as healthy (quiet channel, not stale)", () => {
+    // A channel that has never received events since starting should NOT be
+    // flagged as stale-socket. This prevents a restart loop where a quiet
+    // channel is repeatedly restarted: restart → grace expires → null treated
+    // as stale → restart again.
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -114,7 +118,75 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("flags stale sockets when events were received before but stopped", () => {
+    // If the channel previously received events (lastEventAt is a number)
+    // but hasn't received any beyond the stale threshold, it's a genuine
+    // stale socket (half-dead connection).
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: now - 35_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("does not flag stale-socket when lastEventAt is recent", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: now - 5_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not flag stale-socket for freshly restarted channel with reset lastEventAt", () => {
+    // After a health-monitor restart, lastEventAt is reset to null.
+    // The channel should get a full stale-threshold window before being
+    // flagged again — and only if it receives-then-loses events.
+    // Use lastStartAt past the connect-grace window so the test exercises
+    // the stale-socket path rather than early-returning as grace.
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 15_000,
+        lastEventAt: null,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 });
 

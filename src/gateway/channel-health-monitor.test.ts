@@ -489,14 +489,18 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
-    it("restarts a channel that never received any event past the stale threshold", async () => {
+    it("does not restart a channel that never received any event (quiet channel)", async () => {
+      // A channel that has been running past the stale threshold but never
+      // received any events (lastEventAt is undefined/null) should NOT be
+      // restarted. This prevents a restart loop for quiet-but-healthy channels:
+      //   restart → grace expires → null treated as stale → restart again.
       const now = Date.now();
       const manager = createSlackSnapshotManager(
         runningConnectedSlackAccount({
           lastStartAt: now - STALE_THRESHOLD - 60_000,
         }),
       );
-      await expectRestartedChannel(manager, "slack");
+      await expectNoRestart(manager);
     });
 
     it("respects custom staleEventThresholdMs", async () => {

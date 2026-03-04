@@ -217,6 +217,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           running: true,
           lastStartAt: Date.now(),
           lastError: null,
+          // Reset event timestamps so the health monitor doesn't inherit stale
+          // values from the previous lifecycle and immediately flag the channel
+          // as stale-socket after the connect grace window expires.
+          lastEventAt: null,
+          lastInboundAt: null,
           reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
         });
 

@@ -92,12 +92,22 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
+  // Stale-socket detection: catches "half-dead" connections that appear alive
+  // (health checks pass, connected=true) but silently stop delivering events.
+  //
+  // Key distinction:
+  //   lastEventAt == null → channel hasn't received any events since it started
+  //     (normal for quiet channels or freshly restarted ones — skip stale check)
+  //   lastEventAt is a number → channel received events before and may have stopped
+  //     (potential stale socket — check the age)
+  //
+  // Without this distinction, quiet-but-healthy channels enter a restart loop:
+  //   restart → 30 min grace → null/0 treated as stale → restart again.
+  if (snapshot.lastEventAt != null) {
     const upSince = snapshot.lastStartAt ?? 0;
     const upDuration = policy.now - upSince;
     if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
+      const eventAge = policy.now - snapshot.lastEventAt;
       if (eventAge > policy.staleEventThresholdMs) {
         return { healthy: false, reason: "stale-socket" };
       }
