@@ -190,6 +190,14 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
+  /** Thread binding configuration for ACP/subagent session spawning. */
+  threadBindings?: {
+    enabled?: boolean;
+    idleHours?: number;
+    maxAgeHours?: number;
+    spawnAcpSessions?: boolean;
+    spawnSubagentSessions?: boolean;
+  };
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

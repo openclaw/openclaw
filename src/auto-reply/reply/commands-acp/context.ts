@@ -3,8 +3,14 @@ import {
   normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../../acp/conversation-id.js";
-import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
-import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
+import {
+  DISCORD_THREAD_BINDING_CHANNEL,
+  SLACK_THREAD_BINDING_CHANNEL,
+} from "../../../channels/thread-bindings-policy.js";
+import {
+  resolveConversationIdFromTargets,
+  resolveParentConversationIdFromTargets,
+} from "../../../infra/outbound/conversation-id.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
@@ -102,6 +108,16 @@ export function resolveAcpCommandParentConversationId(
     if (fromTargets && fromTargets !== threadId) {
       return fromTargets;
     }
+    return undefined;
+  }
+  if (channel === SLACK_THREAD_BINDING_CHANNEL) {
+    const fromContext = normalizeConversationText(params.ctx.ThreadParentId);
+    if (fromContext) {
+      return fromContext;
+    }
+    return resolveParentConversationIdFromTargets({
+      targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
+    });
   }
   return undefined;
 }
