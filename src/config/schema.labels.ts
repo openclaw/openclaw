@@ -56,6 +56,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "agents.list.*.identity.avatar": "Identity Avatar",
   "agents.list.*.skills": "Agent Skill Filter",
+  "agents.list.*.thinkingDefault": "Agent Thinking Default",
   agents: "Agents",
   "agents.defaults": "Agent Defaults",
   "agents.list": "Agent List",
@@ -762,6 +763,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "agents.list[].skills": "Agent Skill Filter",
+  "agents.list[].thinkingDefault": "Agent Thinking Default",
   "agents.list[].identity.avatar": "Agent Avatar",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",

@@ -31,6 +31,7 @@ describe("createModelSelectionState parent inheritance", () => {
   }) {
     return createModelSelectionState({
       cfg: params.cfg,
+      agentId: "main",
       agentCfg: params.cfg.agents?.defaults,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
@@ -55,6 +56,7 @@ describe("createModelSelectionState parent inheritance", () => {
 
     return createModelSelectionState({
       cfg,
+      agentId: "main",
       agentCfg: cfg.agents?.defaults,
       sessionEntry,
       sessionStore,
@@ -206,6 +208,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     return createModelSelectionState({
       cfg,
+      agentId: "main",
       agentCfg: undefined,
       sessionEntry,
       sessionStore,
@@ -273,6 +276,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     ]);
     const state = await createModelSelectionState({
       cfg: {} as OpenClawConfig,
+      agentId: "main",
       agentCfg: undefined,
       defaultProvider: "openrouter",
       defaultModel: "x-ai/grok-4.1-fast",
@@ -286,6 +290,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("returns off when catalog model has no reasoning", async () => {
     const state = await createModelSelectionState({
       cfg: {} as OpenClawConfig,
+      agentId: "main",
       agentCfg: undefined,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",

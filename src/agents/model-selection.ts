@@ -537,25 +537,34 @@ export function resolveThinkingDefault(params: {
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
+  agentId?: string;
 }): ThinkLevel {
+  const isThinkingLevel = (value: unknown): value is ThinkLevel =>
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "adaptive";
+
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelLower = params.model.toLowerCase();
   const perModelThinking =
     params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
       ?.thinking;
-  if (
-    perModelThinking === "off" ||
-    perModelThinking === "minimal" ||
-    perModelThinking === "low" ||
-    perModelThinking === "medium" ||
-    perModelThinking === "high" ||
-    perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive"
-  ) {
+  if (isThinkingLevel(perModelThinking)) {
     return perModelThinking;
   }
+  const perAgentConfigured =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+      : undefined;
+  if (isThinkingLevel(perAgentConfigured)) {
+    return perAgentConfigured;
+  }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
-  if (configured) {
+  if (isThinkingLevel(configured)) {
     return configured;
   }
   const isAnthropicFamilyModel =

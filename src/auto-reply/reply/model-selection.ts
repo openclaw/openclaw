@@ -263,6 +263,7 @@ function scoreFuzzyMatch(params: {
 
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -280,6 +281,7 @@ export async function createModelSelectionState(params: {
 }): Promise<ModelSelectionState> {
   const {
     cfg,
+    agentId,
     agentCfg,
     sessionEntry,
     sessionStore,
@@ -394,6 +396,7 @@ export async function createModelSelectionState(params: {
       provider,
       model,
       catalog: catalogForThinking,
+      agentId,
     });
     defaultThinkingLevel =
       resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";

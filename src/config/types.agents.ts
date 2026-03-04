@@ -12,6 +12,8 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
+  /** Per-agent default thinking level when no explicit /think override is set. */
+  thinkingDefault?: AgentDefaultsConfig["thinkingDefault"];
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;

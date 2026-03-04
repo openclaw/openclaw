@@ -54,6 +54,8 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
 
+type TestAgentList = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>;
+
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }
@@ -63,7 +65,7 @@ function mockConfig(
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsList?: TestAgentList,
 ) {
   configSpy.mockReturnValue({
     agents: {
@@ -85,7 +87,7 @@ function mockConfig(
 async function runWithDefaultAgentConfig(params: {
   home: string;
   args: Parameters<typeof agentCommand>[0];
-  agentsList?: Array<{ id: string; default?: boolean }>;
+  agentsList?: TestAgentList;
 }) {
   const store = path.join(params.home, "sessions.json");
   mockConfig(params.home, store, undefined, undefined, params.agentsList);
@@ -97,7 +99,7 @@ async function runEmbeddedWithTempConfig(params: {
   args: Parameters<typeof agentCommand>[0];
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>;
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>;
-  agentsList?: Array<{ id: string; default?: boolean }>;
+  agentsList?: TestAgentList;
 }) {
   return withTempHome(async (home) => {
     const store = path.join(home, "sessions.json");
@@ -784,6 +786,17 @@ describe("agentCommand", () => {
       },
       expected: "high",
     });
+  });
+
+  it("uses per-agent thinkingDefault when no explicit think is set", async () => {
+    const callArgs = await runEmbeddedWithTempConfig({
+      args: { message: "hi", agentId: "ops" },
+      agentOverrides: {
+        thinkingDefault: "low",
+      },
+      agentsList: [{ id: "ops", thinkingDefault: "high" }],
+    });
+    expect(callArgs?.thinkLevel).toBe("high");
   });
 
   it("prints JSON payload when requested", async () => {
