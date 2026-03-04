@@ -593,6 +593,76 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
+
+  it("sanitizes invalid negative Google thinkingBudget for google-vertex models", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: -1,
+          },
+        },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "google-vertex",
+      "gemini-3.1-pro-preview",
+      undefined,
+      "high",
+    );
+
+    const model = {
+      api: "google-vertex",
+      provider: "google-vertex",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-vertex">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        includeThoughts: true,
+        thinkingLevel: "HIGH",
+      },
+    });
+  });
+
+  it("does not wrap payload callback for non-Google APIs", () => {
+    let forwardedOnPayload: ((payload: unknown) => void) | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      forwardedOnPayload = options?.onPayload;
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    const originalOnPayload = () => {
+      // noop
+    };
+    void agent.streamFn?.(model, context, {
+      onPayload: originalOnPayload,
+    });
+
+    expect(forwardedOnPayload).toBe(originalOnPayload);
+  });
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 

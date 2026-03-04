@@ -802,17 +802,18 @@ function createGoogleThinkingPayloadWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    if (model.api !== "google-generative-ai" && model.api !== "google-vertex") {
+      return underlying(model, context, options);
+    }
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        if (model.api === "google-generative-ai") {
-          sanitizeGoogleThinkingPayload({
-            payload,
-            modelId: model.id,
-            thinkingLevel,
-          });
-        }
+        sanitizeGoogleThinkingPayload({
+          payload,
+          modelId: model.id,
+          thinkingLevel,
+        });
         onPayload?.(payload);
       },
     });
