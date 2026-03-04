@@ -9,23 +9,40 @@ import {
   resolveGroupSessionKey,
   resolveStorePath,
 } from "../../../config/sessions.js";
+import { resolveAccountEntry } from "../../../routing/account-lookup.js";
 
-export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
+export function resolveGroupPolicyFor(
+  cfg: ReturnType<typeof loadConfig>,
+  conversationId: string,
+  accountId?: string,
+) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
     ChatType: "group",
     Provider: "whatsapp",
   })?.id;
-  const whatsappCfg = cfg.channels?.whatsapp as
-    | { groupAllowFrom?: string[]; allowFrom?: string[] }
+
+  // 轻量级配置查找，避免文件系统调用（热路径优化）
+  const rootCfg = cfg.channels?.whatsapp as
+    | {
+        groupAllowFrom?: string[];
+        allowFrom?: string[];
+        accounts?: Record<string, { groupAllowFrom?: string[]; allowFrom?: string[] }>;
+      }
     | undefined;
+  const accountCfg = accountId ? resolveAccountEntry(rootCfg?.accounts, accountId) : undefined;
   const hasGroupAllowFrom = Boolean(
-    whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length,
+    accountCfg?.groupAllowFrom?.length ||
+    accountCfg?.allowFrom?.length ||
+    rootCfg?.groupAllowFrom?.length ||
+    rootCfg?.allowFrom?.length,
   );
+
   return resolveChannelGroupPolicy({
     cfg,
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
+    accountId,
     hasGroupAllowFrom,
   });
 }
@@ -33,6 +50,7 @@ export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conver
 export function resolveGroupRequireMentionFor(
   cfg: ReturnType<typeof loadConfig>,
   conversationId: string,
+  accountId?: string,
 ) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
@@ -43,6 +61,7 @@ export function resolveGroupRequireMentionFor(
     cfg,
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
+    accountId,
   });
 }
 
@@ -51,13 +70,18 @@ export function resolveGroupActivationFor(params: {
   agentId: string;
   sessionKey: string;
   conversationId: string;
+  accountId?: string;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const requireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId);
+  const requireMention = resolveGroupRequireMentionFor(
+    params.cfg,
+    params.conversationId,
+    params.accountId,
+  );
   const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation;
 }

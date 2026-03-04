@@ -26,6 +26,7 @@ type ApplyGroupGatingParams = {
   groupHistoryKey: string;
   agentId: string;
   sessionKey: string;
+  accountId?: string;
   baseMentionConfig: MentionConfig;
   authDir?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
@@ -80,7 +81,7 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
 }
 
 export function applyGroupGating(params: ApplyGroupGatingParams) {
-  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
+  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId, params.accountId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
@@ -125,6 +126,7 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
+    accountId: params.accountId,
   });
   const requireMention = activation !== "always";
   const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");

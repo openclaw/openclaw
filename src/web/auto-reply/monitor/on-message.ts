@@ -113,7 +113,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: params.cfg,
+        cfg: loadConfig(),
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -125,12 +125,13 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: params.cfg,
+        cfg: loadConfig(),
         msg,
         conversationId,
         groupHistoryKey,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
+        accountId: route.accountId,
         baseMentionConfig: params.baseMentionConfig,
         authDir: params.account.authDir,
         groupHistories: params.groupHistories,
@@ -153,7 +154,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: params.cfg,
+        cfg: loadConfig(),
         msg,
         peerId,
         route,
