@@ -146,7 +146,7 @@ function resolveOwnerAllowFromList(params: {
  * Returns the provider-specific list if defined, otherwise the "*" global list.
  * Returns null if commands.allowFrom is not configured at all (fall back to channel allowFrom).
  */
-function resolveCommandsAllowFromList(params: {
+export function resolveCommandsAllowFromList(params: {
   dock?: ChannelDock;
   cfg: OpenClawConfig;
   accountId?: string | null;
