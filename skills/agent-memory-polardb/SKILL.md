@@ -1,7 +1,7 @@
 ---
 name: Agent Memory Management (by PolarDB)
 id: polardb-mem0
-description: 基于阿里云 PolarDB 的托管级长记忆服务。通过 Mem0 协议实现毫秒级的事实提取、自动更新与跨设备同步。支持自动事实提取、语义去重及毫秒级云端检索。
+description: A managed long-term memory service powered by Alibaba Cloud PolarDB. It leverages the Mem0 protocol to enable millisecond-level fact extraction, automatic updates, and cross-device synchronization. Features include automated fact extraction, semantic deduplication, and sub-millisecond cloud-based retrieval.
 author: PolarDB Team
 version: 1.0.0
 metadata:
@@ -11,20 +11,20 @@ metadata:
     tags: ["memory", "vector-db", "polardb", "mem0"]
     requires:
       env:
-        - MEM0_API_KEY  # 从阿里云 PolarDB 控制台获取的 API Key
-        - MEM0_ORG_ID   # 你的组织 ID
+        - MEM0_API_KEY  # API Key obtained from the Alibaba Cloud PolarDB Console.
+        - MEM0_ORG_ID   # Your Organization ID
 ---
 
 # Instructions
-你现在拥有一个由 **PolarDB** 驱动的“外挂大脑”，本技能集成了 **PolarDB Mem0** 服务，为 OpenClaw Agent 提供生产级的长期记忆管理方案。它通过替换原生粗粒度的 Markdown 文件存储，实现对用户偏好、事实记忆及事件关系的精准提取与毫秒级检索，支持跨会话（Cross-session）的知识持久化。请遵循以下原则操作记忆：
-1. **主动记录 (Memorize)**：
-   - 当用户提到核心事实（如“我有两个孩子”、“我正在学习 Rust”）时，必须调用 `save_fact`。
-   - 当用户表达明确偏好（如“我不喜欢深色模式”、“周一上午我通常没空”）时，调用 `save_fact`。
-2. **背景检索 (Recall)**：
-   - 在开启新任务、处理复杂请求或用户问及“我之前说过什么”时，调用 `search_memories`。
-   - 检索到的内容应作为你回答的背景信息，确保回答的连贯性。
-3. **动态更新**：
-   - 如果用户纠正了之前的信息（如“我搬家到上海了”），直接调用 `save_fact`，PolarDB mem0 会根据语义自动合并或更新旧记忆。
+You are now equipped with a 'Cloud-Native External Brain' powered by PolarDB. This skill integrates the PolarDB Mem0 service to provide a production-grade long-term memory management solution for OpenClaw Agents. By replacing native, coarse-grained Markdown file storage, it enables precise extraction and millisecond-level retrieval of user preferences, factual memories, and event relationships, supporting cross-session knowledge persistence. Please adhere to the following principles when managing memories:
+1. Proactive Memorization (Memorize):
+   - When the user mentions core facts (e.g., "I have two children," "I am learning Rust"), you must call save_fact.
+   - When the user expresses explicit preferences (e.g., "I don't like dark mode," "I am usually unavailable on Monday mornings"), call save_fact.
+2. Contextual Retrieval (Recall):
+   - When starting new tasks, processing complex requests, or when the user asks, "What did I say before?", call search_memories.
+   - The retrieved content should serve as the background for your responses to ensure conversational coherence.
+3. Dynamic Update:
+   - If the user corrects previous information (e.g., "I've moved to Shanghai"), call save_fact directly. PolarDB mem0 will automatically merge or update the old memory based on semantic context.
 
 # Tools
 ## save_fact
