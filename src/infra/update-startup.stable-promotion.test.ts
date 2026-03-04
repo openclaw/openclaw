@@ -25,6 +25,7 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
   let tempDir = "";
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-promotion-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
     delete process.env.VITEST;
@@ -131,6 +132,8 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
+    // This test exercises persisted-state reuse (fresh check timestamp), so
+    // runGatewayUpdateCheck should not reach the live tag resolver path.
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "beta",
       version: "2026.3.1-beta.1",
@@ -153,6 +156,7 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
     expect(onUpdateAvailableChange).toHaveBeenCalledWith(
       expect.objectContaining({ latestVersion: "2026.3.1" }),
     );
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
   });
 
   it("keeps persisted stable updates visible when base version differs", async () => {
@@ -179,6 +183,7 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
+    // This test also validates persisted-state behavior before the next live check window.
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
       version: "2026.3.2",
@@ -201,5 +206,6 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
     expect(onUpdateAvailableChange).toHaveBeenCalledWith(
       expect.objectContaining({ latestVersion: "2026.3.2" }),
     );
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
   });
 });
