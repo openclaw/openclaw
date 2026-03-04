@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
+import qrcode from "qrcode-terminal";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";
 import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
 import { runSecretsConfigureInteractive } from "../secrets/configure.js";
+import { setupTotp } from "../secrets/index.js";
 import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -243,6 +245,30 @@ export function registerSecretsCli(program: Command) {
             ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
             : "Secrets apply: no changes.",
         );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  secrets
+    .command("setup-totp")
+    .description("Generate a TOTP secret and display a QR code for authenticator app setup")
+    .action(async () => {
+      try {
+        const result = await setupTotp();
+        defaultRuntime.log("TOTP authenticator setup");
+        defaultRuntime.log("");
+        defaultRuntime.log(`OTP Auth URL: ${result.uri}`);
+        defaultRuntime.log("");
+        defaultRuntime.log("Scan this QR code with your authenticator app:");
+        await new Promise<void>((resolve) => {
+          qrcode.generate(result.uri, { small: true }, (output: string) => {
+            defaultRuntime.log(output);
+            resolve();
+          });
+        });
+        defaultRuntime.log(`Manual entry secret: ${result.secret}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

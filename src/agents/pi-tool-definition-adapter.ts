@@ -5,15 +5,26 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { CredentialBroker } from "../secrets/credential-broker.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
+  consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
+
+let _credentialBroker: CredentialBroker | null = null;
+function getCredentialBroker(): CredentialBroker {
+  if (!_credentialBroker) {
+    _credentialBroker = new CredentialBroker();
+  }
+  return _credentialBroker;
+}
 
 type AnyAgentTool = AgentTool;
 
@@ -159,11 +170,39 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
+          // Credential broker injection (agent-blind credentials)
+          const broker = getCredentialBroker();
+          if (broker.isEnabled(name)) {
+            executeParams = await broker.inject(name, executeParams as Record<string, unknown>);
+          }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
           });
+          const afterParams = beforeHookWrapped
+            ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
+            : executeParams;
+
+          // Call after_tool_call hook
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("after_tool_call")) {
+            try {
+              await hookRunner.runAfterToolCall(
+                {
+                  toolName: name,
+                  params: isPlainObject(afterParams) ? afterParams : {},
+                  result,
+                },
+                { toolName: name },
+              );
+            } catch (hookErr) {
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
+            }
+          }
+
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -176,17 +215,41 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (name === "AbortError") {
             throw err;
           }
+          if (beforeHookWrapped) {
+            consumeAdjustedParamsForToolCall(toolCallId);
+          }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
-          return jsonResult({
+          const errorResult = jsonResult({
             status: "error",
             tool: normalizedName,
             error: described.message,
           });
+
+          // Call after_tool_call hook for errors too
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("after_tool_call")) {
+            try {
+              await hookRunner.runAfterToolCall(
+                {
+                  toolName: normalizedName,
+                  params: isPlainObject(params) ? params : {},
+                  error: described.message,
+                },
+                { toolName: normalizedName },
+              );
+            } catch (hookErr) {
+              logDebug(
+                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+              );
+            }
+          }
+
+          return errorResult;
         }
       },
     } satisfies ToolDefinition;
