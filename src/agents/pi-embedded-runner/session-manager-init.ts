@@ -42,12 +42,19 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
-    // Reset file so the first assistant flush includes header+user+assistant in order.
-    await fs.writeFile(params.sessionFile, "", "utf-8");
-    sm.fileEntries = [header];
-    sm.byId?.clear?.();
-    sm.labelsById?.clear?.();
-    sm.leafId = null;
-    sm.flushed = false;
+    const hasCustomEntries = sm.fileEntries.some(
+      (e) => e.type !== "session" && e.type !== "message",
+    );
+    if (!hasCustomEntries) {
+      // Reset file so the first assistant flush includes header+user+assistant in order.
+      // Skip reset when custom entries (e.g. openclaw:prompt-error) exist — they indicate
+      // a prior run attempted and failed; resetting would silently discard user messages.
+      await fs.writeFile(params.sessionFile, "", "utf-8");
+      sm.fileEntries = [header];
+      sm.byId?.clear?.();
+      sm.labelsById?.clear?.();
+      sm.leafId = null;
+      sm.flushed = false;
+    }
   }
 }
