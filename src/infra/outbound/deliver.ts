@@ -182,6 +182,7 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text: caption,
         mediaUrl,
+        audioAsVoice: overrides?.audioAsVoice,
       }),
   };
 }
@@ -733,7 +734,7 @@ async function deliverOutboundPayloadsCore(
           results.push(delivery);
           lastMessageId = delivery.messageId;
         } else {
-          const delivery = await handler.sendMedia(caption, url, sendOverrides);
+          const delivery = await handler.sendMedia(caption, url, { ...sendOverrides, audioAsVoice: effectivePayload.audioAsVoice });
           results.push(delivery);
           lastMessageId = delivery.messageId;
         }

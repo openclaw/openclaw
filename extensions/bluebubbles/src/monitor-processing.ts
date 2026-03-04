@@ -1204,6 +1204,16 @@ export async function processMessage(
             const text = sanitizeReplyDirectiveText(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
+            // Detect voice files: payload.audioAsVoice or TTS-generated voice-*.{ext} pattern.
+            // The ACP dispatch path extracts MEDIA: tokens from text but does not propagate
+            // audioAsVoice, so we fall back to filename-based detection for voice bubbles.
+            const payloadAudioAsVoice =
+              (payload as { audioAsVoice?: unknown }).audioAsVoice === true;
+            const looksLikeVoiceFile = (url: string): boolean => {
+              const basename = url.split("/").pop() ?? "";
+              return /^voice-\d+\.(opus|ogg|m4a|caf|mp3)$/i.test(basename);
+            };
+            const shouldVoice = payloadAudioAsVoice || mediaList.some(looksLikeVoiceFile);
             let first = true;
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
@@ -1227,6 +1237,7 @@ export async function processMessage(
                   caption: caption ?? undefined,
                   replyToId: replyToMessageGuid || null,
                   accountId: account.accountId,
+                  asVoice: shouldVoice || undefined,
                 });
               } catch (err) {
                 forgetPendingOutboundMessageId(pendingId);
