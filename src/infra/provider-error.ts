@@ -171,14 +171,10 @@ export async function retryWithBackoff<T>(
 
   // Attempts 2..maxRetries
   for (let attempt = 2; attempt <= maxRetries; attempt++) {
-<<<<<<< HEAD
-    const delayMs = Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
-=======
     const delayMs =
       lastError.retryAfterMs !== null
         ? lastError.retryAfterMs
         : Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
->>>>>>> mcclean/fix/provider-error-retry-bugs-2
 
     onRetry?.(attempt, maxRetries, delayMs, lastError);
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
