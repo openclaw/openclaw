@@ -1,8 +1,8 @@
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
-  buildSystemRunApprovalBindingV1,
-  missingSystemRunApprovalBindingV1,
-  matchSystemRunApprovalBindingV1,
+  buildSystemRunApprovalBinding,
+  missingSystemRunApprovalBinding,
+  matchSystemRunApprovalBinding,
   type SystemRunApprovalMatchResult,
 } from "../infra/system-run-approval-binding.js";
 
@@ -33,7 +33,7 @@ export function evaluateSystemRunApprovalMatch(params: {
     return requestMismatch();
   }
 
-  const actualBinding = buildSystemRunApprovalBindingV1({
+  const actualBinding = buildSystemRunApprovalBinding({
     argv: params.argv,
     cwd: params.binding.cwd,
     agentId: params.binding.agentId,
@@ -41,13 +41,13 @@ export function evaluateSystemRunApprovalMatch(params: {
     env: params.binding.env,
   });
 
-  const expectedBinding = params.request.systemRunBindingV1;
+  const expectedBinding = params.request.systemRunBinding;
   if (!expectedBinding) {
-    return missingSystemRunApprovalBindingV1({
+    return missingSystemRunApprovalBinding({
       actualEnvKeys: actualBinding.envKeys,
     });
   }
-  return matchSystemRunApprovalBindingV1({
+  return matchSystemRunApprovalBinding({
     expected: expectedBinding,
     actual: actualBinding.binding,
     actualEnvKeys: actualBinding.envKeys,
