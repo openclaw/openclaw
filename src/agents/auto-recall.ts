@@ -20,12 +20,16 @@ export function resolveAutoRecallConfig(
   cfg: OpenClawConfig | undefined,
   agentId: string | undefined,
 ): AutoRecallConfig | null {
-  if (!cfg) return null;
+  if (!cfg) {
+    return null;
+  }
 
   // Memory search must be enabled for auto-recall to work.
   const resolvedAgentId = agentId ?? "main";
   const memCfg = resolveMemorySearchConfig(cfg, resolvedAgentId);
-  if (!memCfg) return null;
+  if (!memCfg) {
+    return null;
+  }
 
   // Check per-agent override first, then defaults.
   const agentEntry = agentId ? cfg.agents?.list?.find((a) => a.id === agentId) : undefined;
@@ -33,11 +37,15 @@ export function resolveAutoRecallConfig(
   const defaultRaw = cfg.agents?.defaults?.memorySearch?.autoRecall;
   const effective = agentRaw ?? defaultRaw;
 
-  if (!effective) return null;
+  if (!effective) {
+    return null;
+  }
   if (typeof effective === "boolean") {
     return effective ? { enabled: true, maxResults: 5, minScore: 0.3 } : null;
   }
-  if (effective.enabled === false) return null;
+  if (effective.enabled === false) {
+    return null;
+  }
   return {
     enabled: true,
     maxResults: effective.maxResults ?? 5,
@@ -56,14 +64,18 @@ export async function runAutoRecall(params: {
   sessionKey?: string;
 }): Promise<string | null> {
   const config = resolveAutoRecallConfig(params.cfg, params.agentId);
-  if (!config) return null;
+  if (!config) {
+    return null;
+  }
 
   const resolvedAgentId = params.agentId ?? "main";
   const { manager } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: resolvedAgentId,
   });
-  if (!manager) return null;
+  if (!manager) {
+    return null;
+  }
 
   try {
     const results = await manager.search(params.prompt, {
@@ -71,7 +83,9 @@ export async function runAutoRecall(params: {
       minScore: config.minScore,
       sessionKey: params.sessionKey,
     });
-    if (!results || results.length === 0) return null;
+    if (!results || results.length === 0) {
+      return null;
+    }
 
     const snippets = results
       .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] ${r.snippet.trim()}`)
