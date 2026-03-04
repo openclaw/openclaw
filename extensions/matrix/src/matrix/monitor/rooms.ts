@@ -1,4 +1,4 @@
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk/compat";
+import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk/matrix";
 import type { MatrixRoomConfig } from "../../types.js";
 
 export type MatrixRoomConfigResolved = {

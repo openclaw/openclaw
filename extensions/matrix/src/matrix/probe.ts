@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/compat";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/matrix";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
 export type MatrixProbe = BaseProbeResult & {
