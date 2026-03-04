@@ -442,6 +442,32 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "merge_forward":
         return "[Nested Merged Forward]";
+      case "interactive": {
+        // Parse interactive card to extract readable content (#34571, #32712)
+        const title = parsed.header?.title?.content || "";
+        const elements = parsed.elements || parsed.body?.elements || [];
+        const texts: string[] = [];
+        for (const el of elements) {
+          if (el.tag === "markdown" && el.content) {
+            texts.push(el.content);
+          } else if (el.tag === "div") {
+            const t = el.text?.content || el.content || "";
+            if (t) texts.push(t);
+          } else if (el.tag === "column_set") {
+            for (const col of el.columns || []) {
+              for (const inner of col.elements || []) {
+                const t = inner.text?.content || inner.content || "";
+                if (t) texts.push(t);
+              }
+            }
+          }
+        }
+        const body = texts.join(" ").trim();
+        if (title && body) return `[Card: ${title}] ${body}`;
+        if (title) return `[Card: ${title}]`;
+        if (body) return `[Card] ${body}`;
+        return "[Interactive Card]";
+      }
       default:
         return `[${contentType}]`;
     }

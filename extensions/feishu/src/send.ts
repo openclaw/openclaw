@@ -35,13 +35,22 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- card structure varies
+  const card = parsed as any;
+
+  // Extract title from card header (Feishu cards often have header.title.content)
+  const title: string =
+    (typeof card.header?.title?.content === "string" && card.header.title.content) || "";
+
+  // Support both top-level elements and body.elements (Card Kit v2 structure)
+  const elements: unknown[] = Array.isArray(card.elements)
+    ? card.elements
+    : Array.isArray(card.body?.elements)
+      ? card.body.elements
+      : [];
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
+  for (const element of elements) {
     if (!element || typeof element !== "object") {
       continue;
     }
@@ -49,6 +58,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
       tag?: string;
       content?: string;
       text?: { content?: string };
+      columns?: Array<{ elements?: unknown[] }>;
     };
     if (item.tag === "div" && typeof item.text?.content === "string") {
       texts.push(item.text.content);
@@ -56,9 +66,33 @@ function parseInteractiveCardContent(parsed: unknown): string {
     }
     if (item.tag === "markdown" && typeof item.content === "string") {
       texts.push(item.content);
+      continue;
+    }
+    // Handle column_set layout containers
+    if (item.tag === "column_set" && Array.isArray(item.columns)) {
+      for (const col of item.columns) {
+        for (const inner of col.elements ?? []) {
+          if (!inner || typeof inner !== "object") continue;
+          const innerItem = inner as {
+            tag?: string;
+            content?: string;
+            text?: { content?: string };
+          };
+          if (innerItem.tag === "markdown" && typeof innerItem.content === "string") {
+            texts.push(innerItem.content);
+          } else if (innerItem.tag === "div" && typeof innerItem.text?.content === "string") {
+            texts.push(innerItem.text.content);
+          }
+        }
+      }
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+
+  const body = texts.join("\n").trim();
+  if (title && body) return `${title}\n${body}`;
+  if (title) return title;
+  if (body) return body;
+  return "[Interactive Card]";
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
