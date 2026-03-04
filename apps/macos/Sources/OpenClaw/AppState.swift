@@ -213,6 +213,10 @@ final class AppState {
         didSet { self.syncGatewayConfigIfNeeded() }
     }
 
+    var remoteToken: String {
+        didSet { self.syncGatewayConfigIfNeeded() }
+    }
+
     var remoteIdentity: String {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) } }
     }
@@ -297,6 +301,7 @@ final class AppState {
             self.remoteTarget = storedRemoteTarget
         }
         self.remoteUrl = configRemoteUrl ?? ""
+        self.remoteToken = GatewayRemoteConfig.resolveTokenString(root: configRoot) ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -380,7 +385,8 @@ final class AppState {
         remoteUrl: String,
         remoteHost: String?,
         remoteTarget: String,
-        remoteIdentity: String) -> (remote: [String: Any], changed: Bool)
+        remoteIdentity: String,
+        remoteToken: String) -> (remote: [String: Any], changed: Bool)
     {
         var remote = current
         var changed = false
@@ -417,6 +423,8 @@ final class AppState {
             changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: remoteIdentity) || changed
         }
 
+        changed = Self.updateGatewayString(&remote, key: "token", value: remoteToken) || changed
+
         return (remote, changed)
     }
 
@@ -439,6 +447,7 @@ final class AppState {
         let gateway = root["gateway"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
+        let remoteToken = GatewayRemoteConfig.resolveTokenString(root: root) ?? ""
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
@@ -469,6 +478,9 @@ final class AppState {
         let remoteUrlText = remoteUrl ?? ""
         if remoteUrlText != self.remoteUrl {
             self.remoteUrl = remoteUrlText
+        }
+        if remoteToken != self.remoteToken {
+            self.remoteToken = remoteToken
         }
 
         let targetMode = desiredMode ?? self.connectionMode
@@ -504,6 +516,7 @@ final class AppState {
         let remoteIdentity = self.remoteIdentity
         let remoteTransport = self.remoteTransport
         let remoteUrl = self.remoteUrl
+        let remoteToken = self.remoteToken
         let desiredMode: String? = switch connectionMode {
         case .local:
             "local"
@@ -541,7 +554,8 @@ final class AppState {
                     remoteUrl: remoteUrl,
                     remoteHost: remoteHost,
                     remoteTarget: remoteTarget,
-                    remoteIdentity: remoteIdentity)
+                    remoteIdentity: remoteIdentity,
+                    remoteToken: remoteToken)
                 if updated.changed {
                     gateway["remote"] = updated.remote
                     changed = true
@@ -697,12 +711,37 @@ extension AppState {
         state.canvasEnabled = true
         state.remoteTarget = "user@example.com"
         state.remoteUrl = "wss://gateway.example.ts.net"
+        state.remoteToken = "example-token"
         state.remoteIdentity = "~/.ssh/id_ed25519"
         state.remoteProjectRoot = "~/Projects/openclaw"
         state.remoteCliPath = ""
         return state
     }
 }
+
+#if DEBUG
+@MainActor
+extension AppState {
+    static func _testUpdatedRemoteGatewayConfig(
+        current: [String: Any],
+        transport: RemoteTransport,
+        remoteUrl: String,
+        remoteHost: String?,
+        remoteTarget: String,
+        remoteIdentity: String,
+        remoteToken: String) -> [String: Any]
+    {
+        Self.updatedRemoteGatewayConfig(
+            current: current,
+            transport: transport,
+            remoteUrl: remoteUrl,
+            remoteHost: remoteHost,
+            remoteTarget: remoteTarget,
+            remoteIdentity: remoteIdentity,
+            remoteToken: remoteToken).remote
+    }
+}
+#endif
 
 @MainActor
 enum AppStateStore {
