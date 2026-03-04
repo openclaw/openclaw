@@ -28,6 +28,17 @@ async function withFixtureRoot<T>(
   }
 }
 
+async function createAliasedUploadsRoot(baseDir: string): Promise<{
+  canonicalUploadsDir: string;
+  aliasedUploadsDir: string;
+}> {
+  const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+  const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+  await fs.mkdir(canonicalUploadsDir, { recursive: true });
+  await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+  return { canonicalUploadsDir, aliasedUploadsDir };
+}
+
 describe("resolveExistingPathsWithinRoot", () => {
   function expectInvalidResult(
     result: Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>,
@@ -142,13 +153,32 @@ describe("resolveExistingPathsWithinRoot", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "returns outside-root message for files reached via escaping symlinked directories",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+        await fs.symlink(outsideDir, path.join(uploadsDir, "alias"));
+
+        const result = await resolveWithinUploads({
+          uploadsDir,
+          requestedPaths: ["alias/secret.txt"],
+        });
+
+        expect(result).toEqual({
+          ok: false,
+          error: "File is outside uploads directory",
+        });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "accepts canonical absolute paths when upload root is a symlink alias",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
-        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
-        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
-        await fs.mkdir(canonicalUploadsDir, { recursive: true });
-        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+        const { canonicalUploadsDir, aliasedUploadsDir } = await createAliasedUploadsRoot(baseDir);
 
         const filePath = path.join(canonicalUploadsDir, "ok.txt");
         await fs.writeFile(filePath, "ok", "utf8");
@@ -176,10 +206,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     "rejects canonical absolute paths outside symlinked upload root",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
-        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
-        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
-        await fs.mkdir(canonicalUploadsDir, { recursive: true });
-        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+        const { aliasedUploadsDir } = await createAliasedUploadsRoot(baseDir);
 
         const outsideDir = path.join(baseDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });
@@ -273,6 +300,29 @@ describe("resolveWritablePathWithinRoot", () => {
         const result = await resolveWritablePathWithinRoot({
           rootDir: uploadsDir,
           requestedPath: "escape-link/pwned.txt",
+          scopeLabel: "uploads directory",
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toContain("must stay within uploads directory");
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects existing hardlinked files under root",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsidePath = path.join(baseDir, "outside-target.txt");
+        await fs.writeFile(outsidePath, "outside", "utf8");
+        const hardlinkedPath = path.join(uploadsDir, "linked.txt");
+        await fs.link(outsidePath, hardlinkedPath);
+
+        const result = await resolveWritablePathWithinRoot({
+          rootDir: uploadsDir,
+          requestedPath: "linked.txt",
           scopeLabel: "uploads directory",
         });
 

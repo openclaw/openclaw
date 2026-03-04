@@ -41,6 +41,18 @@ vi.mock("./paths.js", () => {
 
 let setInputFilesViaPlaywright: typeof import("./pw-tools-core.interactions.js").setInputFilesViaPlaywright;
 
+function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
+  const setInputFiles = vi.fn(async () => {});
+  locator = {
+    setInputFiles,
+    elementHandle: vi.fn(async () => null),
+  };
+  page = {
+    locator: vi.fn(() => ({ first: () => locator })),
+  };
+  return { setInputFiles };
+}
+
 describe("setInputFilesViaPlaywright", () => {
   beforeAll(async () => {
     ({ setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js"));
@@ -57,14 +69,7 @@ describe("setInputFilesViaPlaywright", () => {
   });
 
   it("revalidates upload paths and uses resolved canonical paths for inputRef", async () => {
-    const setInputFiles = vi.fn(async () => {});
-    locator = {
-      setInputFiles,
-      elementHandle: vi.fn(async () => null),
-    };
-    page = {
-      locator: vi.fn(() => ({ first: () => locator })),
-    };
+    const { setInputFiles } = seedSingleLocatorPage();
 
     await setInputFilesViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -88,14 +93,7 @@ describe("setInputFilesViaPlaywright", () => {
       error: "Invalid path: must stay within uploads directory",
     });
 
-    const setInputFiles = vi.fn(async () => {});
-    locator = {
-      setInputFiles,
-      elementHandle: vi.fn(async () => null),
-    };
-    page = {
-      locator: vi.fn(() => ({ first: () => locator })),
-    };
+    const { setInputFiles } = seedSingleLocatorPage();
 
     await expect(
       setInputFilesViaPlaywright({

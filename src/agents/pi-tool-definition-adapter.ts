@@ -197,7 +197,6 @@ export function toToolDefinitions(
               );
             }
           }
-
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -209,9 +208,6 @@ export function toToolDefinitions(
               : "";
           if (name === "AbortError") {
             throw err;
-          }
-          if (beforeHookWrapped) {
-            consumeAdjustedParamsForToolCall(toolCallId);
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
