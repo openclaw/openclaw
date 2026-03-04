@@ -119,6 +119,8 @@ Interface details:
   - `mode: "session"` requires `thread: true`
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
+- `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
+  - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 
 ## Sandbox compatibility
 
@@ -313,7 +315,7 @@ See [Configuration Reference](/gateway/configuration-reference).
 Install and enable plugin:
 
 ```bash
-openclaw plugins install @openclaw/acpx
+openclaw plugins install acpx
 openclaw config set plugins.entries.acpx.enabled true
 ```
 
@@ -331,7 +333,7 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, `@openclaw/acpx` uses the plugin-local pinned binary:
+By default, the acpx plugin (published as `@openclaw/acpx`) uses the plugin-local pinned binary:
 
 1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.

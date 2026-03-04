@@ -302,6 +302,7 @@ private struct ManualEntryStep: View {
     // (GatewaySetupCode) decode raw setup codes.
 }
 
+@MainActor
 private func gatewayConnectionStatusLines(
     appModel: NodeAppModel,
     gatewayController: GatewayConnectionController) -> [String]
@@ -309,6 +310,7 @@ private func gatewayConnectionStatusLines(
     ConnectionStatusBox.defaultLines(appModel: appModel, gatewayController: gatewayController)
 }
 
+@MainActor
 private func resetGatewayConnectionState(
     appModel: NodeAppModel,
     connectStatusText: inout String?,
@@ -319,6 +321,7 @@ private func resetGatewayConnectionState(
     connectingGatewayID = nil
 }
 
+@MainActor
 @ViewBuilder
 private func gatewayConnectionStatusSection(
     appModel: NodeAppModel,

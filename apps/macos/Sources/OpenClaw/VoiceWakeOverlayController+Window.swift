@@ -23,10 +23,11 @@ extension VoiceWakeOverlayController {
                     "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
                 // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
                 AppStateStore.shared.triggerVoiceEars(ttl: nil)
-            }) { window in
+            },
+            onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
                 window.orderFrontRegardless()
-        }
+            })
     }
 
     private func ensureWindow() {

@@ -77,14 +77,14 @@ struct GatewayCostUsageDay: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.date = try c.decode(String.self, forKey: .date)
-        self.totals = GatewayCostUsageTotals(
-            input: try c.decode(Int.self, forKey: .input),
-            output: try c.decode(Int.self, forKey: .output),
-            cacheRead: try c.decode(Int.self, forKey: .cacheRead),
-            cacheWrite: try c.decode(Int.self, forKey: .cacheWrite),
-            totalTokens: try c.decode(Int.self, forKey: .totalTokens),
-            totalCost: try c.decode(Double.self, forKey: .totalCost),
-            missingCostEntries: try c.decode(Int.self, forKey: .missingCostEntries))
+        self.totals = try GatewayCostUsageTotals(
+            input: c.decode(Int.self, forKey: .input),
+            output: c.decode(Int.self, forKey: .output),
+            cacheRead: c.decode(Int.self, forKey: .cacheRead),
+            cacheWrite: c.decode(Int.self, forKey: .cacheWrite),
+            totalTokens: c.decode(Int.self, forKey: .totalTokens),
+            totalCost: c.decode(Double.self, forKey: .totalCost),
+            missingCostEntries: c.decode(Int.self, forKey: .missingCostEntries))
     }
 
     func encode(to encoder: Encoder) throws {

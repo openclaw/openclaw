@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -51,6 +51,12 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import {
+  readTerminalSnapshotFromGatewayDedupe,
+  setGatewayDedupeEntry,
+  type AgentWaitTerminalSnapshot,
+  waitForTerminalGatewayDedupe,
+} from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -351,7 +357,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       } else {
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
-        message = BARE_SESSION_RESET_PROMPT;
+        // Date is embedded in the prompt so agents read the correct daily
+        // memory files; skip further timestamp injection to avoid duplication.
+        message = buildBareSessionResetPrompt(cfg);
         skipTimestampInjection = true;
       }
     }
@@ -591,10 +599,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       acceptedAt: Date.now(),
     };
     // Store an in-flight ack so retries do not spawn a second run.
-    context.dedupe.set(`agent:${idem}`, {
-      ts: Date.now(),
-      ok: true,
-      payload: accepted,
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${idem}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: accepted,
+      },
     });
     respond(true, accepted, undefined, { runId });
 
@@ -645,10 +657,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           summary: "completed",
           result,
         };
-        context.dedupe.set(`agent:${idem}`, {
-          ts: Date.now(),
-          ok: true,
-          payload,
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload,
+          },
         });
         // Send a second res frame (same id) so TS clients with expectFinal can wait.
         // Swift clients will typically treat the first res as the result and ignore this.
@@ -661,11 +677,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           status: "error" as const,
           summary: String(err),
         };
-        context.dedupe.set(`agent:${idem}`, {
-          ts: Date.now(),
-          ok: false,
-          payload,
-          error,
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload,
+            error,
+          },
         });
         respond(false, payload, error, {
           runId,
@@ -727,7 +747,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }) ?? identity.avatar;
     respond(true, { ...identity, avatar: avatarValue }, undefined);
   },
-  "agent.wait": async ({ params, respond }) => {
+  "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {
       respond(
         false,
@@ -745,11 +765,61 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
+    const hasActiveChatRun = context.chatAbortControllers.has(runId);
 
-    const snapshot = await waitForAgentJob({
+    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
+      dedupe: context.dedupe,
+      runId,
+      ignoreAgentTerminalSnapshot: hasActiveChatRun,
+    });
+    if (cachedGatewaySnapshot) {
+      respond(true, {
+        runId,
+        status: cachedGatewaySnapshot.status,
+        startedAt: cachedGatewaySnapshot.startedAt,
+        endedAt: cachedGatewaySnapshot.endedAt,
+        error: cachedGatewaySnapshot.error,
+      });
+      return;
+    }
+
+    const lifecycleAbortController = new AbortController();
+    const dedupeAbortController = new AbortController();
+    const lifecyclePromise = waitForAgentJob({
       runId,
       timeoutMs,
+      signal: lifecycleAbortController.signal,
+      // When chat.send is active with the same runId, ignore cached lifecycle
+      // snapshots so stale agent results do not preempt the active chat run.
+      ignoreCachedSnapshot: hasActiveChatRun,
     });
+    const dedupePromise = waitForTerminalGatewayDedupe({
+      dedupe: context.dedupe,
+      runId,
+      timeoutMs,
+      signal: dedupeAbortController.signal,
+      ignoreAgentTerminalSnapshot: hasActiveChatRun,
+    });
+
+    const first = await Promise.race([
+      lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
+      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
+    ]);
+
+    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
+      first.snapshot;
+    if (snapshot) {
+      if (first.source === "lifecycle") {
+        dedupeAbortController.abort();
+      } else {
+        lifecycleAbortController.abort();
+      }
+    } else {
+      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
+      lifecycleAbortController.abort();
+      dedupeAbortController.abort();
+    }
+
     if (!snapshot) {
       respond(true, {
         runId,

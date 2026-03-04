@@ -65,7 +65,7 @@ async function startAndRunCheck(
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.startupGraceMs ?? 0;
+  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
@@ -153,6 +153,14 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("accepts timing.monitorStartupGraceMs", async () => {
+    const manager = createMockChannelManager();
+    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
   it("skips healthy channels (running + connected)", async () => {
     const manager = createSnapshotManager({
       discord: {
@@ -219,6 +227,63 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
+  });
+
+  it("skips restart when channel is busy with active runs", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 2,
+          busy: true,
+          lastRunActivityAt: now - 30_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts busy channels when run activity is stale", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 1,
+          busy: true,
+          lastRunActivityAt: now - 26 * 60_000,
+        },
+      },
+    });
+    await expectRestartedChannel(manager, "discord");
+  });
+
+  it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 1,
+          busy: true,
+          lastRunActivityAt: now - 301_000,
+        },
+      },
+    });
+    await expectRestartedChannel(manager, "discord");
   });
 
   it("skips recently-started channels while they are still connecting", async () => {

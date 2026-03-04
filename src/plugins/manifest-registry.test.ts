@@ -47,6 +47,74 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
+function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
+  rootDir: string;
+  linked: boolean;
+} {
+  const rootDir = makeTempDir();
+  const outsideDir = makeTempDir();
+  const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+  const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+  fs.writeFileSync(
+    outsideManifest,
+    JSON.stringify({ id: params.id, configSchema: { type: "object" } }),
+    "utf-8",
+  );
+
+  try {
+    if (params.mode === "symlink") {
+      fs.symlinkSync(outsideManifest, linkedManifest);
+    } else {
+      fs.linkSync(outsideManifest, linkedManifest);
+    }
+    return { rootDir, linked: true };
+  } catch (err) {
+    if (params.mode === "symlink") {
+      return { rootDir, linked: false };
+    }
+    if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+      return { rootDir, linked: false };
+    }
+    throw err;
+  }
+}
+
+function loadSingleCandidateRegistry(params: {
+  idHint: string;
+  rootDir: string;
+  origin: "bundled" | "global" | "workspace" | "config";
+}) {
+  return loadRegistry([
+    createPluginCandidate({
+      idHint: params.idHint,
+      rootDir: params.rootDir,
+      origin: params.origin,
+    }),
+  ]);
+}
+
+function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
+  return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
+}
+
+function expectUnsafeWorkspaceManifestRejected(params: {
+  id: string;
+  mode: "symlink" | "hardlink";
+}) {
+  const fixture = prepareLinkedManifestFixture({ id: params.id, mode: params.mode });
+  if (!fixture.linked) {
+    return;
+  }
+  const registry = loadSingleCandidateRegistry({
+    idHint: params.id,
+    rootDir: fixture.rootDir,
+    origin: "workspace",
+  });
+  expect(registry.plugins).toHaveLength(0);
+  expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -169,104 +237,31 @@ describe("loadPluginManifestRegistry", () => {
   });
 
   it("rejects manifest paths that escape plugin root via symlink", () => {
-    const rootDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(
-      outsideManifest,
-      JSON.stringify({ id: "unsafe-symlink", configSchema: { type: "object" } }),
-      "utf-8",
-    );
-    try {
-      fs.symlinkSync(outsideManifest, linkedManifest);
-    } catch {
-      return;
-    }
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "unsafe-symlink",
-        rootDir,
-        origin: "workspace",
-      }),
-    ]);
-    expect(registry.plugins).toHaveLength(0);
-    expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(true);
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-symlink", mode: "symlink" });
   });
 
   it("rejects manifest paths that escape plugin root via hardlink", () => {
     if (process.platform === "win32") {
       return;
     }
-    const rootDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(
-      outsideManifest,
-      JSON.stringify({ id: "unsafe-hardlink", configSchema: { type: "object" } }),
-      "utf-8",
-    );
-    try {
-      fs.linkSync(outsideManifest, linkedManifest);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
-    }
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "unsafe-hardlink",
-        rootDir,
-        origin: "workspace",
-      }),
-    ]);
-    expect(registry.plugins).toHaveLength(0);
-    expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(true);
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-hardlink", mode: "hardlink" });
   });
 
   it("allows bundled manifest paths that are hardlinked aliases", () => {
     if (process.platform === "win32") {
       return;
     }
-    const rootDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(
-      outsideManifest,
-      JSON.stringify({ id: "bundled-hardlink", configSchema: { type: "object" } }),
-      "utf-8",
-    );
-    try {
-      fs.linkSync(outsideManifest, linkedManifest);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
+    const fixture = prepareLinkedManifestFixture({ id: "bundled-hardlink", mode: "hardlink" });
+    if (!fixture.linked) {
+      return;
     }
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "bundled-hardlink",
-        rootDir,
-        origin: "bundled",
-      }),
-    ]);
+    const registry = loadSingleCandidateRegistry({
+      idHint: "bundled-hardlink",
+      rootDir: fixture.rootDir,
+      origin: "bundled",
+    });
     expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
-    expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(false);
+    expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
   });
 });

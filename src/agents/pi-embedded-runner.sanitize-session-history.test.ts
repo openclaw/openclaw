@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
 import {
@@ -14,6 +15,7 @@ import {
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
@@ -23,6 +25,8 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
+let testTimestamp = 1;
+const nextTimestamp = () => testTimestamp++;
 
 // We don't mock session-transcript-repair.js as it is a pure function and complicates mocking.
 // We rely on the real implementation which should pass through our simple messages.
@@ -58,23 +62,33 @@ describe("sanitizeSessionHistory", () => {
 
   const makeThinkingAndTextAssistantMessages = (
     thinkingSignature: string = "some_sig",
-  ): AgentMessage[] =>
-    [
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature,
-          },
-          { type: "text", text: "hi" },
-        ],
-      },
-    ] as unknown as AgentMessage[];
+  ): AgentMessage[] => {
+    const user: UserMessage = {
+      role: "user",
+      content: "hello",
+      timestamp: nextTimestamp(),
+    };
+    const assistant: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature,
+        },
+        { type: "text", text: "hi" },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: makeUsage(0, 0, 0),
+      stopReason: "stop",
+      timestamp: nextTimestamp(),
+    };
+    return [user, assistant];
+  };
 
-  const makeUsage = (input: number, output: number, totalTokens: number) => ({
+  const makeUsage = (input: number, output: number, totalTokens: number): Usage => ({
     input,
     output,
     cacheRead: 0,
@@ -87,22 +101,48 @@ describe("sanitizeSessionHistory", () => {
     text: string;
     usage: ReturnType<typeof makeUsage>;
     timestamp?: number;
-  }) =>
-    ({
-      role: "assistant",
-      content: [{ type: "text", text: params.text }],
-      stopReason: "stop",
-      ...(typeof params.timestamp === "number" ? { timestamp: params.timestamp } : {}),
-      usage: params.usage,
-    }) as unknown as AgentMessage;
+  }): AssistantMessage => ({
+    role: "assistant",
+    content: [{ type: "text", text: params.text }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.2",
+    stopReason: "stop",
+    timestamp: params.timestamp ?? nextTimestamp(),
+    usage: params.usage,
+  });
+
+  const makeUserMessage = (content: string, timestamp = nextTimestamp()): UserMessage => ({
+    role: "user",
+    content,
+    timestamp,
+  });
+
+  const makeAssistantMessage = (
+    content: AssistantMessage["content"],
+    params: {
+      stopReason?: AssistantMessage["stopReason"];
+      usage?: Usage;
+      timestamp?: number;
+    } = {},
+  ): AssistantMessage => ({
+    role: "assistant",
+    content,
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.2",
+    usage: params.usage ?? makeUsage(0, 0, 0),
+    stopReason: params.stopReason ?? "stop",
+    timestamp: params.timestamp ?? nextTimestamp(),
+  });
 
   const makeCompactionSummaryMessage = (tokensBefore: number, timestamp: string) =>
-    ({
+    castAgentMessage({
       role: "compactionSummary",
       summary: "compressed",
       tokensBefore,
       timestamp,
-    }) as unknown as AgentMessage;
+    });
 
   const sanitizeOpenAIHistory = async (
     messages: AgentMessage[],
@@ -123,6 +163,7 @@ describe("sanitizeSessionHistory", () => {
     >;
 
   beforeEach(async () => {
+    testTimestamp = 1;
     sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
   });
 
@@ -218,7 +259,7 @@ describe("sanitizeSessionHistory", () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
-      {
+      castAgentMessage({
         role: "user",
         content: "forwarded instruction",
         provenance: {
@@ -226,7 +267,7 @@ describe("sanitizeSessionHistory", () => {
           sourceSessionKey: "agent:main:req",
           sourceTool: "sessions_send",
         },
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const result = await sanitizeSessionHistory({
@@ -247,14 +288,14 @@ describe("sanitizeSessionHistory", () => {
   it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = [
+    const messages = castAgentMessages([
       { role: "user", content: "old context" },
       makeAssistantUsageMessage({
         text: "old answer",
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
       makeCompactionSummaryMessage(191_919, new Date().toISOString()),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -268,7 +309,7 @@ describe("sanitizeSessionHistory", () => {
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = [
+    const messages = castAgentMessages([
       makeAssistantUsageMessage({
         text: "pre-compaction answer",
         usage: makeUsage(120_000, 3_000, 123_000),
@@ -279,7 +320,7 @@ describe("sanitizeSessionHistory", () => {
         text: "fresh answer",
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -293,14 +334,14 @@ describe("sanitizeSessionHistory", () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = [
+    const messages = castAgentMessages([
       makeCompactionSummaryMessage(191_919, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
         timestamp: compactionTs - 1_000,
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -314,7 +355,7 @@ describe("sanitizeSessionHistory", () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = [
+    const messages = castAgentMessages([
       makeCompactionSummaryMessage(123_000, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
@@ -327,7 +368,7 @@ describe("sanitizeSessionHistory", () => {
         timestamp: compactionTs + 2_000,
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -345,20 +386,19 @@ describe("sanitizeSessionHistory", () => {
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     setNonGoogleModelApi();
 
-    const messages = [
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        stopReason: "aborted",
-        content: [
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage(
+        [
           {
             type: "thinking",
             thinking: "reasoning",
             thinkingSignature: "sig",
           },
         ],
-      },
-    ] as unknown as AgentMessage[];
+        { stopReason: "aborted" },
+      ),
+    ];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -373,12 +413,11 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("synthesizes missing tool results for openai-responses after repair", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-    ] as unknown as AgentMessage[];
+    const messages: AgentMessage[] = [
+      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+    ];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -389,49 +428,57 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("toolResult");
   });
 
-  it("drops malformed tool calls missing input or arguments", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read" }],
-      },
-      { role: "user", content: "hello" },
-    ] as unknown as AgentMessage[];
-
-    const result = await sanitizeOpenAIHistory(messages, { sessionId: "test-session" });
-
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
-  });
-
-  it("drops malformed tool calls with invalid/overlong names", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_bad",
-            name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
-            arguments: {},
-          },
-          { type: "toolCall", id: "call_long", name: `read_${"x".repeat(80)}`, arguments: {} },
-        ],
-      },
-      { role: "user", content: "hello" },
-    ] as unknown as AgentMessage[];
-
-    const result = await sanitizeOpenAIHistory(messages);
-
+  it.each([
+    {
+      name: "missing input or arguments",
+      makeMessages: () =>
+        castAgentMessages([
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "read" }],
+          }),
+          makeUserMessage("hello"),
+        ]),
+      overrides: { sessionId: "test-session" } as Partial<
+        Parameters<typeof sanitizeOpenAIHistory>[1]
+      >,
+    },
+    {
+      name: "invalid or overlong names",
+      makeMessages: () =>
+        castAgentMessages([
+          makeAssistantMessage(
+            [
+              {
+                type: "toolCall",
+                id: "call_bad",
+                name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
+                arguments: {},
+              },
+              {
+                type: "toolCall",
+                id: "call_long",
+                name: `read_${"x".repeat(80)}`,
+                arguments: {},
+              },
+            ],
+            { stopReason: "toolUse" },
+          ),
+          makeUserMessage("hello"),
+        ]),
+      overrides: {} as Partial<Parameters<typeof sanitizeOpenAIHistory>[1]>,
+    },
+  ])("drops malformed tool calls: $name", async ({ makeMessages, overrides }) => {
+    const result = await sanitizeOpenAIHistory(makeMessages(), overrides);
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
   it("drops tool calls that are not in the allowed tool set", async () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
-      },
-    ] as unknown as AgentMessage[];
+    const messages: AgentMessage[] = [
+      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "write", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+    ];
 
     const result = await sanitizeOpenAIHistory(messages, {
       allowedToolNames: ["read"],
@@ -478,25 +525,28 @@ describe("sanitizeSessionHistory", () => {
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
-      },
+    const messages: AgentMessage[] = [
+      makeAssistantMessage([{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
       {
         role: "toolResult",
         toolCallId: "tool_abc123",
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
-      } as unknown as AgentMessage,
-      { role: "user", content: "continue" },
+        isError: false,
+        timestamp: nextTimestamp(),
+      },
+      makeUserMessage("continue"),
       {
         role: "toolResult",
         toolCallId: "tool_01VihkDRptyLpX1ApUPe7ooU",
         toolName: "read",
         content: [{ type: "text", text: "stale result" }],
-      } as unknown as AgentMessage,
-    ] as unknown as AgentMessage[];
+        isError: false,
+        timestamp: nextTimestamp(),
+      },
+    ];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -530,20 +580,17 @@ describe("sanitizeSessionHistory", () => {
   it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages = [
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "some reasoning",
-            thinkingSignature: "reasoning_text",
-          },
-        ],
-      },
-      { role: "user", content: "follow up" },
-    ] as unknown as AgentMessage[];
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "some reasoning",
+          thinkingSignature: "reasoning_text",
+        },
+      ]),
+      makeUserMessage("follow up"),
+    ];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
 
@@ -556,21 +603,18 @@ describe("sanitizeSessionHistory", () => {
   it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages = [
-      { role: "user", content: "read a file" },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "I should use the read tool",
-            thinkingSignature: "reasoning_text",
-          },
-          { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
-          { type: "text", text: "Let me read that file." },
-        ],
-      },
-    ] as unknown as AgentMessage[];
+    const messages: AgentMessage[] = [
+      makeUserMessage("read a file"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "I should use the read tool",
+          thinkingSignature: "reasoning_text",
+        },
+        { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+        { type: "text", text: "Let me read that file." },
+      ]),
+    ];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);

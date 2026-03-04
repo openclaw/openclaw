@@ -611,13 +611,14 @@ export async function spawnSubagentDirect(
           }
           buf = strictBuf;
         } else {
-          buf = Buffer.from(contentVal, "utf8");
-          const estimatedBytes = buf.byteLength;
+          // Avoid allocating oversized UTF-8 buffers before enforcing file limits.
+          const estimatedBytes = Buffer.byteLength(contentVal, "utf8");
           if (estimatedBytes > maxFileBytes) {
             fail(
               `attachments_file_bytes_exceeded (name=${name} bytes=${estimatedBytes} maxFileBytes=${maxFileBytes})`,
             );
           }
+          buf = Buffer.from(contentVal, "utf8");
         }
 
         const bytes = buf.byteLength;
