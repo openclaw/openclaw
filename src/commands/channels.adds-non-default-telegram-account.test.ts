@@ -489,6 +489,36 @@ describe("channels command", () => {
     expect(joined).toMatch(/bot:@openclaw_bot/);
   });
 
+  it("suppresses privacy-mode warning when probe confirms canReadAllGroupMessages", () => {
+    const joined = formatChannelStatusJoined({
+      telegram: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          allowUnmentionedGroups: true,
+          probe: { ok: true, bot: { canReadAllGroupMessages: true } },
+        },
+      ],
+    });
+    expect(joined).not.toMatch(/privacy mode/i);
+  });
+
+  it("surfaces explicit privacy-mode enabled warning when probe confirms false", () => {
+    const joined = formatChannelStatusJoined({
+      telegram: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          allowUnmentionedGroups: true,
+          probe: { ok: true, bot: { canReadAllGroupMessages: false } },
+        },
+      ],
+    });
+    expect(joined).toMatch(/Telegram Bot API privacy mode is enabled/i);
+  });
+
   it("surfaces Telegram group membership audit issues in channels status output", () => {
     const joined = formatChannelStatusJoined({
       telegram: [
