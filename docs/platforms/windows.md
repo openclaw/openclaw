@@ -1,12 +1,12 @@
 ---
-summary: "Windows (WSL2) support + companion app status"
+summary: "Windows support (WSL2 recommended, native experimental) + companion app status"
 read_when:
   - Installing OpenClaw on Windows
   - Looking for Windows companion app status
-title: "Windows (WSL2)"
+title: "Windows"
 ---
 
-# Windows (WSL2)
+# Windows
 
 OpenClaw on Windows is recommended **via WSL2** (Ubuntu recommended). The
 CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
@@ -15,6 +15,37 @@ Windows might be trickier. WSL2 gives you the full Linux experience — one comm
 to install: `wsl --install`.
 
 Native Windows companion apps are planned.
+
+## Native Windows (experimental)
+
+WSL2 remains the recommended path, but the CLI + Gateway can also run natively on Windows for single-host setups.
+
+### Minimal native setup
+
+1. Install Node 22+ and pnpm on Windows.
+2. Install OpenClaw globally (`npm i -g openclaw`).
+3. Run onboarding/configuration (`openclaw onboard` or `openclaw configure`).
+4. Install/start the Gateway service:
+
+```powershell
+openclaw gateway install
+openclaw gateway start
+openclaw gateway status
+```
+
+On native Windows, `gateway install` uses **Task Scheduler** (`schtasks`) for service supervision.
+
+### PowerShell gotchas
+
+- In Windows PowerShell 5.1, `&&` is not valid; use `;` or separate commands.
+- Avoid duplicate starts: check whether port `18789` is already listening before launching another foreground gateway process.
+- OAuth/setup-token auth (for example `sk-ant-oat01-*`) works natively on Windows.
+
+### Task Scheduler and NSSM
+
+- Prefer one supervisor only. Task Scheduler is the default path used by OpenClaw.
+- Do not run NSSM and Task Scheduler for the same gateway at the same time.
+- If you switch supervisors, stop/disable the old one first to avoid duplicate gateway processes.
 
 ## Install (WSL2)
 
