@@ -44,7 +44,11 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // the unit is restarted even when the service is configured with
     // Restart=on-failure (which does not restart on a clean exit code 0).
     const restart = triggerOpenClawRestart();
-    if (!restart.ok) {
+    // On unsupported platforms (e.g. Windows), triggerOpenClawRestart() returns
+    // ok: false with detail "unsupported platform restart". Treat that as
+    // supervised so we exit cleanly and the platform's supervisor can restart
+    // if configured; only treat other failures as mode "failed".
+    if (!restart.ok && restart.detail !== "unsupported platform restart") {
       return {
         mode: "failed",
         detail: restart.detail ?? `${restart.method} restart failed`,

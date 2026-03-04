@@ -125,6 +125,21 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.detail).toContain("Unit not found");
   });
 
+  it("returns supervised when triggerOpenClawRestart returns unsupported platform restart", () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "gateway";
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "supervisor",
+      detail: "unsupported platform restart",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
