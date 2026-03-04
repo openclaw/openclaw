@@ -143,6 +143,9 @@ export function createTelegramDraftStream(params: {
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
+      params.log?.(
+        `telegram draft-trace: editMessageText chat=${chatId} message=${streamMessageId} len=${renderedText.length} mode=${renderedParseMode ?? "plain"}`,
+      );
       if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
@@ -160,6 +163,9 @@ export function createTelegramDraftStream(params: {
       : replyParams;
     let sent;
     try {
+      params.log?.(
+        `telegram draft-trace: sendMessage chat=${chatId} len=${renderedText.length} mode=${renderedParseMode ?? "plain"}`,
+      );
       sent = await params.api.sendMessage(chatId, renderedText, sendParams);
     } catch (err) {
       const hasThreadParam =
@@ -175,6 +181,9 @@ export function createTelegramDraftStream(params: {
       params.warn?.(
         "telegram stream preview send failed with message_thread_id, retrying without thread",
       );
+      params.log?.(
+        `telegram draft-trace: sendMessage retry-without-thread chat=${chatId} len=${renderedText.length} mode=${renderedParseMode ?? "plain"}`,
+      );
       sent = await params.api.sendMessage(
         chatId,
         renderedText,
@@ -189,6 +198,9 @@ export function createTelegramDraftStream(params: {
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
     if (sendGeneration !== generation) {
+      params.log?.(
+        `telegram draft-trace: superseded-preview chat=${chatId} message=${normalizedMessageId} generation=${sendGeneration}->${generation}`,
+      );
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
         textSnapshot: renderedText,
@@ -197,6 +209,9 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     streamMessageId = normalizedMessageId;
+    params.log?.(
+      `telegram draft-trace: sendMessage created preview chat=${chatId} message=${normalizedMessageId} generation=${generation}`,
+    );
     return true;
   };
   const sendDraftTransportPreview = async ({
@@ -211,6 +226,9 @@ export function createTelegramDraftStream(params: {
         : {}),
       ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
     };
+    params.log?.(
+      `telegram draft-trace: sendMessageDraft chat=${chatId} draftId=${draftId} len=${renderedText.length} mode=${renderedParseMode ?? "plain"}`,
+    );
     await resolvedDraftApi!(
       chatId,
       draftId,
@@ -324,6 +342,9 @@ export function createTelegramDraftStream(params: {
   });
 
   const forceNewMessage = () => {
+    params.log?.(
+      `telegram draft-trace: forceNewMessage chat=${chatId} generation=${generation}->${generation + 1} hadMessage=${typeof streamMessageId === "number"}`,
+    );
     generation += 1;
     streamMessageId = undefined;
     if (previewTransport === "draft") {

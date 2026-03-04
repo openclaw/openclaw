@@ -102,6 +102,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  traceBase?: string;
 }): Promise<void> {
   const chunks = params.chunkText(params.replyText);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -123,6 +124,9 @@ async function deliverTextReply(params: {
       plainText: chunk.text,
       linkPreview: params.linkPreview,
       replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
+      traceTag: params.traceBase
+        ? `${params.traceBase}:chunk-${i + 1}/${chunks.length}`
+        : undefined,
     });
     markReplyApplied(params.progress, replyToForChunk);
     markDelivered(params.progress);
@@ -141,6 +145,7 @@ async function sendPendingFollowUpText(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  traceBase?: string;
 }): Promise<void> {
   const chunks = params.chunkText(params.text);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -157,6 +162,9 @@ async function sendPendingFollowUpText(params: {
       plainText: chunk.text,
       linkPreview: params.linkPreview,
       replyMarkup: i === 0 ? params.replyMarkup : undefined,
+      traceTag: params.traceBase
+        ? `${params.traceBase}:followup-chunk-${i + 1}/${chunks.length}`
+        : undefined,
     });
     markReplyApplied(params.progress, replyToForFollowUp);
     markDelivered(params.progress);
@@ -227,6 +235,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  traceBase?: string;
 }): Promise<void> {
   let first = true;
   let pendingFollowUpText: string | undefined;
@@ -419,6 +428,7 @@ async function deliverMediaReply(params: {
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
+        traceBase: params.traceBase,
       });
       pendingFollowUpText = undefined;
     }
@@ -458,7 +468,8 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const originalReply of params.replies) {
+  for (let replyIndex = 0; replyIndex < params.replies.length; replyIndex += 1) {
+    const originalReply = params.replies[replyIndex];
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
@@ -502,6 +513,7 @@ export async function deliverReplies(params: {
     }
 
     const contentForSentHook = reply.text || "";
+    const traceBase = `reply-${replyIndex + 1}/${params.replies.length}`;
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -525,6 +537,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          traceBase,
         });
       } else {
         await deliverMediaReply({
@@ -544,6 +557,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          traceBase,
         });
       }
 
