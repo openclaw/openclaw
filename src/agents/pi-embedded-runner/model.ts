@@ -41,9 +41,14 @@ function applyConfiguredProviderOverrides(params: {
     return discoveredModel;
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
-  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api) {
+  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerConfig.headers) {
     return discoveredModel;
   }
+  const discoveredHeaders = (discoveredModel as Model<Api> & { headers?: Record<string, string> }).headers;
+  const mergedHeaders =
+    discoveredHeaders || providerConfig.headers || configuredModel?.headers
+      ? { ...discoveredHeaders, ...providerConfig.headers, ...configuredModel?.headers }
+      : undefined;
   return {
     ...discoveredModel,
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
@@ -53,7 +58,7 @@ function applyConfiguredProviderOverrides(params: {
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers: configuredModel?.headers ?? discoveredModel.headers,
+    headers: mergedHeaders,
     compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
