@@ -523,7 +523,7 @@ export const registerTelegramHandlers = ({
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
         logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        return { skip: true, reason: 'group-disabled' };
+        return { skip: true, reason: "group-disabled" };
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
@@ -1430,7 +1430,7 @@ export const registerTelegramHandlers = ({
         groupConfig,
         topicConfig,
       });
-      
+
       if (shouldSkip) {
         // Only send hint for unconfigured groups (not intentionally disabled)
         if (skipReason === "group-policy-allowlist-empty") {
@@ -1439,11 +1439,12 @@ export const registerTelegramHandlers = ({
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
-              fn: () => bot.api.sendMessage(
-                event.chatId,
-                "⚠️ I received your message, but I'm not authorized to respond in this group. Please check the group configuration.",
-                resolvedThreadId != null ? { message_thread_id: resolvedThreadId } : undefined,
-              ),
+              fn: () =>
+                bot.api.sendMessage(
+                  event.chatId,
+                  "⚠️ I received your message, but I'm not authorized to respond in this group. Please check the group configuration.",
+                  resolvedThreadId != null ? { message_thread_id: resolvedThreadId } : undefined,
+                ),
             }).catch(() => {}); // Silently ignore errors
           }
         }
