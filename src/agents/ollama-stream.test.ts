@@ -104,20 +104,20 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("falls back to reasoning when content is empty", () => {
+  it("falls back to thinking when content is empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
       message: {
         role: "assistant" as const,
         content: "",
-        reasoning: "Reasoning output",
+        thinking: "Thinking output",
       },
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+    expect(result.content).toEqual([{ type: "text", text: "Thinking output" }]);
   });
 
   it("builds response with tool calls", () => {
@@ -397,11 +397,11 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("accumulates reasoning chunks when content is empty", async () => {
+  it("accumulates thinking chunks when content is empty", async () => {
     await withMockNdjsonFetch(
       [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"thinking"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
       async () => {
@@ -413,7 +413,7 @@ describe("createOllamaStreamFn", () => {
           throw new Error("Expected done event");
         }
 
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+        expect(doneEvent.message.content).toEqual([{ type: "text", text: "thinking output" }]);
       },
     );
   });

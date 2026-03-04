@@ -185,7 +185,7 @@ interface OllamaChatResponse {
   message: {
     role: "assistant";
     content: string;
-    reasoning?: string;
+    thinking?: string;
     tool_calls?: OllamaToolCall[];
   };
   done: boolean;
@@ -323,10 +323,10 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Qwen 3 (and potentially other reasoning models) may return their final
-  // answer in a `reasoning` field with an empty `content`. Fall back to
-  // `reasoning` so the response isn't silently dropped.
-  const text = response.message.content || response.message.reasoning || "";
+  // Qwen 3 (and potentially other thinking models) may return their final
+  // answer in a `thinking` field with an empty `content`. Fall back to
+  // `thinking` so the response isn't silently dropped.
+  const text = response.message.content || response.message.thinking || "";
   if (text) {
     content.push({ type: "text", text });
   }
@@ -474,9 +474,9 @@ export function createOllamaStreamFn(
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
-          } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
-            accumulatedContent += chunk.message.reasoning;
+          } else if (chunk.message?.thinking) {
+            // Qwen 3 thinking mode: content may be empty, output in thinking
+            accumulatedContent += chunk.message.thinking;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
