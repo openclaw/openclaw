@@ -49,6 +49,14 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  auditPostCompactionReads,
+  extractReadPaths,
+  formatAuditWarning,
+  isPostCompactionAuditEnabled,
+  readSessionMessages,
+  resolveRequiredReads,
+} from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
@@ -58,6 +66,9 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+/** Tracks sessions that have recently compacted and need a post-compaction audit on the next turn. */
+const pendingPostCompactionAudits = new Map<string, true>();
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -675,6 +686,11 @@ export async function runReplyAgent(params: {
           .catch(() => {
             // Silent failure — post-compaction context is best-effort
           });
+
+        // Schedule a post-compaction audit for the next turn (if enabled)
+        if (isPostCompactionAuditEnabled(cfg)) {
+          pendingPostCompactionAudits.set(sessionKey, true);
+        }
       }
 
       if (verboseEnabled) {
@@ -687,6 +703,27 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    // Run post-compaction audit: check if agent read required files after last compaction
+    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
+      pendingPostCompactionAudits.delete(sessionKey);
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const requiredReads = resolveRequiredReads(cfg);
+          const audit = auditPostCompactionReads(
+            extractReadPaths(readSessionMessages(sessionFile)),
+            process.cwd(),
+            requiredReads,
+          );
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
     }
 
     return finalizeWithFollowup(

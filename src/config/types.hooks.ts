@@ -136,7 +136,24 @@ export type HooksConfig = {
   transformsDir?: string;
   mappings?: HookMappingConfig[];
   gmail?: HooksGmailConfig;
+  /** Post-compaction startup audit configuration. */
+  postCompactionAudit?: PostCompactionAuditConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
 import type { InstallRecordBase } from "./types.installs.js";
+
+export type PostCompactionAuditConfig = {
+  /**
+   * Enable or disable post-compaction startup file audit.
+   * Default: true.
+   */
+  enabled?: boolean;
+  /**
+   * List of files the agent must read after compaction.
+   * Strings are matched exactly (workspace-relative). Slash-wrapped strings
+   * (e.g. "/memory\\/\\d{4}-\\d{2}-\\d{2}\\.md/") are treated as regex patterns.
+   * If omitted, defaults to ["WORKFLOW_AUTO.md", "/memory\\/\\d{4}-\\d{2}-\\d{2}\\.md/"].
+   */
+  requiredReads?: string[];
+};

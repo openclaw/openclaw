@@ -510,6 +510,13 @@ export const OpenClawSchema = z
         transformsDir: z.string().optional(),
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
+        postCompactionAudit: z
+          .object({
+            enabled: z.boolean().optional(),
+            requiredReads: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         internal: InternalHooksSchema,
       })
       .strict()
