@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/usage-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw plugin that tracks tool calls and skill usage with dashboard",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

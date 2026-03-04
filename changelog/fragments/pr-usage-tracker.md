@@ -1,0 +1,1 @@
+- **feat(plugins)**: Add `usage-tracker` extension — tracks tool calls and skill usage in real-time via `after_tool_call` hook, with historical backfill from session transcripts, query API, agent tool, and a Chart.js web dashboard. Zero external dependencies.
