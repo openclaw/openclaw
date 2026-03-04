@@ -159,6 +159,14 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("hot-reloads when agents.defaults.models allowlist changes (#33600)", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.models.openrouter/minimax/minimax-m2.5"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.noopPaths).toEqual([]);
+    expect(plan.hotReasons).toContain("agents.defaults.models.openrouter/minimax/minimax-m2.5");
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
