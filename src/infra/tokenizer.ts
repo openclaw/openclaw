@@ -95,20 +95,28 @@ interface CacheEntry {
 const CACHE = new Map<string, CacheEntry>();
 const CACHE_MAX_SIZE = 1000;
 const CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 小时
+let cacheCleanupCounter = 0;
 
-function cleanupCache() {
-  const now = Date.now();
-  if (CACHE.size > CACHE_MAX_SIZE) {
-    const entries = Array.from(CACHE.entries());
-    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-    const deleteCount = CACHE.size - CACHE_MAX_SIZE;
-    for (let i = 0; i < deleteCount; i++) {
-      CACHE.delete(entries[i][0]);
+function maybeCleanupCache() {
+  // 只在每 100 次 miss 后才清理一次，避免每次 miss 都做 O(N) 操作
+  cacheCleanupCounter++;
+  if (cacheCleanupCounter >= 100) {
+    cacheCleanupCounter = 0;
+    const now = Date.now();
+    // 只在超过最大大小时才清理
+    if (CACHE.size > CACHE_MAX_SIZE) {
+      const entries = Array.from(CACHE.entries());
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const deleteCount = CACHE.size - CACHE_MAX_SIZE;
+      for (let i = 0; i < deleteCount; i++) {
+        CACHE.delete(entries[i][0]);
+      }
     }
-  }
-  for (const [key, entry] of CACHE.entries()) {
-    if (now - entry.timestamp > CACHE_MAX_AGE) {
-      CACHE.delete(key);
+    // 清理过期条目
+    for (const [key, entry] of CACHE.entries()) {
+      if (now - entry.timestamp > CACHE_MAX_AGE) {
+        CACHE.delete(key);
+      }
     }
   }
 }
@@ -117,64 +125,76 @@ function cleanupCache() {
 // Tiktoken Tokenizer
 // ================================
 
-// Tiktoken encoding type (using unknown for type safety)
+// Tiktoken encoding type
+interface TiktokenEncoding {
+  encode: (text: string) => number[];
+  free: () => void;
+}
+
 let tiktokenEncoding: TiktokenEncoding | null = null;
-type TiktokenEncoding = { encode: (text: string) => number[]; free: () => void };
+let tiktokenLoadPromise: Promise<TiktokenEncoding> | null = null;
 
 async function loadTiktokenTokenizer(): Promise<TiktokenEncoding> {
+  // 如果已经加载，直接返回
   if (tiktokenEncoding) {
     return tiktokenEncoding;
   }
 
-  try {
-    // 动态导入 tiktoken
-    const tiktoken = await import("tiktoken");
-    const model = config.model;
-
-    // 验证是否为有效的 tiktoken 模型
-    const validModels = ["cl100k_base", "p50k_base", "r50k_base", "cl50k_base"];
-    if (!validModels.includes(model)) {
-      console.warn(
-        `[tokenizer] Model "${model}" is not a standard tiktoken model, trying anyway...`,
-      );
-    }
-
-    // tiktoken.get_encoding expects a specific encoding name
-    // @ts-expect-error - tiktoken types are not fully compatible
-    tiktokenEncoding = tiktoken.get_encoding(model);
-    console.log(`[tokenizer] Loaded tiktoken model: ${model}`);
-    return tiktokenEncoding;
-  } catch (error) {
-    console.error("[tokenizer] Failed to load tiktoken:", error);
-    throw error;
+  // 如果正在加载，等待加载完成
+  if (tiktokenLoadPromise) {
+    return tiktokenLoadPromise;
   }
+
+  // 开始加载
+  tiktokenLoadPromise = (async () => {
+    try {
+      // 动态导入 tiktoken (ESM 兼容)
+      const tiktoken = await import("tiktoken");
+      const model = config.model;
+
+      // 验证是否为有效的 tiktoken 模型
+      const validModels = ["cl100k_base", "p50k_base", "r50k_base", "cl50k_base"];
+      if (!validModels.includes(model)) {
+        console.warn(
+          `[tokenizer] Model "${model}" is not a standard tiktoken model, trying anyway...`,
+        );
+      }
+
+      // tiktoken.get_encoding expects a specific encoding name
+      // @ts-expect-error - tiktoken types are not fully compatible
+      const encoding = tiktoken.get_encoding(model);
+      tiktokenEncoding = encoding;
+      console.log(`[tokenizer] Loaded tiktoken model: ${model}`);
+      return encoding;
+    } catch (error) {
+      console.error("[tokenizer] Failed to load tiktoken:", error);
+      tiktokenLoadPromise = null;
+      throw error;
+    }
+  })();
+
+  return tiktokenLoadPromise;
 }
 
-// Tiktoken 同步版本（性能更好）
+// Tiktoken 同步版本
+// 注意：必须先调用 warmupTokenizer() 或 loadTiktokenTokenizer() 预加载
 function estimateTokensByTiktokenSync(text: string): number {
   if (!text || text.length === 0) {
     return 0;
   }
 
-  // 尝试使用缓存的 encoding
+  // 使用缓存的 encoding
   if (tiktokenEncoding) {
     const tokens = tiktokenEncoding.encode(text);
     return tokens.length;
   }
 
-  // 同步加载并使用（tiktoken 在 Node.js 中支持同步）
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const tiktoken = require("tiktoken");
-    const encoding = tiktoken.get_encoding(config.model);
-    const tokens = encoding.encode(text);
-    encoding.free();
-    return tokens.length;
-  } catch (error) {
-    console.warn("[tokenizer] Tiktoken sync failed:", error);
-    // 回退到字符估算
-    return estimateTokensByChars(text);
-  }
+  // 如果没有预加载，回退到字符估算并异步加载
+  // 这样不会阻塞，但第一次调用可能不准确
+  loadTiktokenTokenizer().catch(() => {
+    // 忽略错误，已经回退到字符估算
+  });
+  return estimateTokensByChars(text);
 }
 
 // ================================
@@ -183,24 +203,39 @@ function estimateTokensByTiktokenSync(text: string): number {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let hfTokenizer: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let hfLoadPromise: Promise<any> | null = null;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadHuggingfaceTokenizer(): Promise<any> {
+  // 如果已经加载，直接返回
   if (hfTokenizer) {
     return hfTokenizer;
   }
 
-  try {
-    const { Tokenizer } = await import("@huggingface/tokenizers");
-    const model = config.model;
-
-    hfTokenizer = await Tokenizer.fromPretrained(model);
-    console.log(`[tokenizer] Loaded HuggingFace model: ${model}`);
-    return hfTokenizer;
-  } catch (error) {
-    console.error("[tokenizer] Failed to load HuggingFace tokenizer:", error);
-    throw error;
+  // 如果正在加载，等待加载完成
+  if (hfLoadPromise) {
+    return hfLoadPromise;
   }
+
+  // 开始加载
+  hfLoadPromise = (async () => {
+    try {
+      const { Tokenizer } = await import("@huggingface/tokenizers");
+      const model = config.model;
+
+      const tokenizer = await Tokenizer.fromPretrained(model);
+      hfTokenizer = tokenizer;
+      console.log(`[tokenizer] Loaded HuggingFace model: ${model}`);
+      return tokenizer;
+    } catch (error) {
+      console.error("[tokenizer] Failed to load HuggingFace tokenizer:", error);
+      hfLoadPromise = null;
+      throw error;
+    }
+  })();
+
+  return hfLoadPromise;
 }
 
 export async function estimateTokensWithHuggingface(text: string): Promise<number> {
@@ -227,29 +262,20 @@ function hashMessage(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function messageToText(message: Message): string {
-  const role = message.role || "";
-  let content: string;
+/**
+ * 将消息内容转换为文本
+ *
+ * 重要：默认模式下只计算 content 的字符数，不添加 role 前缀
+ * 这与原始 SDK 的 estimateTokens 行为一致
+ */
+function messageContentToText(message: Message): string {
   if (message.content === undefined || message.content === null) {
-    content = "";
-  } else if (typeof message.content === "string") {
-    content = message.content;
-  } else {
-    content = JSON.stringify(message.content);
-  }
-  // If both role and content are empty, return empty string
-  if (!role && !content) {
     return "";
   }
-  // If content is empty, don't count role as tokens either (empty message = 0 tokens)
-  if (!content) {
-    return "";
+  if (typeof message.content === "string") {
+    return message.content;
   }
-  return `${role}: ${content}`;
-}
-
-function messagesToText(messages: Message[]): string {
-  return messages.map(messageToText).join("\n");
+  return JSON.stringify(message.content);
 }
 
 // ================================
@@ -259,11 +285,18 @@ function messagesToText(messages: Message[]): string {
 /**
  * 估算单条消息的 token 数
  *
- * 默认行为：使用字符数估算 (chars * 0.4)
+ * 默认行为：使用字符数估算 (chars * 0.4)，只计算 content 不添加 role 前缀
  * 开启 tokenizer 后：使用 tiktoken 或 huggingface tokenizer
  */
 export function estimateTokensWithTokenizer(message: Message): number {
-  const content = messagesToText([message]);
+  // 默认模式：只计算 content，与原始 SDK 的 estimateTokens 行为一致
+  const content = messageContentToText(message);
+
+  // 空内容返回 0
+  if (!content || content.length === 0) {
+    return 0;
+  }
+
   const cacheKey = hashMessage(content);
   const cached = CACHE.get(cacheKey);
   if (cached !== undefined) {
@@ -274,7 +307,7 @@ export function estimateTokensWithTokenizer(message: Message): number {
 
   if (!config.enabled) {
     // 默认使用字符数估算 (chars * 0.4)
-    // 这与 OpenClaw 原有行为一致
+    // 这与 OpenClaw 原有行为一致，只计算 content
     tokenCount = estimateTokensByChars(content);
   } else {
     try {
@@ -282,9 +315,8 @@ export function estimateTokensWithTokenizer(message: Message): number {
         tokenCount = estimateTokensByTiktokenSync(content);
       } else {
         // HuggingFace 需要异步处理，这里同步返回字符估算
-        console.warn(
-          "[tokenizer] HuggingFace provider requires async, falling back to char estimation",
-        );
+        // 并触发异步加载以便下次使用
+        loadHuggingfaceTokenizer().catch(() => {});
         tokenCount = estimateTokensByChars(content);
       }
     } catch (error) {
@@ -294,7 +326,7 @@ export function estimateTokensWithTokenizer(message: Message): number {
   }
 
   CACHE.set(cacheKey, { tokens: tokenCount, timestamp: Date.now() });
-  cleanupCache();
+  maybeCleanupCache();
   return tokenCount;
 }
 
@@ -321,6 +353,7 @@ export function estimateMessagesTokensWithTokenizer(messages: Message[]): number
 
 export function clearTokenizerCache() {
   CACHE.clear();
+  cacheCleanupCounter = 0;
 }
 
 export function getTokenizerCacheStats() {
