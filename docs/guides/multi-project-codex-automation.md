@@ -179,6 +179,7 @@ Use OpenClaw heartbeats to periodically check project status and report:
 
 ```markdown
 # HEARTBEAT.md
+
 - Check Codex status across all projects
 - Report any stuck or erroring sessions
 ```
@@ -208,12 +209,12 @@ Use OpenClaw heartbeats to periodically check project status and report:
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Symptom                       | Cause                       | Fix                                          |
+| ----------------------------- | --------------------------- | -------------------------------------------- |
 | Codex not responding to nudge | TUI stalled or process dead | Check `codex-status.sh`, restart if `absent` |
-| Queue task stuck in-progress | Codex crashed mid-task | Watchdog auto-recovers after 1 hour timeout |
-| Too many nudges, no commits | Stuck in review-fix loop | Backoff kicks in after 5 attempts |
-| Discord notifications missing | Channel mapping wrong | Check `config.yaml` channel IDs |
+| Queue task stuck in-progress  | Codex crashed mid-task      | Watchdog auto-recovers after 1 hour timeout  |
+| Too many nudges, no commits   | Stuck in review-fix loop    | Backoff kicks in after 5 attempts            |
+| Discord notifications missing | Channel mapping wrong       | Check `config.yaml` channel IDs              |
 
 ## Resources
 
