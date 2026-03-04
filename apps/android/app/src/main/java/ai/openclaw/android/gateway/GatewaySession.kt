@@ -138,13 +138,10 @@ class GatewaySession(
 
   suspend fun sendNodeEvent(event: String, payloadJson: String?): Boolean {
     val conn = currentConnection ?: return false
-    val parsedPayload = payloadJson?.let { parseJsonOrNull(it) }
     val params =
       buildJsonObject {
         put("event", JsonPrimitive(event))
-        if (parsedPayload != null) {
-          put("payload", parsedPayload)
-        } else if (payloadJson != null) {
+        if (payloadJson != null) {
           put("payloadJSON", JsonPrimitive(payloadJson))
         } else {
           put("payloadJSON", JsonNull)

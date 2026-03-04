@@ -885,7 +885,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
     item {
       ListItem(
-        modifier = settingsRowModifier(),
+        modifier = Modifier.settingsRowModifier(),
         colors = listItemColors,
         headlineContent = { Text("Background battery history", style = mobileHeadline) },
         supportingContent = { Text("Collect battery level in background for local history.", style = mobileCallout) },
@@ -899,7 +899,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
     item {
       ListItem(
-        modifier = settingsRowModifier(),
+        modifier = Modifier.settingsRowModifier(),
         colors = listItemColors,
         headlineContent = { Text("Background location history", style = mobileHeadline) },
         supportingContent = { Text("Collect location history in background (requires Location: Always).", style = mobileCallout) },
@@ -913,7 +913,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
     item {
       ListItem(
-        modifier = settingsRowModifier(),
+        modifier = Modifier.settingsRowModifier(),
         colors = listItemColors,
         headlineContent = { Text("Sync telemetry to gateway", style = mobileHeadline) },
         supportingContent = { Text("If disabled, telemetry stays local on device.", style = mobileCallout) },
@@ -926,7 +926,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
       item {
-        Column(modifier = settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Column(modifier = Modifier.settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -968,7 +968,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
       item {
-        Column(modifier = settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Column(modifier = Modifier.settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
