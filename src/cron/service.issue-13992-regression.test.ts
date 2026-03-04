@@ -24,7 +24,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     };
   }
 
-  it("should NOT recompute nextRunAtMs for past-due jobs during maintenance", () => {
+  it("should recompute nextRunAtMs for past-due jobs during maintenance", () => {
     const now = Date.now();
     const pastDue = now - 60_000; // 1 minute ago
 
@@ -38,15 +38,15 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
-        nextRunAtMs: pastDue, // This is in the past and should NOT be recomputed
+        nextRunAtMs: pastDue,
       },
     };
 
     const state = createMockState([job]);
     recomputeNextRunsForMaintenance(state);
 
-    // Should not have changed the past-due nextRunAtMs
-    expect(job.state.nextRunAtMs).toBe(pastDue);
+    expect(typeof job.state.nextRunAtMs).toBe("number");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
   it("should compute missing nextRunAtMs during maintenance", () => {
