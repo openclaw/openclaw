@@ -541,6 +541,27 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
+  it("keeps tool typing available for media-only replies in message mode", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined, ["https://example.com/image.png"]);
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+
+    (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    await signaler.signalToolStart();
+
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
   it("starts tool typing immediately in instant mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
