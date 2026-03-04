@@ -20,6 +20,16 @@ describe("resolveTelegramNativeSessionKey", () => {
         defaultSessionKey: "telegram:slash:123",
       }),
     ).toBe("telegram:commands:123");
+
+    expect(
+      resolveTelegramNativeSessionKey({
+        prompt: "/status",
+        senderId: "123",
+        chatId: -100987654321,
+        defaultSessionKey: "telegram:slash:123",
+        useChatScopedCommandLane: true,
+      }),
+    ).toBe("telegram:commands:-100987654321");
   });
 
   it("keeps other slash commands on the default slash lane", () => {

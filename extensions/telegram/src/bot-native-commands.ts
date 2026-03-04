@@ -89,8 +89,11 @@ export function resolveTelegramNativeSessionKey(params: {
   senderId?: string;
   chatId: string | number;
   defaultSessionKey: string;
+  useChatScopedCommandLane?: boolean;
 }): string {
-  const identity = params.senderId || String(params.chatId);
+  const identity = params.useChatScopedCommandLane
+    ? String(params.chatId)
+    : (params.senderId ?? String(params.chatId));
   if (STRICT_CONTROL_COMMAND_WORD_RE.test(params.prompt.trim())) {
     return `telegram:commands:${identity}`;
   }
@@ -769,6 +772,7 @@ export const registerTelegramNativeCommands = ({
               senderId,
               chatId,
               defaultSessionKey: commandSessionKey,
+              useChatScopedCommandLane: isGroup,
             }),
             AccountId: route.accountId,
             CommandTargetSessionKey: commandTargetSessionKey,
