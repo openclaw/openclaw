@@ -34,7 +34,7 @@ DONE                       → (default) session goes inert until external event
 2. If `CONTINUE_WORK` is detected (with optional delay):
    - Strip the token from the displayed response (like `NO_REPLY`)
    - Schedule an internal "continuation" event for the session after `delay` ms
-   - The continuation event delivers a system message: `[continuation] Turn N/M. You elected to continue. Resume your work.`
+   - The continuation event delivers a system message: `[continuation:wake] Turn N/M. You elected to continue. Resume your work.`
 3. If `[[CONTINUE_DELEGATE: <task>]]` is detected:
    - Strip the token
    - Spawn a sub-agent with the specified task
@@ -110,7 +110,7 @@ Safety enforcement happens at the scheduling layer: chain length, cost cap, and 
 
 ### Test Coverage
 
-77 tests covering:
+88 tests covering:
 
 - Token parsing and stripping (50 tests in `src/auto-reply/tokens.test.ts`)
 - Gateway integration: continuation scheduling, timer cancellation, delay capping, streaming false-positive prevention (27 tests in `agent-runner.misc.runreplyagent.test.ts`)
@@ -237,7 +237,7 @@ These are not hypothetical. We run 4 agents in persistent Discord sessions. Thes
 
 - [x] Design review
 - [x] Implementation (gateway hook wired)
-- [x] Tests (77 passing — 50 unit + 27 integration, covering parsing, scheduling, cancellation, delegation, edge cases)
+- [x] Tests (88 passing — 50 unit + 38 integration, covering parsing, scheduling, cancellation, delegation, edge cases)
 - [x] Token parsing: `parseContinuationSignal()`, `stripContinuationSignal()` in `src/auto-reply/tokens.ts`
 - [x] Gateway hook: signal detection in `agent-runner.ts`, scheduling via `session-updates.ts`
 - [x] Chain tracking: session metadata for chain count and cost

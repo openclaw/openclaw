@@ -25,7 +25,7 @@ DONE                       → (default) session goes inert until external event
 2. If `CONTINUE_WORK` is detected (with optional delay):
    - Strip the token from the displayed response (like `NO_REPLY`)
    - Schedule an internal "continuation" event for the session after `delay` ms
-   - The continuation event delivers a system message like: `[continuation] You elected to continue. Resume your work.`
+   - The continuation event delivers a system message like: `[continuation:wake] Turn N/M. You elected to continue. Resume your work.`
 3. If `[[CONTINUE_DELEGATE: <task>]]` is detected:
    - Strip the token
    - Spawn a sub-agent with the specified task
@@ -37,7 +37,7 @@ DONE                       → (default) session goes inert until external event
 - **Max continuation chain**: configurable limit (default: 10) to prevent runaway loops
 - **Cost cap**: optional per-session token budget for self-elected turns
 - **Interruptibility**: external events (direct mentions, operator messages) always preempt scheduled continuations
-- **Cooldown**: minimum delay between continuations (default: 10s) to prevent tight loops
+- **Cooldown**: minimum delay between continuations (default: 5s) to prevent tight loops
 - **Observability**: continuation chains logged in session history; operator can view/kill active chains
 - **Opt-in**: disabled by default; enabled via `agents.defaults.continuation.enabled: true`
 
@@ -67,7 +67,7 @@ agents:
 ### Where to Hook
 
 1. **Token parsing**: `src/auto-reply/tokens.ts` — add `CONTINUE_WORK_TOKEN` alongside existing tokens
-2. **Detection**: `src/auto-reply/reply/streaming-directives.ts` — detect continuation signal in final output
+2. **Detection**: `src/auto-reply/reply/agent-runner.ts` — detect continuation signal in final assembled payloads (not streaming partials)
 3. **Scheduling**: `src/auto-reply/reply/get-reply-run.ts` or `src/agents/pi-embedded-runner/runs.ts` — after run completes, check for continuation and schedule next turn
 4. **Delivery**: Reuse existing session message injection (similar to heartbeat delivery)
 5. **Chain tracking**: Session metadata to track current chain length and cost
@@ -228,7 +228,7 @@ The mechanism must be volitional — "I elect to continue" — not coercive. The
 
 - [ ] Design review
 - [ ] Implementation
-- [x] Tests (token parsing — `src/auto-reply/tokens.test.ts`, 45 tests passing)
+- [x] Tests (token parsing — `src/auto-reply/tokens.test.ts`, 50 tests passing)
 - [ ] Documentation
 - [x] Upstream feature request: [openclaw/openclaw#32701](https://github.com/openclaw/openclaw/issues/32701)
 - [ ] Upstream PR to openclaw/openclaw

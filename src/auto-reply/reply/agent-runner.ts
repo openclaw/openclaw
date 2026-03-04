@@ -182,10 +182,11 @@ export async function runReplyAgent(params: {
       activeSessionEntry.continuationChainStartedAt = undefined;
       activeSessionEntry.continuationChainTokens = undefined;
     }
-    // Cancel any pending continuation timer by bumping the generation counter,
-    // then clean up the map entry (the bump already invalidated in-flight callbacks).
+    // Cancel any pending continuation timer by bumping the generation counter.
+    // Do NOT clear the map entry — clearing resets to 0, and a new chain's first
+    // bump would produce 1 which could match a stale timer's captured generation.
+    // Bump-only monotonically advances past all stale callbacks.
     bumpContinuationGeneration(sessionKey);
-    clearContinuationGeneration(sessionKey);
     if (activeSessionStore && activeSessionEntry) {
       activeSessionStore[sessionKey] = {
         ...activeSessionEntry,
