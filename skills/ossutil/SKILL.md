@@ -1,7 +1,6 @@
 ---
 name: ossutil
 description: Alibaba Cloud OSS CLI for bucket/object operations (install, config, ls/cp/sync/rm/sign).
-homepage: https://help.aliyun.com/zh/oss/developer-reference/ossutil-overview/
 metadata:
   {
     "openclaw":
@@ -15,6 +14,7 @@ metadata:
 # ossutil
 
 Use `ossutil` to manage Alibaba Cloud Object Storage Service (OSS) from the terminal.
+This skill targets the `ossutil` (v1-style) command interface.
 
 ## Install (official docs)
 
@@ -22,10 +22,10 @@ Follow the official install guide for your OS (Windows/macOS/Linux), then verify
 
 - `ossutil --version`
 
-Notes from official docs:
+Notes:
 
-- For `ossutil` 1.6.16+, binary name is directly `ossutil`.
-- Official docs recommend using `ossutil2.0` for new usage.
+- For `ossutil` 1.6.16+, binary name is `ossutil`.
+- Commands in this skill are for the `ossutil` binary/interface.
 
 ## Configure credentials
 
