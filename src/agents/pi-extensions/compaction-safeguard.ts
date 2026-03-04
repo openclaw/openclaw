@@ -426,8 +426,19 @@ function buildCompactionStructureInstructions(
 }
 
 function hasRequiredSummarySections(summary: string): boolean {
-  const normalized = summary.toLowerCase();
-  return REQUIRED_SUMMARY_SECTIONS.every((heading) => normalized.includes(heading.toLowerCase()));
+  const lines = summary
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  let cursor = 0;
+  for (const heading of REQUIRED_SUMMARY_SECTIONS) {
+    const index = lines.findIndex((line, lineIndex) => lineIndex >= cursor && line === heading);
+    if (index < 0) {
+      return false;
+    }
+    cursor = index + 1;
+  }
+  return true;
 }
 
 function buildStructuredFallbackSummary(

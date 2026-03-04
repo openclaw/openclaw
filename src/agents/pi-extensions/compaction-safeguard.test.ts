@@ -713,6 +713,28 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(buildStructuredFallbackSummary(structured)).toBe(structured);
   });
 
+  it("restructures summaries with near-match headings instead of reusing them", () => {
+    const nearMatch = [
+      "## Decisions",
+      "done",
+      "",
+      "## Open TODOs (active)",
+      "todo",
+      "",
+      "## Constraints/Rules",
+      "rules",
+      "",
+      "## Pending user asks",
+      "asks",
+      "",
+      "## Exact identifiers",
+      "ids",
+    ].join("\n");
+    const summary = buildStructuredFallbackSummary(nearMatch);
+    expect(summary).not.toBe(nearMatch);
+    expect(summary).toContain("\n## Open TODOs\n");
+  });
+
   it("uses policy-off marker in fallback exact identifiers section", () => {
     const summary = buildStructuredFallbackSummary(undefined, {
       identifierPolicy: "off",
