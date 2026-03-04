@@ -203,6 +203,42 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 }
 
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const dt = e.dataTransfer;
+  if (!dt || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const files = Array.from(dt.files).filter((file) => file.type.startsWith("image/"));
+
+  if (files.length === 0) {
+    return;
+  }
+
+  for (const file of files) {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, newAttachment]);
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
 function renderAttachmentPreview(props: ChatProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
@@ -420,7 +456,11 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div 
+        class="chat-compose"
+        @dragover=${(e: DragEvent) => handleDragOver(e)}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
