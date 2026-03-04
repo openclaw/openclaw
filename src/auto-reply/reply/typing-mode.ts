@@ -95,10 +95,22 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
+    const trimmed = text?.trim();
+    const isThinkingContent = !trimmed; // Empty or whitespace-only text is likely thinking block
     const renderable = isRenderableText(text);
     if (renderable) {
       hasRenderableText = true;
     } else if (text?.trim()) {
+      // For thinking mode: don't treat reasoning/thinking content as renderable text
+      // This prevents typing on runs that end up as NO_REPLY
+      if (shouldStartOnReasoning && !hasRenderableText) {
+        // In thinking mode, only start typing if we've already seen renderable text
+        return;
+      }
+      return;
+    }
+    // Skip typing on thinking blocks in thinking mode until we have actual renderable content
+    if (shouldStartOnReasoning && isThinkingContent && !hasRenderableText) {
       return;
     }
     if (shouldStartOnText) {
@@ -117,6 +129,8 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
+    // Don't start typing if we haven't seen any renderable text yet
+    // This prevents typing on thinking runs that end up as NO_REPLY
     if (!hasRenderableText) {
       return;
     }
