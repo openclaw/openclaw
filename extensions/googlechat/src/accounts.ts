@@ -3,8 +3,8 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { isSecretRef } from "openclaw/plugin-sdk/compat";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import { isSecretRef } from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
