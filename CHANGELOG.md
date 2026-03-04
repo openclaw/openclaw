@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/session usage tracking: preserve accumulated usage metadata on embedded Pi runner error exits so failed turns still update session `totalTokens` from real usage instead of stale prior values. (#34275) thanks @RealKai42.
 - Nodes/system.run approval hardening: use explicit argv-mutation signaling when regenerating prepared `rawCommand`, and cover the `system.run.prepare -> system.run` handoff so direct PATH-based `nodes.run` commands no longer fail with `rawCommand does not match command`. (#33137) thanks @Sid-Qin.
 - Models/custom provider headers: propagate `models.providers.<name>.headers` across inline, fallback, and registry-found model resolution so header-authenticated proxies consistently receive configured request headers. (#27490) thanks @Sid-Qin.
 - Ollama/custom provider headers: forward resolved model headers into native Ollama stream requests so header-authenticated Ollama proxies receive configured request headers. (#24337) thanks @echoVic.
@@ -84,6 +85,7 @@ Docs: https://docs.openclaw.ai
 - Agents/bootstrap truncation warning handling: unify bootstrap budget/truncation analysis across embedded + CLI runtime, `/context`, and `openclaw doctor`; add `agents.defaults.bootstrapPromptTruncationWarning` (`off|once|always`, default `once`) and persist warning-signature metadata so truncation warnings are consistent and deduped across turns. (#32769) Thanks @gumadeiras.
 - Agents/Skills runtime loading: propagate run config into embedded attempt and compaction skill-entry loading so explicitly enabled bundled companion skills are discovered consistently when skill snapshots do not already provide resolved entries. Thanks @gumadeiras.
 - Agents/Session startup date grounding: substitute `YYYY-MM-DD` placeholders in startup/post-compaction AGENTS context and append runtime current-time lines for `/new` and `/reset` prompts so daily-memory references resolve correctly. (#32381) Thanks @chengzhichao-xydt.
+- Agents/Compaction template heading alignment: update AGENTS template section names to `Session Startup`/`Red Lines` and keep legacy `Every Session`/`Safety` fallback extraction so post-compaction context remains intact across template versions. (#25098) thanks @echoVic.
 - Agents/Compaction continuity: expand staged-summary merge instructions to preserve active task status, batch progress, latest user request, and follow-up commitments so compaction handoffs retain in-flight work context. (#8903) thanks @joetomasone.
 - Agents/Compaction safeguard structure hardening: require exact fallback summary headings, sanitize untrusted compaction instruction text before prompt embedding, and keep structured sections when preserving all turns. (#25555) thanks @rodrigouroz.
 - Gateway/status self version reporting: make Gateway self version in `openclaw status` prefer runtime `VERSION` (while preserving explicit `OPENCLAW_VERSION` override), preventing stale post-upgrade app version output. (#32655) thanks @liuxiaopai-ai.
