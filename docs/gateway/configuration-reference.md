@@ -216,7 +216,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
-- `channels.telegram.groups.<chatId>.topics.<threadId>.bindings.acp` configures persistent ACP bindings for forum topics (`enabled`, `agentId`, `mode`, `cwd`, `backend`, `label`).
+- `channels.telegram.groups.<chatId>.topics.<threadId>.bindings.acp` configures persistent ACP bindings for forum topics. Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
@@ -324,7 +324,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
-- `channels.discord.guilds.<guildId>.channels.<channelId>.bindings.acp` configures persistent ACP bindings for channels (`enabled`, `agentId`, `mode`, `cwd`, `backend`, `label`).
+- `channels.discord.guilds.<guildId>.channels.<channelId>.bindings.acp` configures persistent ACP bindings for channels. Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).

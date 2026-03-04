@@ -1,0 +1,176 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { logVerbose } from "../globals.js";
+import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
+import { getAcpSessionManager } from "./control-plane/manager.js";
+import {
+  buildConfiguredAcpSessionKey,
+  normalizeText,
+  type ConfiguredAcpBindingSpec,
+} from "./persistent-bindings.types.js";
+import { readAcpSessionEntry } from "./runtime/session-meta.js";
+
+function sessionMatchesConfiguredBinding(params: {
+  cfg: OpenClawConfig;
+  spec: ConfiguredAcpBindingSpec;
+  meta: SessionAcpMeta;
+}): boolean {
+  const desiredAgent = params.spec.agentId.trim().toLowerCase();
+  const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
+  if (!currentAgent || currentAgent !== desiredAgent) {
+    return false;
+  }
+
+  if (params.meta.mode !== params.spec.mode) {
+    return false;
+  }
+
+  const desiredBackend = params.spec.backend?.trim() || params.cfg.acp?.backend?.trim() || "";
+  if (desiredBackend) {
+    const currentBackend = (params.meta.backend ?? "").trim();
+    if (!currentBackend || currentBackend !== desiredBackend) {
+      return false;
+    }
+  }
+
+  const desiredCwd = params.spec.cwd?.trim();
+  if (desiredCwd !== undefined) {
+    const currentCwd = (params.meta.runtimeOptions?.cwd ?? params.meta.cwd ?? "").trim();
+    if (desiredCwd !== currentCwd) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export async function ensureConfiguredAcpBindingSession(params: {
+  cfg: OpenClawConfig;
+  spec: ConfiguredAcpBindingSpec;
+}): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
+  const sessionKey = buildConfiguredAcpSessionKey(params.spec);
+  const acpManager = getAcpSessionManager();
+  try {
+    const resolution = acpManager.resolveSession({
+      cfg: params.cfg,
+      sessionKey,
+    });
+    if (
+      resolution.kind === "ready" &&
+      sessionMatchesConfiguredBinding({
+        cfg: params.cfg,
+        spec: params.spec,
+        meta: resolution.meta,
+      })
+    ) {
+      return {
+        ok: true,
+        sessionKey,
+      };
+    }
+
+    if (resolution.kind !== "none") {
+      await acpManager.closeSession({
+        cfg: params.cfg,
+        sessionKey,
+        reason: "config-binding-reconfigure",
+        clearMeta: true,
+        allowBackendUnavailable: true,
+        requireAcpSession: false,
+      });
+    }
+
+    await acpManager.initializeSession({
+      cfg: params.cfg,
+      sessionKey,
+      agent: params.spec.agentId,
+      mode: params.spec.mode,
+      cwd: params.spec.cwd,
+      backendId: params.spec.backend,
+    });
+
+    return {
+      ok: true,
+      sessionKey,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logVerbose(
+      `acp-persistent-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
+    );
+    return {
+      ok: false,
+      sessionKey,
+      error: message,
+    };
+  }
+}
+
+export async function resetAcpSessionInPlace(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  reason: "new" | "reset";
+}): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return {
+      ok: false,
+      skipped: true,
+    };
+  }
+
+  const meta = readAcpSessionEntry({
+    cfg: params.cfg,
+    sessionKey,
+  })?.acp;
+  if (!meta) {
+    return {
+      ok: false,
+      skipped: true,
+    };
+  }
+
+  const acpManager = getAcpSessionManager();
+  const agent = pickFirstExistingAgentId(params.cfg, meta.agent || "main");
+  const mode = meta.mode === "oneshot" ? "oneshot" : "persistent";
+  const runtimeOptions = { ...meta.runtimeOptions };
+  const cwd = normalizeText(runtimeOptions.cwd ?? meta.cwd);
+
+  try {
+    await acpManager.closeSession({
+      cfg: params.cfg,
+      sessionKey,
+      reason: `${params.reason}-in-place-reset`,
+      clearMeta: true,
+      allowBackendUnavailable: true,
+      requireAcpSession: false,
+    });
+
+    await acpManager.initializeSession({
+      cfg: params.cfg,
+      sessionKey,
+      agent,
+      mode,
+      cwd,
+      backendId: normalizeText(meta.backend) ?? normalizeText(params.cfg.acp?.backend),
+    });
+
+    const runtimeOptionsPatch = Object.fromEntries(
+      Object.entries(runtimeOptions).filter(([, value]) => value !== undefined),
+    ) as SessionAcpMeta["runtimeOptions"];
+    if (runtimeOptionsPatch && Object.keys(runtimeOptionsPatch).length > 0) {
+      await acpManager.updateSessionRuntimeOptions({
+        cfg: params.cfg,
+        sessionKey,
+        patch: runtimeOptionsPatch,
+      });
+    }
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logVerbose(`acp-persistent-binding: failed reset for ${sessionKey}: ${message}`);
+    return {
+      ok: false,
+      error: message,
+    };
+  }
+}

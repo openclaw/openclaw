@@ -813,11 +813,7 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
   - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.enabled`: enable a persistent ACP topic binding.
-  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.agentId`: ACP harness alias for this topic (for example `codex`, `claude`).
-  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.mode`: `persistent | oneshot` (default `persistent`).
-  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.cwd`: optional ACP working directory for this topic.
-  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.backend`: optional ACP backend override for this topic.
+  - `channels.telegram.groups.<id>.topics.<threadId>.bindings.acp.*`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
   - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.

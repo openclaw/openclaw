@@ -1,3 +1,7 @@
+import {
+  buildTelegramTopicConversationId,
+  parseTelegramChatIdFromTarget,
+} from "../../../acp/conversation-id.js";
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -39,7 +43,13 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
     const threadId = resolveAcpCommandThreadId(params);
     const parentConversationId = resolveAcpCommandParentConversationId(params);
     if (threadId && parentConversationId) {
-      return `${parentConversationId}:topic:${threadId}`;
+      const canonical = buildTelegramTopicConversationId({
+        chatId: parentConversationId,
+        topicId: threadId,
+      });
+      if (canonical) {
+        return canonical;
+      }
     }
     if (threadId) {
       return threadId;
@@ -49,18 +59,6 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
     threadId: params.ctx.MessageThreadId,
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
-}
-
-function parseTelegramChatIdFromTarget(raw: unknown): string | undefined {
-  const text = normalizeString(raw);
-  if (!text) {
-    return undefined;
-  }
-  const match = text.match(/^telegram:(-?\d+)$/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return match[1];
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
