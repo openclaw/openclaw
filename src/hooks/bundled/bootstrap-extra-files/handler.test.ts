@@ -94,7 +94,6 @@ describe("bootstrap-extra-files hook", () => {
     await handler(event);
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
       "AGENTS.md",
-      "SOUL.md",
       "TOOLS.md",
     ]);
   });
