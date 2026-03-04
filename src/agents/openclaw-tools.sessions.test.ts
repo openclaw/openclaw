@@ -92,6 +92,8 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
     expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "sandbox").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "streamTo").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runtime").type).toBe("string");
     expect(schemaProp("sessions_spawn", "cwd").type).toBe("string");
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
@@ -873,6 +875,59 @@ describe("sessions tools", () => {
     expect(details.recent).toHaveLength(1);
     expect(details.text).toContain("active subagents:");
     expect(details.text).toContain("recent (last 30m):");
+  });
+
+  it("subagents list keeps ended orchestrators active while descendants are pending", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-orchestrator-ended",
+      childSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 5 * 60_000,
+      startedAt: now - 5 * 60_000,
+      endedAt: now - 4 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-orchestrator-child-active",
+      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
+      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
+      requesterDisplayKey: "subagent:orchestrator-ended",
+      task: "child worker still running",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-orchestrator", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{ runId?: string; status?: string }>;
+      recent?: Array<{ runId?: string }>;
+    };
+
+    expect(details.status).toBe("ok");
+    expect(details.active).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-orchestrator-ended",
+          status: "active",
+        }),
+      ]),
+    );
+    expect(details.recent?.find((entry) => entry.runId === "run-orchestrator-ended")).toBeFalsy();
   });
 
   it("subagents list usage separates io tokens from prompt/cache", async () => {

@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a non-regression defect or unexpected behavior in OpenClaw.
+description: Report defects, including regressions, crashes, and behavior bugs.
 title: "[Bug]: "
 labels:
   - bug
@@ -8,7 +8,17 @@ body:
     attributes:
       value: |
         Thanks for filing this report. Keep it concise, reproducible, and evidence-based.
-        If this behavior worked previously and now fails, use the "Regression bug report" template instead.
+  - type: dropdown
+    id: bug_type
+    attributes:
+      label: Bug type
+      description: Choose the category that best matches this report.
+      options:
+        - Regression (worked before, now fails)
+        - Crash (process/app exits or hangs)
+        - Behavior bug (incorrect output/state without crash)
+    validations:
+      required: true
   - type: textarea
     id: summary
     attributes:
@@ -92,5 +102,5 @@ body:
     id: additional_information
     attributes:
       label: Additional information
-      description: Add any context that helps triage but does not fit above.
-      placeholder: Regression started after upgrade from <previous-version>; temporary workaround is ...
+      description: Add any context that helps triage but does not fit above. If this is a regression, include the last known good and first known bad versions.
+      placeholder: Last known good version <...>, first known bad version <...>, temporary workaround is ...

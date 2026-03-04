@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
@@ -10,6 +10,15 @@ type AccountAwareParams = { accountId?: string };
 function normalizeOptionalAccountId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
+  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
+    ?.defaultAccount;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeOptionalAccountId(value);
 }
 
 export function resolveFeishuToolAccount(params: {
@@ -24,6 +33,7 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
+      readConfiguredDefaultAccountId(params.api.config) ??
       normalizeOptionalAccountId(params.defaultAccountId),
   });
 }
