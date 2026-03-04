@@ -82,6 +82,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalRunIds?.();
   };
 
+  const resetRunTracking = () => {
+    finalizedRuns.clear();
+    sessionRuns.clear();
+    streamAssembler = new TuiStreamAssembler();
+    state.activeChatRunId = null;
+    clearLocalRunIds?.();
+  };
+
   const noteSessionRun = (runId: string) => {
     sessionRuns.set(runId, Date.now());
     pruneRunMap(sessionRuns);
@@ -298,5 +306,5 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  return { handleChatEvent, handleAgentEvent };
+  return { handleChatEvent, handleAgentEvent, resetRunTracking };
 }
