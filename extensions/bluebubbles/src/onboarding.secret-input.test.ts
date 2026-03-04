@@ -1,4 +1,4 @@
-import type { WizardPrompter } from "openclaw/plugin-sdk";
+import type { WizardPrompter } from "openclaw/plugin-sdk/compat";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk", () => ({
