@@ -277,6 +277,9 @@ async function tryYouContentsFallback(params: {
       timeoutSeconds: params.youTimeoutSeconds,
     });
     const text = params.extractMode === "text" ? markdownToText(result.text) : result.text;
+    if (!text) {
+      return null;
+    }
     return { text, title: result.title };
   } catch {
     return null;
@@ -733,12 +736,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
               title = firecrawl.title;
               extractor = "firecrawl";
             } else {
+              const tried = ["Readability"];
+              if (params.youEnabled) {
+                tried.push("You.com Contents");
+              }
+              if (params.firecrawlEnabled) {
+                tried.push("Firecrawl");
+              }
               throw new Error(
-                "Web fetch extraction failed: Readability returned no content" +
-                  (params.youEnabled ? ", You.com Contents" : "") +
-                  (params.firecrawlEnabled ? ", and Firecrawl" : "") +
-                  " returned no usable content.",
+                `Web fetch extraction failed: ${tried.join(", ")} returned no content.`,
               );
+            }
           }
         }
       } else {

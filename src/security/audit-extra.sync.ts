@@ -326,22 +326,13 @@ function resolveToolPolicies(params: {
   return policies;
 }
 
-function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey || search?.perplexity?.apiKey || env.BRAVE_API_KEY || env.PERPLEXITY_API_KEY,
-  );
-}
-
-function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+function isWebSearchEnabled(cfg: OpenClawConfig): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
     return false;
   }
-  if (enabled === true) {
-    return true;
-  }
-  return hasWebSearchKey(cfg, env);
+  // You.com free tier works without any API key, so web_search is always available
+  return true;
 }
 
 function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
@@ -350,6 +341,18 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
     return false;
   }
   return true;
+}
+
+function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  const enabled = cfg.tools?.web?.research?.enabled;
+  if (enabled === false) {
+    return false;
+  }
+  if (enabled === true) {
+    return true;
+  }
+  const apiKey = cfg.tools?.web?.research?.apiKey || env.YDC_API_KEY;
+  return Boolean(apiKey);
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -1223,7 +1226,7 @@ export function collectSmallModelRiskFindings(params: {
       agentId,
     });
     const exposed: string[] = [];
-    if (isWebSearchEnabled(params.cfg, params.env)) {
+    if (isWebSearchEnabled(params.cfg)) {
       if (isToolAllowedByPolicies("web_search", policies)) {
         exposed.push("web_search");
       }
@@ -1231,6 +1234,11 @@ export function collectSmallModelRiskFindings(params: {
     if (isWebFetchEnabled(params.cfg)) {
       if (isToolAllowedByPolicies("web_fetch", policies)) {
         exposed.push("web_fetch");
+      }
+    }
+    if (isWebResearchEnabled(params.cfg, params.env)) {
+      if (isToolAllowedByPolicies("web_research", policies)) {
+        exposed.push("web_research");
       }
     }
     if (isBrowserEnabled(params.cfg)) {
@@ -1271,7 +1279,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/web_research/browser (tools.deny=["group:web","browser"]).',
   });
 
   return findings;

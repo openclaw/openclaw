@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("you"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -308,6 +309,12 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    you: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -321,6 +328,27 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    you: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+export const ToolsWebResearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
+    defaultEffort: z
+      .union([z.literal("lite"), z.literal("standard"), z.literal("deep"), z.literal("exhaustive")])
+      .optional(),
   })
   .strict()
   .optional();
@@ -329,6 +357,7 @@ export const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
+    research: ToolsWebResearchSchema,
   })
   .strict()
   .optional();

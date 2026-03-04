@@ -1231,9 +1231,10 @@ async function runYouSearch(params: {
   if (params.country) {
     url.searchParams.set("country", params.country);
   }
-  // freshness already normalized to day/week/month/year by normalizeFreshness()
+  // freshness already normalized to day/week/month/year by normalizeFreshness();
+  // You.com API uses "recency" as the query parameter name
   if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
+    url.searchParams.set("recency", params.freshness);
   }
 
   const headers: Record<string, string> = {
