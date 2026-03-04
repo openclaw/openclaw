@@ -6,9 +6,11 @@
  */
 
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
+import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -23,6 +25,162 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   type: "agent";
   action: "bootstrap";
   context: AgentBootstrapHookContext;
+};
+
+export type GatewayStartupHookContext = {
+  cfg?: OpenClawConfig;
+  deps?: CliDeps;
+  workspaceDir?: string;
+};
+
+export type GatewayStartupHookEvent = InternalHookEvent & {
+  type: "gateway";
+  action: "startup";
+  context: GatewayStartupHookContext;
+};
+
+// ============================================================================
+// Message Hook Events
+// ============================================================================
+
+export type MessageReceivedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from: string;
+  /** Message content */
+  content: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Additional provider-specific metadata */
+  metadata?: Record<string, unknown>;
+};
+
+export type MessageReceivedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "received";
+  context: MessageReceivedHookContext;
+};
+
+export type MessageSentHookContext = {
+  /** Recipient identifier */
+  to: string;
+  /** Message content */
+  content: string;
+  /** Whether the message was sent successfully */
+  success: boolean;
+  /** Error message if sending failed */
+  error?: string;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID returned by the provider */
+  messageId?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+};
+
+export type MessageSentHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "sent";
+  context: MessageSentHookContext;
+};
+
+export type MessageTranscribedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body (e.g., "🎤 [Audio]") */
+  body?: string;
+  /** Enriched body shown to the agent, including transcript */
+  bodyForAgent?: string;
+  /** The transcribed text from audio */
+  transcript: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file that was transcribed */
+  mediaPath?: string;
+  /** MIME type of the media */
+  mediaType?: string;
+};
+
+export type MessageTranscribedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "transcribed";
+  context: MessageTranscribedHookContext;
+};
+
+export type MessagePreprocessedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body */
+  body?: string;
+  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
+  bodyForAgent?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file, if present */
+  mediaPath?: string;
+  /** MIME type of the media, if present */
+  mediaType?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+};
+
+export type MessagePreprocessedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "preprocessed";
+  context: MessagePreprocessedHookContext;
 };
 
 export interface InternalHookEvent {
@@ -42,8 +200,24 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Uses a globalThis singleton so that registerInternalHook and
+ * triggerInternalHook always share the same Map even when the bundler
+ * emits multiple copies of this module into separate chunks (bundle
+ * splitting). Without the singleton, handlers registered in one chunk
+ * are invisible to triggerInternalHook in another chunk, causing hooks
+ * to silently fire with zero handlers.
+ */
+const _g = globalThis as typeof globalThis & {
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+};
+const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
+const log = createSubsystemLogger("internal-hooks");
 
 /**
  * Register a hook handler for a specific event type or event:action combination
@@ -134,10 +308,8 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     try {
       await handler(event);
     } catch (err) {
-      console.error(
-        `Hook error [${event.type}:${event.action}]:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
     }
   }
 }
@@ -166,16 +338,111 @@ export function createInternalHookEvent(
   };
 }
 
-export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
-  if (event.type !== "agent" || event.action !== "bootstrap") {
-    return false;
-  }
-  const context = event.context as Partial<AgentBootstrapHookContext> | null;
+function isHookEventTypeAndAction(
+  event: InternalHookEvent,
+  type: InternalHookEventType,
+  action: string,
+): boolean {
+  return event.type === type && event.action === action;
+}
+
+function getHookContext<T extends Record<string, unknown>>(
+  event: InternalHookEvent,
+): Partial<T> | null {
+  const context = event.context as Partial<T> | null;
   if (!context || typeof context !== "object") {
+    return null;
+  }
+  return context;
+}
+
+function hasStringContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "string";
+}
+
+function hasBooleanContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "boolean";
+}
+
+export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
   }
-  if (typeof context.workspaceDir !== "string") {
+  const context = getHookContext<AgentBootstrapHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  if (!hasStringContextField(context, "workspaceDir")) {
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
+}
+
+export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
+  if (!isHookEventTypeAndAction(event, "gateway", "startup")) {
+    return false;
+  }
+  return Boolean(getHookContext<GatewayStartupHookContext>(event));
+}
+
+export function isMessageReceivedEvent(
+  event: InternalHookEvent,
+): event is MessageReceivedHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "received")) {
+    return false;
+  }
+  const context = getHookContext<MessageReceivedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
+}
+
+export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "sent")) {
+    return false;
+  }
+  const context = getHookContext<MessageSentHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "to") &&
+    hasStringContextField(context, "channelId") &&
+    hasBooleanContextField(context, "success")
+  );
+}
+
+export function isMessageTranscribedEvent(
+  event: InternalHookEvent,
+): event is MessageTranscribedHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "transcribed")) {
+    return false;
+  }
+  const context = getHookContext<MessageTranscribedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
+  );
+}
+
+export function isMessagePreprocessedEvent(
+  event: InternalHookEvent,
+): event is MessagePreprocessedHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "preprocessed")) {
+    return false;
+  }
+  const context = getHookContext<MessagePreprocessedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "channelId");
 }

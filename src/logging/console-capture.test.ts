@@ -10,27 +10,16 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { loggingState } from "./state.js";
-
-type ConsoleSnapshot = {
-  log: typeof console.log;
-  info: typeof console.info;
-  warn: typeof console.warn;
-  error: typeof console.error;
-  debug: typeof console.debug;
-  trace: typeof console.trace;
-};
+import {
+  captureConsoleSnapshot,
+  type ConsoleSnapshot,
+  restoreConsoleSnapshot,
+} from "./test-helpers/console-snapshot.js";
 
 let snapshot: ConsoleSnapshot;
 
 beforeEach(() => {
-  snapshot = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    trace: console.trace,
-  };
+  snapshot = captureConsoleSnapshot();
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -39,12 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  console.log = snapshot.log;
-  console.info = snapshot.info;
-  console.warn = snapshot.warn;
-  console.error = snapshot.error;
-  console.debug = snapshot.debug;
-  console.trace = snapshot.trace;
+  restoreConsoleSnapshot(snapshot);
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -86,7 +70,10 @@ describe("enableConsoleCapture", () => {
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
     const firstArg = String(warn.mock.calls[0]?.[0] ?? "");
-    expect(firstArg.startsWith("2026-01-17T18:01:02.000Z [EventQueue]")).toBe(true);
+    // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
+    expect(firstArg).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
+    );
     vi.useRealTimers();
   });
 
@@ -120,6 +107,25 @@ describe("enableConsoleCapture", () => {
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
     expect(log).toHaveBeenCalledWith(payload);
+  });
+
+  it.each([
+    { name: "stdout", stream: process.stdout },
+    { name: "stderr", stream: process.stderr },
+  ])("swallows async EPIPE on $name", ({ stream }) => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    enableConsoleCapture();
+    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+    epipe.code = "EPIPE";
+    expect(() => stream.emit("error", epipe)).not.toThrow();
+  });
+
+  it("rethrows non-EPIPE errors on stdout", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    enableConsoleCapture();
+    const other = new Error("EACCES") as NodeJS.ErrnoException;
+    other.code = "EACCES";
+    expect(() => process.stdout.emit("error", other)).toThrow("EACCES");
   });
 });
 

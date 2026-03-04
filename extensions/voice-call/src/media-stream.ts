@@ -21,6 +21,14 @@ import type {
 export interface MediaStreamConfig {
   /** STT provider for transcription */
   sttProvider: OpenAIRealtimeSTTProvider;
+  /** Close sockets that never send a valid `start` frame within this window. */
+  preStartTimeoutMs?: number;
+  /** Max concurrent pre-start sockets. */
+  maxPendingConnections?: number;
+  /** Max concurrent pre-start sockets from a single source IP. */
+  maxPendingConnectionsPerIp?: number;
+  /** Max total open sockets (pending + active sessions). */
+  maxConnections?: number;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
@@ -52,6 +60,16 @@ type TtsQueueEntry = {
   reject: (error: unknown) => void;
 };
 
+type PendingConnection = {
+  ip: string;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+const DEFAULT_PRE_START_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_PENDING_CONNECTIONS = 32;
+const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
+const DEFAULT_MAX_CONNECTIONS = 128;
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -59,6 +77,14 @@ export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
   private config: MediaStreamConfig;
+  /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
+  private pendingConnections = new Map<WebSocket, PendingConnection>();
+  /** Pending socket count per remote IP for pre-auth throttling. */
+  private pendingByIp = new Map<string, number>();
+  private preStartTimeoutMs: number;
+  private maxPendingConnections: number;
+  private maxPendingConnectionsPerIp: number;
+  private maxConnections: number;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
   /** Whether TTS is currently playing per stream */
@@ -68,6 +94,11 @@ export class MediaStreamHandler {
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
+    this.preStartTimeoutMs = config.preStartTimeoutMs ?? DEFAULT_PRE_START_TIMEOUT_MS;
+    this.maxPendingConnections = config.maxPendingConnections ?? DEFAULT_MAX_PENDING_CONNECTIONS;
+    this.maxPendingConnectionsPerIp =
+      config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;
+    this.maxConnections = config.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
   }
 
   /**
@@ -77,6 +108,12 @@ export class MediaStreamHandler {
     if (!this.wss) {
       this.wss = new WebSocketServer({ noServer: true });
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+    }
+
+    const currentConnections = this.wss.clients.size;
+    if (currentConnections >= this.maxConnections) {
+      this.rejectUpgrade(socket, 503, "Too many media stream connections");
+      return;
     }
 
     this.wss.handleUpgrade(request, socket, head, (ws) => {
@@ -90,6 +127,12 @@ export class MediaStreamHandler {
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
     const streamToken = this.getStreamToken(_request);
+    const ip = this.getClientIp(_request);
+
+    if (!this.registerPendingConnection(ws, ip)) {
+      ws.close(1013, "Too many pending media stream connections");
+      return;
+    }
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -102,6 +145,9 @@ export class MediaStreamHandler {
 
           case "start":
             session = await this.handleStart(ws, message, streamToken);
+            if (session) {
+              this.clearPendingConnection(ws);
+            }
             break;
 
           case "media":
@@ -125,6 +171,7 @@ export class MediaStreamHandler {
     });
 
     ws.on("close", () => {
+      this.clearPendingConnection(ws);
       if (session) {
         this.handleStop(session);
       }
@@ -146,6 +193,11 @@ export class MediaStreamHandler {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
+    // Prefer token from start message customParameters (set via TwiML <Parameter>),
+    // falling back to query string token. Twilio strips query params from WebSocket
+    // URLs but reliably delivers <Parameter> values in customParameters.
+    const effectiveToken = message.start?.customParameters?.token ?? streamToken;
+
     console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
     if (!callSid) {
       console.warn("[MediaStream] Missing callSid; closing stream");
@@ -154,7 +206,7 @@ export class MediaStreamHandler {
     }
     if (
       this.config.shouldAcceptStream &&
-      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: streamToken })
+      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })
     ) {
       console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
       ws.close(1008, "Unknown call");
@@ -219,6 +271,69 @@ export class MediaStreamHandler {
     } catch {
       return undefined;
     }
+  }
+
+  private getClientIp(request: IncomingMessage): string {
+    return request.socket.remoteAddress || "unknown";
+  }
+
+  private registerPendingConnection(ws: WebSocket, ip: string): boolean {
+    if (this.pendingConnections.size >= this.maxPendingConnections) {
+      console.warn("[MediaStream] Rejecting connection: pending connection limit reached");
+      return false;
+    }
+
+    const pendingForIp = this.pendingByIp.get(ip) ?? 0;
+    if (pendingForIp >= this.maxPendingConnectionsPerIp) {
+      console.warn(`[MediaStream] Rejecting connection: pending per-IP limit reached (${ip})`);
+      return false;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!this.pendingConnections.has(ws)) {
+        return;
+      }
+      console.warn(
+        `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
+      );
+      ws.close(1008, "Start timeout");
+    }, this.preStartTimeoutMs);
+
+    timeout.unref?.();
+    this.pendingConnections.set(ws, { ip, timeout });
+    this.pendingByIp.set(ip, pendingForIp + 1);
+    return true;
+  }
+
+  private clearPendingConnection(ws: WebSocket): void {
+    const pending = this.pendingConnections.get(ws);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingConnections.delete(ws);
+
+    const current = this.pendingByIp.get(pending.ip) ?? 0;
+    if (current <= 1) {
+      this.pendingByIp.delete(pending.ip);
+      return;
+    }
+    this.pendingByIp.set(pending.ip, current - 1);
+  }
+
+  private rejectUpgrade(socket: Duplex, statusCode: 429 | 503, message: string): void {
+    const statusText = statusCode === 429 ? "Too Many Requests" : "Service Unavailable";
+    const body = `${message}\n`;
+    socket.write(
+      `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+        "Connection: close\r\n" +
+        "Content-Type: text/plain; charset=utf-8\r\n" +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        "\r\n" +
+        body,
+    );
+    socket.destroy();
   }
 
   /**
@@ -393,6 +508,7 @@ interface TwilioMediaMessage {
     accountSid: string;
     callSid: string;
     tracks: string[];
+    customParameters?: Record<string, string>;
     mediaFormat: {
       encoding: string;
       sampleRate: number;

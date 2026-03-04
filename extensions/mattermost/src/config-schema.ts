@@ -4,17 +4,33 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 import { z } from "zod";
+import { buildSecretInputSchema } from "./secret-input.js";
+
+const MattermostSlashCommandsSchema = z
+  .object({
+    /** Enable native slash commands. "auto" resolves to false (opt-in). */
+    native: z.union([z.boolean(), z.literal("auto")]).optional(),
+    /** Also register skill-based commands. */
+    nativeSkills: z.union([z.boolean(), z.literal("auto")]).optional(),
+    /** Path for the callback endpoint on the gateway HTTP server. */
+    callbackPath: z.string().optional(),
+    /** Explicit callback URL (e.g. behind reverse proxy). */
+    callbackUrl: z.string().optional(),
+  })
+  .strict()
+  .optional();
 
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
-    botToken: z.string().optional(),
+    botToken: buildSecretInputSchema().optional(),
     baseUrl: z.string().optional(),
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
@@ -27,6 +43,13 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    responsePrefix: z.string().optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+      })
+      .optional(),
+    commands: MattermostSlashCommandsSchema,
   })
   .strict();
 
@@ -43,6 +66,7 @@ const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, 
 
 export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,

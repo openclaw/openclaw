@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
+import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import { normalizeChatChannelId } from "../registry.js";
 
@@ -51,16 +53,36 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const allowFrom =
+  const configuredAllowFrom =
     Array.isArray(cfg.channels?.whatsapp?.allowFrom) && cfg.channels.whatsapp.allowFrom.length > 0
       ? cfg.channels.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
       : [];
+  const storeAllowFrom = readChannelAllowFromStoreSync(
+    "whatsapp",
+    process.env,
+    DEFAULT_ACCOUNT_ID,
+  ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
+  const allowFrom = unique([...configuredAllowFrom, ...storeAllowFrom]);
 
   if (opts.all) {
     const all = unique([...sessionRecipients.map((s) => s.to), ...allowFrom]);
     return { recipients: all, source: "all" };
+  }
+
+  if (allowFrom.length > 0) {
+    const allowSet = new Set(allowFrom);
+    const authorizedSessionRecipients = sessionRecipients
+      .map((entry) => entry.to)
+      .filter((recipient) => allowSet.has(recipient));
+    if (authorizedSessionRecipients.length === 1) {
+      return { recipients: [authorizedSessionRecipients[0]], source: "session-single" };
+    }
+    if (authorizedSessionRecipients.length > 1) {
+      return { recipients: authorizedSessionRecipients, source: "session-ambiguous" };
+    }
+    return { recipients: allowFrom, source: "allowFrom" };
   }
 
   if (sessionRecipients.length === 1) {

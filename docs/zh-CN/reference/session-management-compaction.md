@@ -161,7 +161,7 @@ OpenClaw 有意**不**"修复"记录；Gateway 网关使用 `SessionManager` 来
 - 上下文窗口来自模型目录（可以通过配置覆盖）。
 - 存储中的 `contextTokens` 是运行时估计/报告值；不要将其视为严格保证。
 
-更多信息，参见 [/token-use](/token-use)。
+更多信息，参见 [/token-use](/reference/token-use)。
 
 ---
 

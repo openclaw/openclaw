@@ -1,5 +1,5 @@
-import type { loadConfig } from "../../../config/config.js";
 import { normalizeGroupActivation } from "../../../auto-reply/group-activation.js";
+import type { loadConfig } from "../../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -16,10 +16,17 @@ export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conver
     ChatType: "group",
     Provider: "whatsapp",
   })?.id;
+  const whatsappCfg = cfg.channels?.whatsapp as
+    | { groupAllowFrom?: string[]; allowFrom?: string[] }
+    | undefined;
+  const hasGroupAllowFrom = Boolean(
+    whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length,
+  );
   return resolveChannelGroupPolicy({
     cfg,
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
+    hasGroupAllowFrom,
   });
 }
 

@@ -1,18 +1,45 @@
-import type { ChannelId } from "../../channels/plugins/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
+}
+
+type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
+type TargetNormalizerCacheEntry = {
+  version: number;
+  normalizer: TargetNormalizer;
+};
+
+const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
+
+function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
+  const version = getActivePluginRegistryVersion();
+  const cached = targetNormalizerCacheByChannelId.get(channelId);
+  if (cached?.version === version) {
+    return cached.normalizer;
+  }
+  const plugin = getChannelPlugin(channelId);
+  const normalizer = plugin?.messaging?.normalizeTarget;
+  targetNormalizerCacheByChannelId.set(channelId, {
+    version,
+    normalizer,
+  });
+  return normalizer;
 }
 
 export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
   if (!raw) {
     return undefined;
   }
+  const fallback = raw.trim() || undefined;
+  if (!fallback) {
+    return undefined;
+  }
   const providerId = normalizeChannelId(provider);
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const normalized =
-    plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim().toLowerCase() || undefined);
+  const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
+  const normalized = normalizer?.(raw) ?? fallback;
   return normalized || undefined;
 }
 

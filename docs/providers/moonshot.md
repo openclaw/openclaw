@@ -15,14 +15,20 @@ Kimi Coding with `kimi-coding/k2p5`.
 
 Current Kimi K2 model IDs:
 
+<!-- markdownlint-disable MD037 -->
+
 {/_ moonshot-kimi-k2-ids:start _/ && null}
+
+<!-- markdownlint-enable MD037 -->
 
 - `kimi-k2.5`
 - `kimi-k2-0905-preview`
 - `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
+  <!-- markdownlint-disable MD037 -->
   {/_ moonshot-kimi-k2-ids:end _/ && null}
+  <!-- markdownlint-enable MD037 -->
 
 ```bash
 openclaw onboard --auth-choice moonshot-api-key
@@ -140,3 +146,35 @@ Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangea
 - If Moonshot publishes different context limits for a model, adjust
   `contextWindow` accordingly.
 - Use `https://api.moonshot.ai/v1` for the international endpoint, and `https://api.moonshot.cn/v1` for the China endpoint.
+
+## Native thinking mode (Moonshot)
+
+Moonshot Kimi supports binary native thinking:
+
+- `thinking: { type: "enabled" }`
+- `thinking: { type: "disabled" }`
+
+Configure it per model via `agents.defaults.models.<provider/model>.params`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "moonshot/kimi-k2.5": {
+          params: {
+            thinking: { type: "disabled" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw also maps runtime `/think` levels for Moonshot:
+
+- `/think off` -> `thinking.type=disabled`
+- any non-off thinking level -> `thinking.type=enabled`
+
+When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. OpenClaw normalizes incompatible `tool_choice` values to `auto` for compatibility.
