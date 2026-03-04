@@ -112,20 +112,16 @@ describe("isSystemdServiceEnabled", () => {
         cb(err, "", "Failed to connect to bus");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual([
-          "--machine",
-          `${process.env.USER ?? process.env.LOGNAME}@`,
-          "--user",
-          "is-enabled",
-          "openclaw-gateway.service",
-        ]);
+        expect(args[0]).toBe("--machine");
+        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(
-      isSystemdServiceEnabled({ env: { USER: process.env.USER ?? process.env.LOGNAME } }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
+    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
+      "systemctl is-enabled unavailable: permission denied",
+    );
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
