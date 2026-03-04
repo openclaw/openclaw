@@ -420,4 +420,82 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
+
+  it("does not bypass permission errors with GOOGLE_CLOUD_PROJECT fallback", async () => {
+    process.env.GOOGLE_CLOUD_PROJECT = "env-project";
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson(
+          {
+            error: {
+              message: "The caller does not have permission",
+              details: [{ reason: "PERMISSION_DENIED" }],
+            },
+          },
+          403,
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    await expect(runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth)).rejects.toThrow(
+      "permission errors cannot be bypassed with project fallback",
+    );
+  });
+
+  it("surfaces actionable loadCodeAssist diagnostics on 400 failures", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson(
+          {
+            error: {
+              message: "Bad request from loadCodeAssist",
+            },
+          },
+          400,
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    await expect(async () => {
+      try {
+        await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        expect(message).toContain("Gemini CLI OAuth project discovery failed (loadCodeAssist).");
+        expect(message).toContain("Try signing in with a Google account that can use Gemini CLI");
+        throw err;
+      }
+    }).rejects.toThrow();
+  });
 });

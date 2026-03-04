@@ -788,6 +788,13 @@ Steps:
 
 This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
+Troubleshooting:
+
+- Confirm Gemini CLI works on the same host first: `gemini -m gemini-3.1-pro-preview -p "reply ONLY OK"`
+- `loadCodeAssist failed: 400` or `403` usually means the Google account lacks Cloud Code Assist access.
+- `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` helps with project binding only. It does not bypass permission errors.
+- If you want API-key based Gemini access instead of CLI OAuth, use provider `google` with `GEMINI_API_KEY`.
+
 ### Is a local model OK for casual chats
 
 Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
