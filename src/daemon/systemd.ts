@@ -1,14 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
-  resolveGatewayServiceDescription,
-  resolveGatewaySystemdServiceName,
-} from "./constants.js";
-import { execFileUtf8 } from "./exec-file.js";
-import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveHomeDir } from "./paths.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -18,6 +9,15 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
 } from "./service-types.js";
+import {
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
+  resolveGatewayServiceDescription,
+  resolveGatewaySystemdServiceName,
+} from "./constants.js";
+import { execFileUtf8 } from "./exec-file.js";
+import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
+import { resolveHomeDir } from "./paths.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -143,7 +143,12 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  const stderr = result.stderr.trim();
+  const stdout = result.stdout.trim();
+  if (stderr && stdout && stderr !== stdout) {
+    return `${stderr} ${stdout}`.trim();
+  }
+  return (stderr || stdout || "").trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
