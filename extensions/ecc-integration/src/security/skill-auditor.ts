@@ -1,50 +1,50 @@
 /**
  * Skill Auditor
- * 
+ *
  * Mandatory security scanner for OpenClaw skills.
  * Analyzes skills for malicious code, unsafe commands, and security vulnerabilities.
- * 
+ *
  * Security Context: Part of comprehensive audit suite
  * - skill-auditor (this): Scans skills for malicious code
  * - auth-auditor: Code security patterns
  * - audit-code: Secrets/SQL injection detection
  * - permission-auditor: Environment/config permissions
- * 
+ *
  * Stats: ~7.1% of online skills may contain malicious software
  * This auditor prevents unsafe skill installation.
  */
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Types & Schemas
 // ============================================================================
 
 export const SkillAuditSeveritySchema = z.enum([
-  'critical',  // Immediate threat, blocks installation
-  'high',      // Serious risk, blocks by default
-  'medium',    // Moderate concern, warns
-  'low',       // Minor issue, logs only
-  'info'       // FYI
+  "critical", // Immediate threat, blocks installation
+  "high", // Serious risk, blocks by default
+  "medium", // Moderate concern, warns
+  "low", // Minor issue, logs only
+  "info", // FYI
 ]);
 
 export const SkillAuditCategorySchema = z.enum([
-  'malicious_code',      // Known malware patterns
-  'unsafe_command',    // Dangerous shell commands
-  'data_exfiltration', // Data theft patterns
-  'unauthorized_access', // Privilege escalation
-  'obfuscated_code',   // Hidden/masked code
-  'dynamic_execution', // eval, new Function, etc.
-  'network_risk',      // Suspicious network calls
-  'file_system_risk',  // Dangerous file operations
-  'env_manipulation',  // Environment variable tampering
-  'import_risk',       // Suspicious imports
-  'prototype_pollution', // __proto__ manipulation
-  'regex_dos',         // ReDoS vulnerabilities
-  'prototype_mutation', // applyPrototypeMixins pattern
-  'hidden_dependency',  // Obscured npm packages
-  'permission_escalation', // Sudo/admin patterns
-  'backdoor_pattern'   // Remote access/backdoor code
+  "malicious_code", // Known malware patterns
+  "unsafe_command", // Dangerous shell commands
+  "data_exfiltration", // Data theft patterns
+  "unauthorized_access", // Privilege escalation
+  "obfuscated_code", // Hidden/masked code
+  "dynamic_execution", // eval, new Function, etc.
+  "network_risk", // Suspicious network calls
+  "file_system_risk", // Dangerous file operations
+  "env_manipulation", // Environment variable tampering
+  "import_risk", // Suspicious imports
+  "prototype_pollution", // __proto__ manipulation
+  "regex_dos", // ReDoS vulnerabilities
+  "prototype_mutation", // applyPrototypeMixins pattern
+  "hidden_dependency", // Obscured npm packages
+  "permission_escalation", // Sudo/admin patterns
+  "backdoor_pattern", // Remote access/backdoor code
 ]);
 
 export interface SkillAuditFinding {
@@ -100,7 +100,7 @@ interface SecurityPattern {
   // Pattern matching
   codePatterns: RegExp[];
   importPatterns: RegExp[];
-  filePatterns: RegExp[];
+  filePatterns?: RegExp[];
   // AST analysis hints
   astIndicators?: string[];
 }
@@ -108,37 +108,37 @@ interface SecurityPattern {
 const SECURITY_PATTERNS: SecurityPattern[] = [
   // === CRITICAL: Malicious Code ===
   {
-    id: 'MAL-001',
-    category: 'malicious_code',
-    severity: 'critical',
-    title: 'Known Malware Signature',
-    description: 'Code matches known malware signatures or suspicious patterns',
-    remediation: 'Remove skill immediately and scan system for compromise',
+    id: "MAL-001",
+    category: "malicious_code",
+    severity: "critical",
+    title: "Known Malware Signature",
+    description: "Code matches known malware signatures or suspicious patterns",
+    remediation: "Remove skill immediately and scan system for compromise",
     codePatterns: [
-      /eval\s*\(\s*atob\s*\(/i,  // Base64 decode + eval
-      /eval\s*\(\s*Buffer\.from\s*\(/i,  // Buffer decode + eval
+      /eval\s*\(\s*atob\s*\(/i, // Base64 decode + eval
+      /eval\s*\(\s*Buffer\.from\s*\(/i, // Buffer decode + eval
       /Function\s*\(\s*['"`]return\s+process\.mainModule/i,
       /require\s*\(\s*['"`][\.\/]*\s*child_process/i, // Hidden child_process import
       /process\.binding\s*\(\s*['"`]natives/i, // Access to native bindings
     ],
     importPatterns: [
-      /^(https?:\/\/|ftp:\/\/)/i,  // Remote imports
+      /^(https?:\/\/|ftp:\/\/)/i, // Remote imports
       /^data:text\/javascript/i,
     ],
     filePatterns: [
-      /\.min\.js$/,  // Minified code harder to audit
+      /\.min\.js$/, // Minified code harder to audit
       /\.packed\.js$/,
     ],
   },
 
   // === CRITICAL: Data Exfiltration ===
   {
-    id: 'EXF-001',
-    category: 'data_exfiltration',
-    severity: 'critical',
-    title: 'Data Exfiltration Pattern',
-    description: 'Code attempts to send sensitive data to external servers',
-    remediation: 'Block skill. Review network logs for data leakage.',
+    id: "EXF-001",
+    category: "data_exfiltration",
+    severity: "critical",
+    title: "Data Exfiltration Pattern",
+    description: "Code attempts to send sensitive data to external servers",
+    remediation: "Block skill. Review network logs for data leakage.",
     codePatterns: [
       /fetch\s*\(\s*['"`]https?:\/\/(?!.*(?:localhost|127\.0\.0\.1|::1)).*['"`]\s*[^)]*,\s*\{[^}]*method\s*:\s*['"`](POST|PUT|PATCH)/i,
       /https\.request\s*\([^)]*hostname[^)]*[^'"](?!.*(?:localhost|127\.0\.0\.1))/i,
@@ -146,27 +146,25 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
       /\.send\s*\(\s*(?:process\.env|Buffer\.from\s*\(\s*JSON\.stringify\s*\(\s*process)/i,
       /navigator\.sendBeacon\s*\(\s*['"`]https?:\/\/(?!.*localhost)/i,
     ],
-    importPatterns: [
-      /^(?:http|https|axios|node-fetch|undici)$/,
-    ],
+    importPatterns: [/^(?:http|https|axios|node-fetch|undici)$/],
   },
 
   // === CRITICAL: Backdoor Patterns ===
   {
-    id: 'BCK-001',
-    category: 'backdoor_pattern',
-    severity: 'critical',
-    title: 'Potential Backdoor Code',
-    description: 'Code contains patterns associated with remote access backdoors',
-    remediation: 'Immediately quarantine skill and audit system',
+    id: "BCK-001",
+    category: "backdoor_pattern",
+    severity: "critical",
+    title: "Potential Backdoor Code",
+    description: "Code contains patterns associated with remote access backdoors",
+    remediation: "Immediately quarantine skill and audit system",
     codePatterns: [
-      /net\s*\.\s*createServer\s*\(/i,  // Network server creation
+      /net\s*\.\s*createServer\s*\(/i, // Network server creation
       /require\s*\(\s*['"`]socket\.io['"`]\s*\)/i,
-      /ws\s*\.\s*Server\s*\(/i,  // WebSocket server
-      /exec\s*\(\s*['"`]nc\s+-[e|l]/i,  // Netcat patterns
-      /spawn\s*\(\s*['"`](?:bash|sh|zsh|cmd|powershell)/i,  // Shell spawning
-      /setInterval\s*\(\s*function\s*\(\s*\)\s*\{[^}]*fetch/i,  // Beaconing
-      /process\.env\s*\.\s*PORT.*\|\|\s*\d{4,5}/,  // Suspicious port binding
+      /ws\s*\.\s*Server\s*\(/i, // WebSocket server
+      /exec\s*\(\s*['"`]nc\s+-[e|l]/i, // Netcat patterns
+      /spawn\s*\(\s*['"`](?:bash|sh|zsh|cmd|powershell)/i, // Shell spawning
+      /setInterval\s*\(\s*function\s*\(\s*\)\s*\{[^}]*fetch/i, // Beaconing
+      /process\.env\s*\.\s*PORT.*\|\|\s*\d{4,5}/, // Suspicious port binding
     ],
     importPatterns: [
       /^(?:net|http2|dgram|tls)$/,
@@ -176,32 +174,30 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
 
   // === HIGH: Unsafe Commands ===
   {
-    id: 'UNC-001',
-    category: 'unsafe_command',
-    severity: 'high',
-    title: 'Unsafe Shell Command Execution',
-    description: 'Skill executes shell commands which can be dangerous',
-    remediation: 'Review all shell commands. Use safer alternatives where possible.',
+    id: "UNC-001",
+    category: "unsafe_command",
+    severity: "high",
+    title: "Unsafe Shell Command Execution",
+    description: "Skill executes shell commands which can be dangerous",
+    remediation: "Review all shell commands. Use safer alternatives where possible.",
     codePatterns: [
       /exec(?:Sync|async)?\s*\(\s*['"`][^'"`]*(?:rm\s+-rf|del\s+\/f|format|fdisk|mkfs)/i,
-      /exec(?:Sync|async)?\s*\(\s*['"`][^'"`]*curl\s+[^|]*\|/i,  // curl | bash patterns
+      /exec(?:Sync|async)?\s*\(\s*['"`][^'"`]*curl\s+[^|]*\|/i, // curl | bash patterns
       /exec(?:Sync|async)?\s*\(\s*['"`][^'"`]*wget\s+[^|]*\|/i,
-      /spawn\s*\(\s*['"`](?:sudo|su)\s*['"`]/i,  // Privilege escalation
-      /child_process.*exec.*['"`].*>/i,  // Output redirection
+      /spawn\s*\(\s*['"`](?:sudo|su)\s*['"`]/i, // Privilege escalation
+      /child_process.*exec.*['"`].*>/i, // Output redirection
     ],
-    importPatterns: [
-      /^(?:child_process)$/,
-    ],
+    importPatterns: [/^(?:child_process)$/],
   },
 
   // === HIGH: Dynamic Code Execution ===
   {
-    id: 'DYN-001',
-    category: 'dynamic_execution',
-    severity: 'high',
-    title: 'Dynamic Code Execution',
-    description: 'Code uses eval, new Function, or similar dangerous patterns',
-    remediation: 'Replace with safer alternatives. Never execute untrusted input.',
+    id: "DYN-001",
+    category: "dynamic_execution",
+    severity: "high",
+    title: "Dynamic Code Execution",
+    description: "Code uses eval, new Function, or similar dangerous patterns",
+    remediation: "Replace with safer alternatives. Never execute untrusted input.",
     codePatterns: [
       /\beval\s*\(/i,
       /\bnew\s+Function\s*\(/i,
@@ -211,58 +207,54 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
       /\bvm\s*\.\s*runInNewContext/i,
       /\bvm\s*\.\s*Script\s*\(/i,
     ],
-    importPatterns: [
-      /^(?:vm|vm2)$/,
-    ],
+    importPatterns: [/^(?:vm|vm2)$/],
   },
 
   // === HIGH: Obfuscated Code ===
   {
-    id: 'OBF-001',
-    category: 'obfuscated_code',
-    severity: 'high',
-    title: 'Obfuscated or Encoded Code',
-    description: 'Code appears obfuscated, making security auditing difficult',
-    remediation: 'Require unobfuscated source code. Reject minified/packed code.',
+    id: "OBF-001",
+    category: "obfuscated_code",
+    severity: "high",
+    title: "Obfuscated or Encoded Code",
+    description: "Code appears obfuscated, making security auditing difficult",
+    remediation: "Require unobfuscated source code. Reject minified/packed code.",
     codePatterns: [
-      /\\x[0-9a-f]{2}/i,  // Hex escaping
-      /\\u[0-9a-f]{4}/i,  // Unicode escaping
+      /\\x[0-9a-f]{2}/i, // Hex escaping
+      /\\u[0-9a-f]{4}/i, // Unicode escaping
       /String\.fromCharCode\s*\(/i,
       /atob\s*\(|btoa\s*\(/i,
-      /Buffer\.from\s*\(\s*['"`][a-zA-Z0-9+/=]{100,}/i,  // Base64 strings
-      /['"`][a-zA-Z0-9+/=]{200,}['"`]/i,  // Long base64-like strings
-      /\[\s*\]\s*\.\s*constructor\s*\.\s*constructor\s*\(/i,  // []['constructor']['constructor']
+      /Buffer\.from\s*\(\s*['"`][a-zA-Z0-9+/=]{100,}/i, // Base64 strings
+      /['"`][a-zA-Z0-9+/=]{200,}['"`]/i, // Long base64-like strings
+      /\[\s*\]\s*\.\s*constructor\s*\.\s*constructor\s*\(/i, // []['constructor']['constructor']
     ],
     importPatterns: [],
   },
 
   // === HIGH: File System Risks ===
   {
-    id: 'FSR-001',
-    category: 'file_system_risk',
-    severity: 'high',
-    title: 'Dangerous File System Operations',
-    description: 'Skill performs risky file operations outside its scope',
-    remediation: 'Restrict to skill directory. Use virtual file system if possible.',
+    id: "FSR-001",
+    category: "file_system_risk",
+    severity: "high",
+    title: "Dangerous File System Operations",
+    description: "Skill performs risky file operations outside its scope",
+    remediation: "Restrict to skill directory. Use virtual file system if possible.",
     codePatterns: [
-      /fs\s*\.\s*(?:rmdir|unlink|rm)\s*\(\s*['"`]\//i,  // Root access
+      /fs\s*\.\s*(?:rmdir|unlink|rm)\s*\(\s*['"`]\//i, // Root access
       /fs\s*\.\s*writeFile\s*\(\s*['"`](?:\/etc|\/usr|\/bin|\/sbin|\/var|\/home|\~\/\.)/i,
       /fs\s*\.\s*readFile\s*\(\s*['"`][^'"`]*(?:\.env|config|secret|key|password|token)/i,
       /process\.env\s*\.\s*(?:HOME|USERPROFILE).*fs/i,
     ],
-    importPatterns: [
-      /^(?:fs|fs-extra|graceful-fs)$/,
-    ],
+    importPatterns: [/^(?:fs|fs-extra|graceful-fs)$/],
   },
 
   // === HIGH: Unauthorized Access ===
   {
-    id: 'UAC-001',
-    category: 'unauthorized_access',
-    severity: 'high',
-    title: 'Unauthorized System Access',
-    description: 'Skill attempts to access sensitive system resources',
-    remediation: 'Block access to system files. Use sandboxed environment.',
+    id: "UAC-001",
+    category: "unauthorized_access",
+    severity: "high",
+    title: "Unauthorized System Access",
+    description: "Skill attempts to access sensitive system resources",
+    remediation: "Block access to system files. Use sandboxed environment.",
     codePatterns: [
       /fs\s*\.\s*readFile\s*\(\s*['"`]\/etc\/passwd['"`]/i,
       /fs\s*\.\s*readFile\s*\(\s*['"`]\/etc\/shadow['"`]/i,
@@ -270,58 +262,54 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
       /process\.env\s*\.\s*(?:AWS_|AZURE_|GCP_|SECRET_|KEY_|TOKEN_|PASSWORD_)/i,
       /require\s*\(\s*['"`]os['"`]\s*\).*\.userInfo\s*\(/i,
     ],
-    importPatterns: [
-      /^(?:os)$/,
-    ],
+    importPatterns: [/^(?:os)$/],
   },
 
   // === HIGH: Prototype Pollution ===
   {
-    id: 'PPO-001',
-    category: 'prototype_pollution',
-    severity: 'high',
-    title: 'Prototype Pollution Risk',
-    description: 'Code manipulates object prototypes dangerously',
-    remediation: 'Use Object.freeze() on prototypes. Avoid __proto__ access.',
+    id: "PPO-001",
+    category: "prototype_pollution",
+    severity: "high",
+    title: "Prototype Pollution Risk",
+    description: "Code manipulates object prototypes dangerously",
+    remediation: "Use Object.freeze() on prototypes. Avoid __proto__ access.",
     codePatterns: [
       /\[\s*['"`]__proto__['"`]\s*\]/i,
       /\[\s*['"`]constructor['"`]\s*\]\s*\[\s*['"`]prototype['"`]\s*\]/i,
       /Object\.setPrototypeOf\s*\(/i,
       /Object\.defineProperty\s*\(\s*[^,]+\.\s*prototype/i,
-      /applyPrototypeMixins/i,  // Forbidden pattern per AGENTS.md
-      /SomeClass\.prototype\s*=/i,  // Prototype mutation
+      /applyPrototypeMixins/i, // Forbidden pattern per AGENTS.md
+      /SomeClass\.prototype\s*=/i, // Prototype mutation
     ],
     importPatterns: [],
   },
 
   // === MEDIUM: Hidden Dependencies ===
   {
-    id: 'HID-001',
-    category: 'hidden_dependency',
-    severity: 'medium',
-    title: 'Hidden or Suspicious Dependencies',
-    description: 'Skill depends on packages with known issues or obfuscated names',
-    remediation: 'Review all dependencies. Pin to specific versions.',
+    id: "HID-001",
+    category: "hidden_dependency",
+    severity: "medium",
+    title: "Hidden or Suspicious Dependencies",
+    description: "Skill depends on packages with known issues or obfuscated names",
+    remediation: "Review all dependencies. Pin to specific versions.",
     codePatterns: [],
     importPatterns: [
-      /^(?:0x|colors|rc|npm-exec|npm-cli|npm-g)/,  // Typosquatting patterns
-      /^(?:lodash\.assign|lodash\.merge|deep-extend)$/,  // Prototype pollution
+      /^(?:0x|colors|rc|npm-exec|npm-cli|npm-g)/, // Typosquatting patterns
+      /^(?:lodash\.assign|lodash\.merge|deep-extend)$/, // Prototype pollution
     ],
-    filePatterns: [
-      /node_modules\/.*\/(?:preinstall|postinstall|install)\.js$/,
-    ],
+    filePatterns: [/node_modules\/.*\/(?:preinstall|postinstall|install)\.js$/],
   },
 
   // === MEDIUM: Environment Manipulation ===
   {
-    id: 'ENV-001',
-    category: 'env_manipulation',
-    severity: 'medium',
-    title: 'Environment Variable Manipulation',
-    description: 'Skill modifies environment variables which affects other processes',
-    remediation: 'Use isolated environment. Document all env changes.',
+    id: "ENV-001",
+    category: "env_manipulation",
+    severity: "medium",
+    title: "Environment Variable Manipulation",
+    description: "Skill modifies environment variables which affects other processes",
+    remediation: "Use isolated environment. Document all env changes.",
     codePatterns: [
-      /process\.env\s*\.\s*\w+\s*=\s*/i,  // Setting env vars
+      /process\.env\s*\.\s*\w+\s*=\s*/i, // Setting env vars
       /Object\.assign\s*\(\s*process\.env/i,
       /delete\s+process\.env\./i,
     ],
@@ -330,52 +318,43 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
 
   // === MEDIUM: Permission Escalation ===
   {
-    id: 'PER-001',
-    category: 'permission_escalation',
-    severity: 'medium',
-    title: 'Permission Escalation Attempt',
-    description: 'Skill attempts to gain elevated privileges',
-    remediation: 'Run in restricted environment. Never grant sudo access.',
-    codePatterns: [
-      /sudo\s+/i,
-      /chmod\s+.*777/i,
-      /chown\s+.*root/i,
-      /pkexec/i,
-      /gksu/i,
-      /doas/i,
-    ],
+    id: "PER-001",
+    category: "permission_escalation",
+    severity: "medium",
+    title: "Permission Escalation Attempt",
+    description: "Skill attempts to gain elevated privileges",
+    remediation: "Run in restricted environment. Never grant sudo access.",
+    codePatterns: [/sudo\s+/i, /chmod\s+.*777/i, /chown\s+.*root/i, /pkexec/i, /gksu/i, /doas/i],
     importPatterns: [],
   },
 
   // === MEDIUM: Network Risk ===
   {
-    id: 'NET-001',
-    category: 'network_risk',
-    severity: 'medium',
-    title: 'Suspicious Network Activity',
-    description: 'Skill makes network calls that may be unexpected',
-    remediation: 'Whitelist allowed domains. Log all network requests.',
+    id: "NET-001",
+    category: "network_risk",
+    severity: "medium",
+    title: "Suspicious Network Activity",
+    description: "Skill makes network calls that may be unexpected",
+    remediation: "Whitelist allowed domains. Log all network requests.",
     codePatterns: [
       /dns\s*\.\s*lookup\s*\(/i,
       /dns\s*\.\s*resolve/i,
       /require\s*\(\s*['"`]dns['"`]/i,
     ],
-    importPatterns: [
-      /^(?:dns|dns2|native-dns)$/,
-    ],
+    importPatterns: [/^(?:dns|dns2|native-dns)$/],
   },
 
   // === LOW: Regex DoS ===
   {
-    id: 'RED-001',
-    category: 'regex_dos',
-    severity: 'low',
-    title: 'Potential ReDoS Vulnerability',
-    description: 'Regex pattern may be vulnerable to Regular Expression Denial of Service',
-    remediation: 'Use regex without nested quantifiers. Set timeouts.',
+    id: "RED-001",
+    category: "regex_dos",
+    severity: "low",
+    title: "Potential ReDoS Vulnerability",
+    description: "Regex pattern may be vulnerable to Regular Expression Denial of Service",
+    remediation: "Use regex without nested quantifiers. Set timeouts.",
     codePatterns: [
-      /\(\s*.*\)\s*\*|\*\s*\(\s*.*\)/,  // (a+)* or a**( patterns
-      /\+\s*\+|\*\s*\*/,  // Nested quantifiers
+      /\(\s*.*\)\s*\*|\*\s*\(\s*.*\)/, // (a+)* or a**( patterns
+      /\+\s*\+|\*\s*\*/, // Nested quantifiers
     ],
     importPatterns: [],
   },
@@ -390,20 +369,19 @@ export class SkillAuditor {
   private trustedDomains: Set<string>;
   private auditLog: string[];
 
-  constructor(options?: {
-    patterns?: SecurityPattern[];
-    trustedDomains?: string[];
-  }) {
+  constructor(options?: { patterns?: SecurityPattern[]; trustedDomains?: string[] }) {
     this.patterns = options?.patterns || SECURITY_PATTERNS;
-    this.trustedDomains = new Set(options?.trustedDomains || [
-      'github.com',
-      'gitlab.com',
-      'bitbucket.org',
-      'npmjs.com',
-      'unpkg.com',
-      'jsdelivr.net',
-      'raw.githubusercontent.com',
-    ]);
+    this.trustedDomains = new Set(
+      options?.trustedDomains || [
+        "github.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "npmjs.com",
+        "unpkg.com",
+        "jsdelivr.net",
+        "raw.githubusercontent.com",
+      ],
+    );
     this.auditLog = [];
   }
 
@@ -421,7 +399,7 @@ export class SkillAuditor {
     try {
       // Step 1: Read and validate manifest
       manifest = await this.readManifest(skillPath);
-      this.log('Manifest loaded successfully');
+      this.log("Manifest loaded successfully");
 
       // Step 2: Check dependencies
       const depFindings = await this.auditDependencies(manifest);
@@ -438,40 +416,41 @@ export class SkillAuditor {
       // Step 5: Analyze dataflow patterns
       const dataflowFindings = await this.analyzeDataflow(skillPath);
       findings.push(...dataflowFindings);
-
     } catch (error) {
-      this.log(`Audit error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.log(`Audit error: ${error instanceof Error ? error.message : "Unknown error"}`);
       findings.push({
-        id: 'AUDIT-ERROR',
-        severity: 'high',
-        category: 'malicious_code',
-        title: 'Audit Failed',
-        description: `Could not complete audit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        id: "AUDIT-ERROR",
+        severity: "high",
+        category: "malicious_code",
+        title: "Audit Failed",
+        description: `Could not complete audit: ${error instanceof Error ? error.message : "Unknown error"}`,
         file: skillPath,
         line: 0,
         column: 0,
-        code: '',
-        remediation: 'Verify skill structure and retry audit',
+        code: "",
+        remediation: "Verify skill structure and retry audit",
         confidence: 1.0,
       });
     }
 
     // Calculate summary
-    const criticalCount = findings.filter(f => f.severity === 'critical').length;
-    const highCount = findings.filter(f => f.severity === 'high').length;
-    const mediumCount = findings.filter(f => f.severity === 'medium').length;
-    const lowCount = findings.filter(f => f.severity === 'low').length;
-    const infoCount = findings.filter(f => f.severity === 'info').length;
+    const criticalCount = findings.filter((f) => f.severity === "critical").length;
+    const highCount = findings.filter((f) => f.severity === "high").length;
+    const mediumCount = findings.filter((f) => f.severity === "medium").length;
+    const lowCount = findings.filter((f) => f.severity === "low").length;
+    const infoCount = findings.filter((f) => f.severity === "info").length;
 
     // Block if critical or high findings exist
     const passed = criticalCount === 0 && highCount === 0;
 
     const duration = Date.now() - startTime;
     this.log(`Audit completed in ${duration}ms`);
-    this.log(`Findings: ${criticalCount} critical, ${highCount} high, ${mediumCount} medium, ${lowCount} low, ${infoCount} info`);
+    this.log(
+      `Findings: ${criticalCount} critical, ${highCount} high, ${mediumCount} medium, ${lowCount} low, ${infoCount} info`,
+    );
 
     return {
-      skillName: manifest?.name || 'unknown',
+      skillName: manifest?.name || "unknown",
       skillPath,
       passed,
       findings,
@@ -493,14 +472,14 @@ export class SkillAuditor {
     const findings: SkillAuditFinding[] = [];
 
     for (const pattern of this.patterns) {
-      if (pattern.severity !== 'critical' && pattern.severity !== 'high') {
+      if (pattern.severity !== "critical" && pattern.severity !== "high") {
         continue; // Only check critical/high in quick screen
       }
 
       for (const regex of pattern.codePatterns) {
         const matches = code.match(regex);
         if (matches) {
-          const lines = code.substring(0, matches.index).split('\n');
+          const lines = code.substring(0, matches.index).split("\n");
           const line = lines.length;
           const column = lines[lines.length - 1].length + 1;
 
@@ -533,9 +512,9 @@ export class SkillAuditor {
     // This would read package.json or skill.json
     // For now, return a placeholder
     return {
-      name: 'unknown-skill',
-      version: '0.0.0',
-      description: 'Skill manifest',
+      name: "unknown-skill",
+      version: "0.0.0",
+      description: "Skill manifest",
     };
   }
 
@@ -554,12 +533,12 @@ export class SkillAuditor {
       const typosquatted = this.checkTyposquatting(name);
       if (typosquatted) {
         findings.push({
-          id: 'DEP-001',
-          severity: 'critical',
-          category: 'hidden_dependency',
-          title: 'Typosquatting Package Detected',
+          id: "DEP-001",
+          severity: "critical",
+          category: "hidden_dependency",
+          title: "Typosquatting Package Detected",
           description: `Package "${name}" appears to be typosquatting "${typosquatted}"`,
-          file: 'package.json',
+          file: "package.json",
           line: 0,
           column: 0,
           code: `"${name}": "${version}"`,
@@ -578,7 +557,7 @@ export class SkillAuditor {
               category: pattern.category,
               title: `Suspicious Dependency: ${pattern.title}`,
               description: `Package "${name}" matches pattern: ${pattern.description}`,
-              file: 'package.json',
+              file: "package.json",
               line: 0,
               column: 0,
               code: `"${name}": "${version}"`,
@@ -627,8 +606,16 @@ export class SkillAuditor {
    */
   private checkTyposquatting(name: string): string | null {
     const popularPackages = [
-      'lodash', 'express', 'react', 'axios', 'debug',
-      'commander', 'chalk', 'request', 'async', 'fs-extra',
+      "lodash",
+      "express",
+      "react",
+      "axios",
+      "debug",
+      "commander",
+      "chalk",
+      "request",
+      "async",
+      "fs-extra",
     ];
 
     for (const popular of popularPackages) {
@@ -664,7 +651,7 @@ export class SkillAuditor {
           matrix[i][j] = Math.min(
             matrix[i - 1][j - 1] + 1,
             matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
+            matrix[i - 1][j] + 1,
           );
         }
       }
@@ -684,10 +671,10 @@ export class SkillAuditor {
 // ============================================================================
 
 export interface SafeImportOptions {
-  skipAudit?: boolean;  // Only for trusted internal skills
-  allowMedium?: boolean;  // Allow medium severity findings
-  allowLow?: boolean;     // Allow low severity findings
-  autoFix?: boolean;      // Attempt to auto-fix issues
+  skipAudit?: boolean; // Only for trusted internal skills
+  allowMedium?: boolean; // Allow medium severity findings
+  allowLow?: boolean; // Allow low severity findings
+  autoFix?: boolean; // Attempt to auto-fix issues
   quarantinePath?: string; // Where to quarantine suspicious skills
 }
 
@@ -704,10 +691,7 @@ export class SafeSkillImporter {
    * Import skill with mandatory security audit
    * This is the ONLY safe way to install skills
    */
-  async importSkill(
-    skillPath: string,
-    options: SafeImportOptions = {}
-  ): Promise<SkillAuditResult> {
+  async importSkill(skillPath: string, options: SafeImportOptions = {}): Promise<SkillAuditResult> {
     console.log(`🔍 Auditing skill: ${skillPath}`);
 
     // ALWAYS audit unless explicitly skipped (trusted internal only)
@@ -737,7 +721,9 @@ export class SafeSkillImporter {
 
       console.log(`✅ Skill audit PASSED`);
       console.log(`   Duration: ${audit.scanDurationMs}ms`);
-      console.log(`   Findings: ${audit.mediumCount} medium, ${audit.lowCount} low, ${audit.infoCount} info`);
+      console.log(
+        `   Findings: ${audit.mediumCount} medium, ${audit.lowCount} low, ${audit.infoCount} info`,
+      );
 
       this.installedSkills.set(audit.skillName, audit);
       return audit;
@@ -746,7 +732,7 @@ export class SafeSkillImporter {
     // Skip audit only for trusted internal skills
     console.log(`⚠️  Skipping audit (trusted internal skill)`);
     return {
-      skillName: 'trusted-internal',
+      skillName: "trusted-internal",
       skillPath,
       passed: true,
       findings: [],
@@ -756,17 +742,14 @@ export class SafeSkillImporter {
       lowCount: 0,
       infoCount: 0,
       scanDurationMs: 0,
-      auditLog: ['Audit skipped - trusted internal skill'],
+      auditLog: ["Audit skipped - trusted internal skill"],
     };
   }
 
   /**
    * Import from remote URL with verification
    */
-  async importFromUrl(
-    url: string,
-    options: SafeImportOptions = {}
-  ): Promise<SkillAuditResult> {
+  async importFromUrl(url: string, options: SafeImportOptions = {}): Promise<SkillAuditResult> {
     console.log(`🌐 Downloading skill from: ${url}`);
 
     // Verify URL is safe
@@ -789,8 +772,8 @@ export class SafeSkillImporter {
   async importFromGitHub(
     owner: string,
     repo: string,
-    path: string = '',
-    options: SafeImportOptions = {}
+    path: string = "",
+    options: SafeImportOptions = {},
   ): Promise<SkillAuditResult> {
     const url = `https://github.com/${owner}/${repo}/tree/main/${path}`;
     return this.importFromUrl(url, options);
@@ -801,7 +784,7 @@ export class SafeSkillImporter {
    */
   async importCollection(
     collectionUrl: string,
-    options: SafeImportOptions = {}
+    options: SafeImportOptions = {},
   ): Promise<SkillAuditResult[]> {
     console.log(`📚 Importing skill collection: ${collectionUrl}`);
 
@@ -819,15 +802,15 @@ export class SafeSkillImporter {
    */
   private isTrustedUrl(url: string): boolean {
     const trustedDomains = [
-      'github.com',
-      'raw.githubusercontent.com',
-      'gitlab.com',
-      'bitbucket.org',
-      'unpkg.com',
-      'jsdelivr.net',
+      "github.com",
+      "raw.githubusercontent.com",
+      "gitlab.com",
+      "bitbucket.org",
+      "unpkg.com",
+      "jsdelivr.net",
     ];
 
-    return trustedDomains.some(domain => url.includes(domain));
+    return trustedDomains.some((domain) => url.includes(domain));
   }
 
   /**
@@ -836,7 +819,7 @@ export class SafeSkillImporter {
   private async quarantineSkill(
     skillPath: string,
     quarantinePath: string,
-    audit: SkillAuditResult
+    audit: SkillAuditResult,
   ): Promise<void> {
     console.log(`🚫 Quarantining skill to: ${quarantinePath}`);
     // TODO: Implement quarantine (move files, save audit report)
@@ -872,15 +855,15 @@ export class SafeSkillImporter {
 
 export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSkillImporter) {
   return {
-    'skill-audit': {
-      description: 'Audit a skill for security vulnerabilities',
+    "skill-audit": {
+      description: "Audit a skill for security vulnerabilities",
       handler: async (args: { path: string; quick?: boolean }) => {
         const { path, quick } = args;
 
         if (quick) {
           // Quick screen only
-          const fs = await import('fs/promises');
-          const code = await fs.readFile(path, 'utf-8');
+          const fs = await import("fs/promises");
+          const code = await fs.readFile(path, "utf-8");
           const findings = await auditor.quickScreen(code, path);
 
           console.log(`\n⚡ Quick Screen Results`);
@@ -902,7 +885,7 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
         console.log(`\n🔍 Skill Audit Report`);
         console.log(`====================`);
         console.log(`Skill: ${result.skillName}`);
-        console.log(`Status: ${result.passed ? '✅ PASSED' : '❌ FAILED'}`);
+        console.log(`Status: ${result.passed ? "✅ PASSED" : "❌ FAILED"}`);
         console.log(`\nFindings Summary:`);
         console.log(`  Critical: ${result.criticalCount}`);
         console.log(`  High: ${result.highCount}`);
@@ -927,8 +910,8 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
       },
     },
 
-    'skill-import': {
-      description: 'Import a skill with mandatory security audit',
+    "skill-import": {
+      description: "Import a skill with mandatory security audit",
       handler: async (args: {
         path: string;
         allowMedium?: boolean;
@@ -950,20 +933,17 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
       },
     },
 
-    'skill-import-github': {
-      description: 'Import skill from GitHub with audit',
+    "skill-import-github": {
+      description: "Import skill from GitHub with audit",
       handler: async (args: {
         owner: string;
         repo: string;
         path?: string;
         allowMedium?: boolean;
       }) => {
-        const result = await importer.importFromGitHub(
-          args.owner,
-          args.repo,
-          args.path,
-          { allowMedium: args.allowMedium }
-        );
+        const result = await importer.importFromGitHub(args.owner, args.repo, args.path, {
+          allowMedium: args.allowMedium,
+        });
 
         return {
           success: result.passed,
@@ -974,18 +954,15 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
       },
     },
 
-    'skill-collection-import': {
-      description: 'Import skill collection from repository',
-      handler: async (args: {
-        url: string;
-        allowMedium?: boolean;
-      }) => {
+    "skill-collection-import": {
+      description: "Import skill collection from repository",
+      handler: async (args: { url: string; allowMedium?: boolean }) => {
         const results = await importer.importCollection(args.url, {
           allowMedium: args.allowMedium,
         });
 
-        const passed = results.filter(r => r.passed).length;
-        const failed = results.filter(r => !r.passed).length;
+        const passed = results.filter((r) => r.passed).length;
+        const failed = results.filter((r) => !r.passed).length;
 
         console.log(`\n📚 Collection Import Summary`);
         console.log(`============================`);
@@ -1002,8 +979,8 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
       },
     },
 
-    'skill-audit-history': {
-      description: 'View audit history for installed skills',
+    "skill-audit-history": {
+      description: "View audit history for installed skills",
       handler: async () => {
         const history = importer.getAuditHistory();
 
@@ -1013,8 +990,10 @@ export function createSkillAuditCommands(auditor: SkillAuditor, importer: SafeSk
 
         for (const [name, audit] of history) {
           console.log(`\n${name}:`);
-          console.log(`  Status: ${audit.passed ? '✅ PASSED' : '❌ FAILED'}`);
-          console.log(`  Findings: ${audit.criticalCount}C ${audit.highCount}H ${audit.mediumCount}M`);
+          console.log(`  Status: ${audit.passed ? "✅ PASSED" : "❌ FAILED"}`);
+          console.log(
+            `  Findings: ${audit.criticalCount}C ${audit.highCount}H ${audit.mediumCount}M`,
+          );
         }
 
         return { success: true, count: history.size };

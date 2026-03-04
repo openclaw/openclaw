@@ -1,18 +1,25 @@
 /**
  * Skill Collection Manager
- * 
+ *
  * Safely imports and manages skill collections from curated repositories.
  * All skills are audited before installation to prevent malicious code injection.
- * 
+ *
  * Supported Collections:
  * - awesome-openclaw-skills (curated list)
  * - Individual GitHub repositories
  * - Git submodules
- * 
+ *
  * Security: Mandatory audit gate for all imports
  */
 
-import { SkillAuditor, SafeSkillImporter, SkillAuditResult } from './skill-auditor.js';
+import { execFile } from "node:child_process";
+import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { promisify } from "node:util";
+import { SkillAuditor, SafeSkillImporter, SkillAuditResult } from "../security/skill-auditor.js";
+
+const execFileAsync = promisify(execFile);
 
 // ============================================================================
 // Curated Skill Collections
@@ -25,8 +32,8 @@ export interface SkillCollection {
   owner: string;
   repo: string;
   path?: string;
-  category: 'official' | 'community' | 'verified' | 'experimental';
-  trustLevel: 'high' | 'medium' | 'low';
+  category: "official" | "community" | "verified" | "experimental";
+  trustLevel: "high" | "medium" | "low";
   skills: CuratedSkill[];
 }
 
@@ -39,19 +46,19 @@ export interface CuratedSkill {
   verified: boolean;
   installCount: number;
   lastAudit?: Date;
-  auditStatus?: 'passed' | 'failed' | 'pending';
+  auditStatus?: "passed" | "failed" | "pending";
 }
 
 // Pre-vetted collections from user request
 export const CURATED_COLLECTIONS: SkillCollection[] = [
   {
-    name: 'awesome-openclaw-skills',
-    description: 'Curated list of excellent OpenClaw skills',
-    url: 'https://github.com/VoltAgent/awesome-openclaw-skills',
-    owner: 'VoltAgent',
-    repo: 'awesome-openclaw-skills',
-    category: 'community',
-    trustLevel: 'medium',
+    name: "awesome-openclaw-skills",
+    description: "Curated list of excellent OpenClaw skills",
+    url: "https://github.com/VoltAgent/awesome-openclaw-skills",
+    owner: "VoltAgent",
+    repo: "awesome-openclaw-skills",
+    category: "community",
+    trustLevel: "medium",
     skills: [], // Populated dynamically
   },
 ];
@@ -59,38 +66,65 @@ export const CURATED_COLLECTIONS: SkillCollection[] = [
 // Individual repositories to import
 export const RECOMMENDED_SKILLS: CuratedSkill[] = [
   {
-    name: 'claude-context-mode',
-    description: 'Context mode management for Claude Code',
-    repository: 'https://github.com/mksglu/claude-context-mode',
-    author: 'mksglu',
-    category: 'context-management',
+    name: "get-shit-done",
+    description: "Action-oriented productivity and execution skills",
+    repository: "https://github.com/gsd-build/get-shit-done.git",
+    author: "gsd-build",
+    category: "productivity",
     verified: false,
     installCount: 0,
   },
   {
-    name: 'qmd',
-    description: 'Query markdown processor',
-    repository: 'https://github.com/tobi/qmd',
-    author: 'tobi',
-    category: 'markdown',
+    name: "antigravity-awesome-skills",
+    description: "Community curated awesome skills collection",
+    repository: "https://github.com/sickn33/antigravity-awesome-skills.git",
+    author: "sickn33",
+    category: "community",
     verified: false,
     installCount: 0,
   },
   {
-    name: 'agent-skill-creator',
-    description: 'Create skills from code patterns',
-    repository: 'https://github.com/FrancyJGLisboa/agent-skill-creator',
-    author: 'FrancyJGLisboa',
-    category: 'development',
+    name: "awesome-openclaw-skills",
+    description: "Curated OpenClaw skills index",
+    repository: "https://github.com/VoltAgent/awesome-openclaw-skills.git",
+    author: "VoltAgent",
+    category: "community",
     verified: false,
     installCount: 0,
   },
   {
-    name: 'SkillForge',
-    description: 'Advanced skill development framework',
-    repository: 'https://github.com/tripleyak/SkillForge',
-    author: 'tripleyak',
-    category: 'framework',
+    name: "claude-context-mode",
+    description: "Context mode management for Claude Code",
+    repository: "https://github.com/mksglu/claude-context-mode",
+    author: "mksglu",
+    category: "context-management",
+    verified: false,
+    installCount: 0,
+  },
+  {
+    name: "qmd",
+    description: "Query markdown processor",
+    repository: "https://github.com/tobi/qmd",
+    author: "tobi",
+    category: "markdown",
+    verified: false,
+    installCount: 0,
+  },
+  {
+    name: "agent-skill-creator",
+    description: "Create skills from code patterns",
+    repository: "https://github.com/FrancyJGLisboa/agent-skill-creator",
+    author: "FrancyJGLisboa",
+    category: "development",
+    verified: false,
+    installCount: 0,
+  },
+  {
+    name: "SkillForge",
+    description: "Advanced skill development framework",
+    repository: "https://github.com/tripleyak/SkillForge",
+    author: "tripleyak",
+    category: "framework",
     verified: false,
     installCount: 0,
   },
@@ -106,17 +140,23 @@ export class SkillCollectionManager {
   private installedSkills: Map<string, CuratedSkill>;
   private auditCache: Map<string, SkillAuditResult>;
   private installPath: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly runGitImpl: (args: string[], cwd?: string) => Promise<void>;
 
   constructor(options?: {
     auditor?: SkillAuditor;
     importer?: SafeSkillImporter;
     installPath?: string;
+    fetchImpl?: typeof fetch;
+    runGitImpl?: (args: string[], cwd?: string) => Promise<void>;
   }) {
     this.auditor = options?.auditor || new SkillAuditor();
     this.importer = options?.importer || new SafeSkillImporter(this.auditor);
     this.installedSkills = new Map();
     this.auditCache = new Map();
-    this.installPath = options?.installPath || './skills';
+    this.installPath = options?.installPath || "./skills";
+    this.fetchImpl = options?.fetchImpl ?? fetch;
+    this.runGitImpl = options?.runGitImpl ?? this.runGit.bind(this);
   }
 
   /**
@@ -145,7 +185,7 @@ export class SkillCollectionManager {
     console.log(`=====================\n`);
 
     for (const skill of RECOMMENDED_SKILLS) {
-      const status = skill.verified ? '✅ Verified' : '⏳ Pending Audit';
+      const status = skill.verified ? "✅ Verified" : "⏳ Pending Audit";
       console.log(`🔧 ${skill.name}`);
       console.log(`   ${skill.description}`);
       console.log(`   By: ${skill.author} | Category: ${skill.category}`);
@@ -166,7 +206,7 @@ export class SkillCollectionManager {
       subPath?: string;
       skipCache?: boolean;
       allowMedium?: boolean;
-    } = {}
+    } = {},
   ): Promise<SkillImportResult> {
     console.log(`\n🔽 Importing from GitHub: ${repositoryUrl}`);
 
@@ -175,8 +215,8 @@ export class SkillCollectionManager {
     if (!parsed) {
       return {
         success: false,
-        skillName: 'unknown',
-        error: 'Invalid GitHub URL format',
+        skillName: "unknown",
+        error: "Invalid GitHub URL format",
         auditResult: null,
       };
     }
@@ -184,7 +224,7 @@ export class SkillCollectionManager {
     const { owner, repo, path } = parsed;
 
     // Check cache first
-    const cacheKey = `${owner}/${repo}/${path || ''}`;
+    const cacheKey = `${owner}/${repo}/${path || ""}`;
     if (!options.skipCache && this.auditCache.has(cacheKey)) {
       const cached = this.auditCache.get(cacheKey)!;
       console.log(`📋 Using cached audit result`);
@@ -213,7 +253,9 @@ export class SkillCollectionManager {
         console.error(`   High: ${audit.highCount}`);
 
         // Report specific issues
-        const criticalFindings = audit.findings.filter(f => f.severity === 'critical');
+        const criticalFindings = audit.findings.filter(
+          (f: { severity: string }) => f.severity === "critical",
+        );
         for (const finding of criticalFindings) {
           console.error(`\n   🚨 ${finding.id}: ${finding.title}`);
           console.error(`      ${finding.description}`);
@@ -233,7 +275,9 @@ export class SkillCollectionManager {
         console.warn(`   Use --allow-medium to proceed anyway`);
         console.warn(`\n   Medium findings:`);
 
-        const mediumFindings = audit.findings.filter(f => f.severity === 'medium');
+        const mediumFindings = audit.findings.filter(
+          (f: { severity: string }) => f.severity === "medium",
+        );
         for (const finding of mediumFindings.slice(0, 5)) {
           console.warn(`   - ${finding.title} (${finding.category})`);
         }
@@ -258,11 +302,11 @@ export class SkillCollectionManager {
         description: `Imported from ${owner}/${repo}`,
         repository: repositoryUrl,
         author: owner,
-        category: 'imported',
+        category: "imported",
         verified: true,
         installCount: 1,
         lastAudit: new Date(),
-        auditStatus: 'passed',
+        auditStatus: "passed",
       };
 
       this.installedSkills.set(audit.skillName, curatedSkill);
@@ -274,13 +318,14 @@ export class SkillCollectionManager {
         installPath: installResult.path,
         auditResult: audit,
       };
-
     } catch (error) {
-      console.error(`\n❌ Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(
+        `\n❌ Import failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
       return {
         success: false,
-        skillName: 'unknown',
-        error: error instanceof Error ? error.message : 'Unknown error',
+        skillName: "unknown",
+        error: error instanceof Error ? error.message : "Unknown error",
         auditResult: null,
       };
     }
@@ -294,12 +339,12 @@ export class SkillCollectionManager {
     options: {
       allowMedium?: boolean;
       parallel?: boolean;
-    } = {}
+    } = {},
   ): Promise<CollectionImportResult> {
     console.log(`\n📚 Importing Collection: ${collectionName}`);
     console.log(`=====================================\n`);
 
-    const collection = CURATED_COLLECTIONS.find(c => c.name === collectionName);
+    const collection = CURATED_COLLECTIONS.find((c) => c.name === collectionName);
     if (!collection) {
       return {
         success: false,
@@ -321,15 +366,15 @@ export class SkillCollectionManager {
 
     if (options.parallel) {
       // Parallel import with individual audits
-      const importPromises = collection.skills.map(skill =>
-        this.importFromGitHub(skill.repository, { allowMedium: options.allowMedium })
+      const importPromises = collection.skills.map((skill) =>
+        this.importFromGitHub(skill.repository, { allowMedium: options.allowMedium }),
       );
 
       const settled = await Promise.allSettled(importPromises);
 
       for (let i = 0; i < settled.length; i++) {
         const result = settled[i];
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           results.push(result.value);
         } else {
           results.push({
@@ -352,8 +397,8 @@ export class SkillCollectionManager {
     }
 
     // Calculate summary
-    const imported = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
+    const imported = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success).length;
 
     console.log(`\n📊 Collection Import Summary`);
     console.log(`============================`);
@@ -363,7 +408,7 @@ export class SkillCollectionManager {
 
     if (failed > 0) {
       console.log(`\nFailed imports:`);
-      for (const result of results.filter(r => !r.success)) {
+      for (const result of results.filter((r) => !r.success)) {
         console.log(`   - ${result.skillName}: ${result.error}`);
       }
     }
@@ -391,15 +436,15 @@ export class SkillCollectionManager {
     const results: SkillImportResult[] = [];
 
     if (options?.parallel) {
-      const importPromises = RECOMMENDED_SKILLS.map(skill =>
-        this.importFromGitHub(skill.repository, { allowMedium: options.allowMedium })
+      const importPromises = RECOMMENDED_SKILLS.map((skill) =>
+        this.importFromGitHub(skill.repository, { allowMedium: options.allowMedium }),
       );
 
       const settled = await Promise.allSettled(importPromises);
 
       for (let i = 0; i < settled.length; i++) {
         const result = settled[i];
-        if (result.status === 'fulfilled') {
+        if (result.status === "fulfilled") {
           results.push(result.value);
         } else {
           results.push({
@@ -419,8 +464,8 @@ export class SkillCollectionManager {
       }
     }
 
-    const imported = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
+    const imported = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success).length;
 
     console.log(`\n📊 Recommended Skills Import Summary`);
     console.log(`====================================`);
@@ -430,7 +475,7 @@ export class SkillCollectionManager {
 
     return {
       success: failed === 0,
-      collectionName: 'recommended-skills',
+      collectionName: "recommended-skills",
       totalSkills: results.length,
       imported,
       failed,
@@ -455,7 +500,7 @@ export class SkillCollectionManager {
 
     // Update tracking
     skill.lastAudit = new Date();
-    skill.auditStatus = audit.passed ? 'passed' : 'failed';
+    skill.auditStatus = audit.passed ? "passed" : "failed";
 
     return audit;
   }
@@ -470,8 +515,8 @@ export class SkillCollectionManager {
     const skills = Array.from(this.installedSkills.values());
 
     for (const skill of skills) {
-      const statusIcon = skill.auditStatus === 'passed' ? '✅' :
-                        skill.auditStatus === 'failed' ? '❌' : '⏳';
+      const statusIcon =
+        skill.auditStatus === "passed" ? "✅" : skill.auditStatus === "failed" ? "❌" : "⏳";
       console.log(`${statusIcon} ${skill.name}`);
       console.log(`   ${skill.description}`);
       console.log(`   By: ${skill.author} | Category: ${skill.category}`);
@@ -495,7 +540,9 @@ export class SkillCollectionManager {
       return false;
     }
 
-    // TODO: Implement removal
+    const installRoot = resolve(this.installPath);
+    const skillPath = this.resolveWithinRoot(installRoot, skillName);
+    await rm(skillPath, { recursive: true, force: true });
     this.installedSkills.delete(skillName);
 
     console.log(`   ✅ Removed`);
@@ -507,48 +554,50 @@ export class SkillCollectionManager {
    */
   async generateAuditReport(): Promise<string> {
     const lines: string[] = [
-      '# Skill Collection Security Audit Report',
-      '',
+      "# Skill Collection Security Audit Report",
+      "",
       `Generated: ${new Date().toISOString()}`,
       `Total Skills: ${this.installedSkills.size}`,
-      '',
-      '## Installed Skills',
-      '',
+      "",
+      "## Installed Skills",
+      "",
     ];
 
     for (const [name, skill] of this.installedSkills) {
-      const cacheKey = skill.repository.replace('https://github.com/', '');
+      const cacheKey = skill.repository.replace("https://github.com/", "");
       const audit = this.auditCache.get(cacheKey);
 
       lines.push(`### ${name}`);
       lines.push(`- **Description**: ${skill.description}`);
       lines.push(`- **Source**: ${skill.repository}`);
       lines.push(`- **Author**: ${skill.author}`);
-      lines.push(`- **Verified**: ${skill.verified ? '✅ Yes' : '❌ No'}`);
+      lines.push(`- **Verified**: ${skill.verified ? "✅ Yes" : "❌ No"}`);
 
       if (audit) {
-        lines.push(`- **Audit Status**: ${audit.passed ? '✅ PASSED' : '❌ FAILED'}`);
-        lines.push(`- **Findings**: ${audit.criticalCount}C / ${audit.highCount}H / ${audit.mediumCount}M / ${audit.lowCount}L`);
-        lines.push('');
+        lines.push(`- **Audit Status**: ${audit.passed ? "✅ PASSED" : "❌ FAILED"}`);
+        lines.push(
+          `- **Findings**: ${audit.criticalCount}C / ${audit.highCount}H / ${audit.mediumCount}M / ${audit.lowCount}L`,
+        );
+        lines.push("");
 
         if (audit.findings.length > 0) {
-          lines.push('#### Security Findings');
-          lines.push('');
+          lines.push("#### Security Findings");
+          lines.push("");
           for (const finding of audit.findings) {
             lines.push(`**[${finding.severity.toUpperCase()}]** ${finding.id}: ${finding.title}`);
             lines.push(`- Category: ${finding.category}`);
             lines.push(`- Location: ${finding.file}:${finding.line}`);
             lines.push(`- ${finding.description}`);
             lines.push(`- Remediation: ${finding.remediation}`);
-            lines.push('');
+            lines.push("");
           }
         }
       }
 
-      lines.push('');
+      lines.push("");
     }
 
-    return lines.join('\n');
+    return lines.join("\n");
   }
 
   // ============================================================================
@@ -556,6 +605,7 @@ export class SkillCollectionManager {
   // ============================================================================
 
   private parseGitHubUrl(url: string): { owner: string; repo: string; path?: string } | null {
+    const normalized = url.replace(/\.git$/, "").replace(/\/$/, "");
     // Handle various GitHub URL formats
     const patterns = [
       /github\.com\/([^\/]+)\/([^\/]+)(?:\/tree\/[^\/]+\/(.+))?/,
@@ -563,11 +613,11 @@ export class SkillCollectionManager {
     ];
 
     for (const pattern of patterns) {
-      const match = url.match(pattern);
+      const match = normalized.match(pattern);
       if (match) {
         return {
           owner: match[1],
-          repo: match[2].replace('.git', ''),
+          repo: match[2],
           path: match[3],
         };
       }
@@ -580,28 +630,124 @@ export class SkillCollectionManager {
     owner: string,
     repo: string,
     path?: string,
-    branch: string = 'main'
+    branch: string = "main",
   ): Promise<string> {
-    // This would use git clone or download tarball
-    // Placeholder implementation
-    const tempPath = `/tmp/skill-import-${owner}-${repo}-${Date.now()}`;
+    const tempRoot = await mkdtemp(join(tmpdir(), `skill-import-${owner}-${repo}-`));
+    const tempPath = join(tempRoot, repo);
     console.log(`   Cloning ${owner}/${repo}...`);
-    // TODO: Implement actual download
-    return tempPath;
+    const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+
+    try {
+      await this.runGitImpl(["clone", "--depth", "1", "--branch", branch, cloneUrl, tempPath]);
+    } catch (error) {
+      if (branch !== "master") {
+        await this.runGitImpl(["clone", "--depth", "1", "--branch", "master", cloneUrl, tempPath]);
+      } else {
+        throw error;
+      }
+    }
+
+    if (!path) {
+      return tempPath;
+    }
+
+    const scopedPath = this.resolveWithinRoot(tempPath, path);
+    const scopedStats = await stat(scopedPath);
+    if (!scopedStats.isDirectory()) {
+      throw new Error(`Repository path '${path}' is not a directory`);
+    }
+    return scopedPath;
   }
 
   private async fetchCollectionSkills(collection: SkillCollection): Promise<void> {
-    // Fetch README and parse skill list
-    // This would parse the awesome-list format
     console.log(`   Fetching skills from ${collection.name}...`);
-    // TODO: Implement fetching
+    const readmeCandidates = [
+      `https://raw.githubusercontent.com/${collection.owner}/${collection.repo}/main/README.md`,
+      `https://raw.githubusercontent.com/${collection.owner}/${collection.repo}/master/README.md`,
+    ];
+
+    let readme = "";
+    for (const readmeUrl of readmeCandidates) {
+      try {
+        const response = await this.fetchImpl(readmeUrl);
+        if (!response.ok) continue;
+        readme = await response.text();
+        if (readme.trim().length > 0) break;
+      } catch {
+        // Try next candidate branch.
+      }
+    }
+
+    if (!readme) {
+      collection.skills = RECOMMENDED_SKILLS.filter((skill) =>
+        skill.repository.includes(`${collection.owner}/${collection.repo}`),
+      );
+      return;
+    }
+
+    const repoLinks = this.extractGitHubRepositoryLinks(readme);
+    const uniqueLinks = [...new Set(repoLinks)];
+
+    collection.skills = uniqueLinks.map((repositoryUrl) => {
+      const parsed = this.parseGitHubUrl(repositoryUrl);
+      const repoName = parsed?.repo ?? basename(repositoryUrl);
+      const author = parsed?.owner ?? "unknown";
+      return {
+        name: repoName,
+        description: `Imported from ${repositoryUrl}`,
+        repository: repositoryUrl,
+        author,
+        category: "community",
+        verified: false,
+        installCount: 0,
+      };
+    });
   }
 
   private async installSkill(tempPath: string, skillName: string): Promise<{ path: string }> {
-    // Copy from temp to install path
-    const finalPath = `${this.installPath}/${skillName}`;
-    // TODO: Implement copy
+    const installRoot = resolve(this.installPath);
+    await mkdir(installRoot, { recursive: true });
+    const safeSkillName = this.normalizeSkillName(skillName);
+    const finalPath = this.resolveWithinRoot(installRoot, safeSkillName);
+    await rm(finalPath, { recursive: true, force: true });
+    await cp(tempPath, finalPath, { recursive: true, force: true });
     return { path: finalPath };
+  }
+
+  private async runGit(args: string[], cwd?: string): Promise<void> {
+    await execFileAsync("git", args, cwd ? { cwd } : undefined);
+  }
+
+  private resolveWithinRoot(root: string, relativeOrAbsolutePath: string): string {
+    const rootPath = resolve(root);
+    const candidatePath = isAbsolute(relativeOrAbsolutePath)
+      ? resolve(relativeOrAbsolutePath)
+      : resolve(rootPath, relativeOrAbsolutePath);
+    if (candidatePath !== rootPath && !candidatePath.startsWith(`${rootPath}${sep}`)) {
+      throw new Error(`Path escapes root: ${relativeOrAbsolutePath}`);
+    }
+    return candidatePath;
+  }
+
+  private normalizeSkillName(skillName: string): string {
+    const normalized = skillName
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return normalized || "imported-skill";
+  }
+
+  private extractGitHubRepositoryLinks(markdown: string): string[] {
+    const links = markdown.match(/\[[^\]]+\]\((https:\/\/github\.com\/[^)\s]+)\)/g) || [];
+    const repositories: string[] = [];
+    for (const link of links) {
+      const match = link.match(/\((https:\/\/github\.com\/[^)\s]+)\)/);
+      if (!match) continue;
+      const parsed = this.parseGitHubUrl(match[1]);
+      if (!parsed) continue;
+      repositories.push(`https://github.com/${parsed.owner}/${parsed.repo}`);
+    }
+    return repositories;
   }
 }
 
@@ -634,8 +780,8 @@ export interface CollectionImportResult {
 
 export function createCollectionCommands(manager: SkillCollectionManager) {
   return {
-    'skill-collections': {
-      description: 'Browse available skill collections',
+    "skill-collections": {
+      description: "Browse available skill collections",
       handler: async () => {
         await manager.browseCollections();
         await manager.browseRecommended();
@@ -643,13 +789,9 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-import-github': {
-      description: 'Import skill from GitHub with mandatory audit',
-      handler: async (args: {
-        url: string;
-        allowMedium?: boolean;
-        branch?: string;
-      }) => {
+    "skill-import-github": {
+      description: "Import skill from GitHub with mandatory audit",
+      handler: async (args: { url: string; allowMedium?: boolean; branch?: string }) => {
         const result = await manager.importFromGitHub(args.url, {
           branch: args.branch,
           allowMedium: args.allowMedium,
@@ -666,13 +808,9 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-import-collection': {
-      description: 'Import entire skill collection with audits',
-      handler: async (args: {
-        name: string;
-        allowMedium?: boolean;
-        parallel?: boolean;
-      }) => {
+    "skill-import-collection": {
+      description: "Import entire skill collection with audits",
+      handler: async (args: { name: string; allowMedium?: boolean; parallel?: boolean }) => {
         const result = await manager.importCollection(args.name, {
           allowMedium: args.allowMedium,
           parallel: args.parallel,
@@ -687,12 +825,9 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-import-recommended': {
-      description: 'Import all recommended skills with audits',
-      handler: async (args: {
-        allowMedium?: boolean;
-        parallel?: boolean;
-      }) => {
+    "skill-import-recommended": {
+      description: "Import all recommended skills with audits",
+      handler: async (args: { allowMedium?: boolean; parallel?: boolean }) => {
         const result = await manager.importRecommended({
           allowMedium: args.allowMedium,
           parallel: args.parallel,
@@ -707,14 +842,14 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-list': {
-      description: 'List installed skills with audit status',
+    "skill-list": {
+      description: "List installed skills with audit status",
       handler: async () => {
         const skills = await manager.listInstalled();
         return {
           success: true,
           count: skills.length,
-          skills: skills.map(s => ({
+          skills: skills.map((s) => ({
             name: s.name,
             verified: s.verified,
             auditStatus: s.auditStatus,
@@ -723,8 +858,8 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-validate': {
-      description: 'Re-validate installed skill',
+    "skill-validate": {
+      description: "Re-validate installed skill",
       handler: async (args: { name: string }) => {
         const audit = await manager.validateSkill(args.name);
         return {
@@ -738,8 +873,8 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-audit-report': {
-      description: 'Generate comprehensive audit report',
+    "skill-audit-report": {
+      description: "Generate comprehensive audit report",
       handler: async () => {
         const report = await manager.generateAuditReport();
         return {
@@ -749,8 +884,8 @@ export function createCollectionCommands(manager: SkillCollectionManager) {
       },
     },
 
-    'skill-remove': {
-      description: 'Remove installed skill',
+    "skill-remove": {
+      description: "Remove installed skill",
       handler: async (args: { name: string }) => {
         const removed = await manager.removeSkill(args.name);
         return {

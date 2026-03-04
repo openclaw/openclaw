@@ -1,8 +1,9 @@
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
@@ -23,6 +24,12 @@ export function getLoadWebMediaMock(): AnyMock {
 vi.mock("../web/media.js", () => ({
   loadWebMedia,
 }));
+
+const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
+const lookupMock = vi.fn();
+let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
+let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn> = null;
 
 const { loadConfig } = vi.hoisted((): { loadConfig: AnyMock } => ({
   loadConfig: vi.fn(() => ({})),
@@ -263,6 +270,18 @@ export function makeForumGroupMessageCtx(params?: {
 }
 
 beforeEach(() => {
+  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+  resolvePinnedHostnameSpy = vi
+    .spyOn(ssrf, "resolvePinnedHostname")
+    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+  resolvePinnedHostnameWithPolicySpy = vi
+    .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+    .mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, {
+        ...params,
+        lookupFn: lookupMock,
+      }),
+    );
   resetInboundDedupe();
   loadConfig.mockReset();
   loadConfig.mockReturnValue({
@@ -325,4 +344,12 @@ beforeEach(() => {
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();
   sequentializeKey = undefined;
+});
+
+afterEach(() => {
+  lookupMock.mockClear();
+  resolvePinnedHostnameSpy?.mockRestore();
+  resolvePinnedHostnameSpy = null;
+  resolvePinnedHostnameWithPolicySpy?.mockRestore();
+  resolvePinnedHostnameWithPolicySpy = null;
 });

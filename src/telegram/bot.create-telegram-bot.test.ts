@@ -50,6 +50,13 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
+const VALID_TINY_PNG_BYTES = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c,
+  0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xff, 0x1f, 0x00,
+  0x03, 0x03, 0x02, 0x00, 0xed, 0xb1, 0xab, 0xa9, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+  0xae, 0x42, 0x60, 0x82,
+]);
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
@@ -1950,7 +1957,7 @@ describe("createTelegramBot", () => {
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
-        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        new Response(VALID_TINY_PNG_BYTES, {
           status: 200,
           headers: { "content-type": "image/png" },
         }),
@@ -2178,7 +2185,7 @@ describe("createTelegramBot", () => {
       if (fetchCallIndex === 2) {
         throw new Error("MediaFetchError: Failed to fetch media");
       }
-      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+      return new Response(VALID_TINY_PNG_BYTES, {
         status: 200,
         headers: { "content-type": "image/png" },
       });
@@ -2264,7 +2271,7 @@ describe("createTelegramBot", () => {
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
-        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        new Response(VALID_TINY_PNG_BYTES, {
           status: 200,
           headers: { "content-type": "image/png" },
         }),

@@ -1,0 +1,11 @@
+#!/bin/bash
+echo "🚀 Deploy ECC Code to ClawCloud"
+echo "============================"
+echo "1. Fork openclaw repo to your GitHub"
+echo "2. Push your ECC code to your fork"
+echo "3. Update ClawCloud app to use your fork URL"
+echo ""
+echo "Commands:"
+echo "git remote add fork https://github.com/YOUR_USERNAME/openclaw.git"
+echo "git push fork main"
+echo "Then update app's git repo URL in ClawCloud dashboard"
