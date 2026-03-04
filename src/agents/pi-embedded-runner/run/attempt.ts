@@ -1654,7 +1654,6 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          modelCallStartedAt = Date.now();
           logModelApiRequest({
             runId: params.runId,
             provider: params.provider,
@@ -1662,8 +1661,15 @@ export async function runEmbeddedAttempt(
             promptChars: effectivePrompt.length,
             systemPromptChars: systemPromptText?.length ?? 0,
             historyMessages: activeSession.messages.length,
+            historyChars: activeSession.messages.reduce(
+              (sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0),
+              0,
+            ),
             imagesCount: imageResult.images.length,
           });
+          // Set modelCallStartedAt AFTER logModelApiRequest so that if logging throws,
+          // the response log in the finally block is skipped (no orphaned response line).
+          modelCallStartedAt = Date.now();
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
