@@ -487,6 +487,16 @@ export async function finalizeOnboardingWizard(
       ].join("\n"),
       "Web search",
     );
+  } else {
+    await prompter.note(
+      [
+        "Web search was skipped. You can enable it later:",
+        `  ${formatCliCommand("openclaw configure --section web")}`,
+        "",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
   }
 
   await prompter.note(
