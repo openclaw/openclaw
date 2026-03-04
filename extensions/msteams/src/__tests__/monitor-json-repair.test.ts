@@ -94,7 +94,7 @@ describe("msteams JSON repair middleware", () => {
     const { body, path } = twoPassParse(VALID_ESCAPES_PAYLOAD);
     expect(path).toBe("first_pass"); // No repair needed for valid JSON
     const obj = body as Record<string, string>;
-    expect(obj["text"]).toBe("line1\nline2\ttab\"quote\\backslash");
+    expect(obj["text"]).toBe('line1\nline2\ttab"quote\\backslash');
   });
 
   it("completely malformed JSON is re-thrown (caller returns HTTP 200 to prevent backoff)", () => {
