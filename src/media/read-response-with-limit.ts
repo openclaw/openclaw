@@ -1,3 +1,20 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("media/fetch");
+
+function warnReaderOperationFailed(params: {
+  operation: "cancel" | "releaseLock";
+  error: unknown;
+  maxBytes: number;
+  url?: string;
+}): void {
+  log.warn(`response stream reader ${params.operation} failed`, {
+    error: String(params.error),
+    maxBytes: params.maxBytes,
+    url: params.url || undefined,
+  });
+}
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -33,7 +50,14 @@ export async function readResponseWithLimit(
         if (total > maxBytes) {
           try {
             await reader.cancel();
-          } catch {}
+          } catch (error) {
+            warnReaderOperationFailed({
+              operation: "cancel",
+              error,
+              maxBytes,
+              url: res.url,
+            });
+          }
           throw onOverflow({ size: total, maxBytes, res });
         }
         chunks.push(value);
@@ -42,7 +66,14 @@ export async function readResponseWithLimit(
   } finally {
     try {
       reader.releaseLock();
-    } catch {}
+    } catch (error) {
+      warnReaderOperationFailed({
+        operation: "releaseLock",
+        error,
+        maxBytes,
+        url: res.url,
+      });
+    }
   }
 
   return Buffer.concat(
