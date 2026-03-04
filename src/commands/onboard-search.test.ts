@@ -62,6 +62,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("brave");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-test-key");
   });
 
@@ -73,6 +74,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("gemini");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.tools?.web?.search?.gemini?.apiKey).toBe("AIza-test");
   });
 
@@ -84,6 +86,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
   });
 
@@ -95,6 +98,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("kimi");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.tools?.web?.search?.kimi?.apiKey).toBe("sk-moonshot");
   });
 
@@ -128,6 +132,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
   it("quickstart skips key prompt when env var is available", async () => {
@@ -140,6 +145,7 @@ describe("setupSearch", () => {
         quickstartDefaults: true,
       });
       expect(result.tools?.web?.search?.provider).toBe("brave");
+      expect(result.tools?.web?.search?.enabled).toBe(true);
       expect(prompter.text).not.toHaveBeenCalled();
     } finally {
       if (orig === undefined) {

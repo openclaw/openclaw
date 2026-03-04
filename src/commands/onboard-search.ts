@@ -56,7 +56,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   },
 ] as const;
 
-function hasKeyInEnv(entry: SearchProviderEntry): boolean {
+export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
 }
 
@@ -79,7 +79,7 @@ export function resolveExistingKey(
   }
 }
 
-function applySearchKey(
+export function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: string,

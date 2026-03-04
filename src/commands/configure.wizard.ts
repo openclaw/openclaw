@@ -168,7 +168,8 @@ async function promptWebToolsConfig(
   const existingFetch = nextConfig.tools?.web?.fetch;
   const existingProvider = existingSearch?.provider ?? "perplexity";
 
-  const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey } = await import("./onboard-search.js");
+  const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, applySearchKey, hasKeyInEnv } =
+    await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
 
   const hasKeyForProvider = (provider: string): boolean => {
@@ -176,8 +177,7 @@ async function promptWebToolsConfig(
     if (!entry) {
       return false;
     }
-    const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
-    return Boolean(resolveExistingKey(nextConfig, provider as SP)) || envAvailable;
+    return Boolean(resolveExistingKey(nextConfig, provider as SP)) || hasKeyInEnv(entry);
   };
 
   note(
@@ -242,36 +242,8 @@ async function promptWebToolsConfig(
     const key = String(keyInput ?? "").trim();
 
     if (key || hasKey) {
-      const apiKey = key || existingKey;
-      switch (providerChoice) {
-        case "brave":
-          nextSearch = { ...nextSearch, apiKey };
-          break;
-        case "perplexity":
-          nextSearch = {
-            ...nextSearch,
-            perplexity: { ...existingSearch?.perplexity, apiKey },
-          };
-          break;
-        case "gemini":
-          nextSearch = {
-            ...nextSearch,
-            gemini: { ...existingSearch?.gemini, apiKey },
-          };
-          break;
-        case "grok":
-          nextSearch = {
-            ...nextSearch,
-            grok: { ...existingSearch?.grok, apiKey },
-          };
-          break;
-        case "kimi":
-          nextSearch = {
-            ...nextSearch,
-            kimi: { ...existingSearch?.kimi, apiKey },
-          };
-          break;
-      }
+      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
+      nextSearch = { ...applied.tools?.web?.search };
     } else if (!envAvailable) {
       nextSearch = { ...nextSearch, enabled: false };
       note(
