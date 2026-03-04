@@ -229,12 +229,30 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Distinct-directory duplicate: apply precedence-based dedup.
+      // Keep the higher-precedence origin and skip the lower-precedence one
+      // instead of registering both. Downgrade to info since this is expected
+      // during upgrades (e.g. feishu in both legacy bundled and new global path).
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (candidateRank < existingRank) {
+        // Incoming candidate has higher precedence — replace the existing record
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
       diagnostics.push({
-        level: "warn",
+        level: "info",
         pluginId: manifest.id,
         source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        message: `duplicate plugin id "${manifest.id}" from distinct directory skipped in favor of ${candidateRank < existingRank ? candidate.origin : existing.candidate.origin} origin (${candidateRank < existingRank ? candidate.source : existing.candidate.source})`,
       });
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("deduplicates distinct-directory plugins with same id using precedence and emits info diagnostic", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -150,7 +150,45 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    // No warn-level duplicate diagnostics
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Info-level diagnostic emitted instead
+    const infoDiags = registry.diagnostics.filter(
+      (d) => d.level === "info" && d.message?.includes("duplicate plugin id"),
+    );
+    expect(infoDiags.length).toBe(1);
+    // Only one plugin record kept (deduplicated)
+    expect(registry.plugins.length).toBe(1);
+    // Higher precedence origin wins (global > bundled)
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("selects higher-precedence origin when distinct-directory duplicates appear in any order", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu-dedup", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    // config origin comes second but has highest precedence
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu-dedup",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu-dedup",
+        rootDir: dirB,
+        origin: "config",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
