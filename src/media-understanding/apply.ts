@@ -117,7 +117,6 @@ const BINARY_FILE_EXTENSIONS = new Set([
   ".tif",
   ".webp",
   ".ico",
-  ".svg",
   ".psd",
   ".ai",
   ".eps",
@@ -163,6 +162,7 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".yaml", "text/yaml"],
   [".yml", "text/yaml"],
   [".xml", "application/xml"],
+  [".svg", "image/svg+xml"],
 ]);
 
 const XML_ESCAPE_MAP: Record<string, string> = {
