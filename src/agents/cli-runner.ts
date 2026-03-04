@@ -79,11 +79,10 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
+  const systemPromptSuffix = params.config?.agents?.defaults?.systemPromptSuffix?.trim();
+
   const extraSystemPrompt = [
-    mergeExtraSystemPrompt(
-      params.extraSystemPrompt?.trim(),
-      params.config?.agents?.defaults?.systemPromptSuffix,
-    ),
+    mergeExtraSystemPrompt(params.extraSystemPrompt?.trim(), systemPromptSuffix),
     "Tools are disabled in this session. Do not call tools.",
   ]
     .filter(Boolean)
@@ -148,14 +147,20 @@ export async function runCliAgent(params: {
       cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
     );
     const systemPromptArg = resolveSystemPromptUsage({
-      backend,
+      backend:
+        systemPromptSuffix && backend.systemPromptWhen === "first"
+          ? { ...backend, systemPromptWhen: "always" }
+          : backend,
       isNewSession: isNew,
       systemPrompt,
     });
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
-    let prompt = params.prompt;
+    let prompt =
+      systemPromptSuffix && !backend.systemPromptArg?.trim()
+        ? `${systemPromptSuffix}\n\n${params.prompt}`
+        : params.prompt;
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;

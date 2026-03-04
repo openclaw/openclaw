@@ -242,6 +242,80 @@ describe("runCliAgent with process supervisor", () => {
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { cwd?: string };
     expect(input.cwd).toBe(path.resolve(fallbackWorkspace));
   });
+
+  it("re-applies system prompt on resumed claude-cli sessions when systemPromptSuffix is configured", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 30,
+        stdout: '{"type":"result","result":"ok"}',
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s-claude",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "continue",
+      provider: "claude-cli",
+      timeoutMs: 1_000,
+      runId: "run-claude-resume",
+      cliSessionId: "sess-1",
+      config: {
+        agents: {
+          defaults: {
+            systemPromptSuffix: "RULE: always include citations.",
+          },
+        },
+      },
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv).toContain("--append-system-prompt");
+  });
+
+  it("prepends systemPromptSuffix to prompt for codex-cli when backend has no system prompt arg", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 30,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s-codex",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "fix this",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-codex-suffix",
+      config: {
+        agents: {
+          defaults: {
+            systemPromptSuffix: "RULE: no secrets.",
+          },
+        },
+      },
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const joined = (input.argv ?? []).join(" ");
+    expect(joined).toContain("RULE: no secrets.");
+    expect(joined).toContain("fix this");
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
