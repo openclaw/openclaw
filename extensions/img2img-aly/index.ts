@@ -280,7 +280,7 @@ export function createImg2ImgAlyTool(options?: {
   return {
     name: "img2img_aly",
     description:
-      "图像编辑工具。在各类中任务中表现优于 `img2img` 工具\n---\n注意：\n- model 的值目前只支持 `qwen-image-edit-max`\n- 正向提示词，不能超过800字符",
+      "图像编辑工具。\n---\n注意：\n- model 的值目前只支持 `qwen-image-edit-max`\n- 正向提示词，不能超过800字符",
     parameters: {
       type: "object",
       properties: {
