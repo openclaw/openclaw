@@ -153,11 +153,8 @@ export const registerTelegramHandlers = ({
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext }>;
     timer: ReturnType<typeof setTimeout>;
-    storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
-    resolvedThreadId?: number;
-    dmThreadId?: number;
   };
   const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
   let documentBatchProcessing: Promise<void> = Promise.resolve();
@@ -1071,11 +1068,8 @@ export const registerTelegramHandlers = ({
           key: docBatchKey,
           messages: [{ msg, ctx }],
           timer: setTimeout(() => {}, documentBatchWindowMs),
-          storeAllowFrom,
           sendOversizeWarning,
           oversizeLogMessage,
-          resolvedThreadId,
-          dmThreadId,
         };
         documentBatchBuffer.set(docBatchKey, entry);
         scheduleDocumentBatchFlush(entry);
