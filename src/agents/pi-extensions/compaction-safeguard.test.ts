@@ -740,6 +740,78 @@ describe("compaction-safeguard double-compaction guard", () => {
   });
 });
 
+describe("compaction-safeguard cancel reasons", () => {
+  it("sets lastCancelReason when there are no messages to compact", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No conversation history to compact");
+  });
+
+  it("sets lastCancelReason when no model is configured", async () => {
+    const sessionManager = stubSessionManager();
+    // No model in runtime, no ctx.model either → model missing path
+
+    const mockEvent = createCompactionEvent({ messageText: "hello", tokensBefore: 1500 });
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: null });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No model configured for compaction summarization");
+  });
+
+  it("sets lastCancelReason when no API key is available", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = createCompactionEvent({ messageText: "hello", tokensBefore: 1500 });
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: null });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No API key available for compaction model");
+  });
+
+  it("preserves existing runtime fields when setting lastCancelReason", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, maxHistoryShare: 0.6 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("No conversation history to compact");
+    // Other fields must be untouched
+    expect(runtime?.maxHistoryShare).toBe(0.6);
+    expect(runtime?.model).toEqual(model);
+  });
+});
+
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {

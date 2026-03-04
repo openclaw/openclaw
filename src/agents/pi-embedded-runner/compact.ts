@@ -747,7 +747,7 @@ export async function compactEmbeddedPiSessionDirect(
     // The Pi SDK emits a generic "Compaction cancelled" when the safeguard
     // returns { cancel: true }. Surface the specific reason stored by the
     // safeguard so the user understands why compaction was cancelled.
-    if (safeguardSessionManager && /\bcancelled\b/i.test(reason)) {
+    if (safeguardSessionManager && /\bcompaction\s+cancelled\b/i.test(reason)) {
       const runtime = getCompactionSafeguardRuntime(safeguardSessionManager);
       if (runtime?.lastCancelReason) {
         reason = runtime.lastCancelReason;
