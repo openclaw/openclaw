@@ -329,6 +329,23 @@ describe("bedrock discovery", () => {
     );
   });
 
+  it("does not cache partial discovery results", async () => {
+    const { discoverBedrockModels } = await loadDiscovery();
+    setupDiscoveryResponses({
+      foundationError: new Error("foundation-model discovery failed"),
+      inferencePages: [
+        { inferenceProfileSummaries: [baseInferenceProfileSummary] },
+        { inferenceProfileSummaries: [baseInferenceProfileSummary] },
+      ],
+    });
+
+    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    // Each call should re-run both source queries when the previous result was partial.
+    expect(sendMock).toHaveBeenCalledTimes(4);
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     const { discoverBedrockModels } = await loadDiscovery();
     setupDiscoveryResponses({

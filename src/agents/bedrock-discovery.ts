@@ -303,6 +303,7 @@ export async function discoverBedrockModels(params: {
 
   const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
   const client = clientFactory(params.region);
+  let hadPartialFailure = false;
 
   const discoveryPromise = (async () => {
     const defaults = {
@@ -322,6 +323,7 @@ export async function discoverBedrockModels(params: {
         discovered.push(toModelDefinitionFromFoundationModel(summary, defaults));
       }
     } catch (error) {
+      hadPartialFailure = true;
       log.warn(`Failed to list foundation models during Bedrock discovery: ${String(error)}`);
       partialFailures.push(error);
     }
@@ -335,6 +337,7 @@ export async function discoverBedrockModels(params: {
         discovered.push(toModelDefinitionFromInferenceProfile(summary, defaults));
       }
     } catch (error) {
+      hadPartialFailure = true;
       log.warn(`Failed to list inference profiles during Bedrock discovery: ${String(error)}`);
       partialFailures.push(error);
     }
@@ -356,10 +359,14 @@ export async function discoverBedrockModels(params: {
   try {
     const value = await discoveryPromise;
     if (refreshIntervalSeconds > 0) {
-      discoveryCache.set(cacheKey, {
-        expiresAt: now + refreshIntervalSeconds * 1000,
-        value,
-      });
+      if (hadPartialFailure) {
+        discoveryCache.delete(cacheKey);
+      } else {
+        discoveryCache.set(cacheKey, {
+          expiresAt: now + refreshIntervalSeconds * 1000,
+          value,
+        });
+      }
     }
     return value;
   } catch (error) {
