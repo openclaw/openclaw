@@ -62,6 +62,23 @@ export function parseDurationMs(input: string): number | null {
   return Math.floor(n * factor);
 }
 
+export function parseCronStaggerMs(params: {
+  staggerRaw: string;
+  useExact: boolean;
+}): number | undefined {
+  if (params.useExact) {
+    return 0;
+  }
+  if (!params.staggerRaw) {
+    return undefined;
+  }
+  const parsed = parseDurationMs(params.staggerRaw);
+  if (!parsed) {
+    throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
+  return parsed;
+}
+
 export function parseAt(input: string): string | null {
   const raw = input.trim();
   if (!raw) {

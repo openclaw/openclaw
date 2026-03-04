@@ -35,6 +35,15 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 }
 ```
 
+## Thinking defaults (Claude 4.6)
+
+- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- You can override per-message (`/think:<level>`) or in model params:
+  `agents.defaults.models["anthropic/<model>"].params.thinking`.
+- Related Anthropic docs:
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 ## Prompt caching (Anthropic API)
 
 OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.

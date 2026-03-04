@@ -1,17 +1,23 @@
 import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "../commands/auth-choice.apply-helpers.js";
+import {
   normalizeGatewayTokenInput,
   randomToken,
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
-import type { GatewayAuthChoice } from "../commands/onboard-types.js";
+import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_DOCS_LINES,
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
@@ -22,26 +28,13 @@ import type {
 } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
-// These commands are "high risk" (privacy writes/recording) and should be
-// explicitly armed by the user when they want to use them.
-//
-// This only affects what the gateway will accept via node.invoke; the iOS app
-// still prompts for OS permissions (camera/photos/contacts/etc) on first use.
-const DEFAULT_DANGEROUS_NODE_DENY_COMMANDS = [
-  "camera.snap",
-  "camera.clip",
-  "screen.record",
-  "calendar.add",
-  "contacts.add",
-  "reminders.add",
-];
-
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
   baseConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   localPort: number;
   quickstartGateway: QuickstartGatewayDefaults;
+  secretInputMode?: SecretInputMode;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
@@ -161,25 +154,57 @@ export async function configureGatewayForOnboarding(
   let gatewayToken: string | undefined;
   if (authMode === "token") {
     if (flow === "quickstart") {
-      gatewayToken = quickstartGateway.token ?? randomToken();
+      gatewayToken =
+        (quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
+        randomToken();
     } else {
       const tokenInput = await prompter.text({
         message: "Gateway token (blank to generate)",
         placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue: quickstartGateway.token ?? "",
+        initialValue:
+          quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+          "",
       });
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }
   }
 
   if (authMode === "password") {
-    const password =
-      flow === "quickstart" && quickstartGateway.password
-        ? quickstartGateway.password
-        : await prompter.text({
+    let password: SecretInput | undefined =
+      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+    if (!password) {
+      const selectedMode = await resolveSecretInputModeForEnvSelection({
+        prompter,
+        explicitMode: opts.secretInputMode,
+        copy: {
+          modeMessage: "How do you want to provide the gateway password?",
+          plaintextLabel: "Enter password now",
+          plaintextHint: "Stores the password directly in OpenClaw config",
+        },
+      });
+      if (selectedMode === "ref") {
+        const resolved = await promptSecretRefForOnboarding({
+          provider: "gateway-auth-password",
+          config: nextConfig,
+          prompter,
+          preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
+          copy: {
+            sourceMessage: "Where is this gateway password stored?",
+            envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        });
+        password = resolved.ref;
+      } else {
+        password = String(
+          (await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
-          });
+          })) ?? "",
+        ).trim();
+      }
+    }
     nextConfig = {
       ...nextConfig,
       gateway: {
@@ -187,7 +212,7 @@ export async function configureGatewayForOnboarding(
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          password: String(password ?? "").trim(),
+          password,
         },
       },
     };
@@ -244,7 +269,7 @@ export async function configureGatewayForOnboarding(
         ...nextConfig.gateway,
         nodes: {
           ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_DENY_COMMANDS],
+          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
         },
       },
     };

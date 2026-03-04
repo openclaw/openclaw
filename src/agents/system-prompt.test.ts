@@ -286,6 +286,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
   });
 
+  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      sandboxInfo: {
+        enabled: true,
+      },
+    });
+
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+    expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
+    expect(prompt).toContain('`runtime: "acp"`');
+    expect(prompt).toContain('Use `runtime: "subagent"` instead.');
+  });
+
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -503,6 +525,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
     );
+  });
+
+  it("renders bootstrap truncation warning even when no context files are injected", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapTruncationWarningLines: ["AGENTS.md: 200 raw -> 0 injected"],
+      contextFiles: [],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("⚠ Bootstrap truncation warning:");
+    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
   });
 
   it("summarizes the message tool when available", () => {

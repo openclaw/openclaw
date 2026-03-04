@@ -4,6 +4,10 @@ vi.mock("./doctor-completion.js", () => ({
   doctorShellCompletion: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-bootstrap-size.js", () => ({
+  noteBootstrapFileSize: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));
@@ -48,4 +52,8 @@ vi.mock("./doctor-ui.js", () => ({
 
 vi.mock("./doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: vi.fn(),
+}));
+
+vi.mock("./oauth-tls-preflight.js", () => ({
+  noteOpenAIOAuthTlsPrerequisites: vi.fn().mockResolvedValue(undefined),
 }));

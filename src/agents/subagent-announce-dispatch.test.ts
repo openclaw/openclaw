@@ -28,15 +28,25 @@ describe("mapQueueOutcomeToDeliveryResult", () => {
 });
 
 describe("runSubagentAnnounceDispatch", () => {
-  it("uses queue-first ordering for non-completion mode", async () => {
-    const queue = vi.fn(async () => "none" as const);
-    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-
+  async function runNonCompletionDispatch(params: {
+    queueOutcome: "none" | "queued" | "steered";
+    directDelivered?: boolean;
+  }) {
+    const queue = vi.fn(async () => params.queueOutcome);
+    const direct = vi.fn(async () => ({
+      delivered: params.directDelivered ?? true,
+      path: "direct" as const,
+    }));
     const result = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
       queue,
       direct,
     });
+    return { queue, direct, result };
+  }
+
+  it("uses queue-first ordering for non-completion mode", async () => {
+    const { queue, direct, result } = await runNonCompletionDispatch({ queueOutcome: "none" });
 
     expect(queue).toHaveBeenCalledTimes(1);
     expect(direct).toHaveBeenCalledTimes(1);
@@ -49,14 +59,7 @@ describe("runSubagentAnnounceDispatch", () => {
   });
 
   it("short-circuits direct send when non-completion queue delivers", async () => {
-    const queue = vi.fn(async () => "queued" as const);
-    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-
-    const result = await runSubagentAnnounceDispatch({
-      expectsCompletionMessage: false,
-      queue,
-      direct,
-    });
+    const { queue, direct, result } = await runNonCompletionDispatch({ queueOutcome: "queued" });
 
     expect(queue).toHaveBeenCalledTimes(1);
     expect(direct).not.toHaveBeenCalled();

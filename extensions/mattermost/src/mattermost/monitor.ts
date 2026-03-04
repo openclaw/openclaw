@@ -4,7 +4,7 @@ import type {
   OpenClawConfig,
   ReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 import {
   buildAgentMediaPayload,
   DM_GROUP_ACCESS_REASON,
@@ -25,8 +25,9 @@ import {
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
+  listSkillCommandsForAgents,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -34,6 +35,7 @@ import {
   fetchMattermostChannel,
   fetchMattermostMe,
   fetchMattermostUser,
+  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
   type MattermostChannel,
@@ -54,6 +56,19 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { sendMessageMattermost } from "./send.js";
+import {
+  DEFAULT_COMMAND_SPECS,
+  cleanupSlashCommands,
+  isSlashCommandsEnabled,
+  registerSlashCommands,
+  resolveCallbackUrl,
+  resolveSlashCommandConfig,
+} from "./slash-commands.js";
+import {
+  activateSlashCommands,
+  deactivateSlashCommands,
+  getSlashCommandState,
+} from "./slash-state.js";
 
 export type MonitorMattermostOpts = {
   botToken?: string;
@@ -110,15 +125,22 @@ function isSystemPost(post: MattermostPost): boolean {
   return Boolean(type);
 }
 
-function channelKind(channelType?: string | null): ChatType {
+export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   if (!channelType) {
     return "channel";
   }
+  // Mattermost channel types: D=direct, G=group DM, O=public channel, P=private channel.
   const normalized = channelType.trim().toUpperCase();
   if (normalized === "D") {
     return "direct";
   }
   if (normalized === "G") {
+    return "group";
+  }
+  if (normalized === "P") {
+    // Private channels are invitation-restricted spaces; route as "group" so
+    // groupPolicy / groupAllowFrom can gate access separately from open public
+    // channels (type "O"), and the From prefix becomes mattermost:group:<id>.
     return "group";
   }
   return "channel";
@@ -196,6 +218,144 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+
+  // ─── Slash command registration ──────────────────────────────────────────
+  const commandsRaw = account.config.commands as
+    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
+    | undefined;
+  const slashConfig = resolveSlashCommandConfig(commandsRaw);
+  const slashEnabled = isSlashCommandsEnabled(slashConfig);
+
+  if (slashEnabled) {
+    try {
+      const teams = await fetchMattermostUserTeams(client, botUserId);
+
+      // Use the *runtime* listener port when available (e.g. `openclaw gateway run --port <port>`).
+      // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
+      // a different port.
+      const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
+      const envPort = envPortRaw ? Number.parseInt(envPortRaw, 10) : NaN;
+      const gatewayPort =
+        Number.isFinite(envPort) && envPort > 0 ? envPort : (cfg.gateway?.port ?? 18789);
+
+      const callbackUrl = resolveCallbackUrl({
+        config: slashConfig,
+        gatewayPort,
+        gatewayHost: cfg.gateway?.customBindHost ?? undefined,
+      });
+
+      const isLoopbackHost = (hostname: string) =>
+        hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+      try {
+        const mmHost = new URL(baseUrl).hostname;
+        const callbackHost = new URL(callbackUrl).hostname;
+
+        // NOTE: We cannot infer network reachability from hostnames alone.
+        // Mattermost might be accessed via a public domain while still running on the same
+        // machine as the gateway (where http://localhost:<port> is valid).
+        // So treat loopback callback URLs as an advisory warning only.
+        if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
+          runtime.error?.(
+            `mattermost: slash commands callbackUrl resolved to ${callbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
+          );
+        }
+      } catch {
+        // URL parse failed; ignore and continue (we'll fail naturally if registration requests break).
+      }
+
+      const commandsToRegister: import("./slash-commands.js").MattermostCommandSpec[] = [
+        ...DEFAULT_COMMAND_SPECS,
+      ];
+
+      if (slashConfig.nativeSkills === true) {
+        try {
+          const skillCommands = listSkillCommandsForAgents({ cfg: cfg as any });
+          for (const spec of skillCommands) {
+            const name = typeof spec.name === "string" ? spec.name.trim() : "";
+            if (!name) continue;
+            const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
+            commandsToRegister.push({
+              trigger,
+              description: spec.description || `Run skill ${name}`,
+              autoComplete: true,
+              autoCompleteHint: "[args]",
+              originalName: name,
+            });
+          }
+        } catch (err) {
+          runtime.error?.(`mattermost: failed to list skill commands: ${String(err)}`);
+        }
+      }
+
+      // Deduplicate by trigger
+      const seen = new Set<string>();
+      const dedupedCommands = commandsToRegister.filter((cmd) => {
+        const key = cmd.trigger.trim();
+        if (!key) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
+      let teamRegistrationFailures = 0;
+
+      for (const team of teams) {
+        try {
+          const registered = await registerSlashCommands({
+            client,
+            teamId: team.id,
+            creatorUserId: botUserId,
+            callbackUrl,
+            commands: dedupedCommands,
+            log: (msg) => runtime.log?.(msg),
+          });
+          allRegistered.push(...registered);
+        } catch (err) {
+          teamRegistrationFailures += 1;
+          runtime.error?.(
+            `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
+          );
+        }
+      }
+
+      if (allRegistered.length === 0) {
+        runtime.error?.(
+          "mattermost: native slash commands enabled but no commands could be registered; keeping slash callbacks inactive",
+        );
+      } else {
+        if (teamRegistrationFailures > 0) {
+          runtime.error?.(
+            `mattermost: slash command registration completed with ${teamRegistrationFailures} team error(s)`,
+          );
+        }
+
+        // Build trigger→originalName map for accurate command name resolution
+        const triggerMap = new Map<string, string>();
+        for (const cmd of dedupedCommands) {
+          if (cmd.originalName) {
+            triggerMap.set(cmd.trigger, cmd.originalName);
+          }
+        }
+
+        activateSlashCommands({
+          account,
+          commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
+          registeredCommands: allRegistered,
+          triggerMap,
+          api: { cfg, runtime },
+          log: (msg) => runtime.log?.(msg),
+        });
+
+        runtime.log?.(
+          `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${callbackUrl})`,
+        );
+      }
+    } catch (err) {
+      runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
+    }
+  }
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
@@ -352,7 +512,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const channelInfo = await resolveChannelInfo(channelId);
     const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
-    const kind = channelKind(channelType);
+    const kind = mapMattermostChannelTypeToChatType(channelType);
     const chatType = channelChatType(kind);
 
     const senderName =
@@ -863,7 +1023,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage(`mattermost: drop reaction (cannot resolve channel type for ${channelId})`);
       return;
     }
-    const kind = channelKind(channelInfo.type);
+    const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
     const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -1003,6 +1163,37 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
   });
 
+  let slashShutdownCleanup: Promise<void> | null = null;
+
+  // Clean up slash commands on shutdown
+  if (slashEnabled) {
+    const runAbortCleanup = () => {
+      if (slashShutdownCleanup) {
+        return;
+      }
+      // Snapshot registered commands before deactivating state.
+      // This listener may run concurrently with startup in a new process, so we keep
+      // monitor shutdown alive until the remote cleanup completes.
+      const commands = getSlashCommandState(account.accountId)?.registeredCommands ?? [];
+      // Deactivate state immediately to prevent new local dispatches during teardown.
+      deactivateSlashCommands(account.accountId);
+
+      slashShutdownCleanup = cleanupSlashCommands({
+        client,
+        commands,
+        log: (msg) => runtime.log?.(msg),
+      }).catch((err) => {
+        runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
+      });
+    };
+
+    if (opts.abortSignal?.aborted) {
+      runAbortCleanup();
+    } else {
+      opts.abortSignal?.addEventListener("abort", runAbortCleanup, { once: true });
+    }
+  }
+
   await runWithReconnect(connectOnce, {
     abortSignal: opts.abortSignal,
     jitterRatio: 0.2,
@@ -1014,4 +1205,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
     },
   });
+
+  if (slashShutdownCleanup) {
+    await slashShutdownCleanup;
+  }
 }

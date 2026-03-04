@@ -13,6 +13,9 @@ export type DraftLaneState = {
 export type ArchivedPreview = {
   messageId: number;
   textSnapshot: string;
+  // Boundary-finalized previews should remain visible even if no matching
+  // final edit arrives; superseded previews can be safely deleted.
+  deleteIfUnused?: boolean;
 };
 
 export type LaneDeliveryResult = "preview-finalized" | "preview-updated" | "sent" | "skipped";
@@ -101,25 +104,58 @@ type ConsumeArchivedAnswerPreviewParams = {
   canEditViaPreview: boolean;
 };
 
+type PreviewUpdateContext = "final" | "update";
+type RegressiveSkipMode = "always" | "existingOnly";
+
+type ResolvePreviewTargetParams = {
+  lane: DraftLaneState;
+  previewMessageIdOverride?: number;
+  stopBeforeEdit: boolean;
+  context: PreviewUpdateContext;
+};
+
+type PreviewTargetResolution = {
+  hadPreviewMessage: boolean;
+  previewMessageId: number | undefined;
+  stopCreatesFirstPreview: boolean;
+};
+
+function shouldSkipRegressivePreviewUpdate(args: {
+  currentPreviewText: string | undefined;
+  text: string;
+  skipRegressive: RegressiveSkipMode;
+  hadPreviewMessage: boolean;
+}): boolean {
+  const currentPreviewText = args.currentPreviewText;
+  if (currentPreviewText === undefined) {
+    return false;
+  }
+  return (
+    currentPreviewText.startsWith(args.text) &&
+    args.text.length < currentPreviewText.length &&
+    (args.skipRegressive === "always" || args.hadPreviewMessage)
+  );
+}
+
+function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTargetResolution {
+  const lanePreviewMessageId = params.lane.stream?.messageId();
+  const previewMessageId =
+    typeof params.previewMessageIdOverride === "number"
+      ? params.previewMessageIdOverride
+      : lanePreviewMessageId;
+  const hadPreviewMessage =
+    typeof params.previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
+  return {
+    hadPreviewMessage,
+    previewMessageId: typeof previewMessageId === "number" ? previewMessageId : undefined,
+    stopCreatesFirstPreview:
+      params.stopBeforeEdit && !hadPreviewMessage && params.context === "final",
+  };
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
-
-  const shouldSkipRegressivePreviewUpdate = (args: {
-    currentPreviewText: string | undefined;
-    text: string;
-    skipRegressive: "always" | "existingOnly";
-    hadPreviewMessage: boolean;
-  }): boolean => {
-    const currentPreviewText = args.currentPreviewText;
-    if (currentPreviewText === undefined) {
-      return false;
-    }
-    return (
-      currentPreviewText.startsWith(args.text) &&
-      args.text.length < currentPreviewText.length &&
-      (args.skipRegressive === "always" || args.hadPreviewMessage)
-    );
-  };
+  const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
 
   const tryEditPreviewMessage = async (args: {
     laneName: LaneName;
@@ -171,22 +207,22 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
   }: TryUpdatePreviewParams): Promise<boolean> => {
-    if (!lane.stream) {
-      return false;
-    }
-    const lanePreviewMessageId = lane.stream.messageId();
-    const hadPreviewMessage =
-      typeof previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
-    const stopCreatesFirstPreview = stopBeforeEdit && !hadPreviewMessage && context === "final";
-    if (stopCreatesFirstPreview) {
-      // Final stop() can create the first visible preview message.
-      // Prime pending text so the stop flush sends the final text snapshot.
-      lane.stream.update(text);
-      await params.stopDraftLane(lane);
-      const previewMessageId = lane.stream.messageId();
-      if (typeof previewMessageId !== "number") {
-        return false;
-      }
+    const editPreview = (messageId: number, treatEditFailureAsDelivered: boolean) =>
+      tryEditPreviewMessage({
+        laneName,
+        messageId,
+        text,
+        context,
+        previewButtons,
+        updateLaneSnapshot,
+        lane,
+        treatEditFailureAsDelivered,
+      });
+    const finalizePreview = (
+      previewMessageId: number,
+      treatEditFailureAsDelivered: boolean,
+      hadPreviewMessage: boolean,
+    ): boolean | Promise<boolean> => {
       const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
       const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
         currentPreviewText,
@@ -198,48 +234,49 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.markDelivered();
         return true;
       }
-      return tryEditPreviewMessage({
-        laneName,
-        messageId: previewMessageId,
-        text,
-        context,
-        previewButtons,
-        updateLaneSnapshot,
+      return editPreview(previewMessageId, treatEditFailureAsDelivered);
+    };
+    if (!lane.stream) {
+      return false;
+    }
+    const previewTargetBeforeStop = resolvePreviewTarget({
+      lane,
+      previewMessageIdOverride,
+      stopBeforeEdit,
+      context,
+    });
+    if (previewTargetBeforeStop.stopCreatesFirstPreview) {
+      // Final stop() can create the first visible preview message.
+      // Prime pending text so the stop flush sends the final text snapshot.
+      lane.stream.update(text);
+      await params.stopDraftLane(lane);
+      const previewTargetAfterStop = resolvePreviewTarget({
         lane,
-        treatEditFailureAsDelivered: true,
+        stopBeforeEdit: false,
+        context,
       });
+      if (typeof previewTargetAfterStop.previewMessageId !== "number") {
+        return false;
+      }
+      return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
     }
     if (stopBeforeEdit) {
       await params.stopDraftLane(lane);
     }
-    const previewMessageId =
-      typeof previewMessageIdOverride === "number"
-        ? previewMessageIdOverride
-        : lane.stream.messageId();
-    if (typeof previewMessageId !== "number") {
+    const previewTargetAfterStop = resolvePreviewTarget({
+      lane,
+      previewMessageIdOverride,
+      stopBeforeEdit: false,
+      context,
+    });
+    if (typeof previewTargetAfterStop.previewMessageId !== "number") {
       return false;
     }
-    const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-    const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-      currentPreviewText,
-      text,
-      skipRegressive,
-      hadPreviewMessage,
-    });
-    if (shouldSkipRegressive) {
-      params.markDelivered();
-      return true;
-    }
-    return tryEditPreviewMessage({
-      laneName,
-      messageId: previewMessageId,
-      text,
-      context,
-      previewButtons,
-      updateLaneSnapshot,
-      lane,
-      treatEditFailureAsDelivered: false,
-    });
+    return finalizePreview(
+      previewTargetAfterStop.previewMessageId,
+      false,
+      previewTargetAfterStop.hadPreviewMessage,
+    );
   };
 
   const consumeArchivedAnswerPreviewForFinal = async ({
@@ -269,14 +306,20 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return "preview-finalized";
       }
     }
-    try {
-      await params.deletePreviewMessage(archivedPreview.messageId);
-    } catch (err) {
-      params.log(
-        `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
-      );
-    }
+    // Send the replacement message first, then clean up the old preview.
+    // This avoids the visual "disappear then reappear" flash.
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    // Once this archived preview is consumed by a fallback final send, delete it
+    // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
+    if (delivered || archivedPreview.deleteIfUnused !== false) {
+      try {
+        await params.deletePreviewMessage(archivedPreview.messageId);
+      } catch (err) {
+        params.log(
+          `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
+        );
+      }
+    }
     return delivered ? "sent" : "skipped";
   };
 
@@ -344,6 +387,24 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
+      if (isDraftPreviewLane(lane)) {
+        // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
+        // Only mark as updated when the draft flush actually emits an update.
+        const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
+        lane.stream?.update(text);
+        await params.flushDraftLane(lane);
+        const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
+        if (!previewUpdated) {
+          params.log(
+            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
+          );
+          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          return delivered ? "sent" : "skipped";
+        }
+        lane.lastPartialText = text;
+        params.markDelivered();
+        return "preview-updated";
+      }
       const updated = await tryUpdatePreviewForLane({
         lane,
         laneName,

@@ -32,8 +32,8 @@ import Testing
         #expect(parsed3?.port == 22)
     }
 
-    @Test func sanitizedTargetStripsLeadingSSHPrefix() {
-        let defaults = UserDefaults(suiteName: "UtilitiesTests.\(UUID().uuidString)")!
+    @Test func sanitizedTargetStripsLeadingSSHPrefix() throws {
+        let defaults = try #require(UserDefaults(suiteName: "UtilitiesTests.\(UUID().uuidString)"))
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("ssh  alice@example.com", forKey: remoteTargetKey)
 

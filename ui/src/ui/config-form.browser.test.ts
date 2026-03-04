@@ -304,6 +304,83 @@ describe("config form renderer", () => {
     expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
+  it("supports SecretInput unions in additionalProperties maps", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            providers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  apiKey: {
+                    anyOf: [
+                      { type: "string" },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: { type: "string", const: "env" },
+                              provider: { type: "string" },
+                              id: { type: "string" },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: { type: "string", const: "file" },
+                              provider: { type: "string" },
+                              id: { type: "string" },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("models.providers");
+    expect(analysis.unsupportedPaths).not.toContain("models.providers.*.apiKey");
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "models.providers.*.apiKey": { sensitive: true },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { models: { providers: { openai: { apiKey: "old" } } } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const apiKeyInput: HTMLInputElement | null = container.querySelector("input[type='password']");
+    expect(apiKeyInput).not.toBeNull();
+    if (!apiKeyInput) {
+      return;
+    }
+    apiKeyInput.value = "new-key";
+    apiKeyInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
+  });
+
   it("flags unsupported unions", () => {
     const schema = {
       type: "object",

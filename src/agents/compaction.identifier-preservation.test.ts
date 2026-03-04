@@ -13,6 +13,7 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 });
 
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+type SummarizeInStagesInput = Parameters<typeof summarizeInStages>[0];
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
@@ -28,58 +29,63 @@ describe("compaction identifier-preservation instructions", () => {
     model: "claude-3-opus",
     contextWindow: 200_000,
   } as unknown as NonNullable<ExtensionContext["model"]>;
+  const summarizeBase: Omit<SummarizeInStagesInput, "messages"> = {
+    model: testModel,
+    apiKey: "test-key",
+    reserveTokens: 4000,
+    maxChunkTokens: 8000,
+    contextWindow: 200_000,
+    signal: new AbortController().signal,
+  };
 
   beforeEach(() => {
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
   });
 
-  it("injects identifier-preservation guidance even without custom instructions", async () => {
+  async function runSummary(
+    messageCount: number,
+    overrides: Partial<Omit<SummarizeInStagesInput, "messages">> = {},
+  ) {
     await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2)],
-      model: testModel,
-      apiKey: "test-key",
+      ...summarizeBase,
+      ...overrides,
       signal: new AbortController().signal,
-      reserveTokens: 4000,
-      maxChunkTokens: 8000,
-      contextWindow: 200_000,
+      messages: Array.from({ length: messageCount }, (_unused, index) => makeMessage(index + 1)),
     });
+  }
+
+  function firstSummaryInstructions() {
+    return mockGenerateSummary.mock.calls[0]?.[5];
+  }
+
+  it("injects identifier-preservation guidance even without custom instructions", async () => {
+    await runSummary(2);
 
     expect(mockGenerateSummary).toHaveBeenCalled();
-    const firstCall = mockGenerateSummary.mock.calls[0];
-    expect(firstCall?.[5]).toContain("Preserve all opaque identifiers exactly as written");
-    expect(firstCall?.[5]).toContain("UUIDs");
-    expect(firstCall?.[5]).toContain("IPs");
-    expect(firstCall?.[5]).toContain("ports");
+    expect(firstSummaryInstructions()).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
+    expect(firstSummaryInstructions()).toContain("UUIDs");
+    expect(firstSummaryInstructions()).toContain("IPs");
+    expect(firstSummaryInstructions()).toContain("ports");
   });
 
   it("keeps identifier-preservation guidance when custom instructions are provided", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
-      maxChunkTokens: 8000,
-      contextWindow: 200_000,
+    await runSummary(2, {
       customInstructions: "Focus on release-impacting bugs.",
     });
 
-    const firstCall = mockGenerateSummary.mock.calls[0];
-    expect(firstCall?.[5]).toContain("Preserve all opaque identifiers exactly as written");
-    expect(firstCall?.[5]).toContain("Additional focus:");
-    expect(firstCall?.[5]).toContain("Focus on release-impacting bugs.");
+    expect(firstSummaryInstructions()).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
+    expect(firstSummaryInstructions()).toContain("Additional focus:");
+    expect(firstSummaryInstructions()).toContain("Focus on release-impacting bugs.");
   });
 
   it("applies identifier-preservation guidance on staged split + merge summarization", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2), makeMessage(3), makeMessage(4)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
+    await runSummary(4, {
       maxChunkTokens: 1000,
-      contextWindow: 200_000,
       parts: 2,
       minMessagesForSplit: 4,
     });
@@ -91,14 +97,8 @@ describe("compaction identifier-preservation instructions", () => {
   });
 
   it("avoids duplicate additional-focus headers in split+merge path", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2), makeMessage(3), makeMessage(4)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
+    await runSummary(4, {
       maxChunkTokens: 1000,
-      contextWindow: 200_000,
       parts: 2,
       minMessagesForSplit: 4,
       customInstructions: "Prioritize customer-visible regressions.",

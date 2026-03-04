@@ -25,15 +25,20 @@ import {
 
 describe("gateway --force helpers", () => {
   let originalKill: typeof process.kill;
+  let originalPlatform: NodeJS.Platform;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
+    originalPlatform = process.platform;
     tryListenOnPortMock.mockReset();
+    // Pin to linux so all lsof tests are platform-invariant.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
 
   afterEach(() => {
     process.kill = originalKill;
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
   it("parses lsof output into pid/command pairs", () => {
@@ -224,5 +229,70 @@ describe("gateway --force helpers", () => {
     await expect(forceFreePortAndWait(18789, { timeoutMs: 200, intervalMs: 100 })).rejects.toThrow(
       /fuser not found/i,
     );
+  });
+});
+
+describe("gateway --force helpers (Windows netstat path)", () => {
+  let originalKill: typeof process.kill;
+  let originalPlatform: NodeJS.Platform;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    originalKill = process.kill.bind(process);
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  });
+
+  afterEach(() => {
+    process.kill = originalKill;
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  const makeNetstatOutput = (port: number, ...pids: number[]) =>
+    [
+      "Proto  Local Address          Foreign Address        State           PID",
+      ...pids.map(
+        (pid) => `  TCP    0.0.0.0:${port}           0.0.0.0:0              LISTENING       ${pid}`,
+      ),
+    ].join("\r\n");
+
+  it("returns empty list when netstat finds no listeners on the port", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
+    expect(listPortListeners(18789)).toEqual([]);
+  });
+
+  it("parses PIDs from netstat output correctly", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
+    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+  });
+
+  it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(8080, 42));
+    expect(listPortListeners(80)).toEqual([]);
+  });
+
+  it("deduplicates PIDs that appear multiple times", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 42));
+    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }]);
+  });
+
+  it("throws a descriptive error when netstat fails", () => {
+    (execFileSync as unknown as Mock).mockImplementation(() => {
+      throw new Error("access denied");
+    });
+    expect(() => listPortListeners(18789)).toThrow(/netstat failed/);
+  });
+
+  it("kills Windows listeners and returns metadata", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    const killed = forceFreePort(18789);
+
+    expect(killMock).toHaveBeenCalledTimes(2);
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(killMock).toHaveBeenCalledWith(99, "SIGTERM");
+    expect(killed).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 });
