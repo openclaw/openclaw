@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -58,9 +59,12 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
 }
 
 function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): string {
-  return kind === "file"
-    ? `${normalizedTarget}.lock`
-    : path.join(normalizedTarget, ".openclaw.workspace.lock");
+  const lockDir = path.join(path.dirname(normalizedTarget), ".openclaw.workspace-locks");
+  const digest = createHash("sha256")
+    .update(`${kind}:${normalizedTarget}`)
+    .digest("hex")
+    .slice(0, 24);
+  return path.join(lockDir, `${kind}-${digest}.lock`);
 }
 
 function isTimestampExpired(isoTimestamp: string | undefined): boolean {
@@ -148,6 +152,7 @@ export async function acquireWorkspaceLock(
 
   const normalizedTarget = await normalizeTargetPath(targetPath, kind);
   const lockPath = resolveLockPath(normalizedTarget, kind);
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
   const mapKey = lockMapKey(kind, normalizedTarget);
 
   const held = HELD_WORKSPACE_LOCKS.get(mapKey);
