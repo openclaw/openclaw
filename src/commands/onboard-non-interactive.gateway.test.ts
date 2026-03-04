@@ -9,7 +9,7 @@ const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
   password?: string;
-  onHelloOk?: () => void;
+  onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
@@ -20,13 +20,13 @@ vi.mock("../gateway/client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
     };
     constructor(params: {
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
     }) {
       this.params = params;
       gatewayClientCalls.push(params);
@@ -35,7 +35,7 @@ vi.mock("../gateway/client.js", () => ({
       return { ok: true };
     }
     start() {
-      queueMicrotask(() => this.params.onHelloOk?.());
+      queueMicrotask(() => this.params.onHelloOk?.({ features: { methods: ["health"] } }));
     }
     stop() {}
   },
@@ -145,7 +145,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
-      expect(cfg?.tools?.profile).toBe("messaging");
+      expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
     });
