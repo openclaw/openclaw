@@ -16,6 +16,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { cancelContinuationTimer } from "./agent-runner.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -245,6 +246,10 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (directiveResult.kind === "reply") {
+    // Directive-handled replies bypass runReplyAgent — cancel pending timers.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey);
+    }
     return directiveResult.reply;
   }
 
@@ -339,6 +344,11 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (inlineActionResult.kind === "reply") {
+    // Inline actions (slash commands, status, etc.) bypass runReplyAgent but
+    // represent real user input that should cancel pending continuation timers.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey);
+    }
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }

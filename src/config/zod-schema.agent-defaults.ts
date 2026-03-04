@@ -177,6 +177,17 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    continuation: z
+      .object({
+        enabled: z.boolean().optional(),
+        defaultDelayMs: z.number().int().positive().optional(),
+        minDelayMs: z.number().int().positive().optional(),
+        maxDelayMs: z.number().int().positive().optional(),
+        maxChainLength: z.number().int().positive().optional(),
+        costCapTokens: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

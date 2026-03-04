@@ -16,6 +16,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { peekSystemEventEntries, removeSystemEvents } from "../../infra/system-events.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -33,6 +34,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { cancelContinuationTimer } from "./agent-runner.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
@@ -283,6 +285,11 @@ export async function runPreparedReply(
     !baseBodyTrimmedRaw &&
     hasControlCommand(commandSource, cfg)
   ) {
+    // Unauthorized command still represents user input — cancel pending timers
+    // and reset chain metadata so stale counters don't block future chains.
+    if (sessionKey && !isHeartbeat) {
+      cancelContinuationTimer(sessionKey, { sessionEntry, sessionStore, storePath });
+    }
     typing.cleanup();
     return undefined;
   }
@@ -332,6 +339,19 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+  // Peek system events BEFORE buildQueuedSystemPrompt drains them.
+  // This detects continuation wakes so runReplyAgent can skip chain-state reset.
+  const hasContinuationSystemEvent = peekSystemEventEntries(sessionKey)?.some((e) =>
+    e.text?.startsWith("[continuation:wake]"),
+  );
+  // On non-heartbeat external input, discard any stale [continuation:wake] events
+  // so they aren't injected into the user's prompt by buildQueuedSystemPrompt.
+  // This completes preemption: timer is cancelled, chain state is reset, AND
+  // any already-enqueued wake events are dropped.
+  if (!isHeartbeat && hasContinuationSystemEvent) {
+    removeSystemEvents(sessionKey, (e) => e.text?.startsWith("[continuation:wake]") ?? false);
+  }
+
   const queuedSystemPrompt = await buildQueuedSystemPrompt({
     cfg,
     sessionKey,
@@ -542,5 +562,6 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    isContinuationWake: isHeartbeat && hasContinuationSystemEvent,
   });
 }
