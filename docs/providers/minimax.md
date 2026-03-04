@@ -8,8 +8,8 @@ title: "MiniMax"
 
 # MiniMax
 
-MiniMax is an AI company that builds the **M2/M2.1** model family. The current
-coding-focused release is **MiniMax M2.1** (December 23, 2025), built for
+MiniMax is an AI company that builds the **M2/M2.5** model family. The current
+coding-focused release is **MiniMax M2.5** (January 2026), built for
 real-world complex tasks.
 
 Source: [MiniMax M2.1 release note](https://www.minimax.io/news/minimax-m21)
@@ -64,7 +64,7 @@ Configure via CLI:
 
 - Run `openclaw configure`
 - Select **Model/auth**
-- Choose **MiniMax M2.1**
+- Choose **MiniMax M2.5**
 
 ```json5
 {
@@ -79,9 +79,9 @@ Configure via CLI:
         api: "anthropic-messages",
         models: [
           {
-            id: "MiniMax-M2.1",
-            name: "MiniMax M2.1",
-            reasoning: false,
+            id: "MiniMax-M2.5",
+            name: "MiniMax M2.5",
+            reasoning: true,
             input: ["text"],
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,

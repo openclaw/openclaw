@@ -208,13 +208,13 @@ Synthetic 通过 `synthetic` 提供商提供 Anthropic 兼容模型：
 
 - 提供商：`synthetic`
 - 认证：`SYNTHETIC_API_KEY`
-- 示例模型：`synthetic/hf:MiniMaxAI/MiniMax-M2.1`
+- 示例模型：`synthetic/hf:MiniMaxAI/MiniMax-M2.5`
 - CLI：`openclaw onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
+    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" } },
   },
   models: {
     mode: "merge",
@@ -223,7 +223,7 @@ Synthetic 通过 `synthetic` 提供商提供 Anthropic 兼容模型：
         baseUrl: "https://api.synthetic.new/anthropic",
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
+        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.5", name: "MiniMax M2.5" }],
       },
     },
   },

@@ -4,7 +4,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 
 const MINIMAX_KEY = process.env.MINIMAX_API_KEY ?? "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/anthropic";
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.5";
 const LIVE = isTruthyEnvValue(process.env.MINIMAX_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;
@@ -17,7 +17,7 @@ describeLive("minimax live", () => {
       api: "anthropic-messages",
       provider: "minimax",
       baseUrl: MINIMAX_BASE_URL,
-      reasoning: false,
+      reasoning: true,
       input: ["text"],
       // Pricing: placeholder values (per 1M tokens, multiplied by 1000 for display)
       cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
