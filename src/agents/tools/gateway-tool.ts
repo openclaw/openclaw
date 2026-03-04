@@ -127,8 +127,14 @@ export function createGatewayTool(opts?: {
             : undefined;
         const extracted = extractDeliveryInfo(sessionKey);
         const deliveryContext = liveContext ?? extracted.deliveryContext;
+        // Guard threadId with the same session check as deliveryContext. When
+        // targeting another session, opts.agentThreadId belongs to the current
+        // session's thread and must not be written into the sentinel — it would
+        // cause scheduleRestartSentinelWake to deliver to the wrong thread.
         const threadId =
-          opts?.agentThreadId != null ? String(opts.agentThreadId) : extracted.threadId;
+          !isTargetingOtherSession && opts?.agentThreadId != null
+            ? String(opts.agentThreadId)
+            : extracted.threadId;
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
