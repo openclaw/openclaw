@@ -442,12 +442,14 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
 
-    // Verify the dispatch includes media from the quoted message
-    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ReplyToBody: "[image message]",
-      }),
-    );
+// Verify the dispatch includes media from the quoted message
+expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+  expect.objectContaining({
+    ReplyToBody: "[image message]",
+    // Verify the combined media list was passed to the agent:
+    MediaPaths: expect.any(Array),
+  }),
+);
   });
 
   it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {
