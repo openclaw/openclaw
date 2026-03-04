@@ -17,7 +17,10 @@ type ResolveTelegramTokenOpts = {
   logMissingFile?: (message: string) => void;
 };
 
-function resolveDollarEnvRef(rawToken: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
+function resolveDollarEnvRef(
+  rawToken: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   if (!rawToken) {
     return undefined;
   }
