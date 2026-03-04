@@ -87,6 +87,7 @@ export async function installDaemonServiceAndEmit(params: {
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
   fail: (message: string, hints?: string[]) => void;
   install: () => Promise<void>;
+  env?: NodeJS.ProcessEnv;
 }) {
   try {
     await params.install();
@@ -96,8 +97,9 @@ export async function installDaemonServiceAndEmit(params: {
   }
 
   let installed = true;
+  const env = params.env ?? process.env;
   try {
-    installed = await params.service.isLoaded({ env: process.env });
+    installed = await params.service.isLoaded({ env });
   } catch {
     installed = true;
   }
