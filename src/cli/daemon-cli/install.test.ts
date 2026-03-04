@@ -16,7 +16,7 @@ const buildGatewayInstallPlan = vi.fn(async (_params?: unknown) => ({
   workingDirectory: process.cwd(),
   environment: {},
 }));
-const serviceInstall = vi.fn(async () => {});
+const serviceInstall = vi.fn(async (_opts?: unknown) => {});
 const serviceIsLoaded = vi.fn(async () => false);
 const emit = vi.fn();
 const fail = vi.fn((msg: string) => {
