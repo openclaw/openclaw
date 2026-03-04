@@ -141,6 +141,15 @@ describe("ensureAgentWorkspace", () => {
     expect(memoryContent).toBe("# Long-term memory\nImportant stuff");
   });
 
+  it("creates memory/ directory automatically during bootstrap", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const stat = await fs.stat(path.join(tempDir, "memory"));
+    expect(stat.isDirectory()).toBe(true);
+  });
+
   it("treats git-backed workspaces as existing even when template files are missing", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });

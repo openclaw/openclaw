@@ -446,6 +446,10 @@ export async function ensureAgentWorkspace(params?: {
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 
+  // Ensure the memory/ directory exists so memory tools work immediately
+  // without requiring a prior write operation to create it.
+  await fs.mkdir(path.join(dir, "memory"), { recursive: true });
+
   return {
     dir,
     agentsPath,
