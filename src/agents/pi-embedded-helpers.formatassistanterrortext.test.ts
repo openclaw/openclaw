@@ -117,6 +117,16 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("suppresses internal 'terminated' error marker", () => {
+    const msg = makeAssistantError("terminated");
+    expect(formatAssistantErrorText(msg)).toBeUndefined();
+  });
+
+  it("suppresses internal 'aborted' error marker", () => {
+    const msg = makeAssistantError("aborted");
+    expect(formatAssistantErrorText(msg)).toBeUndefined();
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

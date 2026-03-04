@@ -252,6 +252,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   }
 
   if (normalized === "anthropic") {
+    // Explicitly prioritize ANTHROPIC_OAUTH_TOKEN and ANTHROPIC_API_KEY
+    // Do NOT fall back to X_API_KEY even though Anthropic uses x-api-key header,
+    // as X_API_KEY is ambiguous (could be from xAI or stale Anthropic key).
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
