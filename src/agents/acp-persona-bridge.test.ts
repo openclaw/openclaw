@@ -214,6 +214,39 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     expect(result.reason).toBe("no-persona-files");
   });
 
+  it("prevents TOCTOU race — only one concurrent fresh write succeeds", async () => {
+    const { cfg, sessionCwd } = await setup({
+      "SOUL.md": "# Racer\nI race you.",
+    });
+
+    // Fire two concurrent bridge calls — both see no CLAUDE.md,
+    // but only one should win the exclusive-create write.
+    const [r1, r2] = await Promise.all([
+      bridgeAgentPersonaToClaudeMd({
+        cfg: cfg as OpenClawConfig,
+        agentId: "test-agent",
+        sessionCwd,
+      }),
+      bridgeAgentPersonaToClaudeMd({
+        cfg: cfg as OpenClawConfig,
+        agentId: "test-agent",
+        sessionCwd,
+      }),
+    ]);
+
+    const results = [r1, r2];
+    const winners = results.filter((r) => r.bridged);
+    const losers = results.filter((r) => !r.bridged);
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0].reason).toBe("existing-claude-md");
+
+    // The file should exist and contain bridge content
+    const content = await fs.readFile(path.join(sessionCwd, "CLAUDE.md"), "utf-8");
+    expect(content).toContain("I race you");
+  });
+
   it("skips empty persona files", async () => {
     const { cfg, sessionCwd } = await setup({
       "SOUL.md": "   ",

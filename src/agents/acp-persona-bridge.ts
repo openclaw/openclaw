@@ -83,10 +83,22 @@ export async function bridgeAgentPersonaToClaudeMd(params: {
   const content = sections.join("\n");
 
   try {
-    await fs.writeFile(claudeMdPath, content, { encoding: "utf-8" });
+    if (existingIsBridgeFile) {
+      // Refresh: overwrite our own bridge-generated file — plain write is fine.
+      await fs.writeFile(claudeMdPath, content, { encoding: "utf-8" });
+    } else {
+      // Fresh create: use exclusive-create flag to prevent TOCTOU race.
+      // If another process created CLAUDE.md between our check and write,
+      // the 'wx' flag causes an EEXIST error instead of silently overwriting.
+      await fs.writeFile(claudeMdPath, content, { encoding: "utf-8", flag: "wx" });
+    }
     logVerbose(`acp-persona-bridge: bridged persona for agent "${agentId}" to ${claudeMdPath}`);
     return { bridged: true };
-  } catch (err) {
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      // Another process won the race and created CLAUDE.md first — respect it.
+      return { bridged: false, reason: "existing-claude-md" };
+    }
     logVerbose(
       `acp-persona-bridge: failed to write CLAUDE.md for agent "${agentId}": ${String(err)}`,
     );
