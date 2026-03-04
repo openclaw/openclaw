@@ -27,14 +27,15 @@ export interface TimestampInjectionOptions {
  * timestamps ({@link formatZonedTimestamp}), keeping token cost low (~7
  * tokens) and format consistent across all agent contexts.
  *
- * Used by the gateway `agent` and `chat.send` handlers to give TUI, web,
- * spawned subagents, `sessions_send`, and heartbeat wake events date/time
- * awareness — without modifying the system prompt (which is cached).
+ * Called from two paths:
+ * - Gateway `agent` and `chat.send` handlers — for TUI, web, spawned
+ *   subagents, `sessions_send`, and heartbeat wake events.
+ * - `finalizeInboundContext` — for channel messages (Slack, LINE,
+ *   Telegram, Discord, etc.) that arrive without a timestamp.
  *
- * Channel messages (Discord, Telegram, etc.) already have timestamps via
- * envelope formatting and take a separate code path — they never reach
- * these handlers, so there is no double-stamping risk. The detection
- * pattern is a safety net for edge cases.
+ * Idempotent: the {@link TIMESTAMP_ENVELOPE_PATTERN} guard prevents
+ * double-stamping when both paths happen to run (e.g. a gateway handler
+ * stamps first, then the message is re-finalized).
  *
  * @see https://github.com/moltbot/moltbot/issues/3658
  */
