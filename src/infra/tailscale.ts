@@ -11,10 +11,14 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+  if (start === -1 || end <= start) {
+    return {};
   }
-  return JSON.parse(trimmed) as Record<string, unknown>;
+  try {
+    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 /**
