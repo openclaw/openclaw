@@ -1906,9 +1906,11 @@ export type PluginHookLoopIterationEndEvent = {
   toolCallsMade: number;
   /** Number of new messages added this iteration. Undefined when not available. */
   newMessagesAdded?: number;
-  /** Approximate: true when tool results exist (loop typically continues).
-   *  Does not account for abort/timeout/max-iteration limits. */
-  willContinue: boolean;
+  /** True when the turn produced tool results, suggesting (but not guaranteeing)
+   *  that the loop will continue. Does not account for abort signals, timeouts,
+   *  or max-iteration limits — those are evaluated by the loop controller after
+   *  this event fires. Use `llm_output` for definitive loop-terminal detection. */
+  hasToolResults: boolean;
 };
 
 // Hook handler types mapped by hook name
