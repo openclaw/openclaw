@@ -96,29 +96,43 @@ function getRegistryMutex(registryPath: string): MutexState {
 
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
   const mutex = getRegistryMutex(registryPath);
-  let release!: () => void;
   const prev = mutex.tail;
-  // Chain the next waiter onto the mutex tail before awaiting so concurrent
-  // callers always queue in arrival order rather than racing on Promise.resolve.
+
+  // The next waiter queues behind `fnSettled` (not just a plain release flag)
+  // so a timed-out fn() cannot race the next mutation: the file lock is held
+  // until fn() actually settles, regardless of whether the caller timed out.
+  let resolveSettled!: () => void;
   mutex.tail = new Promise<void>((resolve) => {
-    release = resolve;
+    resolveSettled = resolve;
   });
+
   await prev;
+
+  // Track whether fn() was launched so the outer finally knows who owns
+  // the responsibility for calling resolveSettled().
+  let fnStarted = false;
   try {
     // Acquire the file lock for cross-process safety (e.g. `openclaw sandbox
     // recreate` CLI running concurrently with the gateway). Because the
-    // in-process mutex above serialises all gateway callers, only one waiter
-    // ever contends for the file lock at a time — acquisition is instant.
-    // NOTE: placed inside try/finally so release() always fires even if
-    // acquireSessionWriteLock throws (e.g. its 10-second timeout).
+    // in-process mutex serialises all gateway callers, only one waiter ever
+    // contends for the file lock at a time — acquisition is instant.
     const fileLock = await acquireSessionWriteLock({
       sessionFile: registryPath,
       allowReentrant: false,
     });
-    // Start fn() eagerly so we can drain it in the finally even when the
-    // timeout fires first — prevents a slow/stalled write from racing the
-    // next mutation's read-modify-write cycle after the file lock is released.
     const fnPromise = fn();
+    fnStarted = true;
+
+    // Fire-and-forget: release the file lock and unblock the next waiter once
+    // fn() settles. This keeps the file lock held until the write completes,
+    // preventing a timed-out mutation from racing a subsequent read-modify-write,
+    // while still allowing the timeout error to return to the caller immediately
+    // (no synchronous await in the finally path).
+    void fnPromise.finally(async () => {
+      await fileLock.release();
+      resolveSettled();
+    });
+
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       // Race against a timeout so a stalled file write surfaces as an explicit
@@ -134,15 +148,14 @@ async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): 
       ]);
     } finally {
       clearTimeout(timeoutHandle);
-      // Drain fn() before releasing the file lock so a timed-out write cannot
-      // race the next mutation. The file lock is held until fn() settles.
-      await fnPromise.catch(() => {});
-      await fileLock.release();
     }
   } finally {
-    // Always release the in-process mutex so subsequent waiters can proceed,
-    // even if acquireSessionWriteLock or fn() threw.
-    release();
+    // If fn() was never started (acquireSessionWriteLock threw), release the
+    // mutex immediately. If fn() was started, the fire-and-forget finally above
+    // owns resolveSettled() and will call it once fn() settles.
+    if (!fnStarted) {
+      resolveSettled();
+    }
   }
 }
 
