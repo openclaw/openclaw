@@ -15,7 +15,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/kudosity-sms";
+} from "openclaw/plugin-sdk";
 import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
 import { kudositySmsOnboarding } from "./onboarding.js";
 import { getKudositySmsRuntime } from "./runtime.js";
@@ -87,8 +87,8 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    */
   resolveAccount(cfg, _accountId) {
     const section = (cfg as any).channels?.[CHANNEL_KEY];
-    const apiKey = (section?.apiKey as string) || process.env.KUDOSITY_API_KEY || "";
-    const sender = (section?.sender as string) || process.env.KUDOSITY_SENDER || "";
+    const apiKey = String(section?.apiKey ?? process.env.KUDOSITY_API_KEY ?? "");
+    const sender = String(section?.sender ?? process.env.KUDOSITY_SENDER ?? "");
     const enabled = section?.enabled as boolean | undefined;
     return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
@@ -134,7 +134,27 @@ const meta: ChannelMeta = {
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 const capabilities: ChannelCapabilities = {
-  chatTypes: ["direct"],
+  text: true,
+  media: false, // SMS is text-only (MMS would be a separate channel)
+  reactions: false,
+  threads: false,
+  groups: false,
+  mentions: false,
+  buttons: false,
+  audio: false,
+  video: false,
+  files: false,
+  location: false,
+  contacts: false,
+  stickers: false,
+  polls: false,
+  editing: false,
+  deleting: false,
+  forwarding: false,
+  quoting: false,
+  typing: false,
+  readReceipts: false,
+  presenceStatus: false,
 };
 
 // ─── Outbound Adapter ────────────────────────────────────────────────────────
