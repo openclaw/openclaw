@@ -504,6 +504,7 @@ export async function runReplyAgent(params: {
 
     // Handle react-only mode: send ⚠️ emoji reaction instead of error text
     // Skip for slash commands and component interactions - their MessageSid is interaction id, not message id
+    let reactionFailed = false;
     if (
       errorReactionRequested &&
       sessionCtx.MessageSid &&
@@ -522,12 +523,25 @@ export async function runReplyAgent(params: {
           await reactMessageDiscord(channelId, sessionCtx.MessageSid, "⚠️");
         }
       } catch (error: unknown) {
-        // Reaction failed, but don't fail the whole reply
+        // Reaction failed (permissions/emoji/message deleted)
+        // Log and mark for fallback to text reply
         logVerbose(`Failed to send error reaction: ${String(error)}`);
+        reactionFailed = true;
       }
     }
 
-    if (replyPayloads.length === 0) {
+    // If reaction failed in react-only mode, rebuild payloads without error filtering
+    // to restore the original error messages as fallback
+    const finalReplyPayloads =
+      reactionFailed && cfg.channels?.defaults?.errorPolicy === "react-only"
+        ? buildReplyPayloads({
+            ...params,
+            payloads: payloadArray,
+            errorPolicy: undefined, // Disable filtering to restore errors
+          }).replyPayloads
+        : replyPayloads;
+
+    if (finalReplyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
