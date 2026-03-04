@@ -160,19 +160,36 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-        guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
-        else { return }
-        let stableID = self.manualStableID(host: host, port: resolvedPort)
+        guard let resolvedHost = Self.normalizeManualHostInput(host) else {
+            self.appModel?.gatewayStatusText = "Manual gateway host is invalid."
+            return
+        }
+        let resolvedUseTLS = self.resolveManualUseTLS(host: resolvedHost, useTLS: useTLS)
+        guard let resolvedPort = self.resolveManualPort(
+            host: resolvedHost,
+            port: port,
+            useTLS: resolvedUseTLS)
+        else {
+            self.appModel?.gatewayStatusText = "Manual gateway port is invalid."
+            return
+        }
+        let stableID = self.manualStableID(host: resolvedHost, port: resolvedPort)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
-            guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else { return }
+            guard let url = self.buildGatewayURL(host: resolvedHost, port: resolvedPort, useTLS: true) else {
+                self.appModel?.gatewayStatusText = "Failed to build manual TLS URL."
+                return
+            }
+            guard let fp = await self.probeTLSFingerprint(url: url) else {
+                self.appModel?.gatewayStatusText =
+                    "Failed to read TLS fingerprint from manual gateway. Check host/port and TLS settings."
+                return
+            }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
-                gatewayName: "\(host):\(resolvedPort)",
-                host: host,
+                gatewayName: "\(resolvedHost):\(resolvedPort)",
+                host: resolvedHost,
                 port: resolvedPort,
                 fingerprintSha256: fp,
                 isManual: true)
@@ -184,12 +201,15 @@ final class GatewayConnectionController {
             GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
         }
         guard let url = self.buildGatewayURL(
-            host: host,
+            host: resolvedHost,
             port: resolvedPort,
             useTLS: tlsParams?.required == true)
-        else { return }
+        else {
+            self.appModel?.gatewayStatusText = "Failed to build manual gateway URL."
+            return
+        }
         GatewaySettingsStore.saveLastGatewayConnectionManual(
-            host: host,
+            host: resolvedHost,
             port: resolvedPort,
             useTLS: resolvedUseTLS && tlsParams != nil,
             stableID: stableID)
@@ -696,6 +716,19 @@ final class GatewayConnectionController {
             return true
         }
         return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
+    }
+
+    private static func normalizeManualHostInput(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let components = URLComponents(string: trimmed),
+           let scheme = components.scheme,
+           !scheme.isEmpty
+        {
+            let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return host.isEmpty ? nil : host
+        }
+        return trimmed
     }
 
     private static func isLoopbackIPv4(_ host: String) -> Bool {

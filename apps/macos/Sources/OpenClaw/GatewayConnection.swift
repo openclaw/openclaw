@@ -106,6 +106,7 @@ actor GatewayConnection {
     private var configuredURL: URL?
     private var configuredToken: String?
     private var configuredPassword: String?
+    private var loopbackWsFallbackByConfigURL: [String: URL] = [:]
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
@@ -125,7 +126,9 @@ actor GatewayConnection {
         params: [String: AnyCodable]?,
         timeoutMs: Double? = nil) async throws -> Data
     {
-        let cfg = try await self.configProvider()
+        let sourceCfg = try await self.configProvider()
+        let cfg = self.applyLoopbackWsFallbackIfKnown(sourceCfg)
+        let usingCachedLoopbackFallback = cfg.url.absoluteString != sourceCfg.url.absoluteString
         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
         guard let client else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
@@ -137,6 +140,36 @@ actor GatewayConnection {
             if error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
+            var recoveredError = error
+            if usingCachedLoopbackFallback,
+               let sourceRetryAttempt = await self.tryLoopbackSourceRetryAfterCachedFallbackFailure(
+                   sourceConfig: sourceCfg,
+                   fromError: recoveredError,
+                   method: method,
+                   params: params,
+                   timeoutMs: timeoutMs)
+            {
+                switch sourceRetryAttempt {
+                case let .success(data):
+                    return data
+                case let .failure(err):
+                    recoveredError = err
+                }
+            }
+            if let fallbackAttempt = await self.tryLoopbackWsFallback(
+                sourceConfig: sourceCfg,
+                fromError: recoveredError,
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs)
+            {
+                switch fallbackAttempt {
+                case let .success(data):
+                    return data
+                case let .failure(err):
+                    recoveredError = err
+                }
+            }
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
@@ -145,7 +178,7 @@ actor GatewayConnection {
             case .local:
                 await MainActor.run { GatewayProcessManager.shared.setActive(true) }
 
-                var lastError: Error = error
+                var lastError: Error = recoveredError
                 for delayMs in [150, 400, 900] {
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                     do {
@@ -178,10 +211,10 @@ actor GatewayConnection {
 
                 throw lastError
             case .remote:
-                let nsError = error as NSError
-                guard nsError.domain == URLError.errorDomain else { throw error }
+                let nsError = recoveredError as NSError
+                guard nsError.domain == URLError.errorDomain else { throw recoveredError }
 
-                var lastError: Error = error
+                var lastError: Error = recoveredError
                 await RemoteTunnelManager.shared.stopAll()
                 do {
                     _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
@@ -192,7 +225,7 @@ actor GatewayConnection {
                 for delayMs in [150, 400, 900] {
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                     do {
-                        let cfg = try await self.configProvider()
+                        let cfg = self.applyLoopbackWsFallbackIfKnown(try await self.configProvider())
                         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
                         guard let client = self.client else {
                             throw NSError(
@@ -252,7 +285,7 @@ actor GatewayConnection {
 
     /// Ensure the underlying socket is configured (and replaced if config changed).
     func refresh() async throws {
-        let cfg = try await self.configProvider()
+        let cfg = self.applyLoopbackWsFallbackIfKnown(try await self.configProvider())
         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
     }
 
@@ -268,6 +301,8 @@ actor GatewayConnection {
         self.client = nil
         self.configuredURL = nil
         self.configuredToken = nil
+        self.configuredPassword = nil
+        self.loopbackWsFallbackByConfigURL.removeAll()
         self.lastSnapshot = nil
     }
 
@@ -355,6 +390,91 @@ actor GatewayConnection {
         return isMainAlias ? mainSessionKey : trimmed
     }
 
+    private func applyLoopbackWsFallbackIfKnown(_ config: Config) -> Config {
+        guard let fallbackURL = self.loopbackWsFallbackByConfigURL[config.url.absoluteString] else {
+            return config
+        }
+        return (fallbackURL, config.token, config.password)
+    }
+
+    private func tryLoopbackWsFallback(
+        sourceConfig: Config,
+        fromError error: Error,
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?) async -> Result<Data, Error>?
+    {
+        guard Self.shouldTryLoopbackWsFallback(for: error) else { return nil }
+        guard let fallbackURL = Self.loopbackWsFallbackURL(from: sourceConfig.url) else { return nil }
+
+        gatewayConnectionLogger.warning(
+            "gateway connect failed over wss loopback; retrying over ws url=\(sourceConfig.url.absoluteString, privacy: .public)")
+        await self.configure(url: fallbackURL, token: sourceConfig.token, password: sourceConfig.password)
+        guard let client = self.client else {
+            return .failure(error)
+        }
+
+        do {
+            let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+            self.loopbackWsFallbackByConfigURL[sourceConfig.url.absoluteString] = fallbackURL
+            gatewayConnectionLogger.warning(
+                "gateway loopback ws fallback active source=\(sourceConfig.url.absoluteString, privacy: .public) target=\(fallbackURL.absoluteString, privacy: .public)")
+            return .success(data)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func tryLoopbackSourceRetryAfterCachedFallbackFailure(
+        sourceConfig: Config,
+        fromError error: Error,
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?) async -> Result<Data, Error>?
+    {
+        guard self.loopbackWsFallbackByConfigURL[sourceConfig.url.absoluteString] != nil else { return nil }
+        guard Self.shouldTryLoopbackWsFallback(for: error) else { return nil }
+
+        self.loopbackWsFallbackByConfigURL.removeValue(forKey: sourceConfig.url.absoluteString)
+        gatewayConnectionLogger.warning(
+            "cached loopback ws fallback failed; retrying source wss url=\(sourceConfig.url.absoluteString, privacy: .public)")
+        await self.configure(url: sourceConfig.url, token: sourceConfig.token, password: sourceConfig.password)
+        guard let client = self.client else {
+            return .failure(error)
+        }
+
+        do {
+            let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+            return .success(data)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private static func loopbackWsFallbackURL(from url: URL) -> URL? {
+        guard url.scheme?.lowercased() == "wss",
+              let host = url.host,
+              LoopbackHost.isLoopbackHost(host),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else {
+            return nil
+        }
+        components.scheme = "ws"
+        return components.url
+    }
+
+    private static func shouldTryLoopbackWsFallback(for error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            if urlError.code == .dataNotAllowed { return false }
+            return true
+        }
+        let nsError = error as NSError
+        if nsError.domain == "Gateway", nsError.code == 1008 {
+            return false
+        }
+        return true
+    }
+
     private func configure(url: URL, token: String?, password: String?) async {
         if self.client != nil, self.configuredURL == url, self.configuredToken == token,
            self.configuredPassword == password
@@ -391,12 +511,14 @@ actor GatewayConnection {
         guard url.scheme?.lowercased() == "wss" else { return nil }
         let host = url.host ?? "gateway"
         let port = url.port ?? 443
+        let isLoopback = LoopbackHost.isLoopbackHost(host)
         let stableID = "\(host):\(port)"
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         let params = GatewayTLSParams(
             required: true,
             expectedFingerprint: stored,
             allowTOFU: stored == nil,
+            allowPinRotation: isLoopback,
             storeKey: stableID)
         return WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
     }

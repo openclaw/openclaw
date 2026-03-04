@@ -504,6 +504,10 @@ public final class OpenClawChatViewModel {
         }
 
         switch chat.state {
+        case "delta":
+            if let text = Self.assistantDeltaText(from: chat.message), !text.isEmpty {
+                self.streamingAssistantText = text
+            }
         case "final", "aborted", "error":
             if chat.state == "error" {
                 self.errorText = chat.errorMessage ?? "Chat failed"
@@ -519,6 +523,20 @@ public final class OpenClawChatViewModel {
         default:
             break
         }
+    }
+
+    private static func assistantDeltaText(from message: AnyCodable?) -> String? {
+        guard let message else { return nil }
+        guard let decoded = try? ChatPayloadDecoding.decode(message, as: OpenClawChatMessage.self) else {
+            return nil
+        }
+        for item in decoded.content where (item.type ?? "text").lowercased() == "text" {
+            let text = item.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !text.isEmpty {
+                return text
+            }
+        }
+        return nil
     }
 
     private static func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {
@@ -537,7 +555,11 @@ public final class OpenClawChatViewModel {
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        if let sessionId, evt.runId != sessionId {
+        let isOurRun = self.pendingRuns.contains(evt.runId)
+        if let incomingSessionKey = evt.sessionKey,
+           !Self.matchesCurrentSessionKey(incoming: incomingSessionKey, current: self.sessionKey),
+           !isOurRun
+        {
             return
         }
 

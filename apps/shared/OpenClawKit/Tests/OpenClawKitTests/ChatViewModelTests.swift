@@ -78,12 +78,14 @@ private func emitAssistantText(
     transport: TestChatTransport,
     runId: String,
     text: String,
+    sessionKey: String? = nil,
     seq: Int = 1)
 {
     transport.emit(
         .agent(
             OpenClawAgentEventPayload(
                 runId: runId,
+                sessionKey: sessionKey,
                 seq: seq,
                 stream: "assistant",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -311,6 +313,53 @@ extension TestChatTransportState {
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
         try await waitUntil("history refresh") {
             await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+    }
+
+    @Test func streamsAssistantWhenRunIdDiffersFromSessionId() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try #require(await transport.lastSentRunId())
+
+        emitAssistantText(
+            transport: transport,
+            runId: runId,
+            text: "streaming from agent event",
+            sessionKey: "main")
+
+        try await waitUntil("assistant stream visible") {
+            await MainActor.run { vm.streamingAssistantText == "streaming from agent event" }
+        }
+    }
+
+    @Test func streamsAssistantFromChatDeltaEvent() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try #require(await transport.lastSentRunId())
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "delta",
+                    message: AnyCodable([
+                        "role": "assistant",
+                        "content": [["type": "text", "text": "streaming from chat delta"]],
+                        "timestamp": Date().timeIntervalSince1970 * 1000,
+                    ]),
+                    errorMessage: nil)))
+
+        try await waitUntil("assistant stream visible from chat delta") {
+            await MainActor.run { vm.streamingAssistantText == "streaming from chat delta" }
         }
     }
 

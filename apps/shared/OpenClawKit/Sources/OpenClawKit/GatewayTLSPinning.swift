@@ -6,12 +6,20 @@ public struct GatewayTLSParams: Sendable {
     public let required: Bool
     public let expectedFingerprint: String?
     public let allowTOFU: Bool
+    public let allowPinRotation: Bool
     public let storeKey: String?
 
-    public init(required: Bool, expectedFingerprint: String?, allowTOFU: Bool, storeKey: String?) {
+    public init(
+        required: Bool,
+        expectedFingerprint: String?,
+        allowTOFU: Bool,
+        allowPinRotation: Bool = false,
+        storeKey: String?)
+    {
         self.required = required
         self.expectedFingerprint = expectedFingerprint
         self.allowTOFU = allowTOFU
+        self.allowPinRotation = allowPinRotation
         self.storeKey = storeKey
     }
 }
@@ -90,6 +98,11 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         if let fingerprint = certificateFingerprint(trust) {
             if let expected {
                 if fingerprint == expected {
+                    completionHandler(.useCredential, URLCredential(trust: trust))
+                } else if params.allowPinRotation {
+                    if let storeKey = params.storeKey {
+                        GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
+                    }
                     completionHandler(.useCredential, URLCredential(trust: trust))
                 } else {
                     completionHandler(.cancelAuthenticationChallenge, nil)

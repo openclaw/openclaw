@@ -158,12 +158,14 @@ final class MacNodeModeCoordinator {
         guard url.scheme?.lowercased() == "wss" else { return nil }
         let host = url.host ?? "gateway"
         let port = url.port ?? 443
+        let isLoopback = LoopbackHost.isLoopbackHost(host)
         let stableID = "\(host):\(port)"
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         let params = GatewayTLSParams(
             required: true,
             expectedFingerprint: stored,
             allowTOFU: stored == nil,
+            allowPinRotation: isLoopback,
             storeKey: stableID)
         let session = GatewayTLSPinningSession(params: params)
         return WebSocketSessionBox(session: session)
