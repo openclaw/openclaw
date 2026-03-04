@@ -227,7 +227,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         bind === "loopback"
           ? "127.0.0.1"
           : bind === "lan"
-            ? "0.0.0.0"
+            ? "::"
             : bind === "custom"
               ? toOptionString(cfg.gateway?.customBindHost)
               : undefined;

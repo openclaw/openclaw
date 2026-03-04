@@ -211,7 +211,7 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  *
  * Modes:
  * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
- * - lan: always 0.0.0.0 (no fallback)
+ * - lan: always :: (dual-stack, no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
  * - auto: Loopback if available, else 0.0.0.0
  * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
@@ -244,7 +244,7 @@ export async function resolveGatewayBindHost(
   }
 
   if (mode === "lan") {
-    return "0.0.0.0";
+    return "::";
   }
 
   if (mode === "custom") {

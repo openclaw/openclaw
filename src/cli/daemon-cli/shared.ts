@@ -73,7 +73,7 @@ export function pickProbeHostForBind(
   }
   if (bindMode === "lan") {
     // Same as call.ts: self-connections should always target loopback.
-    // bind=lan controls which interfaces the server listens on (0.0.0.0),
+    // bind=lan controls which interfaces the server listens on (::),
     // but co-located CLI probes should connect via 127.0.0.1.
     return "127.0.0.1";
   }
