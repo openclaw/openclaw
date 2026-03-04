@@ -109,7 +109,11 @@ def load_run_results(benchmark_dir: Path) -> dict:
                 results[config] = []
 
             for run_dir in sorted(config_dir.glob("run-*")):
-                run_number = int(run_dir.name.split("-")[1])
+                try:
+                    run_number = int(run_dir.name.split("-")[1])
+                except (ValueError, IndexError):
+                    print(f"Warning: cannot parse run number from '{run_dir.name}', skipping")
+                    continue
                 grading_file = run_dir / "grading.json"
 
                 if not grading_file.exists():
@@ -268,7 +272,14 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
             "analyzer_model": "<model-name>",
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "evals_run": eval_ids,
-            "runs_per_configuration": 3
+            "runs_per_configuration": max(
+                (
+                    sum(1 for r in results[config] if r["eval_id"] == eid)
+                    for config in results
+                    for eid in eval_ids
+                ),
+                default=0,
+            )
         },
         "runs": runs,
         "run_summary": run_summary,

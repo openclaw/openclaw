@@ -69,6 +69,9 @@ def run_eval(skill_path: Path, evals: list[dict]) -> None:
 
     passed = sum(1 for r in results if r["correct"])
     total = len(results)
+    if total == 0:
+        print("No eval cases to run.")
+        return
     rate = passed / total * 100
 
     print(f"{'='*60}")
