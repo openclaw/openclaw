@@ -99,9 +99,14 @@ const moonpayPlugin = {
           .description("Check MoonPay CLI installation and auth status")
           .action(async () => {
             const version = await runMp(["--version"]);
-            const wallets = await runMp(["wallet", "list"]);
             console.log(`MoonPay CLI: ${version.stdout.trim() || "not installed"}`);
-            if (wallets.stdout.trim()) {
+            if (version.exitCode !== 0) {
+              return;
+            }
+            const wallets = await runMp(["wallet", "list"]);
+            if (wallets.exitCode !== 0) {
+              console.log(`\nWallet check failed: ${wallets.stderr.trim() || "unknown error"}`);
+            } else if (wallets.stdout.trim()) {
               console.log(`\nWallets:\n${wallets.stdout.trim()}`);
             } else {
               console.log("\nNo wallets found. Run: mp login --email your@email.com");
