@@ -143,7 +143,9 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  // Combine both streams: systemctl may report state on stdout (e.g. "not-found")
+  // while execFileUtf8 fills stderr with the Node error message on non-zero exit.
+  return `${result.stderr} ${result.stdout}`.trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
