@@ -138,12 +138,18 @@ const BASE_RUN_RETRY_ITERATIONS = 24;
 const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
+const TOOL_CALL_JSON_PARSE_ERROR_RE =
+  /Expected ',' or '}' after property value in JSON|Unexpected end of JSON input/i;
 
 function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
   const scaled =
     BASE_RUN_RETRY_ITERATIONS +
     Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
+}
+
+function isToolCallJsonParseError(message: string): boolean {
+  return TOOL_CALL_JSON_PARSE_ERROR_RE.test(message);
 }
 
 const hasUsageValues = (
@@ -747,6 +753,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let toolCallJsonParseRetried = false;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1158,6 +1165,13 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (!toolCallJsonParseRetried && isToolCallJsonParseError(errorText)) {
+              toolCallJsonParseRetried = true;
+              log.warn(
+                `tool-call json parse error for ${provider}/${modelId}; retrying prompt once`,
+              );
+              continue;
+            }
             if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
               continue;
