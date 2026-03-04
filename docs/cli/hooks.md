@@ -8,7 +8,7 @@ title: "hooks"
 
 # `openclaw hooks`
 
-Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
+Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, agent bootstrap, and gateway startup).
 
 Related:
 
@@ -32,13 +32,14 @@ List all discovered hooks from workspace, managed, and bundled directories.
 **Example output:**
 
 ```
-Hooks (4/4 ready)
+Hooks (5/5 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
+  🗓️ daily-memory ✓ - Create daily memory log templates on startup and agent bootstrap
+  💾 session-memory ✓ - Save session context to memory when /new or /reset is issued
 ```
 
 **Example (verbose):**
@@ -84,14 +85,14 @@ openclaw hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to memory when /new or /reset is issued
 
 Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
   Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
-  Events: command:new
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -114,8 +115,8 @@ Show summary of hook eligibility status (how many are ready vs. not ready).
 ```
 Hooks Status
 
-Total hooks: 4
-Ready: 4
+Total hooks: 5
+Ready: 5
 Not ready: 0
 ```
 
@@ -245,9 +246,42 @@ global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ## Bundled Hooks
 
+### daily-memory
+
+Creates daily memory log templates for today and upcoming days.
+
+**Events:** `agent:bootstrap`, `gateway:startup`
+
+Enable it:
+
+```bash
+openclaw hooks enable daily-memory
+```
+
+Config:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+**See:** [daily-memory documentation](/automation/hooks#daily-memory)
+
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
 **Enable:**
 

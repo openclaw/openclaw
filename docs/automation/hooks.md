@@ -41,9 +41,10 @@ The hooks system allows you to:
 
 ### Bundled Hooks
 
-OpenClaw ships with four bundled hooks that are automatically discovered:
+OpenClaw ships with five bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **🗓️ daily-memory**: Creates empty daily log templates in `<workspace>/memory/` for today and upcoming days
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
 - **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
@@ -252,6 +253,37 @@ Triggered when agent commands are issued:
 Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
+
+## Bundled Hook Reference
+
+### `daily-memory`
+
+Creates daily memory files during `agent:bootstrap` and `gateway:startup`.
+
+Configuration:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n\n## Afternoon Progress\n\n## Evening Reflection\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+- `template`: Markdown template for new files. `{{date}}` is replaced with the current date.
+- `createDaysAhead`: Number of future daily files to create in addition to today.
+
+This hook is intentionally limited to file creation. Reminder delivery and session-end prompts are
+out of scope here; use cron or heartbeat if you want reminder-style nudges today.
 
 ### Message Events
 
@@ -549,11 +581,52 @@ openclaw hooks disable command-logger
 
 ## Bundled hook reference
 
+### daily-memory
+
+Creates empty daily memory files for today and upcoming days.
+
+**Events**: `agent:bootstrap`, `gateway:startup`
+
+**Requirements**: `workspace.dir` must be configured
+
+**Output**: `<workspace>/memory/YYYY-MM-DD.md`
+
+**Config**:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+**What it does**:
+
+1. Creates today’s daily memory file if it is missing
+2. Creates future daily files up to `createDaysAhead`
+3. Leaves existing files untouched
+
+**Enable**:
+
+```bash
+openclaw hooks enable daily-memory
+```
+
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 
 **Requirements**: `workspace.dir` must be configured
 
@@ -762,7 +835,8 @@ metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 The gateway logs hook loading at startup:
 
 ```
-Registered hook: session-memory -> command:new
+Registered hook: daily-memory -> agent:bootstrap, gateway:startup
+Registered hook: session-memory -> command:new, command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup

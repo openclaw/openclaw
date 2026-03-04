@@ -31,6 +31,56 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("hook-specific config passthrough", () => {
+  it("accepts session-memory custom config fields", () => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        internal: {
+          entries: {
+            "session-memory": {
+              enabled: true,
+              messages: 3,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hooks?.internal?.entries?.["session-memory"]).toMatchObject({
+        enabled: true,
+        messages: 3,
+      });
+    }
+  });
+
+  it("accepts daily-memory custom config fields", () => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        internal: {
+          entries: {
+            "daily-memory": {
+              enabled: true,
+              template: "# {{date}} - Daily Log\n",
+              createDaysAhead: 1,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hooks?.internal?.entries?.["daily-memory"]).toMatchObject({
+        enabled: true,
+        template: "# {{date}} - Daily Log\n",
+        createDaysAhead: 1,
+      });
+    }
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });

@@ -572,6 +572,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Hooks/Memory: add the bundled `daily-memory` hook to auto-create per-workspace daily log files on gateway startup and agent bootstrap, with configurable template and `createDaysAhead`, and retire the unfinished `memory.hybrid` / `memory.mode` PR shape in favor of the current hook architecture. Landed from contributor PR #11457 by @Undertone0809. Thanks @Undertone0809.
 - Highlight: External Secrets Management introduces a full `openclaw secrets` workflow (`audit`, `configure`, `apply`, `reload`) with runtime snapshot activation, strict `secrets apply` target-path validation, safer migration scrubbing, ref-only auth-profile support, and dedicated docs. (#26155) Thanks @joshavant.
 - ACP/Thread-bound agents: make ACP agents first-class runtimes for thread sessions with `acp` spawn/send dispatch integration, acpx backend bridging, lifecycle controls, startup reconciliation, runtime cleanup, and coalesced thread replies. (#23580) thanks @osolmaz.
 - Agents/Routing CLI: add `openclaw agents bindings`, `openclaw agents bind`, and `openclaw agents unbind` for account-scoped route management, including channel-only to account-scoped binding upgrades, role-aware binding identity handling, plugin-resolved binding account IDs, and optional account-binding prompts in `openclaw channels add`. (#27195) thanks @gumadeiras.

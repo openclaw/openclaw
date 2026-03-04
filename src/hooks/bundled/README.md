@@ -4,6 +4,20 @@ This directory contains hooks that ship with OpenClaw. These hooks are automatic
 
 ## Available Hooks
 
+### 🗓️ daily-memory
+
+Creates empty daily memory logs for today and upcoming days.
+
+**Events**: `agent:bootstrap`, `gateway:startup`
+**What it does**: Ensures `<workspace>/memory/YYYY-MM-DD.md` files exist for today and future days.
+**Output**: `<workspace>/memory/YYYY-MM-DD.md`
+
+**Enable**:
+
+```bash
+openclaw hooks enable daily-memory
+```
+
 ### 💾 session-memory
 
 Automatically saves session context to memory when you issue `/new` or `/reset`.
@@ -148,6 +162,11 @@ Hooks can be configured in `~/.openclaw/openclaw.json`:
     "internal": {
       "enabled": true,
       "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n",
+          "createDaysAhead": 1
+        },
         "session-memory": {
           "enabled": true
         },

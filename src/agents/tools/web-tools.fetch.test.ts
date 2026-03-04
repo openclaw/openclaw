@@ -166,6 +166,15 @@ describe("web_fetch extraction fallbacks", () => {
         lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
       };
     });
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34", "93.184.216.35"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
   });
 
   afterEach(() => {

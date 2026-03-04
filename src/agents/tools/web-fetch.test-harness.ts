@@ -4,12 +4,16 @@ import * as ssrf from "../../infra/net/ssrf.js";
 export function installWebFetchSsrfHarness() {
   const lookupMock = vi.fn();
   const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+  const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
   const priorFetch = global.fetch;
 
   beforeEach(() => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
     );
   });
 

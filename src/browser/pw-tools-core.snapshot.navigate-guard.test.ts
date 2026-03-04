@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -7,6 +8,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
+mockPinnedHostnameResolution();
 const mod = await import("./pw-tools-core.snapshot.js");
 
 describe("pw-tools-core.snapshot navigate guard", () => {

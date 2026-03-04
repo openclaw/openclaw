@@ -126,6 +126,17 @@ export async function makeSessionStore(
 
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
+  let resolvePinnedHostnameWithPolicySpy: { mockRestore: () => unknown } | undefined;
+
+  const buildPinnedHostname = (hostname: string) => {
+    const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+    const addresses = [TEST_NET_IP];
+    return {
+      hostname: normalized,
+      addresses,
+      lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+    };
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -134,22 +145,18 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     if (opts?.pinDns) {
       resolvePinnedHostnameSpy = vi
         .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+        .mockImplementation(async (hostname) => buildPinnedHostname(hostname));
+      resolvePinnedHostnameWithPolicySpy = vi
+        .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+        .mockImplementation(async (hostname) => buildPinnedHostname(hostname));
     }
   });
 
   afterEach(() => {
     resolvePinnedHostnameSpy?.mockRestore();
     resolvePinnedHostnameSpy = undefined;
+    resolvePinnedHostnameWithPolicySpy?.mockRestore();
+    resolvePinnedHostnameWithPolicySpy = undefined;
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
