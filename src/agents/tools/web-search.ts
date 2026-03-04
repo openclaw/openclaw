@@ -1191,6 +1191,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  searchConfig?: WebSearchConfig;
 }): Promise<Record<string, unknown>> {
   const providerSpecificKey =
     params.provider === "searxng"
@@ -1332,21 +1333,23 @@ async function runWebSearch(params: {
       const searxngUrl = new URL(`${searxngBaseUrl}/search`);
       searxngUrl.searchParams.set("q", params.query);
       searxngUrl.searchParams.set("format", "json");
-      if (params.count) {
-        searxngUrl.searchParams.set("pageno", "1");
-      }
+      searxngUrl.searchParams.set("pageno", "1");
       if (params.search_lang) {
         searxngUrl.searchParams.set("language", params.search_lang);
       }
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), params.timeoutSeconds * 1000);
-      const res = await fetch(searxngUrl.toString(), {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+      let res: Response;
+      try {
+        res = await fetch(searxngUrl.toString(), {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (!res.ok) {
         throw new Error(`SearXNG error (${res.status})`);
@@ -1364,8 +1367,22 @@ async function runWebSearch(params: {
       const results = Array.isArray(data.results) ? data.results : [];
 
       if (results.length === 0) {
-        logVerbose("web_search: SearXNG returned 0 results, falling back to Brave");
-        throw new Error("SearXNG returned 0 results");
+        logVerbose("web_search: SearXNG returned 0 results");
+        const emptyPayload = {
+          query: params.query,
+          provider: "searxng" as const,
+          count: 0,
+          tookMs: Date.now() - start,
+          externalContent: {
+            untrusted: true,
+            source: "web_search",
+            provider: "searxng",
+            wrapped: true,
+          },
+          results: [],
+        };
+        writeCache(SEARCH_CACHE, cacheKey, emptyPayload, params.cacheTtlMs);
+        return emptyPayload;
       }
 
       const mapped = results.slice(0, params.count).map((entry) => ({
@@ -1396,7 +1413,7 @@ async function runWebSearch(params: {
       logVerbose(
         `web_search: SearXNG failed (${err instanceof Error ? err.message : String(err)}), falling back to Brave`,
       );
-      const braveApiKey = resolveSearchApiKey();
+      const braveApiKey = resolveSearchApiKey(params.searchConfig);
       if (!braveApiKey) {
         return {
           error: "searxng_failed_no_brave_fallback",
@@ -1711,6 +1728,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         searxngBaseUrl,
+        searchConfig: search,
       });
       return jsonResult(result);
     },
