@@ -166,8 +166,13 @@ async function promptWebToolsConfig(
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, applySearchKey, hasKeyInEnv } =
-    await import("./onboard-search.js");
+  const {
+    SEARCH_PROVIDER_OPTIONS,
+    resolveExistingKey,
+    hasExistingKey,
+    applySearchKey,
+    hasKeyInEnv,
+  } = await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
 
   const hasKeyForProvider = (provider: string): boolean => {
@@ -175,7 +180,7 @@ async function promptWebToolsConfig(
     if (!entry) {
       return false;
     }
-    return Boolean(resolveExistingKey(nextConfig, provider as SP)) || hasKeyInEnv(entry);
+    return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
   };
 
   const existingProvider: string =
@@ -229,25 +234,27 @@ async function promptWebToolsConfig(
 
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
     const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
-    const hasKey = Boolean(existingKey);
+    const keyConfigured = hasExistingKey(nextConfig, providerChoice as SP);
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
     const envVarNames = entry.envKeys.join(" / ");
 
     const keyInput = guardCancel(
       await text({
-        message: hasKey
+        message: keyConfigured
           ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
           : `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`,
-        placeholder: hasKey ? "Leave blank to keep current" : entry.placeholder,
+        placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
       }),
       runtime,
     );
     const key = String(keyInput ?? "").trim();
 
-    if (key || hasKey) {
+    if (key || existingKey) {
       const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
       nextSearch = { ...applied.tools?.web?.search };
-    } else if (!envAvailable) {
+    } else if (keyConfigured || envAvailable) {
+      nextSearch = { ...nextSearch };
+    } else {
       nextSearch = { ...nextSearch, enabled: false };
       note(
         [

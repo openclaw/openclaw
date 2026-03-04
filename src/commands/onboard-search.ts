@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -61,23 +61,33 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
 }
 
+function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
+  const search = config.tools?.web?.search;
+  switch (provider) {
+    case "brave":
+      return search?.apiKey;
+    case "perplexity":
+      return search?.perplexity?.apiKey;
+    case "gemini":
+      return search?.gemini?.apiKey;
+    case "grok":
+      return search?.grok?.apiKey;
+    case "kimi":
+      return search?.kimi?.apiKey;
+  }
+}
+
+/** Returns the plaintext key string, or undefined for SecretRefs/missing. */
 export function resolveExistingKey(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): string | undefined {
-  const search = config.tools?.web?.search;
-  switch (provider) {
-    case "brave":
-      return normalizeSecretInputString(search?.apiKey);
-    case "perplexity":
-      return normalizeSecretInputString(search?.perplexity?.apiKey);
-    case "gemini":
-      return normalizeSecretInputString(search?.gemini?.apiKey);
-    case "grok":
-      return normalizeSecretInputString(search?.grok?.apiKey);
-    case "kimi":
-      return normalizeSecretInputString(search?.kimi?.apiKey);
-  }
+  return normalizeSecretInputString(rawKeyValue(config, provider));
+}
+
+/** Returns true if a key is configured (plaintext string or SecretRef). */
+export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
+  return hasConfiguredSecretInput(rawKeyValue(config, provider));
 }
 
 export function applySearchKey(
@@ -151,7 +161,7 @@ export async function setupSearch(
   const existingProvider = config.tools?.web?.search?.provider;
 
   const options = SEARCH_PROVIDER_OPTIONS.map((entry) => {
-    const configured = Boolean(resolveExistingKey(config, entry.value)) || hasKeyInEnv(entry);
+    const configured = hasExistingKey(config, entry.value) || hasKeyInEnv(entry);
     const hint = configured ? `${entry.hint} · configured` : entry.hint;
     return { value: entry.value, label: entry.label, hint };
   });
@@ -161,7 +171,7 @@ export async function setupSearch(
       return existingProvider;
     }
     const detected = SEARCH_PROVIDER_OPTIONS.find(
-      (e) => Boolean(resolveExistingKey(config, e.value)) || hasKeyInEnv(e),
+      (e) => hasExistingKey(config, e.value) || hasKeyInEnv(e),
     );
     if (detected) {
       return detected.value;
@@ -189,9 +199,10 @@ export async function setupSearch(
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
   const existingKey = resolveExistingKey(config, choice);
+  const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
 
-  if (opts?.quickstartDefaults && (existingKey || envAvailable)) {
+  if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
     const wasDisabled = config.tools?.web?.search?.enabled === false;
     let result = existingKey
       ? applySearchKey(config, choice, existingKey)
@@ -209,12 +220,12 @@ export async function setupSearch(
   }
 
   const keyInput = await prompter.text({
-    message: existingKey
+    message: keyConfigured
       ? `${entry.label} API key (leave blank to keep current)`
       : envAvailable
         ? `${entry.label} API key (leave blank to use env var)`
         : `${entry.label} API key`,
-    placeholder: existingKey ? "Leave blank to keep current" : entry.placeholder,
+    placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
   });
 
   const key = keyInput?.trim() ?? "";
@@ -226,7 +237,7 @@ export async function setupSearch(
     return applySearchKey(config, choice, existingKey);
   }
 
-  if (envAvailable) {
+  if (keyConfigured || envAvailable) {
     return applyProviderOnly(config, choice);
   }
 

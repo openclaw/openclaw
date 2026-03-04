@@ -475,18 +475,21 @@ export async function finalizeOnboardingWizard(
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   if (webSearchProvider && webSearchEnabled !== false) {
-    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasKeyInEnv } =
+    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
       await import("../commands/onboard-search.js");
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
+    const keyConfigured = hasExistingKey(nextConfig, webSearchProvider);
     const envAvailable = entry ? hasKeyInEnv(entry) : false;
-    const hasKey = Boolean(storedKey) || envAvailable;
+    const hasKey = keyConfigured || envAvailable;
     const keySource = storedKey
       ? "API key: stored in config."
-      : envAvailable
-        ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
-        : undefined;
+      : keyConfigured
+        ? "API key: configured via secret reference."
+        : envAvailable
+          ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+          : undefined;
     if (hasKey) {
       await prompter.note(
         [
