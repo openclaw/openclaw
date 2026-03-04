@@ -20,6 +20,7 @@ permissions: {}
 
 jobs:
   label:
+    if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       contents: read
       pull-requests: write
@@ -203,7 +204,7 @@ jobs:
             }
 
   backfill-pr-labels:
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'workflow_dispatch' && secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       contents: read
       pull-requests: write
@@ -452,6 +453,7 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
+    if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404

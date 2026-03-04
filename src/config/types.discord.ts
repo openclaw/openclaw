@@ -37,6 +37,9 @@ export type DiscordGuildChannelConfig = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /** When true, fan out messages from other agents to all agent sessions for this channel. */
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -64,6 +67,9 @@ export type DiscordGuildEntry = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /** When true, fan out messages from other agents to all agent sessions for channels in this guild. */
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -164,6 +170,11 @@ export type DiscordThreadBindingsConfig = {
    * when set.
    */
   enabled?: boolean;
+  /**
+   * Auto-unfocus TTL for thread-bound sessions in hours.
+   * Set to 0 to disable TTL. Default: 24.
+   */
+  ttlHours?: number;
   /**
    * Inactivity window for thread-bound sessions in hours.
    * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
@@ -318,37 +329,26 @@ export type DiscordAccountConfig = {
    * Discord supports both unicode emoji and custom emoji names.
    */
   ackReaction?: string;
-  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
-  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
   status?: "online" | "dnd" | "idle" | "invisible";
-  /** Automatic runtime/quota presence signaling (status text + status mapping). */
-  autoPresence?: DiscordAutoPresenceConfig;
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
-  /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
-   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
-   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
-   * to prevent the event queue from killing long-running message handlers.
-   */
+  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+  /** Automatic runtime/quota presence signaling (status text + status mapping). */
+  autoPresence?: DiscordAutoPresenceConfig;
+  /** Event queue tuning for Discord gateway listener. */
   eventQueue?: {
-    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    /** Listener timeout in milliseconds. Default: 60000. */
     listenerTimeout?: number;
-    /** Max events queued before backpressure is applied. Default: 10000. */
-    maxQueueSize?: number;
-    /** Max concurrent event processing operations. Default: 50. */
-    maxConcurrency?: number;
   };
 };
 
 export type DiscordConfig = {
   /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
 } & DiscordAccountConfig;

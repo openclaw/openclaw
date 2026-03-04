@@ -193,6 +193,9 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** When true, fan out messages from other agents to all agent sessions for this group. */
+  fanOut?: boolean;
+  fanOutMaxRounds?: number;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */

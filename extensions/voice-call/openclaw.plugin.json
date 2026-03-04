@@ -553,6 +553,9 @@
       "responseTimeoutMs": {
         "type": "integer",
         "minimum": 1
+      },
+      "responseAgentId": {
+        "type": "string"
       }
     }
   }
