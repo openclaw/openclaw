@@ -858,11 +858,11 @@ async function sendSubagentAnnounceDirectly(params: {
     // prefer completionDirectOrigin (from hooks like subagent_delivery_target)
     // over directOrigin (requester origin). This ensures hook-selected
     // completion targets are respected even on the agent delivery path.
-    const routeViaParent =
-      cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
-    const effectiveOrigin = routeViaParent && completionDirectOrigin
-      ? completionDirectOrigin
-      : normalizeDeliveryContext(params.directOrigin);
+    const routeViaParent = cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+    const effectiveOrigin =
+      routeViaParent && completionDirectOrigin
+        ? completionDirectOrigin
+        : normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
       typeof effectiveOrigin?.channel === "string" ? effectiveOrigin.channel.trim() : "";
     const directChannel =
