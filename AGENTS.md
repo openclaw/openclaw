@@ -167,6 +167,13 @@
 - Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
+- Command auth canonicalization (`commands.allowFrom`) rules:
+  - Canonical final-auth helpers live in `src/auto-reply/command-auth.ts`: `resolveCommandSenderCandidates(...)` and `resolveCanonicalCommandSenderAuthorization(...)`.
+  - Handler contract (all channels, native/slash/text/plugin paths): compute channel-local fallback auth first, then compute final auth via canonical helper before any deny/drop and before writing `CommandAuthorized` into context.
+  - Precedence contract: `commands.allowFrom.<provider>` overrides `commands.allowFrom["*"]`; fallback auth applies only when neither provider-specific nor `*` list is configured.
+  - Explicit-empty provider list rule: `commands.allowFrom.<provider>: []` is a deliberate deny-all override for that provider (it does not fall back to `commands.allowFrom["*"]`).
+  - Do not reimplement precedence logic in channel monitors, plugin SDK helpers, or security helpers; route all final privileged-command auth through the canonical helper.
+  - Required parity tests for any auth-path change: global override, provider-specific override, provider-over-global precedence, explicit-empty provider deny-all semantics, prefixed identity normalization, and fallback parity when no applicable `commands.allowFrom` list exists.
 - Never update the Carbon dependency.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
