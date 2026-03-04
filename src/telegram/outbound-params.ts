@@ -2,8 +2,8 @@ export function parseTelegramReplyToMessageId(replyToId?: string | null): number
   if (!replyToId) {
     return undefined;
   }
-  const parsed = Number.parseInt(replyToId, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  // Reject non-integer strings (e.g. UUIDs from webchat) that parseInt would partially parse.
+  return parseIntegerId(replyToId);
 }
 
 function parseIntegerId(value: string): number | undefined {
