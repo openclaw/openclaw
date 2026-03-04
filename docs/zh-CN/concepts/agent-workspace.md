@@ -5,10 +5,10 @@ read_when:
 summary: 智能体工作区：位置、布局和备份策略
 title: 智能体工作区
 x-i18n:
-  generated_at: "2026-02-03T07:45:49Z"
+  generated_at: "2026-03-04T08:42:18Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 84c550fd89b5f2474aeae586795485fd29d36effbb462f13342b31540fc18b82
+  source_hash: e306ebb731c0259123818cbfa0117f75ee6ebfb69abb1438a0cdb2ab686c8244
   source_path: concepts/agent-workspace.md
   workflow: 15
 ---
@@ -29,8 +29,8 @@ x-i18n:
 - 如果设置了 `OPENCLAW_PROFILE` 且不是 `"default"`，默认值变为
   `~/.openclaw/workspace-<profile>`。
 - 对于严格的本地媒体路径校验，推荐使用稳定的子目录布局（例如
-  `~/.openclaw/workspace/<profile>`）；如果使用后缀/自定义工作区，记得把路径加入
-  `tools.media.localRoots`。
+  `~/.openclaw/workspace/<profile>`，并显式配置 `agent.workspace`）；
+  如果使用后缀/自定义工作区，记得把路径加入 `tools.media.localRoots`。
 - 在 `~/.openclaw/openclaw.json` 中覆盖：
 
 ```json5
