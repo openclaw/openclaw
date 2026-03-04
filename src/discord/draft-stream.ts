@@ -50,22 +50,24 @@ export function createDiscordDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-      if (trimmed.length > maxChars) {
-        // Discord messages cap at 2000 chars.
-        // Truncate with user-visible warning instead of silently stopping.
-        const truncationWarning = "\n\n⚠️ [Content truncated — text exceeded platform limits. Use /verbose off for full content.]";
-        const truncatedText = trimmed.slice(0, maxChars - truncationWarning.length) + truncationWarning;
+    if (trimmed.length > maxChars) {
+      // Discord messages cap at 2000 chars.
+      // Truncate with user-visible warning instead of silently stopping.
+      const truncationWarning =
+        "\n\n⚠️ [Content truncated — text exceeded platform limits. Use /verbose off for full content.]";
+      const truncatedText =
+        trimmed.slice(0, maxChars - truncationWarning.length) + truncationWarning;
 
-        params.warn?.(
-          `discord stream preview truncated (${trimmed.length} > ${maxChars} chars). Consider disabling verbose mode for long outputs.`,
-        );
+      params.warn?.(
+        `discord stream preview truncated (${trimmed.length} > ${maxChars} chars). Consider disabling verbose mode for long outputs.`,
+      );
 
-        // Send the truncated content
-        await sendOrEditStreamMessage(truncatedText);
+      // Send the truncated content
+      await sendOrEditStreamMessage(truncatedText);
 
-        streamState.stopped = true;
-        return false;
-      }
+      streamState.stopped = true;
+      return false;
+    }
     if (trimmed === lastSentText) {
       return true;
     }
@@ -152,3 +154,4 @@ export function createDiscordDraftStream(params: {
     forceNewMessage,
   };
 }
+
