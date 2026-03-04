@@ -1,3 +1,9 @@
+import {
+  DEFAULT_RETRY_POLICY,
+  parseProviderError,
+  retryWithBackoff,
+} from "./provider-error.js";
+import type { RetryPolicy } from "./provider-error.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
@@ -14,6 +20,52 @@ export async function fetchJson(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function fetchJsonWithRetry(
+  provider: string,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+  policy: RetryPolicy = DEFAULT_RETRY_POLICY,
+  onRetry?: (attempt: number, max: number, delayMs: number) => void,
+): Promise<Response> {
+  const res = await fetchJson(url, init, timeoutMs, fetchFn);
+  if (res.ok) return res;
+
+  const providerErr = await parseProviderError(provider, res);
+
+  if (!providerErr.retryable) {
+    return res;
+  }
+
+  return retryWithBackoff(
+    async () => {
+      const retryRes = await fetchJson(url, init, timeoutMs, fetchFn);
+      if (!retryRes.ok) {
+        throw await parseProviderError(provider, retryRes);
+      }
+      return retryRes;
+    },
+    policy,
+    providerErr,
+    onRetry ? (attempt, max, delayMs) => onRetry(attempt, max, delayMs) : undefined,
+  ).catch((err: unknown) => {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "httpStatus" in err &&
+      "raw" in err
+    ) {
+      const provErr = err as { httpStatus: number; raw: unknown };
+      return new Response(JSON.stringify(provErr.raw ?? null), {
+        status: provErr.httpStatus,
+        headers: {},
+      });
+    }
+    throw err;
+  });
 }
 
 export function parseFiniteNumber(value: unknown): number | undefined {

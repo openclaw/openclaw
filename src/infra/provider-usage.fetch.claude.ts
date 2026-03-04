@@ -1,4 +1,4 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJsonWithRetry } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -73,7 +73,8 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const orgRes = await fetchJson(
+  const orgRes = await fetchJsonWithRetry(
+    "anthropic",
     "https://claude.ai/api/organizations",
     { headers },
     timeoutMs,
@@ -89,7 +90,8 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const usageRes = await fetchJson(
+  const usageRes = await fetchJsonWithRetry(
+    "anthropic",
     `https://claude.ai/api/organizations/${orgId}/usage`,
     { headers },
     timeoutMs,
@@ -117,7 +119,8 @@ export async function fetchClaudeUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
+  const res = await fetchJsonWithRetry(
+    "anthropic",
     "https://api.anthropic.com/api/oauth/usage",
     {
       headers: {
