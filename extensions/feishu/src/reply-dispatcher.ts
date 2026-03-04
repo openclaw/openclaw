@@ -173,7 +173,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streamingStartPromise;
       }
       if (streaming?.isActive()) {
-        await streaming.update(streamText);
+        await streaming.update(normalizeFeishuMarkdownLinks(streamText));
       }
     });
   };
