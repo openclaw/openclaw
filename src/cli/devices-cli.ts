@@ -234,7 +234,7 @@ export function registerDevicesCli(program: Command) {
               columns: [
                 { key: "Request", header: "Request", minWidth: 10 },
                 { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
+                { key: "DeviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
                 { key: "IP", header: "IP", minWidth: 12 },
                 { key: "Age", header: "Age", minWidth: 8 },
@@ -243,7 +243,7 @@ export function registerDevicesCli(program: Command) {
               rows: list.pending.map((req) => ({
                 Request: req.requestId,
                 Name: req.displayName ?? "",
-                deviceId: req.deviceId,
+                DeviceId: req.deviceId,
                 Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
                 Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
@@ -262,7 +262,7 @@ export function registerDevicesCli(program: Command) {
               width: tableWidth,
               columns: [
                 { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
+                { key: "DeviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
@@ -270,7 +270,7 @@ export function registerDevicesCli(program: Command) {
               ],
               rows: list.paired.map((device) => ({
                 Name: device.displayName ?? "",
-                deviceId: device.deviceId,
+                DeviceId: device.deviceId,
                 Roles: device.roles?.length ? device.roles.join(", ") : "",
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
