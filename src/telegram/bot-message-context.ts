@@ -44,12 +44,9 @@ import {
   resolveAgentRoute,
   type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  buildAgentMainSessionKey,
-  resolveThreadSessionKeys,
-} from "../routing/session-key.js";
+import { buildAgentMainSessionKey, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -245,13 +242,15 @@ export const buildTelegramMessageContext = async ({
       `telegram: per-topic agent override: topic=${resolvedThreadId ?? dmThreadId} agent=${topicAgentId} sessionKey=${overrideSessionKey}`,
     );
   }
-  // Fail closed for named Telegram accounts when route resolution falls back to
-  // default-agent routing. This prevents cross-account DM/session contamination.
-  if (route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default") {
+  const defaultTelegramAccountId = resolveDefaultTelegramAccountId(freshCfg);
+  // Fail closed when fallback routing would route a non-default Telegram account.
+  // This keeps cross-account isolation while allowing the configured default account
+  // (which may be a non-"default" id) to route without explicit bindings.
+  if (route.matchedBy === "default" && route.accountId !== defaultTelegramAccountId) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
-      reason: "non-default account requires explicit binding",
+      reason: "non-default telegram account requires explicit binding",
       target: route.accountId,
     });
     return null;

@@ -813,11 +813,50 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("routes DMs for configured default telegram account without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
           accounts: {
+            opie: {
+              botToken: "tok-opie",
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok", accountId: "opie" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 999, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.AccountId).toBe("opie");
+  });
+
+  it("drops non-default account DMs without explicit bindings when a different default account is configured", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          defaultAccount: "primary",
+          accounts: {
+            primary: {
+              botToken: "tok-primary",
+              dmPolicy: "open",
+            },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
