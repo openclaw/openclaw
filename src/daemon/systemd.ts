@@ -224,8 +224,8 @@ async function execSystemctlUser(
   const machineUser = resolveSystemctlMachineScopeUser(env);
   const sudoUser = env.SUDO_USER?.trim();
 
-  // Under sudo, prefer the invoking user's scope directly (root usually lacks a user bus).
-  if (sudoUser && machineUser) {
+  // Under sudo, prefer the invoking non-root user's scope directly.
+  if (sudoUser && sudoUser !== "root" && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       return await execSystemctl([...machineScopeArgs, ...args]);
