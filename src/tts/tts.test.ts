@@ -437,6 +437,58 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig – openai.baseUrl", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("defaults to the official OpenAI endpoint", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("https://api.openai.com/v1");
+      });
+    });
+
+    it("picks up OPENAI_TTS_BASE_URL env var when no config baseUrl is set", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+    });
+
+    it("config baseUrl takes precedence over env var", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+        },
+      };
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+        const config = resolveTtsConfig(cfg);
+        expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
+      });
+    });
+
+    it("strips trailing slashes from the resolved baseUrl", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
+    });
+
+    it("strips trailing slashes from env var baseUrl", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+    });
+  });
+
   describe("maybeApplyTtsToPayload", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },

@@ -51,6 +51,7 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
@@ -113,6 +114,7 @@ export type ResolvedTtsConfig = {
   };
   openai: {
     apiKey?: string;
+    baseUrl: string;
     model: string;
     voice: string;
   };
@@ -294,6 +296,12 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
         value: raw.openai?.apiKey,
         path: "messages.tts.openai.apiKey",
       }),
+      // Config > env var > default; strip trailing slashes for consistency.
+      baseUrl: (
+        raw.openai?.baseUrl?.trim() ||
+        process.env.OPENAI_TTS_BASE_URL?.trim() ||
+        DEFAULT_OPENAI_BASE_URL
+      ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
@@ -681,6 +689,7 @@ export async function textToSpeech(params: {
         audioBuffer = await openaiTTS({
           text: params.text,
           apiKey,
+          baseUrl: config.openai.baseUrl,
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
           responseFormat: output.openai,
@@ -777,6 +786,7 @@ export async function textToSpeechTelephony(params: {
       const audioBuffer = await openaiTTS({
         text: params.text,
         apiKey,
+        baseUrl: config.openai.baseUrl,
         model: config.openai.model,
         voice: config.openai.voice,
         responseFormat: output.format,
