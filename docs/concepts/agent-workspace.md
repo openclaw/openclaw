@@ -54,6 +54,24 @@ Older installs may have created `~/openclaw`. Keeping multiple workspace
 directories around can cause confusing auth or state drift, because only one
 workspace is active at a time.
 
+### Media allowlist note (`workspace-<profile>`)
+
+`workspace-<profile>` paths (for example `~/.openclaw/workspace-code`) are
+supported and valid.
+
+For local media reads/sends, OpenClaw uses layered allowlists:
+
+- A **default** global root set (intentionally conservative), and
+- **Agent-scoped roots** that add the active agent workspace.
+
+That means media under the active agent workspace should work even when the
+workspace is `workspace-<profile>`.
+
+If you see `Local media path is not under an allowed directory`, it usually
+indicates a specific call path that did not receive the active `agentId`
+(correct agent-scoped roots were not applied), not that `workspace-<profile>`
+itself is unsupported.
+
 **Recommendation:** keep a single active workspace. If you no longer use the
 extra folders, archive or move them to Trash (for example `trash ~/openclaw`).
 If you intentionally keep multiple workspaces, make sure
