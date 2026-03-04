@@ -48,4 +48,15 @@ export const createTelegramUpdateDedupe = () =>
     maxSize: RECENT_TELEGRAM_UPDATE_MAX,
   });
 
-export { MEDIA_GROUP_TIMEOUT_MS };
+const DOCUMENT_BATCH_FLUSH_MS = 1500;
+
+export type DocumentBatchEntry = {
+  key: string;
+  messages: Array<{
+    msg: TelegramMessage;
+    ctx: TelegramContext;
+  }>;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+export { MEDIA_GROUP_TIMEOUT_MS, DOCUMENT_BATCH_FLUSH_MS };

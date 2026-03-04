@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { MEDIA_GROUP_TIMEOUT_MS } from "./bot-updates.js";
+import { DOCUMENT_BATCH_FLUSH_MS, MEDIA_GROUP_TIMEOUT_MS } from "./bot-updates.js";
 
 const useSpy = vi.fn();
 const middlewareUseSpy = vi.fn();
@@ -761,5 +761,218 @@ describe("telegram text fragments", () => {
       expect(payload.RawBody).toContain(part2.slice(0, 32));
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+});
+
+describe("telegram document batch buffer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const DOC_BATCH_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const DOC_BATCH_FLUSH_MS = DOCUMENT_BATCH_FLUSH_MS + 25;
+
+  it(
+    "single document passes through after flush window",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "application/pdf" },
+        arrayBuffer: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer,
+      } as Response);
+
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await handler({
+        message: {
+          chat: { id: 100, type: "private" },
+          message_id: 1,
+          from: { id: 999 },
+          date: 1736380800,
+          document: { file_id: "doc1", file_name: "report.pdf" },
+        },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ file_path: "documents/report.pdf" }),
+      });
+
+      // Should not fire immediately
+      expect(replySpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DOC_BATCH_FLUSH_MS);
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.MediaPaths).toHaveLength(1);
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "multiple documents from same chat+sender within window arrive as one processMessage call",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "text/plain" },
+        arrayBuffer: async () => new Uint8Array([0x48, 0x65, 0x6c, 0x6c]).buffer,
+      } as Response);
+
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      // Send 3 documents from the same sender within the batch window
+      for (let i = 1; i <= 3; i++) {
+        await handler({
+          message: {
+            chat: { id: 200, type: "private" },
+            message_id: i,
+            from: { id: 555 },
+            date: 1736380800 + i,
+            document: { file_id: `doc${i}`, file_name: `session${i}.md` },
+            ...(i === 1 ? { caption: "Here are my session files" } : {}),
+          },
+          me: { username: "moltbot_bot" },
+          getFile: async () => ({ file_path: `documents/session${i}.md` }),
+        });
+      }
+
+      expect(replySpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DOC_BATCH_FLUSH_MS);
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.MediaPaths).toHaveLength(3);
+      // Caption from first document should be used
+      expect(payload.Body).toContain("Here are my session files");
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "documents from different senders are NOT batched together",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "text/plain" },
+        arrayBuffer: async () => new Uint8Array([0x48, 0x65]).buffer,
+      } as Response);
+
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      // Document from sender A
+      await handler({
+        message: {
+          chat: { id: 300, type: "private" },
+          message_id: 1,
+          from: { id: 111 },
+          date: 1736380800,
+          document: { file_id: "docA", file_name: "fileA.txt" },
+        },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ file_path: "documents/fileA.txt" }),
+      });
+
+      // Document from sender B (same chat, different sender)
+      await handler({
+        message: {
+          chat: { id: 300, type: "private" },
+          message_id: 2,
+          from: { id: 222 },
+          date: 1736380801,
+          document: { file_id: "docB", file_name: "fileB.txt" },
+        },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ file_path: "documents/fileB.txt" }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DOC_BATCH_FLUSH_MS);
+
+      // Should have been called twice — separate batches for each sender
+      expect(replySpy).toHaveBeenCalledTimes(2);
+
+      const payload1 = replySpy.mock.calls[0][0];
+      const payload2 = replySpy.mock.calls[1][0];
+      expect(payload1.MediaPaths).toHaveLength(1);
+      expect(payload2.MediaPaths).toHaveLength(1);
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
   );
 });

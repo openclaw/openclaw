@@ -130,6 +130,11 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /**
+   * Window (ms) for batching rapid one-by-one document uploads into a
+   * single agent turn.  Set to 0 to disable.  Default: 1500.
+   */
+  documentBatchWindowMs?: number;
 };
 
 export type TelegramTopicConfig = {

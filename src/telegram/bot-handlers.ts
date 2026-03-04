@@ -16,7 +16,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
-import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
+import { DOCUMENT_BATCH_FLUSH_MS, MEDIA_GROUP_TIMEOUT_MS, type DocumentBatchEntry, type MediaGroupEntry } from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
@@ -54,6 +54,10 @@ export const registerTelegramHandlers = ({
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
+
+  const documentBatchWindowMs = telegramCfg.documentBatchWindowMs ?? DOCUMENT_BATCH_FLUSH_MS;
+  const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
+  let documentBatchProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   type TelegramDebounceEntry = {
@@ -138,6 +142,49 @@ export const registerTelegramHandlers = ({
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }
+  };
+
+  const processDocumentBatch = async (entry: DocumentBatchEntry) => {
+    try {
+      entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+
+      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
+      const primaryEntry = captionMsg ?? entry.messages[0];
+
+      const allMedia: Array<{
+        path: string;
+        contentType?: string;
+        stickerMetadata?: { emoji?: string; setName?: string; fileId?: string };
+      }> = [];
+      for (const { ctx } of entry.messages) {
+        try {
+          const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+          if (media) {
+            allMedia.push({
+              path: media.path,
+              contentType: media.contentType,
+              stickerMetadata: media.stickerMetadata,
+            });
+          }
+        } catch (err) {
+          runtime.log?.(warn(`document batch: skipping file: ${String(err)}`));
+        }
+      }
+
+      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
+    } catch (err) {
+      runtime.error?.(danger(`document batch handler failed: ${String(err)}`));
+    }
+  };
+
+  const flushDocumentBatch = (key: string, entry: DocumentBatchEntry) => {
+    documentBatchBuffer.delete(key);
+    documentBatchProcessing = documentBatchProcessing
+      .then(async () => {
+        await processDocumentBatch(entry);
+      })
+      .catch(() => undefined);
   };
 
   const flushTextFragments = async (entry: TextFragmentEntry) => {
@@ -629,6 +676,39 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      // Document batch handling — buffer one-by-one document uploads
+      const senderId = msg.from?.id ? String(msg.from.id) : "";
+      const docBatchKey = `${chatId}:${senderId}`;
+
+      if (!mediaGroupId && msg.document && documentBatchWindowMs > 0) {
+        const existing = documentBatchBuffer.get(docBatchKey);
+        if (existing) {
+          clearTimeout(existing.timer);
+          existing.messages.push({ msg, ctx });
+          existing.timer = setTimeout(() => {
+            flushDocumentBatch(docBatchKey, existing);
+          }, documentBatchWindowMs);
+        } else {
+          const entry: DocumentBatchEntry = {
+            key: docBatchKey,
+            messages: [{ msg, ctx }],
+            timer: setTimeout(() => {
+              flushDocumentBatch(docBatchKey, entry);
+            }, documentBatchWindowMs),
+          };
+          documentBatchBuffer.set(docBatchKey, entry);
+        }
+        return;
+      }
+
+      // Flush any pending document batch when a non-document message arrives
+      const pendingDocBatch = documentBatchBuffer.get(docBatchKey);
+      if (pendingDocBatch) {
+        clearTimeout(pendingDocBatch.timer);
+        flushDocumentBatch(docBatchKey, pendingDocBatch);
+        await documentBatchProcessing;
+      }
+
       let media: Awaited<ReturnType<typeof resolveMedia>> = null;
       try {
         media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
@@ -667,7 +747,6 @@ export const registerTelegramHandlers = ({
             },
           ]
         : [];
-      const senderId = msg.from?.id ? String(msg.from.id) : "";
       const conversationKey =
         resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
       const debounceKey = senderId
