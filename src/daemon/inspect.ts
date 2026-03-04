@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAndroidRuntime } from "../infra/android.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -28,25 +29,22 @@ export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
   const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
-    }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [
-        `systemctl --user disable --now ${unit}.service`,
-        `rm ~/.config/systemd/user/${unit}.service`,
-      ];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [`schtasks /Delete /TN "${task}" /F`];
-    }
-    default:
-      return [];
+  if (process.platform === "darwin") {
+    const label = resolveGatewayLaunchAgentLabel(profile);
+    return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
   }
+  if (process.platform === "win32") {
+    const task = resolveGatewayWindowsTaskName(profile);
+    return [`schtasks /Delete /TN "${task}" /F`];
+  }
+  if (process.platform === "linux" || isAndroidRuntime()) {
+    const unit = resolveGatewaySystemdServiceName(profile);
+    return [
+      `systemctl --user disable --now ${unit}.service`,
+      `rm ~/.config/systemd/user/${unit}.service`,
+    ];
+  }
+  return [];
 }
 
 function resolveHomeDir(env: Record<string, string | undefined>): string {
@@ -357,7 +355,7 @@ export async function findExtraGatewayServices(
     return results;
   }
 
-  if (process.platform === "linux") {
+  if (process.platform === "linux" || isAndroidRuntime()) {
     try {
       const home = resolveHomeDir(env);
       const userDir = path.join(home, ".config", "systemd", "user");

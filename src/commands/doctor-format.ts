@@ -11,6 +11,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../daemon/systemd-hints.js";
+import { isAndroidRuntime } from "../infra/android.js";
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
@@ -34,6 +35,8 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   const platform = options.platform ?? process.platform;
+  const androidLike = platform === "android" || (platform === "linux" && isAndroidRuntime());
+  const linuxLike = platform === "linux" || androidLike;
   const env = options.env ?? process.env;
   const fileLog = (() => {
     try {
@@ -42,7 +45,7 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+  if (linuxLike && isSystemdUnavailableDetail(runtime.detail)) {
     hints.push(...renderSystemdUnavailableHints({ wsl: isWSLEnv() }));
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
@@ -72,7 +75,7 @@ export function buildGatewayRuntimeHints(
       const logs = resolveGatewayLogPaths(env);
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (platform === "linux") {
+    } else if (linuxLike) {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (platform === "win32") {

@@ -4,6 +4,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isAndroidRuntime } from "./android.js";
 
 export type RestartAttempt = {
   ok: boolean;
@@ -289,7 +290,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
   const tried: string[] = [];
   if (process.platform !== "darwin") {
-    if (process.platform === "linux") {
+    if (process.platform === "linux" || isAndroidRuntime()) {
       const unit = normalizeSystemdUnit(
         process.env.OPENCLAW_SYSTEMD_UNIT,
         process.env.OPENCLAW_PROFILE,

@@ -6,6 +6,7 @@ import {
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import { pickPrimaryLanIPv4 } from "../../gateway/net.js";
+import { isAndroidRuntime } from "../../infra/android.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -146,7 +147,7 @@ export function renderRuntimeHints(
       const logs = resolveGatewayLogPaths(env);
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (process.platform === "linux") {
+    } else if (process.platform === "linux" || isAndroidRuntime()) {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (process.platform === "win32") {
@@ -163,20 +164,17 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
     formatCliCommand("openclaw gateway", env),
   ];
   const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
-    }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [...base, `systemctl --user start ${unit}.service`];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [...base, `schtasks /Run /TN "${task}"`];
-    }
-    default:
-      return base;
+  if (process.platform === "darwin") {
+    const label = resolveGatewayLaunchAgentLabel(profile);
+    return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
   }
+  if (process.platform === "win32") {
+    const task = resolveGatewayWindowsTaskName(profile);
+    return [...base, `schtasks /Run /TN "${task}"`];
+  }
+  if (process.platform === "linux" || isAndroidRuntime()) {
+    const unit = resolveGatewaySystemdServiceName(profile);
+    return [...base, `systemctl --user start ${unit}.service`];
+  }
+  return base;
 }

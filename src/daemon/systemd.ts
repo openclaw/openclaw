@@ -176,7 +176,9 @@ async function assertSystemdAvailable() {
   }
   const detail = res.stderr || res.stdout;
   if (detail.toLowerCase().includes("not found")) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error(
+      "systemctl not available; systemd user services are required on Linux/Android.",
+    );
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }

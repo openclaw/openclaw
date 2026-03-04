@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { isAndroidRuntime } from "../infra/android.js";
 
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   if (!detail) {
@@ -20,6 +21,13 @@ export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): 
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
       "Then run: wsl --shutdown (from PowerShell) and reopen your distro.",
       "Verify: systemctl --user status",
+    ];
+  }
+  if (isAndroidRuntime()) {
+    return [
+      "Detected Android platform; you may be hitting compatibility limitations.",
+      `Recommended: run the gateway in the foreground: \`${formatCliCommand("openclaw gateway run")}\`.`,
+      "If you need it to stay running in the background, use your environment's process supervisor.",
     ];
   }
   return [

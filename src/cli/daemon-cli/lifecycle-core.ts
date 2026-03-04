@@ -6,6 +6,7 @@ import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
+import { isAndroidRuntime } from "../../infra/android.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -28,7 +29,7 @@ type RestartPostCheckContext = {
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
-  if (process.platform !== "linux") {
+  if (process.platform !== "linux" && !isAndroidRuntime()) {
     return hints;
   }
   const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);

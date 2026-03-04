@@ -15,6 +15,7 @@ import { logConfigUpdated } from "../config/logging.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { isAndroidRuntime } from "../infra/android.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -239,7 +240,7 @@ export async function doctorCommand(
 
   if (
     options.nonInteractive !== true &&
-    process.platform === "linux" &&
+    (process.platform === "linux" || isAndroidRuntime()) &&
     resolveMode(cfg) === "local"
   ) {
     const service = resolveGatewayService();

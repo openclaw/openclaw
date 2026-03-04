@@ -3,6 +3,7 @@ import {
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
+import { isAndroidRuntime } from "../infra/android.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 
@@ -20,7 +21,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   prompt?: boolean;
   requireConfirm?: boolean;
 }): Promise<void> {
-  if (process.platform !== "linux") {
+  if (process.platform !== "linux" && !isAndroidRuntime()) {
     return;
   }
   if (params.prompt === false) {
@@ -93,7 +94,7 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  if (process.platform !== "linux") {
+  if (process.platform !== "linux" && !isAndroidRuntime()) {
     return;
   }
   const env = params.env ?? process.env;

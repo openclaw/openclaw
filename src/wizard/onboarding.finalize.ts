@@ -24,6 +24,7 @@ import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import { isAndroidRuntime } from "../infra/android.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
@@ -62,16 +63,16 @@ export async function finalizeOnboardingWizard(
     }
   };
 
-  const systemdAvailable =
-    process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
-  if (process.platform === "linux" && !systemdAvailable) {
+  const linuxLike = process.platform === "linux" || isAndroidRuntime();
+  const systemdAvailable = linuxLike ? await isSystemdUserServiceAvailable() : true;
+  if (linuxLike && !systemdAvailable) {
     await prompter.note(
       "Systemd user services are unavailable. Skipping lingering checks and service install.",
       "Systemd",
     );
   }
 
-  if (process.platform === "linux" && systemdAvailable) {
+  if (linuxLike && systemdAvailable) {
     const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,
@@ -80,7 +81,7 @@ export async function finalizeOnboardingWizard(
         note: prompter.note,
       },
       reason:
-        "Linux installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+        "Linux/Android installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
       requireConfirm: false,
     });
   }
@@ -90,7 +91,7 @@ export async function finalizeOnboardingWizard(
   let installDaemon: boolean;
   if (explicitInstallDaemon !== undefined) {
     installDaemon = explicitInstallDaemon;
-  } else if (process.platform === "linux" && !systemdAvailable) {
+  } else if (linuxLike && !systemdAvailable) {
     installDaemon = false;
   } else if (flow === "quickstart") {
     installDaemon = true;
@@ -101,7 +102,7 @@ export async function finalizeOnboardingWizard(
     });
   }
 
-  if (process.platform === "linux" && !systemdAvailable && installDaemon) {
+  if (linuxLike && !systemdAvailable && installDaemon) {
     await prompter.note(
       "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
       "Gateway service",
