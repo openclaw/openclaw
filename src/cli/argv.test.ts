@@ -3,6 +3,8 @@ import {
   buildParseArgv,
   getFlagValue,
   getCommandPath,
+  getCommandPositionalsWithRootOptions,
+  getCommandPathWithRootOptions,
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
@@ -160,6 +162,50 @@ describe("argv helpers", () => {
     expect(getCommandPath(argv, 2)).toEqual(expected);
   });
 
+  it("extracts command path while skipping known root option values", () => {
+    expect(
+      getCommandPathWithRootOptions(
+        ["node", "openclaw", "--profile", "work", "--no-color", "config", "validate"],
+        2,
+      ),
+    ).toEqual(["config", "validate"]);
+  });
+
+  it("extracts routed config get positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--log-level", "debug", "update.channel", "--json"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("extracts routed config unset positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"],
+        {
+          commandPath: ["config", "unset"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("returns null when routed command sees unknown options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toBeNull();
+  });
+
   it.each([
     {
       name: "returns first command token",
@@ -170,6 +216,11 @@ describe("argv helpers", () => {
       name: "returns null when no command exists",
       argv: ["node", "openclaw"],
       expected: null,
+    },
+    {
+      name: "skips known root option values",
+      argv: ["node", "openclaw", "--log-level", "debug", "status"],
+      expected: "status",
     },
   ])("returns primary command: $name", ({ argv, expected }) => {
     expect(getPrimaryCommand(argv)).toBe(expected);

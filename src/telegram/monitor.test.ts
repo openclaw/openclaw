@@ -91,14 +91,27 @@ function makeRecoverableFetchError() {
   });
 }
 
+const createAbortTask = (
+  abort: AbortController,
+  beforeAbort?: () => void,
+): (() => Promise<void>) => {
+  return async () => {
+    beforeAbort?.();
+    abort.abort();
+  };
+};
+
+const makeAbortRunner = (abort: AbortController, beforeAbort?: () => void): RunnerStub =>
+  makeRunnerStub({ task: createAbortTask(abort, beforeAbort) });
+
 function mockRunOnceAndAbort(abort: AbortController) {
-  runSpy.mockImplementationOnce(() =>
-    makeRunnerStub({
-      task: async () => {
-        abort.abort();
-      },
-    }),
-  );
+  runSpy.mockImplementationOnce(() => makeAbortRunner(abort));
+}
+
+function expectRecoverableRetryState(expectedRunCalls: number) {
+  expect(computeBackoff).toHaveBeenCalled();
+  expect(sleepWithAbort).toHaveBeenCalled();
+  expect(runSpy).toHaveBeenCalledTimes(expectedRunCalls);
 }
 
 async function monitorWithAutoAbort(
@@ -273,19 +286,11 @@ describe("monitorTelegramProvider (grammY)", () => {
           task: () => Promise.reject(networkError),
         }),
       )
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: async () => {
-            abort.abort();
-          },
-        }),
-      );
+      .mockImplementationOnce(() => makeAbortRunner(abort));
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(computeBackoff).toHaveBeenCalled();
-    expect(sleepWithAbort).toHaveBeenCalled();
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    expectRecoverableRetryState(2);
   });
 
   it("deletes webhook before starting polling", async () => {
@@ -298,11 +303,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
     runSpy.mockImplementationOnce(() => {
       order.push("run");
-      return makeRunnerStub({
-        task: async () => {
-          abort.abort();
-        },
-      });
+      return makeAbortRunner(abort);
     });
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
@@ -321,9 +322,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
-    expect(computeBackoff).toHaveBeenCalled();
-    expect(sleepWithAbort).toHaveBeenCalled();
-    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRecoverableRetryState(1);
   });
 
   it("retries setup-time recoverable errors before starting polling", async () => {
@@ -357,30 +356,18 @@ describe("monitorTelegramProvider (grammY)", () => {
       )
       .mockImplementationOnce(() => {
         expect(firstStopped).toBe(true);
-        return makeRunnerStub({
-          task: async () => {
-            abort.abort();
-          },
-        });
+        return makeAbortRunner(abort);
       });
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(firstStop).toHaveBeenCalled();
-    expect(computeBackoff).toHaveBeenCalled();
-    expect(sleepWithAbort).toHaveBeenCalled();
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    expectRecoverableRetryState(2);
   });
 
   it("stops bot instance when polling cycle exits", async () => {
     const abort = new AbortController();
-    runSpy.mockImplementationOnce(() =>
-      makeRunnerStub({
-        task: async () => {
-          abort.abort();
-        },
-      }),
-    );
+    mockRunOnceAndAbort(abort);
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
