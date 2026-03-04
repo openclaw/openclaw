@@ -175,17 +175,32 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
-function isSystemdUserManagerUnavailable(detail: string): boolean {
+function isSystemdUserManagerUnavailable(
+  detail: string,
+  res?: { code: number; stdout: string; stderr: string },
+): boolean {
   if (!detail) {
     return false;
   }
   const normalized = detail.toLowerCase();
-  return (
+  const hasKnownNoSessionSignal =
     normalized.includes("failed to connect to bus") ||
     normalized.includes("not been booted") ||
-    normalized.includes("no medium found") ||
-    normalized.includes("command failed: systemctl --user is-enabled")
-  );
+    // Seen in some user-session D-Bus failures where no user manager is reachable.
+    normalized.includes("no medium found");
+  if (hasKnownNoSessionSignal) {
+    return true;
+  }
+  const stderrText = res?.stderr?.trim().toLowerCase() ?? "";
+  const isWrapperOnlyStderr =
+    stderrText.startsWith("command failed: systemctl --user is-enabled") &&
+    !stderrText.includes("\n");
+  const isWrapperOnlyFailure =
+    normalized.includes("command failed: systemctl --user is-enabled") &&
+    (res?.code ?? -1) === 1 &&
+    !res?.stdout?.trim() &&
+    (isWrapperOnlyStderr || !stderrText);
+  return isWrapperOnlyFailure;
 }
 
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
@@ -368,7 +383,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (
     isSystemctlMissing(detail) ||
     isSystemdUnitNotEnabled(detail) ||
-    isSystemdUserManagerUnavailable(detail)
+    isSystemdUserManagerUnavailable(detail, res)
   ) {
     return false;
   }
