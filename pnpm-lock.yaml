@@ -369,22 +369,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/fin-data-bus:
-    dependencies:
-      yahoo-finance2:
-        specifier: ^3.13.0
-        version: 3.13.1
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-data-hub:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/fin-evolution-engine:
     devDependencies:
       openfinclaw:
@@ -459,10 +443,19 @@ importers:
 
   extensions/findoo-backtest-plugin:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       openclaw:
         specifier: '>=2026.1.0'
         version: 2026.2.24(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
     devDependencies:
+      '@openfinclaw/fin-shared-types':
+        specifier: workspace:*
+        version: link:../fin-shared-types
       openfinclaw:
         specifier: workspace:*
         version: link:../..

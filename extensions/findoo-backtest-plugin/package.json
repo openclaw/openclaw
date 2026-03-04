@@ -10,8 +10,26 @@
     "trading"
   ],
   "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/findoo-backtest-plugin"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "skills/",
+    "openclaw.plugin.json"
+  ],
   "type": "module",
+  "main": "./index.ts",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "jszip": "^3.10.1"
+  },
   "devDependencies": {
+    "@openfinclaw/fin-shared-types": "workspace:*",
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
