@@ -35,16 +35,16 @@ type SearchProviderValue = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
 const PROVIDER_ENV_VARS: Record<Exclude<SearchProviderValue, "skip">, string> = {
   brave: "BRAVE_API_KEY",
   parallel: "PARALLEL_API_KEY",
-  perplexity: "PERPLEXITY_API_KEY or OPENROUTER_API_KEY",
+  perplexity: "PERPLEXITY_API_KEY",
   grok: "XAI_API_KEY",
   gemini: "GEMINI_API_KEY",
-  kimi: "KIMI_API_KEY or MOONSHOT_API_KEY",
+  kimi: "KIMI_API_KEY",
 };
 
 const PROVIDER_PLACEHOLDERS: Record<Exclude<SearchProviderValue, "skip">, string> = {
   brave: "BSA...",
   parallel: "par-...",
-  perplexity: "pplx-... or sk-or-...",
+  perplexity: "pplx-...",
   grok: "xai-...",
   gemini: "AIza...",
   kimi: "sk-...",
