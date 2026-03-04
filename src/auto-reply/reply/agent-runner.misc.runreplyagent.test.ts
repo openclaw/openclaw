@@ -1409,6 +1409,25 @@ describe("runReplyAgent fallback reasoning tags", () => {
     expect(call?.enforceFinalTag).toBe(true);
   });
 
+  it("does not enforce <final> when the fallback provider is minimax", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("minimax-cn", "MiniMax-M2.5"),
+        provider: "minimax-cn",
+        model: "MiniMax-M2.5",
+      }),
+    );
+
+    await createRun();
+
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
+    expect(call?.enforceFinalTag).toBe(false);
+  });
+
   it("enforces <final> during memory flush on fallback providers", async () => {
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
       if (params.prompt?.includes("Pre-compaction memory flush.")) {
