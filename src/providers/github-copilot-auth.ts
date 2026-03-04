@@ -9,6 +9,7 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const GITHUB_SLOW_DOWN_EXTRA_DELAY_MS = 2000;
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -99,7 +100,7 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      await new Promise((r) => setTimeout(r, params.intervalMs + GITHUB_SLOW_DOWN_EXTRA_DELAY_MS));
       continue;
     }
     if (err === "expired_token") {

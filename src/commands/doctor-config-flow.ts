@@ -51,6 +51,8 @@ import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
+const TELEGRAM_CHAT_ID_FETCH_TIMEOUT_MS = 4000;
+
 type UnrecognizedKeysIssue = ZodIssue & {
   code: "unrecognized_keys";
   keys: PropertyKey[];
@@ -500,7 +502,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
     for (const token of tokens) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
+      const timeout = setTimeout(() => controller.abort(), TELEGRAM_CHAT_ID_FETCH_TIMEOUT_MS);
       try {
         const id = await fetchTelegramChatId({
           token,
