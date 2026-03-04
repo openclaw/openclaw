@@ -1,5 +1,5 @@
 import { ChannelType } from "@buape/carbon";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { maybeCreateDiscordAutoThread, extractFirstSentence } from "./threading.js";
 
 describe("maybeCreateDiscordAutoThread", () => {
@@ -121,5 +121,106 @@ describe("extractFirstSentence", () => {
 
   it("handles whitespace-only string", () => {
     expect(extractFirstSentence("   ")).toBe("");
+  });
+
+  it("skips common abbreviations like Dr., Mr., etc.", () => {
+    expect(extractFirstSentence("Dr. Smith is here. Call him now.")).toBe("Dr. Smith is here.");
+    expect(extractFirstSentence("Mr. Jones and Mrs. Smith went home. They were tired.")).toBe(
+      "Mr. Jones and Mrs. Smith went home.",
+    );
+    expect(
+      extractFirstSentence("The U.S. government announced something. More details later."),
+    ).toBe("The U.S. government announced something.");
+  });
+});
+
+describe("maybeCreateDiscordAutoThread config integration", () => {
+  const postMock = vi.fn();
+  const getMock = vi.fn();
+  const mockClient = {
+    rest: { post: postMock, get: getMock },
+  } as unknown as Parameters<typeof maybeCreateDiscordAutoThread>[0]["client"];
+  const mockMessage = {
+    id: "msg1",
+    timestamp: "123",
+  } as unknown as Parameters<typeof maybeCreateDiscordAutoThread>[0]["message"];
+
+  beforeEach(() => {
+    postMock.mockReset();
+    getMock.mockReset();
+  });
+
+  it("applies first-sentence naming strategy when configured", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "text1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true, autoThreadName: "first-sentence" },
+      channelType: ChannelType.GuildText,
+      baseText: "Hello world. This is extra text.",
+      combinedBody: "",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ body: expect.objectContaining({ name: "Hello world." }) }),
+    );
+  });
+
+  it("uses full message text when autoThreadName is 'message'", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "text1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true, autoThreadName: "message" },
+      channelType: ChannelType.GuildText,
+      baseText: "Hello world. This is extra text.",
+      combinedBody: "",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "Hello world. This is extra text." }),
+      }),
+    );
+  });
+
+  it("uses configured autoThreadArchiveMin", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "text1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true, autoThreadArchiveMin: "10080" },
+      channelType: ChannelType.GuildText,
+      baseText: "test",
+      combinedBody: "test",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ body: expect.objectContaining({ auto_archive_duration: 10080 }) }),
+    );
+  });
+
+  it("defaults to 60 minute archive when autoThreadArchiveMin not set", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    await maybeCreateDiscordAutoThread({
+      client: mockClient,
+      message: mockMessage,
+      messageChannelId: "text1",
+      isGuildMessage: true,
+      channelConfig: { allowed: true, autoThread: true },
+      channelType: ChannelType.GuildText,
+      baseText: "test",
+      combinedBody: "test",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ body: expect.objectContaining({ auto_archive_duration: 60 }) }),
+    );
   });
 });

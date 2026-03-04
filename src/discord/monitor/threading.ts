@@ -235,15 +235,41 @@ export function resolveDiscordReplyTarget(opts: {
 
 /**
  * Extract the first sentence from text for thread naming.
- * Looks for sentence-ending punctuation followed by space or end of string.
+ * Handles common abbreviations (Dr., Mr., Mrs., Ms., Jr., Sr., vs., etc.)
+ * to avoid false sentence boundaries.
  */
 export function extractFirstSentence(text: string): string {
   const trimmed = text.trim();
-  // Match first sentence: text up to and including .!? followed by space or end
-  const match = trimmed.match(/^[^.!?]*[.!?](?:\s|$)/);
-  if (match) {
-    return match[0].trim();
+  if (!trimmed) {
+    return "";
   }
+
+  // Placeholder for protected periods
+  const placeholder = "\x00DOT\x00";
+
+  // Protect common abbreviations by replacing their periods
+  // Single-letter abbreviations with period
+  let sanitized = trimmed.replace(/\b([A-Z])\./g, `$1${placeholder}`);
+  // Common title/name abbreviations
+  sanitized = sanitized.replace(
+    /\b(Mr|Mrs|Ms|Dr|Jr|Sr|vs|etc|Prof|Rev|St|Lt|Gen|Col|Sgt|Capt)\./gi,
+    `$1${placeholder}`,
+  );
+  // e.g. and i.e.
+  sanitized = sanitized.replace(/\b(e)\.(g)\./gi, `$1${placeholder}$2${placeholder}`);
+  sanitized = sanitized.replace(/\b(i)\.(e)\./gi, `$1${placeholder}$2${placeholder}`);
+
+  // Now find the first real sentence ending
+  const match = sanitized.match(/^[^.!?]*[.!?](?:\s|$)/);
+  if (match) {
+    // Get the matched portion length and extract from original
+    const matchLength = match[0].length;
+    // Count placeholders to adjust length
+    const placeholderCount = (match[0].match(new RegExp(placeholder, "g")) || []).length;
+    const originalLength = matchLength - placeholderCount * (placeholder.length - 1);
+    return trimmed.slice(0, originalLength).trim();
+  }
+
   // If no sentence ending found, take first ~50 chars at word boundary
   if (trimmed.length > 50) {
     const truncated = trimmed.slice(0, 50).replace(/\s+\S*$/, "");
