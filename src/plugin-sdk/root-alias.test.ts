@@ -13,7 +13,11 @@ type EmptySchema = {
       };
 };
 
-describe("plugin-sdk root alias", () => {
+// The lazy proxy triggers a full jiti transpile of plugin-sdk/index.ts (196 exports)
+// on first access to a legacy property. On Windows CI runners this routinely
+// exceeds the default 120 s per-test timeout, so we raise the suite timeout to
+// 5 minutes to prevent flaky failures.
+describe("plugin-sdk root alias", { timeout: 300_000 }, () => {
   it("exposes the fast empty config schema helper", () => {
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
     expect(typeof factory).toBe("function");
