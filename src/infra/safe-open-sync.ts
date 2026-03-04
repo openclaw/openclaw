@@ -7,6 +7,8 @@ export type SafeOpenSyncResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats }
   | { ok: false; reason: SafeOpenSyncFailureReason; error?: unknown };
 
+export type SafeOpenSyncAllowedType = "file" | "directory";
+
 type SafeOpenSyncFs = Pick<
   typeof fs,
   "constants" | "lstatSync" | "realpathSync" | "openSync" | "fstatSync" | "closeSync"
@@ -28,9 +30,11 @@ export function openVerifiedFileSync(params: {
   rejectPathSymlink?: boolean;
   rejectHardlinks?: boolean;
   maxBytes?: number;
+  allowedType?: SafeOpenSyncAllowedType;
   ioFs?: SafeOpenSyncFs;
 }): SafeOpenSyncResult {
   const ioFs = params.ioFs ?? fs;
+  const allowedType = params.allowedType ?? "file";
   const openReadFlags =
     ioFs.constants.O_RDONLY |
     (typeof ioFs.constants.O_NOFOLLOW === "number" ? ioFs.constants.O_NOFOLLOW : 0);
@@ -45,25 +49,29 @@ export function openVerifiedFileSync(params: {
 
     const realPath = params.resolvedPath ?? ioFs.realpathSync(params.filePath);
     const preOpenStat = ioFs.lstatSync(realPath);
-    if (!preOpenStat.isFile()) {
+    if (!isAllowedType(preOpenStat, allowedType)) {
       return { ok: false, reason: "validation" };
     }
-    if (params.rejectHardlinks && preOpenStat.nlink > 1) {
+    if (params.rejectHardlinks && preOpenStat.isFile() && preOpenStat.nlink > 1) {
       return { ok: false, reason: "validation" };
     }
-    if (params.maxBytes !== undefined && preOpenStat.size > params.maxBytes) {
+    if (
+      params.maxBytes !== undefined &&
+      preOpenStat.isFile() &&
+      preOpenStat.size > params.maxBytes
+    ) {
       return { ok: false, reason: "validation" };
     }
 
     fd = ioFs.openSync(realPath, openReadFlags);
     const openedStat = ioFs.fstatSync(fd);
-    if (!openedStat.isFile()) {
+    if (!isAllowedType(openedStat, allowedType)) {
       return { ok: false, reason: "validation" };
     }
-    if (params.rejectHardlinks && openedStat.nlink > 1) {
+    if (params.rejectHardlinks && openedStat.isFile() && openedStat.nlink > 1) {
       return { ok: false, reason: "validation" };
     }
-    if (params.maxBytes !== undefined && openedStat.size > params.maxBytes) {
+    if (params.maxBytes !== undefined && openedStat.isFile() && openedStat.size > params.maxBytes) {
       return { ok: false, reason: "validation" };
     }
     if (!sameFileIdentity(preOpenStat, openedStat)) {
@@ -83,4 +91,11 @@ export function openVerifiedFileSync(params: {
       ioFs.closeSync(fd);
     }
   }
+}
+
+function isAllowedType(stat: fs.Stats, allowedType: SafeOpenSyncAllowedType): boolean {
+  if (allowedType === "directory") {
+    return stat.isDirectory();
+  }
+  return stat.isFile();
 }
