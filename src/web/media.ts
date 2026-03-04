@@ -109,9 +109,12 @@ async function assertLocalMediaAllowed(
           // Allow workspace-<profile> directories that are already in the
           // roots list (added by buildMediaLocalRoots for the active profile).
           const target = path.join(stateDir, firstSegment);
+          // Exact match only: the workspace-<profile> dir must be an explicit root entry
+          // (added by buildMediaLocalRoots). Prefix matching would re-open the bypass when
+          // stateDir is under tmp and the temp root shares the same ancestor.
           const isAllowed = roots.some((root) => {
             const resolvedRoot = path.resolve(root);
-            return resolvedRoot === target || target.startsWith(resolvedRoot + path.sep);
+            return resolvedRoot === target;
           });
           if (!isAllowed) {
             throw new LocalMediaAccessError(
