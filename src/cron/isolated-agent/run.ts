@@ -6,6 +6,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -299,16 +300,15 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
-  const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
-  let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
+  let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
@@ -451,6 +451,9 @@ export async function runCronIsolatedAgentTurn(params: {
       params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
         ? params.job.payload.fallbacks
         : undefined;
+    let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+      cronSession.sessionEntry.systemPromptReport,
+    );
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -458,13 +461,22 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir,
       fallbacksOverride:
         payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
-      run: (providerOverride, modelOverride) => {
+      run: async (providerOverride, modelOverride) => {
         if (abortSignal?.aborted) {
           throw new Error(abortReason());
         }
+        const bootstrapPromptWarningSignature =
+          bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
-          return runCliAgent({
+          // Fresh isolated cron sessions must not reuse a stored CLI session ID.
+          // Passing an existing ID activates the resume watchdog profile
+          // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
+          // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
+          // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
+          const cliSessionId = cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(cronSession.sessionEntry, providerOverride);
+          const result = await runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
             agentId,
@@ -478,12 +490,19 @@ export async function runCronIsolatedAgentTurn(params: {
             timeoutMs,
             runId: cronSession.sessionEntry.sessionId,
             cliSessionId,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
           });
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+            result.meta?.systemPromptReport,
+          );
+          return result;
         }
-        return runEmbeddedPiAgent({
+        const result = await runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
           agentId,
+          trigger: "cron",
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
@@ -500,6 +519,8 @@ export async function runCronIsolatedAgentTurn(params: {
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
+          bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
+          bootstrapContextRunKind: "cron",
           runId: cronSession.sessionEntry.sessionId,
           // Only enforce an explicit message target when the cron delivery target
           // was successfully resolved. When resolution fails the agent should not
@@ -507,7 +528,13 @@ export async function runCronIsolatedAgentTurn(params: {
           requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
           disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
           abortSignal,
+          bootstrapPromptWarningSignaturesSeen,
+          bootstrapPromptWarningSignature,
         });
+        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+          result.meta?.systemPromptReport,
+        );
+        return result;
       },
     });
     runResult = fallbackResult.result;
@@ -528,6 +555,9 @@ export async function runCronIsolatedAgentTurn(params: {
   // Also collect best-effort telemetry for the cron run log.
   let telemetry: CronRunTelemetry | undefined;
   {
+    if (runResult.meta?.systemPromptReport) {
+      cronSession.sessionEntry.systemPromptReport = runResult.meta.systemPromptReport;
+    }
     const usage = runResult.meta?.agentMeta?.usage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;

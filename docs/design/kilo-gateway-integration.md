@@ -462,7 +462,7 @@ const needsNonImageSanitize =
             "id": "anthropic/claude-opus-4.6",
             "name": "Anthropic: Claude Opus 4.6"
           },
-          { "id": "minimax/minimax-m2.1:free", "name": "Minimax: Minimax M2.1" }
+          { "id": "minimax/minimax-m2.5:free", "name": "Minimax: Minimax M2.5" }
         ]
       }
     }

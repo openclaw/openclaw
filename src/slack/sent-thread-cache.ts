@@ -22,6 +22,13 @@ function evictExpired(): void {
   }
 }
 
+function evictOldest(): void {
+  const oldest = threadParticipation.keys().next().value;
+  if (oldest) {
+    threadParticipation.delete(oldest);
+  }
+}
+
 export function recordSlackThreadParticipation(
   accountId: string,
   channelId: string,
@@ -32,6 +39,9 @@ export function recordSlackThreadParticipation(
   }
   if (threadParticipation.size >= MAX_ENTRIES) {
     evictExpired();
+  }
+  if (threadParticipation.size >= MAX_ENTRIES) {
+    evictOldest();
   }
   threadParticipation.set(makeKey(accountId, channelId, threadTs), Date.now());
 }

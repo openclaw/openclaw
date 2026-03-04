@@ -144,6 +144,29 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[Telegram Alice] follow-up message");
   });
 
+  it("prefixes DM body with (self) when fromMe is true", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "+1555",
+      body: "outbound msg",
+      chatType: "direct",
+      fromMe: true,
+    });
+    expect(body).toBe("[WhatsApp +1555] (self): outbound msg");
+  });
+
+  it("does not prefix group messages with (self) when fromMe is true", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "Family Chat",
+      body: "hello",
+      chatType: "group",
+      senderLabel: "Alice",
+      fromMe: true,
+    });
+    expect(body).toBe("[WhatsApp Family Chat] Alice: hello");
+  });
+
   it("resolves envelope options from config", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {

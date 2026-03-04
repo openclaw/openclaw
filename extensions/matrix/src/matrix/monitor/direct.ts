@@ -8,15 +8,19 @@ type DirectMessageCheck = {
 
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
+  includeMemberCountInLogs?: boolean;
 };
 
 const DM_CACHE_TTL_MS = 30_000;
 
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
+  const includeMemberCountInLogs = opts.includeMemberCountInLogs === true;
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
-  const memberCountCache = new Map<string, { count: number; ts: number }>();
+  const memberCountCache = includeMemberCountInLogs
+    ? new Map<string, { count: number; ts: number }>()
+    : undefined;
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -44,6 +48,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   };
 
   const resolveMemberCount = async (roomId: string): Promise<number | null> => {
+    if (!memberCountCache) {
+      return null;
+    }
     const cached = memberCountCache.get(roomId);
     const now = Date.now();
     if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
@@ -78,17 +85,13 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       const { roomId, senderId } = params;
       await refreshDmCache();
 
+      // Check m.direct account data (most authoritative)
       if (client.dms.isDm(roomId)) {
         log(`matrix: dm detected via m.direct room=${roomId}`);
         return true;
       }
 
-      const memberCount = await resolveMemberCount(roomId);
-      if (memberCount === 2) {
-        log(`matrix: dm detected via member count room=${roomId} members=${memberCount}`);
-        return true;
-      }
-
+      // Check m.room.member state for is_direct flag
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const directViaState =
         (await hasDirectFlag(roomId, senderId)) || (await hasDirectFlag(roomId, selfUserId ?? ""));
@@ -97,6 +100,16 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
+      // Member count alone is NOT a reliable DM indicator.
+      // Explicitly configured group rooms with 2 members (e.g. bot + one user)
+      // were being misclassified as DMs, causing messages to be routed through
+      // DM policy instead of group policy and silently dropped.
+      // See: https://github.com/openclaw/openclaw/issues/20145
+      if (!includeMemberCountInLogs) {
+        log(`matrix: dm check room=${roomId} result=group`);
+        return false;
+      }
+      const memberCount = await resolveMemberCount(roomId);
       log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
     },
