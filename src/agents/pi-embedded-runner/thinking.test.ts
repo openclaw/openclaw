@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
+import {
+  dropThinkingBlocks,
+  isAssistantMessageWithContent,
+  stripThinkingSignatures,
+} from "./thinking.js";
 
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
@@ -57,5 +61,47 @@ describe("dropThinkingBlocks", () => {
     const result = dropThinkingBlocks(messages);
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+  });
+});
+
+describe("stripThinkingSignatures", () => {
+  it("returns the original reference when no thinking signatures are present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal" },
+          { type: "text", text: "final" },
+        ],
+      }),
+    ];
+
+    const result = stripThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("preserves thinking blocks while removing signature fields", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: "reasoning_text",
+            thought_signature: "msg_abc",
+          },
+          { type: "text", text: "final" },
+        ],
+      }),
+    ];
+
+    const result = stripThinkingSignatures(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "internal" },
+      { type: "text", text: "final" },
+    ]);
   });
 });

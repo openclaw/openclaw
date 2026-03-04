@@ -567,17 +567,20 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(false);
   });
 
-  it("drops assistant thinking blocks for github-copilot models", async () => {
+  it("preserves assistant thinking blocks and strips signatures for github-copilot claude models", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages("reasoning_text");
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "internal" },
+      { type: "text", text: "hi" },
+    ]);
   });
 
-  it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
+  it("preserves thinking-only assistant turns for github-copilot claude models", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -594,13 +597,13 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
 
-    // Assistant turn should be preserved (not dropped) to maintain turn alternation
+    // Assistant turn should be preserved with thinking content.
     expect(result).toHaveLength(3);
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+    expect(assistant.content).toEqual([{ type: "thinking", thinking: "some reasoning" }]);
   });
 
-  it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
+  it("preserves tool_use blocks while keeping thinking blocks for github-copilot claude", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -620,7 +623,7 @@ describe("sanitizeSessionHistory", () => {
     const types = getAssistantContentTypes(result);
     expect(types).toContain("toolCall");
     expect(types).toContain("text");
-    expect(types).not.toContain("thinking");
+    expect(types).toContain("thinking");
   });
 
   it("does not drop thinking blocks for non-copilot providers", async () => {

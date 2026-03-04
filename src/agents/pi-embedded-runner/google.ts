@@ -27,7 +27,7 @@ import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { stripThinkingSignatures } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -440,7 +440,7 @@ export async function sanitizeSessionHistory(params: {
     },
   );
   const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+    ? stripThinkingSignatures(sanitizedImages)
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
