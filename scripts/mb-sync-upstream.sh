@@ -190,7 +190,7 @@ fetch_upstream() {
   fi
 
   log "Found $ahead upstream commit(s):"
-  git log --oneline "HEAD..$UPSTREAM_REMOTE/$UPSTREAM_BRANCH" | head -20 | sed 's/^/  /'
+  git log --oneline "HEAD..$UPSTREAM_REMOTE/$UPSTREAM_BRANCH" | sed -n '1,20p' | sed 's/^/  /'
 
   if [[ "$DRY_RUN" == true ]]; then
     echo ""
