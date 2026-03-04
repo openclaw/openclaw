@@ -84,4 +84,28 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.validateAnthropicTurns).toBe(false);
   });
+
+  it("preserves thought_signature for Gemini models proxied via Ollama Cloud (#34008)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "ollama",
+      modelId: "gemini-3-flash-preview:cloud",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeMode).toBe("full");
+    expect(policy.sanitizeThoughtSignatures).toEqual({
+      allowBase64Only: true,
+      includeCamelCase: true,
+    });
+    expect(policy.validateAnthropicTurns).toBe(false);
+  });
+
+  it("does not apply Gemini thought_signature policy for non-Gemini Ollama models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "ollama",
+      modelId: "llama-3:8b",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeThoughtSignatures).toBeUndefined();
+    expect(policy.sanitizeMode).toBe("images-only");
+  });
 });
