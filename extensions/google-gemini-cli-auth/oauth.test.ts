@@ -229,6 +229,7 @@ describe("loginGeminiCliOAuth", () => {
   const LOAD_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist";
   const LOAD_AUTOPUSH =
     "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist";
+  const ONBOARD_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:onboardUser";
 
   const ENV_KEYS = [
     "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
@@ -421,6 +422,51 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
 
+  it("continues with onboarding when a later endpoint succeeds with sparse data", async () => {
+    process.env.GOOGLE_CLOUD_PROJECT = "env-project";
+
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if (url === LOAD_PROD) {
+        return responseJson({ error: { message: "temporary failure" } }, 503);
+      }
+      if (url === LOAD_DAILY) {
+        return responseJson({});
+      }
+      if (url === ONBOARD_DAILY) {
+        return responseJson({
+          done: true,
+          response: {
+            cloudaicompanionProject: { id: "daily-project" },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(result.projectId).toBe("daily-project");
+    expect(requests).toContain(LOAD_PROD);
+    expect(requests).toContain(LOAD_DAILY);
+    expect(requests).toContain(ONBOARD_DAILY);
+  });
+
   it("does not bypass permission errors with GOOGLE_CLOUD_PROJECT fallback", async () => {
     process.env.GOOGLE_CLOUD_PROJECT = "env-project";
 
@@ -454,7 +500,7 @@ describe("loginGeminiCliOAuth", () => {
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
     await expect(runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth)).rejects.toThrow(
-      "permission errors cannot be bypassed with project fallback",
+      "non-retryable errors cannot be bypassed with project fallback",
     );
   });
 
@@ -487,15 +533,14 @@ describe("loginGeminiCliOAuth", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    await expect(async () => {
-      try {
-        await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        expect(message).toContain("Gemini CLI OAuth project discovery failed (loadCodeAssist).");
-        expect(message).toContain("Try signing in with a Google account that can use Gemini CLI");
-        throw err;
-      }
-    }).rejects.toThrow();
+    const error = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth).catch((err) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "Gemini CLI OAuth project discovery failed (loadCodeAssist).",
+    );
+    expect((error as Error).message).toContain(
+      "Try signing in with a Google account that can use Gemini CLI",
+    );
   });
 });

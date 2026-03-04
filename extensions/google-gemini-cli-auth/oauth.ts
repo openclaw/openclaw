@@ -504,6 +504,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   } = {};
   let activeEndpoint = CODE_ASSIST_ENDPOINT_PROD;
   const loadFailures: LoadCodeAssistFailure[] = [];
+  let hasSuccessfulLoadCodeAssistResponse = false;
   for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
       const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
@@ -532,6 +533,7 @@ async function discoverProject(accessToken: string): Promise<string> {
 
       data = (await response.json()) as typeof data;
       activeEndpoint = endpoint;
+      hasSuccessfulLoadCodeAssistResponse = true;
       break;
     } catch (err) {
       loadFailures.push(
@@ -549,7 +551,7 @@ async function discoverProject(accessToken: string): Promise<string> {
     Boolean(data.cloudaicompanionProject) ||
     Boolean(data.allowedTiers?.length);
 
-  if (!hasLoadCodeAssistData && loadFailures.length > 0) {
+  if (!hasLoadCodeAssistData && !hasSuccessfulLoadCodeAssistResponse && loadFailures.length > 0) {
     const hasPermanentFailure = loadFailures.some((failure) => !failure.transient);
     if (envProject && !hasPermanentFailure) {
       return envProject;
@@ -661,12 +663,15 @@ function extractApiError(payload: unknown): { message?: string; reason?: string 
   if (!Array.isArray(details)) {
     return { message };
   }
-  const reason = details.find((detail) => detail && typeof detail === "object") as
-    | { reason?: unknown }
-    | undefined;
+  const reason = details.find(
+    (detail): detail is { reason: string } =>
+      detail != null &&
+      typeof detail === "object" &&
+      typeof (detail as { reason?: unknown }).reason === "string",
+  ) as { reason: string } | undefined;
   return {
     message,
-    reason: typeof reason?.reason === "string" ? reason.reason : undefined,
+    reason: reason?.reason,
   };
 }
 
@@ -749,16 +754,30 @@ function buildLoadCodeAssistFailureError(
   const lines: string[] = ["Gemini CLI OAuth project discovery failed (loadCodeAssist)."];
   lines.push(...failures.map((failure) => `- ${summarizeLoadCodeAssistFailure(failure)}`));
 
-  const hasPermissionFailure = failures.some(
-    (failure) => failure.status === 401 || failure.status === 403 || !failure.transient,
+  const hasAuthLikeFailure = failures.some(
+    (failure) =>
+      failure.status === 401 ||
+      failure.status === 403 ||
+      (failure.reason ?? "").toUpperCase().includes("PERMISSION") ||
+      (failure.reason ?? "").toUpperCase().includes("AUTH") ||
+      (failure.message ?? "").toLowerCase().includes("permission denied") ||
+      (failure.message ?? "").toLowerCase().includes("does not have permission") ||
+      (failure.message ?? "").toLowerCase().includes("access denied"),
   );
-  if (hasPermissionFailure) {
-    lines.push(
-      "Detected non-retryable auth/permission error. This account likely lacks Gemini CLI (Cloud Code Assist) access.",
-    );
+  const hasNonTransientFailure = failures.some((failure) => !failure.transient);
+  if (hasNonTransientFailure) {
+    if (hasAuthLikeFailure) {
+      lines.push(
+        "Detected non-retryable auth/permission error. This account likely lacks Gemini CLI (Cloud Code Assist) access.",
+      );
+    } else {
+      lines.push(
+        "Detected non-retryable loadCodeAssist error (request/config mismatch). Re-auth may not fix this immediately.",
+      );
+    }
     if (hasEnvProject) {
       lines.push(
-        "GOOGLE_CLOUD_PROJECT is set, but permission errors cannot be bypassed with project fallback.",
+        "GOOGLE_CLOUD_PROJECT is set, but non-retryable errors cannot be bypassed with project fallback.",
       );
     } else {
       lines.push(
