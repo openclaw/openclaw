@@ -78,6 +78,40 @@ export function applyHwvaultPresetToExecProvider(options: {
   return { passEnv, env };
 }
 
+function getHwvaultDefaultCommand(): string {
+  // Avoid forcing a Unix path on Windows. On Windows we intentionally leave
+  // this blank so users provide an explicit absolute path.
+  if (process.platform === "win32") {
+    return "";
+  }
+  return "/usr/local/bin/openclaw-hwvault-resolver";
+}
+
+function isLikelyHwvaultExecProvider(
+  base?: Extract<SecretProviderConfig, { source: "exec" }>,
+): boolean {
+  if (!base) {
+    return true;
+  }
+  if (base.command.toLowerCase().includes("hwvault")) {
+    return true;
+  }
+  if (isRecord(base.env)) {
+    return Boolean(base.env.HWVAULT_POLICY_PATH || base.env.HWVAULT_TRUST_ROOTS);
+  }
+  return false;
+}
+
+function pickInitialHwvaultTrustRoots(
+  base?: Extract<SecretProviderConfig, { source: "exec" }>,
+): "tpm" | "yubikey" | "tpm,yubikey" {
+  const current = isRecord(base?.env) ? base.env.HWVAULT_TRUST_ROOTS : undefined;
+  if (current === "tpm" || current === "yubikey" || current === "tpm,yubikey") {
+    return current;
+  }
+  return "tpm,yubikey";
+}
+
 function parseOptionalPositiveInt(value: string, max: number): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -518,19 +552,21 @@ async function parseArgsInput(rawValue: string): Promise<string[] | undefined> {
 async function promptExecProvider(
   base?: Extract<SecretProviderConfig, { source: "exec" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "exec" }>> {
-  const useHwvaultPreset = assertNoCancel(
-    await confirm({
-      message: "Use HWVault resolver preset?",
-      initialValue: false,
-    }),
-    "Secrets configure cancelled.",
-  );
+  const showHwvaultPresetPrompt = isLikelyHwvaultExecProvider(base);
+  const useHwvaultPreset = showHwvaultPresetPrompt
+    ? assertNoCancel(
+        await confirm({
+          message: "Use HWVault resolver preset?",
+          initialValue: !base,
+        }),
+        "Secrets configure cancelled.",
+      )
+    : false;
 
-  const hwvaultDefaultCommand = "/usr/local/bin/openclaw-hwvault-resolver";
   const command = assertNoCancel(
     await text({
       message: "Command path (absolute)",
-      initialValue: base?.command ?? (useHwvaultPreset ? hwvaultDefaultCommand : ""),
+      initialValue: base?.command ?? (useHwvaultPreset ? getHwvaultDefaultCommand() : ""),
       validate: (value) => {
         const trimmed = String(value ?? "").trim();
         if (!trimmed) {
@@ -648,7 +684,7 @@ async function promptExecProvider(
           { value: "yubikey", label: "YubiKey only" },
           { value: "tpm,yubikey", label: "TPM or YubiKey (recommended)" },
         ],
-        initialValue: "tpm,yubikey",
+        initialValue: pickInitialHwvaultTrustRoots(base),
       }),
       "Secrets configure cancelled.",
     );
@@ -657,6 +693,13 @@ async function promptExecProvider(
       await text({
         message: "HWVault policy file path",
         initialValue: nextEnv.HWVAULT_POLICY_PATH ?? "~/.config/hwvault/openclaw-policy.json",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          if (!trimmed) {
+            return "Required";
+          }
+          return undefined;
+        },
       }),
       "Secrets configure cancelled.",
     );

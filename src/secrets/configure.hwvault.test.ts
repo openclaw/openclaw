@@ -37,6 +37,15 @@ describe("applyHwvaultPresetToExecProvider", () => {
       policyPath: "/tmp/policy.json",
     });
 
-    expect(result.passEnv).toHaveLength(4);
+    expect(result.passEnv).toEqual([
+      "OPENCLAW_AGENT_ID",
+      "OPENCLAW_SESSION_KEY",
+      "OPENCLAW_DELEGATION_AUDIENCE",
+      "HWVAULT_BIN",
+    ]);
+    expect(result.env).toMatchObject({
+      HWVAULT_POLICY_PATH: "/tmp/policy.json",
+      HWVAULT_TRUST_ROOTS: "tpm",
+    });
   });
 });
