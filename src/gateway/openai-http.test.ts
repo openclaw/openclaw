@@ -544,7 +544,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
 
     expect(agentCommand).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
     const typedOpts = opts as {
       message?: string;
       extraSystemPrompt?: string;
@@ -581,7 +581,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
 
     expect(agentCommand).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
     const typedOpts = opts as { images?: unknown };
     expect(typedOpts.images).toBeUndefined();
 
@@ -618,15 +618,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
 
     expect(agentCommand).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
     const typedOpts = opts as {
       images?: Array<{ type: string; data: string; mimeType: string }>;
     };
 
     // Should only have images from the LAST user message
     expect(typedOpts.images).toHaveLength(1);
-    expect(typedOpts.images[0].data).toBe(base64Last);
-    expect(typedOpts.images[0].mimeType).toBe("image/png");
+    expect(typedOpts.images![0].data).toBe(base64Last);
+    expect(typedOpts.images![0].mimeType).toBe("image/png");
 
     await res.text();
   });
@@ -648,7 +648,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     // Should NOT return 400 — image-only is valid
     expect(res.status).toBe(200);
 
-    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
     const typedOpts = opts as { images?: Array<{ data: string }> };
     expect(typedOpts.images).toHaveLength(1);
 
@@ -674,7 +674,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
     expect(res.status).toBe(200);
 
-    const [opts] = agentCommand.mock.calls[0] ?? [];
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
     const typedOpts = opts as { images?: unknown };
     // Non-data-url should be ignored
     expect(typedOpts.images).toBeUndefined();
