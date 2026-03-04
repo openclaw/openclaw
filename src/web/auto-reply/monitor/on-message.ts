@@ -5,6 +5,7 @@ import { logVerbose } from "../../../globals.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
 import { normalizeE164 } from "../../../utils.js";
+import { resolveWhatsAppAccount } from "../../accounts.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
@@ -14,6 +15,37 @@ import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
+
+/**
+ * Reload config with per-account WhatsApp overrides merged into the top-level
+ * `channels.whatsapp` section.  This mirrors the expansion in `monitor.ts` so
+ * that downstream consumers (processMessage, applyGroupGating, etc.) see the
+ * same account-scoped fields (messagePrefix, allowFrom, groupPolicy, …) they
+ * relied on when the handler was first created — but with a fresh snapshot.
+ */
+function loadAccountExpandedConfig(accountId?: string): ReturnType<typeof loadConfig> {
+  const baseCfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg: baseCfg, accountId });
+  return {
+    ...baseCfg,
+    channels: {
+      ...baseCfg.channels,
+      whatsapp: {
+        ...baseCfg.channels?.whatsapp,
+        ackReaction: account.ackReaction,
+        messagePrefix: account.messagePrefix,
+        allowFrom: account.allowFrom,
+        groupAllowFrom: account.groupAllowFrom,
+        groupPolicy: account.groupPolicy,
+        textChunkLimit: account.textChunkLimit,
+        chunkMode: account.chunkMode,
+        mediaMaxMb: account.mediaMaxMb,
+        blockStreaming: account.blockStreaming,
+        groups: account.groups,
+      },
+    },
+  } satisfies ReturnType<typeof loadConfig>;
+}
 
 export function createWebOnMessageHandler(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -40,7 +72,7 @@ export function createWebOnMessageHandler(params: {
     },
   ) =>
     processMessage({
-      cfg: loadConfig(),
+      cfg: loadAccountExpandedConfig(params.account.accountId),
       msg,
       route,
       groupHistoryKey,
@@ -65,7 +97,7 @@ export function createWebOnMessageHandler(params: {
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: loadAccountExpandedConfig(params.account.accountId),
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -113,7 +145,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: loadConfig(),
+        cfg: loadAccountExpandedConfig(params.account.accountId),
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -125,7 +157,7 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: loadConfig(),
+        cfg: loadAccountExpandedConfig(params.account.accountId),
         msg,
         conversationId,
         groupHistoryKey,
@@ -154,7 +186,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: loadConfig(),
+        cfg: loadAccountExpandedConfig(params.account.accountId),
         msg,
         peerId,
         route,
