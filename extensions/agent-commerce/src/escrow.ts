@@ -1,7 +1,8 @@
-import type { Wallet as EthersWallet } from "ethers";
-import { ethers } from "ethers";
+import crypto from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { Wallet as EthersWallet } from "ethers";
+import { ethers } from "ethers";
 import { CLAW_TOKEN_ABI } from "./contract-abi.js";
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -68,7 +69,7 @@ export class EscrowManager {
   }): Trade {
     const trades = this.loadTrades();
     const now = new Date().toISOString();
-    const tradeId = `trade_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const tradeId = `trade_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 
     // Generate a deterministic on-chain tradeId (bytes32)
     const tradeHash = ethers.keccak256(

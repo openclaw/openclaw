@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -173,6 +174,6 @@ export class MarketplaceRegistry {
   }
 
   private generateId(): string {
-    return `svc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    return `svc_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
   }
 }
