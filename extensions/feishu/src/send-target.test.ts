@@ -57,6 +57,24 @@ describe("resolveFeishuSendTarget", () => {
     expect(result.receiveIdType).toBe("user_id");
   });
 
+  it("rejects Discord IDs that leak from cross-channel shared sessions", () => {
+    expect(() =>
+      resolveFeishuSendTarget({
+        cfg,
+        to: "discord:1089077850088415312",
+      }),
+    ).toThrow("not a recognized Feishu ID format");
+  });
+
+  it("rejects Telegram IDs that leak from cross-channel shared sessions", () => {
+    expect(() =>
+      resolveFeishuSendTarget({
+        cfg,
+        to: "telegram:12345678",
+      }),
+    ).toThrow("not a recognized Feishu ID format");
+  });
+
   it("throws when target account is not configured", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "default",
