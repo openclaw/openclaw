@@ -109,8 +109,30 @@ export function normalizeSecretInputString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
+  const trimmed = sanitizeSecretString(value.trim());
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Sanitize a secret/API key string by replacing common copy-paste artifacts:
+ * - Smart/curly quotes (\u2018 \u2019 \u201c \u201d) → straight quotes
+ * - Em/en dashes (\u2014 \u2013) → hyphens
+ * - Non-breaking spaces (\u00a0) → regular spaces
+ * - BOM (\uFEFF) → removed
+ * Then strip any remaining non-ASCII characters that would cause HTTP header
+ * ByteString errors (e.g. when used in Authorization or X-Subscription-Token).
+ * See: openclaw/openclaw#33222
+ */
+function sanitizeSecretString(value: string): string {
+  return value
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u2014/g, "-")
+    .replace(/\u2013/g, "-")
+    .replace(/\u00a0/g, " ")
+    .replace(/\uFEFF/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .trim();
 }
 
 function formatSecretRefLabel(ref: SecretRef): string {
