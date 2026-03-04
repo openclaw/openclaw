@@ -120,29 +120,37 @@ export class OpenClawApp extends LitElement {
   }
 
   // toggle handlers used by chat UI
+  // Draft text that existed before recording started; restored on cancel, prepended on commit.
+  private _voiceBase = "";
+
   toggleVoiceInput() {
-    // flip state and notify voice service
     if (!this.voiceInputEnabled) {
       // start recording
       this.voiceInputEnabled = true;
+      this._voiceBase = this.chatMessage;
       void import("./services/voice.ts").then((m) => {
-        m.startRecording().catch((err) => {
+        m.startRecording((interim) => {
+          // Show live transcript while recording
+          const sep = this._voiceBase && interim ? " " : "";
+          this.chatMessage = this._voiceBase + sep + interim;
+        }).catch((err) => {
           console.error("voice start failed", err);
+          this.chatMessage = this._voiceBase;
           this.voiceInputEnabled = false;
         });
       });
     } else {
-      // stop recording
+      // stop recording — commit final transcript
       void import("./services/voice.ts").then(async (m) => {
         try {
           const transcript = await m.stopRecording();
-          if (transcript) {
-            // append to draft
-            this.chatMessage = this.chatMessage ? this.chatMessage + " " + transcript : transcript;
-          }
+          const sep = this._voiceBase && transcript ? " " : "";
+          this.chatMessage = this._voiceBase + sep + transcript;
         } catch (err) {
           console.error("voice stop failed", err);
+          this.chatMessage = this._voiceBase;
         } finally {
+          this._voiceBase = "";
           this.voiceInputEnabled = false;
         }
       });

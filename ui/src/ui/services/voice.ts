@@ -19,7 +19,7 @@ let lastTranscript = "";
 // true once the browser fires onend (natural timeout or explicit stop)
 let recognitionEnded = false;
 
-export async function startRecording(): Promise<void> {
+export async function startRecording(onInterim?: (text: string) => void): Promise<void> {
   const win = window as unknown as Record<string, unknown>;
   const SpeechRec = (win.SpeechRecognition ?? win.webkitSpeechRecognition) as
     | SpeechRecognitionConstructor
@@ -32,12 +32,16 @@ export async function startRecording(): Promise<void> {
     recognition.interimResults = true;
     recognition.addEventListener("result", (ev: Event) => {
       const e = ev as Event & { resultIndex: number; results: SpeechRecognitionResultList };
+      let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
         if (res.isFinal) {
           lastTranscript += res[0].transcript;
+        } else {
+          interim += res[0].transcript;
         }
       }
+      onInterim?.(lastTranscript + interim);
     });
     recognition.addEventListener("error", (e: Event) => {
       console.warn("speech recognition error", e);
