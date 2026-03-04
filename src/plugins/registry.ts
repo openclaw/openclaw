@@ -153,6 +153,11 @@ function evictExpiredCooldowns(now: number): void {
   }
 }
 
+/** @internal Test helper to clear cooldown state between tests */
+export function clearResetSessionCooldownForTesting(): void {
+  resetCooldownMap.clear();
+}
+
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],

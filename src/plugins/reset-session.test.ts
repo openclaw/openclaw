@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResetSessionResult } from "../gateway/session-ops.js";
-import { createPluginRegistry, type PluginRecord } from "./registry.js";
+import {
+  clearResetSessionCooldownForTesting,
+  createPluginRegistry,
+  type PluginRecord,
+} from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 // ---------------------------------------------------------------------------
@@ -107,6 +111,7 @@ describe("api.resetSession", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearResetSessionCooldownForTesting();
 
     const reg = createPluginRegistry({
       logger: dummyLogger,
