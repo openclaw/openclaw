@@ -1384,7 +1384,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("skips DM draft reasoning non-final fallback send when preview update is not emitted", async () => {
+  it("falls back to normal send when DM draft reasoning flush emits no preview update", async () => {
     const answerDraftStream = createDraftStream(999);
     const previewRevision = 0;
     const reasoningDraftStream = {
@@ -1416,7 +1416,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
 
     expect(reasoningDraftStream.flush).toHaveBeenCalled();
-    expect(deliverReplies).not.toHaveBeenCalledWith(
+    expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Reasoning:\n_step one expanded_" })],
       }),

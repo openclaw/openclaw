@@ -442,9 +442,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
         if (!previewUpdated) {
           params.log(
-            `telegram: ${laneName} draft preview update not emitted; skipping non-final fallback send`,
+            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
           );
-          return "skipped";
+          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          return delivered ? "sent" : "skipped";
         }
         lane.lastPartialText = text;
         params.markDelivered();
