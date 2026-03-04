@@ -48,6 +48,8 @@ export type ModelApiRequestLogOptions = {
   systemPromptChars: number;
   /** Number of history messages in the active session at call time. */
   historyMessages: number;
+  /** Approximate character length of conversation history (all prior messages). */
+  historyChars?: number;
   /** Number of images attached to this request. */
   imagesCount: number;
 };
@@ -76,7 +78,7 @@ export type ModelApiResponseLogOptions = {
  *   [model/api] → request: 14.2 KB (~3626 tokens) provider=anthropic model=claude-sonnet-4-6 history=12msg images=3 runId=abc123
  */
 export function logModelApiRequest(opts: ModelApiRequestLogOptions): void {
-  const totalChars = opts.promptChars + opts.systemPromptChars;
+  const totalChars = opts.promptChars + opts.systemPromptChars + (opts.historyChars ?? 0);
   const kb = charsToKbString(totalChars);
   const tokens = estimateTokens(totalChars);
   const imagesSuffix = opts.imagesCount > 0 ? ` images=${opts.imagesCount}` : "";
