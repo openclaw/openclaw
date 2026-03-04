@@ -875,6 +875,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
         CHANNEL_SCOPED_SESSION_SHAPES.has(part),
       );
+      const hasLegacyChannelPeerShape =
+        !isChannelScopedSession && typeof sessionScopeParts[1] === "string";
       // Only inherit prior external route metadata for channel-scoped sessions.
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
@@ -882,7 +884,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
         !isChannelAgnosticSessionScope &&
-        isChannelScopedSession,
+        (isChannelScopedSession || hasLegacyChannelPeerShape),
       );
       const hasDeliverableRoute =
         canInheritDeliverableRoute &&
