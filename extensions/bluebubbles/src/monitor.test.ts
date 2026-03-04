@@ -928,6 +928,45 @@ describe("BlueBubbles webhook monitor", () => {
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     });
+
+    it("drops mention-only direct payloads with unresolved conversation labels", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-mention-only-unknown-label",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          was_mentioned: true,
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
   });
 
   describe("mention gating (group messages)", () => {
