@@ -106,6 +106,7 @@ type HeartbeatAgentState = {
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
   jitterMs: number;
+  scheduledAt: number;
   lastRunMs?: number;
   nextDueMs: number;
 };
@@ -1036,21 +1037,27 @@ export function startHeartbeatRunner(opts: {
     intervalMs: number,
     jitterMs: number,
     prevState?: HeartbeatAgentState,
-  ) => {
+  ): { nextDueMs: number; scheduledAt: number } => {
+    // Steady state: advance deterministically from last run
     if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
+      return { nextDueMs: prevState.lastRunMs + intervalMs, scheduledAt: prevState.scheduledAt };
     }
+    // Config unchanged and schedule still pending — keep it
     if (
       prevState &&
       prevState.intervalMs === intervalMs &&
       prevState.jitterMs === jitterMs &&
       prevState.nextDueMs > now
     ) {
-      return prevState.nextDueMs;
+      return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
     }
-    // Cold start: stagger with jitter to avoid thundering herd.
-    // Max first-run delay is just under now + intervalMs + jitterMs (i.e. up to ~2× interval when jitter == interval).
-    return now + intervalMs + Math.floor(Math.random() * jitterMs);
+    // Config changed on pending schedule — recompute from original base, don't reset countdown
+    if (prevState?.scheduledAt && !prevState.lastRunMs) {
+      const recomputed = prevState.scheduledAt + intervalMs + Math.floor(Math.random() * jitterMs);
+      return { nextDueMs: Math.max(now, recomputed), scheduledAt: prevState.scheduledAt };
+    }
+    // Fresh cold start: stagger with jitter to avoid thundering herd
+    return { nextDueMs: now + intervalMs + Math.floor(Math.random() * jitterMs), scheduledAt: now };
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
@@ -1105,12 +1112,13 @@ export function startHeartbeatRunner(opts: {
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
       const jitterMs = resolveHeartbeatJitterMs(agent.heartbeat, intervalMs);
-      const nextDueMs = resolveNextDue(now, intervalMs, jitterMs, prevState);
+      const { nextDueMs, scheduledAt } = resolveNextDue(now, intervalMs, jitterMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
         jitterMs,
+        scheduledAt,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
       });
