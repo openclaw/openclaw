@@ -194,9 +194,14 @@ function resolveConfigRestartRequest(params: unknown): {
 } {
   const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
-  // Extract deliveryContext + threadId for routing after restart
-  // Supports both :thread: (most channels) and :topic: (Telegram)
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  // Extract threadId from the session key (reliable — derived from key, not store).
+  // For deliveryContext, prefer the live context passed by the client over
+  // extractDeliveryInfo(), which reads the persisted session store. Heartbeat
+  // runs overwrite the store to { channel: "webchat", to: "heartbeat" }, so
+  // reading it here would produce stale routing data. See #18612.
+  const { deliveryContext: extractedDeliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const paramsDeliveryContext = parseDeliveryContextFromParams(params);
+  const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
 
   return {
     sessionKey,
@@ -205,6 +210,31 @@ function resolveConfigRestartRequest(params: unknown): {
     deliveryContext,
     threadId,
   };
+}
+
+function parseDeliveryContextFromParams(
+  params: unknown,
+): { channel?: string; to?: string; accountId?: string } | undefined {
+  const raw = (params as { deliveryContext?: unknown }).deliveryContext;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const channel =
+    typeof (raw as { channel?: unknown }).channel === "string"
+      ? (raw as { channel: string }).channel.trim() || undefined
+      : undefined;
+  const to =
+    typeof (raw as { to?: unknown }).to === "string"
+      ? (raw as { to: string }).to.trim() || undefined
+      : undefined;
+  const accountId =
+    typeof (raw as { accountId?: unknown }).accountId === "string"
+      ? (raw as { accountId: string }).accountId.trim() || undefined
+      : undefined;
+  if (!channel && !to) {
+    return undefined;
+  }
+  return { channel, to, accountId };
 }
 
 function buildConfigRestartSentinelPayload(params: {

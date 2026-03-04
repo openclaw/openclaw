@@ -17,6 +17,22 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+// deliveryContext carries the live channel/to/accountId from the agent run so
+// that the restart sentinel has accurate routing data even after heartbeats
+// have overwritten the session store with { channel: "webchat", to: "heartbeat" }.
+// Without this field, the additionalProperties: false constraint silently drops
+// it and the sentinel falls back to stale session store data. See #18612.
+const DeliveryContextSchema = Type.Optional(
+  Type.Object(
+    {
+      channel: Type.Optional(Type.String()),
+      to: Type.Optional(Type.String()),
+      accountId: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+);
+
 const ConfigApplyLikeParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
@@ -24,6 +40,7 @@ const ConfigApplyLikeParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.String()),
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    deliveryContext: DeliveryContextSchema,
   },
   { additionalProperties: false },
 );
@@ -46,6 +63,7 @@ export const UpdateRunParamsSchema = Type.Object(
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    deliveryContext: DeliveryContextSchema,
   },
   { additionalProperties: false },
 );

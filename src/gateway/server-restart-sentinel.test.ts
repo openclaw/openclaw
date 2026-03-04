@@ -25,8 +25,9 @@ const mocks = vi.hoisted(() => ({
   })),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
-  deliverOutboundPayloads: vi.fn(async () => []),
+  agentCommand: vi.fn(async () => undefined),
   enqueueSystemEvent: vi.fn(),
+  defaultRuntime: {},
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -68,8 +69,12 @@ vi.mock("../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
 }));
 
-vi.mock("../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+vi.mock("../commands/agent.js", () => ({
+  agentCommand: mocks.agentCommand,
+}));
+
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -79,16 +84,62 @@ vi.mock("../infra/system-events.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
-  it("forwards session context to outbound delivery", async () => {
+  it("calls agentCommand with resolved channel, to, and sessionKey after restart", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "whatsapp",
+        message: "restart message",
+        sessionKey: "agent:main:main",
         to: "+15550002",
-        session: { key: "agent:main:main", agentId: "agent-from-key" },
+        channel: "whatsapp",
+        deliver: true,
+        bestEffortDeliver: true,
+        messageChannel: "whatsapp",
+        accountId: "acct-2",
       }),
+      mocks.defaultRuntime,
+      {},
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to enqueueSystemEvent when agentCommand throws", async () => {
+    mocks.agentCommand.mockRejectedValueOnce(new Error("agent failed"));
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("restart summary"),
+      { sessionKey: "agent:main:main" },
+    );
+  });
+
+  it("falls back to enqueueSystemEvent when channel cannot be resolved (no channel in origin)", async () => {
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error("no-target"),
+    } as never);
+    mocks.agentCommand.mockClear();
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("falls back to enqueueSystemEvent on main session key when sentinel has no sessionKey", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({ payload: { sessionKey: "" } } as never);
+    mocks.enqueueSystemEvent.mockClear();
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
   });
 });

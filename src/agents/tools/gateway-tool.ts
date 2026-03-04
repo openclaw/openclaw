@@ -69,6 +69,10 @@ const GatewayToolSchema = Type.Object({
 
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
+  agentChannel?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+  agentAccountId?: string;
   config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
@@ -99,9 +103,24 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
-        const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+        // Prefer the live delivery context captured during the current agent
+        // run over extractDeliveryInfo() (which reads the persisted session
+        // store). The session store is frequently overwritten by heartbeat
+        // runs to { channel: "webchat", to: "heartbeat" }, causing the
+        // sentinel to write stale routing data that fails post-restart.
+        // See #18612.
+        const liveContext =
+          opts?.agentChannel != null && String(opts.agentChannel).trim()
+            ? {
+                channel: String(opts.agentChannel).trim(),
+                to: opts?.agentTo ?? undefined,
+                accountId: opts?.agentAccountId ?? undefined,
+              }
+            : undefined;
+        const extracted = extractDeliveryInfo(sessionKey);
+        const deliveryContext = liveContext ?? extracted.deliveryContext;
+        const threadId =
+          opts?.agentThreadId != null ? String(opts.agentThreadId) : extracted.threadId;
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
@@ -133,10 +152,25 @@ export function createGatewayTool(opts?: {
 
       const gatewayOpts = readGatewayCallOptions(params);
 
+      // Build the live delivery context from the current agent run's routing
+      // fields. This is passed to server-side handlers so they can write an
+      // accurate sentinel without reading the (potentially stale) session
+      // store. The store is frequently overwritten by heartbeat runs to
+      // { channel: "webchat", to: "heartbeat" }. See #18612.
+      const liveDeliveryContextForRpc =
+        opts?.agentChannel != null && String(opts.agentChannel).trim()
+          ? {
+              channel: String(opts.agentChannel).trim(),
+              to: opts?.agentTo ?? undefined,
+              accountId: opts?.agentAccountId ?? undefined,
+            }
+          : undefined;
+
       const resolveGatewayWriteMeta = (): {
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
+        deliveryContext: typeof liveDeliveryContextForRpc;
       } => {
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -148,7 +182,7 @@ export function createGatewayTool(opts?: {
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
-        return { sessionKey, note, restartDelayMs };
+        return { sessionKey, note, restartDelayMs, deliveryContext: liveDeliveryContextForRpc };
       };
 
       const resolveConfigWriteParams = async (): Promise<{
@@ -157,6 +191,7 @@ export function createGatewayTool(opts?: {
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
+        deliveryContext: typeof liveDeliveryContextForRpc;
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
         let baseHash = readStringParam(params, "baseHash");
@@ -183,7 +218,7 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, restartDelayMs, deliveryContext } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
@@ -191,11 +226,12 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, sessionKey, note, restartDelayMs, deliveryContext } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
@@ -203,11 +239,12 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
         });
         return jsonResult({ ok: true, result });
       }
       if (action === "update.run") {
-        const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const { sessionKey, note, restartDelayMs, deliveryContext } = resolveGatewayWriteMeta();
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -217,6 +254,7 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          deliveryContext,
           timeoutMs: updateTimeoutMs,
         });
         return jsonResult({ ok: true, result });

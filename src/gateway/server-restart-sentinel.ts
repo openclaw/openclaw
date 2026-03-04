@@ -1,10 +1,9 @@
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
+import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   consumeRestartSentinel,
@@ -12,10 +11,11 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { defaultRuntime } from "../runtime.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
+export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
   if (!sentinel) {
     return;
@@ -76,30 +76,29 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
-  // Slack uses replyToId (thread_ts) for threading, not threadId.
-  // The reply path does this mapping but deliverOutboundPayloads does not,
-  // so we must convert here to ensure post-restart notifications land in
-  // the originating Slack thread. See #17716.
-  const isSlack = channel === "slack";
-  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
-  const resolvedThreadId = isSlack ? undefined : threadId;
-  const outboundSession = buildOutboundSessionContext({
-    cfg,
-    sessionKey,
-  });
-
   try {
-    await deliverOutboundPayloads({
-      cfg,
-      channel,
-      to: resolved.to,
-      accountId: origin?.accountId,
-      replyToId,
-      threadId: resolvedThreadId,
-      payloads: [{ text: message }],
-      session: outboundSession,
-      bestEffort: true,
-    });
+    // Use agentCommand() rather than deliverOutboundPayloads() so the restart
+    // message is a proper agent turn: the user is notified AND the agent sees
+    // the message in its conversation history and can resume autonomously.
+    //
+    // This is safe post-restart because scheduleRestartSentinelWake() runs in
+    // the new process, where there are zero in-flight replies. The pre-restart
+    // race condition fixed in ab4a08a82 does not apply here.
+    await agentCommand(
+      {
+        message,
+        sessionKey,
+        to: resolved.to,
+        channel,
+        deliver: true,
+        bestEffortDeliver: true,
+        messageChannel: channel,
+        threadId,
+        accountId: origin?.accountId,
+      },
+      defaultRuntime,
+      params.deps,
+    );
   } catch (err) {
     enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
   }
