@@ -29,17 +29,20 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 
   // Fallback for HTTP or when Clipboard API is unavailable (secure context required)
   if (!success) {
+    const textarea = document.createElement("textarea");
     try {
-      const textarea = document.createElement("textarea");
       textarea.value = text;
       textarea.style.position = "fixed";
       textarea.style.opacity = "0";
       document.body.appendChild(textarea);
       textarea.select();
       success = document.execCommand("copy");
-      document.body.removeChild(textarea);
     } catch (err) {
       console.error("Failed to copy:", err);
+    } finally {
+      if (textarea.parentNode) {
+        document.body.removeChild(textarea);
+      }
     }
   }
 
