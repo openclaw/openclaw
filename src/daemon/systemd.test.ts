@@ -326,6 +326,25 @@ describe("systemd service control", () => {
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
   });
 
+  it("keeps direct --user scope when SUDO_USER is root", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { SUDO_USER: "root", USER: "root" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
   it("falls back to machine user scope for restart when user bus env is missing", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
