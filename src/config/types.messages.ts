@@ -112,7 +112,7 @@ export type MessagesConfig = {
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
-  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
@@ -124,6 +124,8 @@ export type MessagesConfig = {
 };
 
 export type NativeCommandsSetting = boolean | "auto";
+
+export type CommandOwnerDisplay = "raw" | "hash";
 
 /**
  * Per-provider allowlist for command authorization.
@@ -153,6 +155,10 @@ export type CommandsConfig = {
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
+  /** How owner IDs are rendered in system prompts. */
+  ownerDisplay?: CommandOwnerDisplay;
+  /** Secret used to key owner ID hashes when ownerDisplay is "hash". */
+  ownerDisplaySecret?: string;
   /**
    * Per-provider allowlist restricting who can use slash commands.
    * If set, overrides the channel's allowFrom for command authorization.

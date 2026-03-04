@@ -1,9 +1,12 @@
 package ai.openclaw.android.node
 
+import ai.openclaw.android.gateway.parseInvokeErrorFromThrowable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
 
@@ -19,6 +22,35 @@ fun String.toJsonString(): String {
 }
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
+  if (paramsJson.isNullOrBlank()) return null
+  return try {
+    Json.parseToJsonElement(paramsJson).asObjectOrNull()
+  } catch (_: Throwable) {
+    null
+  }
+}
+
+fun readJsonPrimitive(params: JsonObject?, key: String): JsonPrimitive? = params?.get(key) as? JsonPrimitive
+
+fun parseJsonInt(params: JsonObject?, key: String): Int? =
+  readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
+
+fun parseJsonDouble(params: JsonObject?, key: String): Double? =
+  readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
+
+fun parseJsonString(params: JsonObject?, key: String): String? =
+  readJsonPrimitive(params, key)?.contentOrNull
+
+fun parseJsonBooleanFlag(params: JsonObject?, key: String): Boolean? {
+  val value = readJsonPrimitive(params, key)?.contentOrNull?.trim()?.lowercase() ?: return null
+  return when (value) {
+    "true" -> true
+    "false" -> false
+    else -> null
+  }
+}
 
 fun JsonElement?.asStringOrNull(): String? =
   when (this) {
@@ -37,14 +69,9 @@ fun parseHexColorArgb(raw: String?): Long? {
 }
 
 fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
-  val raw = (err.message ?: "").trim()
-  if (raw.isEmpty()) return "UNAVAILABLE" to "UNAVAILABLE: error"
-
-  val idx = raw.indexOf(':')
-  if (idx <= 0) return "UNAVAILABLE" to raw
-  val code = raw.substring(0, idx).trim().ifEmpty { "UNAVAILABLE" }
-  val message = raw.substring(idx + 1).trim().ifEmpty { raw }
-  return code to "$code: $message"
+  val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = "UNAVAILABLE: error")
+  val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
+  return parsed.code to message
 }
 
 fun normalizeMainKey(raw: String?): String? {

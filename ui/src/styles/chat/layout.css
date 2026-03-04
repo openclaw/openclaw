@@ -386,6 +386,27 @@
   color: var(--text);
 }
 
+/* Light theme icon button overrides */
+:root[data-theme="light"] .btn--icon {
+  background: #ffffff;
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  color: var(--muted);
+}
+
+:root[data-theme="light"] .btn--icon:hover {
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;
@@ -429,6 +450,24 @@
 
   .chat-compose {
     grid-template-columns: 1fr;
+  }
+
+  /* Mobile: stack compose row vertically */
+  .chat-compose__row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Mobile: stack action buttons vertically */
+  .chat-compose__actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
+  }
+
+  /* Mobile: full-width buttons */
+  .chat-compose .chat-compose__actions .btn {
+    width: 100%;
   }
 
   .chat-controls {

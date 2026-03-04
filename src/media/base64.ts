@@ -35,3 +35,17 @@ export function estimateBase64DecodedBytes(base64: string): number {
   const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
   return Math.max(0, estimated);
 }
+
+const BASE64_CHARS_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Normalize and validate a base64 string.
+ * Returns canonical base64 (no whitespace) or undefined when invalid.
+ */
+export function canonicalizeBase64(base64: string): string | undefined {
+  const cleaned = base64.replace(/\s+/g, "");
+  if (!cleaned || cleaned.length % 4 !== 0 || !BASE64_CHARS_RE.test(cleaned)) {
+    return undefined;
+  }
+  return cleaned;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs.js";
-import type { CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
 /**
@@ -18,32 +18,6 @@ import type { CronJob } from "./types.js";
 describe("issue #17852 - daily cron jobs should not skip days", () => {
   const HOUR_MS = 3_600_000;
   const DAY_MS = 24 * HOUR_MS;
-
-  function createMockState(jobs: CronJob[], nowMs: number): CronServiceState {
-    return {
-      store: { version: 1, jobs },
-      running: false,
-      timer: null,
-      storeLoadedAtMs: nowMs,
-      storeFileMtimeMs: null,
-      op: Promise.resolve(),
-      warnedDisabled: false,
-      deps: {
-        storePath: "/mock/path",
-        cronEnabled: true,
-        nowMs: () => nowMs,
-        enqueueSystemEvent: () => {},
-        requestHeartbeatNow: () => {},
-        runIsolatedAgentJob: async () => ({ status: "ok" }),
-        log: {
-          debug: () => {},
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-        } as never,
-      },
-    };
-  }
 
   function createDailyThreeAmJob(threeAM: number): CronJob {
     return {
@@ -71,7 +45,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
 
     const job = createDailyThreeAmJob(threeAM);
 
-    const state = createMockState([job], now);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Maintenance should NOT touch existing past-due nextRunAtMs.
@@ -88,7 +62,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
 
     const job = createDailyThreeAmJob(threeAM);
 
-    const state = createMockState([job], now);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRuns(state);
 
     // The full recomputeNextRuns advances it to TOMORROW — skipping today's

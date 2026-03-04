@@ -1,10 +1,29 @@
-export function mergeAllowFromSources(params: {
+export function mergeDmAllowFromSources(params: {
   allowFrom?: Array<string | number>;
-  storeAllowFrom?: string[];
+  storeAllowFrom?: Array<string | number>;
+  dmPolicy?: string;
 }): string[] {
-  return [...(params.allowFrom ?? []), ...(params.storeAllowFrom ?? [])]
+  const storeEntries = params.dmPolicy === "allowlist" ? [] : (params.storeAllowFrom ?? []);
+  return [...(params.allowFrom ?? []), ...storeEntries]
     .map((value) => String(value).trim())
     .filter(Boolean);
+}
+
+export function resolveGroupAllowFromSources(params: {
+  allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  fallbackToAllowFrom?: boolean;
+}): string[] {
+  const explicitGroupAllowFrom =
+    Array.isArray(params.groupAllowFrom) && params.groupAllowFrom.length > 0
+      ? params.groupAllowFrom
+      : undefined;
+  const scoped = explicitGroupAllowFrom
+    ? explicitGroupAllowFrom
+    : params.fallbackToAllowFrom === false
+      ? []
+      : (params.allowFrom ?? []);
+  return scoped.map((value) => String(value).trim()).filter(Boolean);
 }
 
 export function firstDefined<T>(...values: Array<T | undefined>) {

@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
+  isChromeCdpReady,
   isChromeReachable,
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
@@ -17,9 +21,81 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 
+type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
+
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(filePath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
+}
+
+async function readDefaultProfileFromLocalState(
+  userDataDir: string,
+): Promise<Record<string, unknown>> {
+  const localState = await readJson(path.join(userDataDir, "Local State"));
+  const profile = localState.profile as Record<string, unknown>;
+  const infoCache = profile.info_cache as Record<string, unknown>;
+  return infoCache.Default as Record<string, unknown>;
+}
+
+async function withMockChromeCdpServer(params: {
+  wsPath: string;
+  onConnection?: (wss: WebSocketServer) => void;
+  run: (baseUrl: string) => Promise<void>;
+}) {
+  const server = createServer((req, res) => {
+    if (req.url === "/json/version") {
+      const addr = server.address() as AddressInfo;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}${params.wsPath}`,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url !== params.wsPath) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+  params.onConnection?.(wss);
+  await new Promise<void>((resolve, reject) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+    server.once("error", reject);
+  });
+  try {
+    const addr = server.address() as AddressInfo;
+    await params.run(`http://127.0.0.1:${addr.port}`);
+  } finally {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, timeoutMs: number) {
+  await stopOpenClawChrome(
+    {
+      proc,
+      cdpPort: 12345,
+    } as unknown as StopChromeTarget,
+    timeoutMs,
+  );
+}
+
+function makeChromeTestProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
+  return {
+    killed: overrides?.killed ?? false,
+    exitCode: overrides?.exitCode ?? null,
+    kill: vi.fn(),
+  };
 }
 
 describe("browser chrome profile decoration", () => {
@@ -53,10 +129,7 @@ describe("browser chrome profile decoration", () => {
 
     const expectedSignedArgb = ((0xff << 24) | 0xff4500) >> 0;
 
-    const localState = await readJson(path.join(userDataDir, "Local State"));
-    const profile = localState.profile as Record<string, unknown>;
-    const infoCache = profile.info_cache as Record<string, unknown>;
-    const def = infoCache.Default as Record<string, unknown>;
+    const def = await readDefaultProfileFromLocalState(userDataDir);
 
     expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
     expect(def.shortcut_name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
@@ -84,10 +157,7 @@ describe("browser chrome profile decoration", () => {
   it("best-effort writes name when color is invalid", async () => {
     const userDataDir = await createUserDataDir();
     decorateOpenClawProfile(userDataDir, { color: "lobster-orange" });
-    const localState = await readJson(path.join(userDataDir, "Local State"));
-    const profile = localState.profile as Record<string, unknown>;
-    const infoCache = profile.info_cache as Record<string, unknown>;
-    const def = infoCache.Default as Record<string, unknown>;
+    const def = await readDefaultProfileFromLocalState(userDataDir);
 
     expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
     expect(def.profile_color_seed).toBeUndefined();
@@ -132,6 +202,10 @@ describe("browser chrome profile decoration", () => {
 });
 
 describe("browser chrome helpers", () => {
+  function mockExistsSync(match: (pathValue: string) => boolean) {
+    return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
+  }
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -139,11 +213,9 @@ describe("browser chrome helpers", () => {
   });
 
   it("picks the first existing Chrome candidate on macOS", () => {
-    const exists = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((p) =>
-        String(p).includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
-      );
+    const exists = mockExistsSync((pathValue) =>
+      pathValue.includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
+    );
     const exe = findChromeExecutableMac();
     expect(exe?.kind).toBe("chrome");
     expect(exe?.path).toMatch(/Google Chrome\.app/);
@@ -158,8 +230,7 @@ describe("browser chrome helpers", () => {
 
   it("picks the first existing Chrome candidate on Windows", () => {
     vi.stubEnv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local");
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-      const pathStr = String(p);
+    const exists = mockExistsSync((pathStr) => {
       return (
         pathStr.includes("Google\\Chrome\\Application\\chrome.exe") ||
         pathStr.includes("BraveSoftware\\Brave-Browser\\Application\\brave.exe") ||
@@ -174,7 +245,7 @@ describe("browser chrome helpers", () => {
 
   it("finds Chrome in Program Files on Windows", () => {
     const marker = path.win32.join("Program Files", "Google", "Chrome");
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p).includes(marker));
+    const exists = mockExistsSync((pathValue) => pathValue.includes(marker));
     const exe = findChromeExecutableWindows();
     expect(exe?.kind).toBe("chrome");
     expect(exe?.path).toMatch(/chrome\.exe$/);
@@ -198,7 +269,7 @@ describe("browser chrome helpers", () => {
       "Application",
       "chrome.exe",
     );
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p).includes(marker));
+    const exists = mockExistsSync((pathValue) => pathValue.includes(marker));
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
       "win32",
@@ -231,28 +302,78 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/health",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (raw) => {
+            let message: { id?: unknown; method?: unknown } | null = null;
+            try {
+              const text =
+                typeof raw === "string"
+                  ? raw
+                  : Buffer.isBuffer(raw)
+                    ? raw.toString("utf8")
+                    : Array.isArray(raw)
+                      ? Buffer.concat(raw).toString("utf8")
+                      : Buffer.from(raw).toString("utf8");
+              message = JSON.parse(text) as { id?: unknown; method?: unknown };
+            } catch {
+              return;
+            }
+            if (message?.method === "Browser.getVersion" && message.id === 1) {
+              ws.send(
+                JSON.stringify({
+                  id: 1,
+                  result: { product: "Chrome/Mock" },
+                }),
+              );
+            }
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        await expect(isChromeCdpReady(baseUrl, 300, 400)).resolves.toBe(true);
+      },
+    });
+  });
+
+  it("reports cdpReady false when websocket opens but command channel is stale", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/stale",
+      // Simulate a stale command channel: WS opens but never responds to commands.
+      onConnection: (wss) => wss.on("connection", (_ws) => {}),
+      run: async (baseUrl) => {
+        await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
+      },
+    });
+  });
+
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
-    const proc = { killed: true, exitCode: null, kill: vi.fn() };
-    await stopOpenClawChrome(
-      {
-        proc,
-        cdpPort: 12345,
-      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-      10,
-    );
+    const proc = makeChromeTestProc({ killed: true });
+    await stopChromeWithProc(proc, 10);
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
   it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = { killed: false, exitCode: null, kill: vi.fn() };
-    await stopOpenClawChrome(
-      {
-        proc,
-        cdpPort: 12345,
-      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-      10,
-    );
+    const proc = makeChromeTestProc();
+    await stopChromeWithProc(proc, 10);
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
+    );
+    const proc = makeChromeTestProc();
+    await stopChromeWithProc(proc, 1);
+    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 });

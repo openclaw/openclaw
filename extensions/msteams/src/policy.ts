@@ -7,7 +7,7 @@ import type {
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
@@ -15,7 +15,7 @@ import {
   resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
@@ -209,6 +209,7 @@ export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): MSTeamsAllowlistMatch {
   return resolveAllowlistMatchSimple(params);
 }
@@ -245,6 +246,7 @@ export function isMSTeamsGroupAllowed(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): boolean {
   const { groupPolicy } = params;
   if (groupPolicy === "disabled") {

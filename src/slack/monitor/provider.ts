@@ -10,8 +10,16 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import type { SessionScope } from "../../config/sessions.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { warn } from "../../globals.js";
+import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -26,6 +34,13 @@ import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import {
+  formatUnknownError,
+  getSocketEmitter,
+  isNonRecoverableSlackAuthError,
+  SLACK_SOCKET_RECONNECT_POLICY,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -52,11 +67,25 @@ function parseApiAppIdFromAppToken(raw?: string) {
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   let account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
   });
+
+  if (!account.enabled) {
+    runtime.log?.(`[${account.accountId}] slack account disabled; monitor startup skipped`);
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      opts.abortSignal?.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
+    return;
+  }
 
   const historyLimit = Math.max(
     0,
@@ -71,7 +100,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
-  const signingSecret = account.config.signingSecret?.trim();
+  const signingSecret = normalizeResolvedSecretInputString({
+    value: account.config.signingSecret,
+    path: `channels.slack.accounts.${account.accountId}.signingSecret`,
+  });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
   if (!botToken || (slackMode !== "http" && !appToken)) {
@@ -87,8 +119,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     );
   }
 
-  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-
   const slackCfg = account.config;
   const dmConfig = slackCfg.dm;
 
@@ -98,31 +128,31 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
-  if (
-    slackCfg.groupPolicy === undefined &&
-    slackCfg.channels === undefined &&
-    defaultGroupPolicy === undefined &&
-    groupPolicy === "open"
-  ) {
-    runtime.log?.(
-      warn(
-        'slack: groupPolicy defaults to "open" when channels.slack is missing; set channels.slack.groupPolicy (or channels.defaults.groupPolicy) or add channels.slack.channels to restrict access.',
-      ),
-    );
-  }
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const providerConfigPresent = cfg.channels?.slack !== undefined;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent,
+    groupPolicy: slackCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "slack",
+    accountId: account.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
 
-  const resolveToken = slackCfg.userToken?.trim() || botToken;
+  const resolveToken = account.userToken || botToken;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
-  const replyToMode = slackCfg.replyToMode ?? "all";
+  const replyToMode = slackCfg.replyToMode ?? "off";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+  const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
@@ -206,6 +236,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     dmEnabled,
     dmPolicy,
     allowFrom,
+    allowNameMatching: isDangerousNameMatchingEnabled(slackCfg),
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,
@@ -220,13 +251,23 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slashCommand,
     textLimit,
     ackReactionScope,
+    typingReaction,
     mediaMaxBytes,
     removeAckAfterReply,
   });
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account });
+  // Wire up event liveness tracking: update lastEventAt on every inbound event
+  // so the health monitor can detect "half-dead" sockets that pass health checks
+  // but silently stop delivering events.
+  const trackEvent = opts.setStatus
+    ? () => {
+        opts.setStatus!({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
+      }
+    : undefined;
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
+  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+
+  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
   await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
@@ -344,22 +385,104 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   try {
     if (slackMode === "socket") {
-      await app.start();
-      runtime.log?.("slack socket mode connected");
+      let reconnectAttempts = 0;
+      while (!opts.abortSignal?.aborted) {
+        try {
+          await app.start();
+          reconnectAttempts = 0;
+          runtime.log?.("slack socket mode connected");
+        } catch (err) {
+          // Auth errors (account_inactive, invalid_auth, etc.) are permanent —
+          // retrying will never succeed and blocks the entire gateway.  Fail fast.
+          if (isNonRecoverableSlackAuthError(err)) {
+            runtime.error?.(
+              `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
+            );
+            throw err;
+          }
+          reconnectAttempts += 1;
+          if (
+            SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
+            reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
+          ) {
+            throw err;
+          }
+          const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
+          runtime.error?.(
+            `slack socket mode failed to start. retry ${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts || "∞"} in ${Math.round(delayMs / 1000)}s (${formatUnknownError(err)})`,
+          );
+          try {
+            await sleepWithAbort(delayMs, opts.abortSignal);
+          } catch {
+            break;
+          }
+          continue;
+        }
+
+        if (opts.abortSignal?.aborted) {
+          break;
+        }
+
+        const disconnect = await waitForSlackSocketDisconnect(app, opts.abortSignal);
+        if (opts.abortSignal?.aborted) {
+          break;
+        }
+
+        // Bail immediately on non-recoverable auth errors during reconnect too.
+        if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
+          runtime.error?.(
+            `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
+          );
+          throw disconnect.error instanceof Error
+            ? disconnect.error
+            : new Error(formatUnknownError(disconnect.error));
+        }
+
+        reconnectAttempts += 1;
+        if (
+          SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
+          reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
+        ) {
+          throw new Error(
+            `Slack socket mode reconnect max attempts reached (${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts}) after ${disconnect.event}`,
+          );
+        }
+
+        const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
+        runtime.error?.(
+          `slack socket disconnected (${disconnect.event}). retry ${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts || "∞"} in ${Math.round(delayMs / 1000)}s${
+            disconnect.error ? ` (${formatUnknownError(disconnect.error)})` : ""
+          }`,
+        );
+        await app.stop().catch(() => undefined);
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch {
+          break;
+        }
+      }
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
+      if (!opts.abortSignal?.aborted) {
+        await new Promise<void>((resolve) => {
+          opts.abortSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+      }
     }
-    if (opts.abortSignal?.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      opts.abortSignal?.addEventListener("abort", () => resolve(), {
-        once: true,
-      });
-    });
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await app.stop().catch(() => undefined);
   }
 }
+
+export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+
+export const __testing = {
+  resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  getSocketEmitter,
+  waitForSlackSocketDisconnect,
+};

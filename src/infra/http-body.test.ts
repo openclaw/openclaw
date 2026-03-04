@@ -113,12 +113,26 @@ describe("http body limits", () => {
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
-  it("timeout surfaces typed error", async () => {
+  it("timeout surfaces typed error when timeoutMs is clamped", async () => {
     const req = createMockRequest({ emitEnd: false });
-    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 10 });
+    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 0 });
     await expect(promise).rejects.toSatisfy((error: unknown) =>
       isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT"),
     );
+    expect(req.__unhandledDestroyError).toBeUndefined();
+  });
+
+  it("guard clamps invalid maxBytes to one byte", async () => {
+    const req = createMockRequest({ chunks: ["ab"], emitEnd: false });
+    const res = createMockServerResponse();
+    const guard = installRequestBodyLimitGuard(req, res, {
+      maxBytes: Number.NaN,
+      responseFormat: "text",
+    });
+    await waitForMicrotaskTurn();
+    expect(guard.isTripped()).toBe(true);
+    expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
+    expect(res.statusCode).toBe(413);
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 

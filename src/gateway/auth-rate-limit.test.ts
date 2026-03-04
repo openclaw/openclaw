@@ -93,6 +93,12 @@ describe("auth rate limiter", () => {
     expect(limiter.check("10.0.0.11").remaining).toBe(2);
   });
 
+  it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter.recordFailure("1.2.3.4");
+    expect(limiter.check("::ffff:1.2.3.4").allowed).toBe(false);
+  });
+
   it("tracks scopes independently for the same IP", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("10.0.0.12", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);

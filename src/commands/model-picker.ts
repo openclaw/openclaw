@@ -10,6 +10,7 @@ import {
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
@@ -77,11 +78,7 @@ function createProviderAuthChecker(params: {
 }
 
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
-  const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
-  if (typeof raw === "string") {
-    return raw.trim();
-  }
-  return raw?.primary?.trim() ?? "";
+  return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
 }
 
 function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
@@ -258,7 +255,15 @@ export async function promptDefaultModel(
   }
 
   if (hasPreferredProvider && preferredProvider) {
-    models = models.filter((entry) => entry.provider === preferredProvider);
+    models = models.filter((entry) => {
+      if (preferredProvider === "volcengine") {
+        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
+      }
+      if (preferredProvider === "byteplus") {
+        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
+      }
+      return entry.provider === preferredProvider;
+    });
     if (preferredProvider === "anthropic") {
       models = models.filter((entry) => !isAnthropicLegacyModel(entry));
     }

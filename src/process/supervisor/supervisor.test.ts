@@ -1,15 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { createProcessSupervisor } from "./supervisor.js";
 
+type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
+type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
+type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
+
+function createWriteStdoutArgv(output: string): string[] {
+  if (process.platform === "win32") {
+    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
+  }
+  return ["/usr/bin/printf", "%s", output];
+}
+
+async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
+  return supervisor.spawn({
+    ...options,
+    backendId: "test",
+    mode: "child",
+  });
+}
+
 describe("process supervisor", () => {
   it("spawns child runs and captures output", async () => {
     const supervisor = createProcessSupervisor();
-    const run = await supervisor.spawn({
+    const run = await spawnChild(supervisor, {
       sessionId: "s1",
-      backendId: "test",
-      mode: "child",
-      argv: [process.execPath, "-e", 'process.stdout.write("ok")'],
-      timeoutMs: 800,
+      argv: createWriteStdoutArgv("ok"),
+      timeoutMs: 1_000,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -20,13 +37,11 @@ describe("process supervisor", () => {
 
   it("enforces no-output timeout for silent processes", async () => {
     const supervisor = createProcessSupervisor();
-    const run = await supervisor.spawn({
+    const run = await spawnChild(supervisor, {
       sessionId: "s1",
-      backendId: "test",
-      mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
-      timeoutMs: 1_000,
-      noOutputTimeoutMs: 20,
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 14)"],
+      timeoutMs: 300,
+      noOutputTimeoutMs: 5,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -37,24 +52,20 @@ describe("process supervisor", () => {
 
   it("cancels prior scoped run when replaceExistingScope is enabled", async () => {
     const supervisor = createProcessSupervisor();
-    const first = await supervisor.spawn({
+    const first = await spawnChild(supervisor, {
       sessionId: "s1",
-      backendId: "test",
       scopeKey: "scope:a",
-      mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 80)"],
       timeoutMs: 1_000,
       stdinMode: "pipe-open",
     });
 
-    const second = await supervisor.spawn({
+    const second = await spawnChild(supervisor, {
       sessionId: "s1",
-      backendId: "test",
       scopeKey: "scope:a",
       replaceExistingScope: true,
-      mode: "child",
-      argv: [process.execPath, "-e", 'process.stdout.write("new")'],
-      timeoutMs: 800,
+      argv: createWriteStdoutArgv("new"),
+      timeoutMs: 1_000,
       stdinMode: "pipe-closed",
     });
 
@@ -67,11 +78,9 @@ describe("process supervisor", () => {
 
   it("applies overall timeout even for near-immediate timer firing", async () => {
     const supervisor = createProcessSupervisor();
-    const run = await supervisor.spawn({
+    const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
-      backendId: "test",
-      mode: "child",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 120)"],
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 12)"],
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });
@@ -83,12 +92,10 @@ describe("process supervisor", () => {
   it("can stream output without retaining it in RunExit payload", async () => {
     const supervisor = createProcessSupervisor();
     let streamed = "";
-    const run = await supervisor.spawn({
+    const run = await spawnChild(supervisor, {
       sessionId: "s-capture",
-      backendId: "test",
-      mode: "child",
-      argv: [process.execPath, "-e", 'process.stdout.write("streamed")'],
-      timeoutMs: 800,
+      argv: createWriteStdoutArgv("streamed"),
+      timeoutMs: 1_000,
       stdinMode: "pipe-closed",
       captureOutput: false,
       onStdout: (chunk) => {

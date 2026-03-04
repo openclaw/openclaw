@@ -1,3 +1,9 @@
+import {
+  isAvatarHttpUrl,
+  isAvatarImageDataUrl,
+  looksLikeAvatarPath,
+} from "../shared/avatar-policy.js";
+
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
 export function normalizeControlUiBasePath(basePath?: string): string {
@@ -26,13 +32,6 @@ export function buildControlUiAvatarUrl(basePath: string, agentId: string): stri
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
 }
 
-function looksLikeLocalAvatarPath(value: string): boolean {
-  if (/[\\/]/.test(value)) {
-    return true;
-  }
-  return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
-}
-
 export function resolveAssistantAvatarUrl(params: {
   avatar?: string | null;
   agentId?: string | null;
@@ -42,7 +41,7 @@ export function resolveAssistantAvatarUrl(params: {
   if (!avatar) {
     return undefined;
   }
-  if (/^https?:\/\//i.test(avatar) || /^data:image\//i.test(avatar)) {
+  if (isAvatarHttpUrl(avatar) || isAvatarImageDataUrl(avatar)) {
     return avatar;
   }
 
@@ -60,7 +59,7 @@ export function resolveAssistantAvatarUrl(params: {
   if (!params.agentId) {
     return avatar;
   }
-  if (looksLikeLocalAvatarPath(avatar)) {
+  if (looksLikeAvatarPath(avatar)) {
     return buildControlUiAvatarUrl(basePath, params.agentId);
   }
   return avatar;

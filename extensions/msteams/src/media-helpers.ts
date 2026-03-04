@@ -8,7 +8,7 @@ import {
   extensionForMime,
   extractOriginalFilename,
   getFileExtension,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 
 /**
  * Detect MIME type from URL extension or data URL.
@@ -66,6 +66,11 @@ export async function extractFilename(url: string): Promise<string> {
  */
 export function isLocalPath(url: string): boolean {
   if (url.startsWith("file://") || url.startsWith("/") || url.startsWith("~")) {
+    return true;
+  }
+
+  // Windows rooted path on current drive (e.g. \tmp\file.txt)
+  if (url.startsWith("\\") && !url.startsWith("\\\\")) {
     return true;
   }
 

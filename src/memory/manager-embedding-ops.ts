@@ -709,6 +709,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       chunkMarkdown(content, this.settings.chunking).filter(
         (chunk) => chunk.text.trim().length > 0,
       ),
+      EMBEDDING_BATCH_MAX_TOKENS,
     );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);

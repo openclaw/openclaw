@@ -34,6 +34,11 @@ import {
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
+  ToolCatalogEntrySchema,
+  ToolCatalogGroupSchema,
+  ToolCatalogProfileSchema,
+  ToolsCatalogParamsSchema,
+  ToolsCatalogResultSchema,
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
@@ -120,6 +125,12 @@ import {
 } from "./nodes.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  SecretsReloadParamsSchema,
+  SecretsResolveAssignmentSchema,
+  SecretsResolveParamsSchema,
+  SecretsResolveResultSchema,
+} from "./secrets.js";
+import {
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
@@ -141,7 +152,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
-export const ProtocolSchemas: Record<string, TSchema> = {
+export const ProtocolSchemas = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
@@ -174,6 +185,10 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  SecretsReloadParams: SecretsReloadParamsSchema,
+  SecretsResolveParams: SecretsResolveParamsSchema,
+  SecretsResolveAssignment: SecretsResolveAssignmentSchema,
+  SecretsResolveResult: SecretsResolveResultSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
@@ -224,6 +239,11 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
   SkillsStatusParams: SkillsStatusParamsSchema,
+  ToolsCatalogParams: ToolsCatalogParamsSchema,
+  ToolCatalogProfile: ToolCatalogProfileSchema,
+  ToolCatalogEntry: ToolCatalogEntrySchema,
+  ToolCatalogGroup: ToolCatalogGroupSchema,
+  ToolsCatalogResult: ToolsCatalogResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
@@ -262,6 +282,6 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
-};
+} satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;

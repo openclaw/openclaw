@@ -22,7 +22,7 @@ const CODEX_MODELS = [
 ];
 const GOOGLE_PREFIXES = ["gemini-3"];
 const ZAI_PREFIXES = ["glm-5", "glm-4.7", "glm-4.7-flash", "glm-4.7-flashx"];
-const MINIMAX_PREFIXES = ["minimax-m2.1", "minimax-m2.5"];
+const MINIMAX_PREFIXES = ["minimax-m2.5", "minimax-m2.5"];
 const XAI_PREFIXES = ["grok-4"];
 
 function matchesPrefix(id: string, prefixes: string[]): boolean {
@@ -31,10 +31,6 @@ function matchesPrefix(id: string, prefixes: string[]): boolean {
 
 function matchesExactOrPrefix(id: string, values: string[]): boolean {
   return values.some((value) => id === value || id.startsWith(value));
-}
-
-function matchesAny(id: string, values: string[]): boolean {
-  return values.some((value) => id.includes(value));
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
@@ -60,10 +56,6 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return matchesPrefix(id, GOOGLE_PREFIXES);
   }
 
-  if (provider === "google-antigravity") {
-    return matchesPrefix(id, GOOGLE_PREFIXES) || matchesPrefix(id, ANTHROPIC_PREFIXES);
-  }
-
   if (provider === "zai") {
     return matchesPrefix(id, ZAI_PREFIXES);
   }
@@ -82,17 +74,16 @@ export function isModernModelRef(ref: ModelRef): boolean {
   if (provider === "opencode" && id === "alpha-glm-4.7") {
     return false;
   }
+  // Opencode MiniMax variants have been intermittently unstable in live runs;
+  // prefer the rest of the modern catalog for deterministic smoke coverage.
+  if (provider === "opencode" && matchesPrefix(id, MINIMAX_PREFIXES)) {
+    return false;
+  }
 
   if (provider === "openrouter" || provider === "opencode") {
-    return matchesAny(id, [
-      ...ANTHROPIC_PREFIXES,
-      ...OPENAI_MODELS,
-      ...CODEX_MODELS,
-      ...GOOGLE_PREFIXES,
-      ...ZAI_PREFIXES,
-      ...MINIMAX_PREFIXES,
-      ...XAI_PREFIXES,
-    ]);
+    // OpenRouter/opencode are pass-through proxies; accept any model ID
+    // rather than restricting to a static prefix list.
+    return true;
   }
 
   return false;

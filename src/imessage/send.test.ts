@@ -39,8 +39,8 @@ function getSentParams() {
 
 describe("sendMessageIMessage", () => {
   beforeEach(() => {
-    requestMock.mockReset().mockResolvedValue({ ok: true });
-    stopMock.mockReset().mockResolvedValue(undefined);
+    requestMock.mockClear().mockResolvedValue({ ok: true });
+    stopMock.mockClear().mockResolvedValue(undefined);
   });
 
   it("sends to chat_id targets", async () => {
@@ -69,6 +69,19 @@ describe("sendMessageIMessage", () => {
     const params = getSentParams();
     expect(params.file).toBe("/tmp/imessage-media.jpg");
     expect(params.text).toBe("<media:image>");
+  });
+
+  it("normalizes mixed-case parameterized MIME for attachment placeholder text", async () => {
+    await sendWithDefaults("chat_id:7", "", {
+      mediaUrl: "http://x/voice",
+      resolveAttachmentImpl: async () => ({
+        path: "/tmp/imessage-media.ogg",
+        contentType: " Audio/Ogg; codecs=opus ",
+      }),
+    });
+    const params = getSentParams();
+    expect(params.file).toBe("/tmp/imessage-media.ogg");
+    expect(params.text).toBe("<media:audio>");
   });
 
   it("returns message id when rpc provides one", async () => {

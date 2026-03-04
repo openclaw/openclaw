@@ -91,7 +91,7 @@ describe("ports helpers", () => {
 
 describeUnix("inspectPortUsage", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
   });
 
   it("reports busy when lsof is missing but loopback listener exists", async () => {
@@ -107,6 +107,64 @@ describeUnix("inspectPortUsage", () => {
       const result = await inspectPortUsage(port);
       expect(result.status).toBe("busy");
       expect(result.errors?.some((err) => err.includes("ENOENT"))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("falls back to ss when lsof is unavailable", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as net.AddressInfo).port;
+
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: `LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=${process.pid},fd=23))`,
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "node /tmp/openclaw/dist/index.js gateway --port 18789\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return {
+            stdout: "debian\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("ppid=")) {
+          return {
+            stdout: "1\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    try {
+      const result = await inspectPortUsage(port);
+      expect(result.status).toBe("busy");
+      expect(result.listeners.length).toBeGreaterThan(0);
+      expect(result.listeners[0]?.pid).toBe(process.pid);
+      expect(result.listeners[0]?.commandLine).toContain("openclaw");
+      expect(result.errors).toBeUndefined();
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
