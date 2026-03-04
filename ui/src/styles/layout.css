@@ -82,7 +82,10 @@
   align-items: center;
   gap: 16px;
   padding: 0 20px;
-  height: var(--shell-topbar-height);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  height: calc(var(--shell-topbar-height) + env(safe-area-inset-top, 0px));
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -427,6 +430,8 @@
 .content {
   grid-area: content;
   padding: 12px 16px 32px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
   display: block;
   min-height: 0;
   overflow-y: auto;

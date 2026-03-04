@@ -372,3 +372,172 @@
     height: 11px;
   }
 }
+
+/* ===========================================
+   Mobile Chat Optimizations
+   =========================================== */
+
+/* Mobile: tighten chat group spacing */
+@media (max-width: 600px) {
+  .chat-group {
+    gap: 8px;
+    margin-right: 8px;
+    margin-left: 2px;
+    margin-bottom: 12px;
+  }
+
+  .chat-group-messages {
+    max-width: calc(100% - 52px); /* avatar (40px) + gap (8px) + 4px buffer */
+  }
+
+  .chat-group-footer {
+    margin-top: 4px;
+  }
+
+  .chat-sender-name {
+    font-size: 11px;
+  }
+
+  .chat-group-timestamp {
+    font-size: 10px;
+  }
+
+  /* Smaller avatars on mobile */
+  .chat-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+}
+
+/* Small phones: hide avatars, maximize message width */
+@media (max-width: 400px) {
+  .chat-group {
+    gap: 0;
+    margin-right: 4px;
+    margin-left: 2px;
+  }
+
+  /* Hide avatars on very small screens */
+  .chat-avatar {
+    display: none;
+  }
+
+  /* Show sender name above messages when avatar hidden */
+  .chat-group-footer {
+    order: -1;
+    margin-top: 0;
+    margin-bottom: 2px;
+  }
+
+  .chat-group-messages {
+    max-width: calc(100% - 16px);
+  }
+
+  /* Tighter bubbles */
+  .chat-bubble {
+    font-size: 13px;
+  }
+
+  .chat-bubble.has-copy {
+    padding-right: 30px;
+  }
+
+  .chat-copy-btn {
+    top: 4px;
+    right: 4px;
+    padding: 3px 5px;
+  }
+}
+
+/* ===========================================
+   Mobile Touch Targets (WCAG 2.5.8: 44x44px)
+   =========================================== */
+
+@media (max-width: 600px) {
+  /* Icon buttons: 44x44px for reliable touch */
+  .btn--icon {
+    min-width: 44px;
+    height: 44px;
+    padding: 10px !important;
+  }
+
+  .btn--icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Chat header: add gap between controls */
+  .chat-header__right {
+    gap: 4px;
+  }
+
+  /* Chat focus exit button: larger on mobile */
+  .chat-focus-exit {
+    width: 44px;
+    height: 44px;
+  }
+
+  .chat-focus-exit svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Attachment previews: smaller on mobile */
+  .chat-attachment {
+    width: 64px;
+    height: 64px;
+  }
+
+  /* Sent images: scale to bubble width */
+  .chat-message-image {
+    max-width: 100%;
+    max-height: 180px;
+  }
+
+  /* Always show remove button on touch devices */
+  .chat-attachment__remove {
+    opacity: 1;
+  }
+}
+
+/* Very small phones: even smaller attachment thumbs */
+@media (max-width: 400px) {
+  .chat-attachment {
+    width: 52px;
+    height: 52px;
+  }
+
+  .chat-message-image {
+    max-height: 150px;
+  }
+}
+
+/* ===========================================
+   Navigation Overflow Affordance
+   =========================================== */
+
+@media (max-width: 1100px) {
+  /* Gradient fade hint when nav overflows */
+  .nav {
+    position: relative;
+    mask-image: linear-gradient(
+      to right,
+      black 0%,
+      black calc(100% - 32px),
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      black 0%,
+      black calc(100% - 32px),
+      transparent 100%
+    );
+  }
+
+  /* Remove mask when scrolled to the end (user has seen all items) */
+  .nav:not(:hover) {
+    /* Keep mask for discoverability — will be visible when not scrolled to end */
+  }
+}

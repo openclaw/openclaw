@@ -96,6 +96,10 @@
 
 /* Mobile: Full-screen modal */
 @media (max-width: 768px) {
+  .chat-main {
+    min-width: 0; /* Override 400px min-width for mobile */
+  }
+
   .chat-split-container--open {
     position: fixed;
     top: 0;

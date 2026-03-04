@@ -148,6 +148,7 @@
   gap: 12px;
   margin-top: auto; /* Push to bottom of flex container */
   padding: 12px 4px 4px;
+  padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
 }
@@ -448,26 +449,25 @@
     min-width: 140px;
   }
 
-  .chat-compose {
-    grid-template-columns: 1fr;
-  }
-
-  /* Mobile: stack compose row vertically */
+  /* Mobile: keep compose row horizontal - matches WhatsApp/iMessage/Signal */
   .chat-compose__row {
-    flex-direction: column;
     gap: 8px;
   }
 
-  /* Mobile: stack action buttons vertically */
+  /* Mobile: compact inline action buttons */
   .chat-compose__actions {
-    flex-direction: column;
-    width: 100%;
-    gap: 8px;
+    gap: 4px;
   }
 
-  /* Mobile: full-width buttons */
+  /* Mobile: compact button sizing */
   .chat-compose .chat-compose__actions .btn {
-    width: 100%;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  /* Hide keyboard shortcut hint on mobile */
+  .chat-compose .btn-kbd {
+    display: none;
   }
 
   .chat-controls {

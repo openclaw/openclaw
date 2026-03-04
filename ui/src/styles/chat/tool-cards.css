@@ -200,3 +200,47 @@
     transform: scale(1);
   }
 }
+
+/* Mobile tool card optimizations */
+@media (max-width: 600px) {
+  .chat-tool-card {
+    padding: 10px;
+    max-height: 80px;
+  }
+
+  .chat-tool-card__title {
+    font-size: 12px;
+  }
+
+  .chat-tool-card__preview {
+    max-height: 28px;
+    font-size: 10px;
+    padding: 6px 8px;
+    margin-top: 6px;
+  }
+
+  .chat-tool-card__action {
+    font-size: 11px;
+  }
+
+  /* Ensure clickable cards have visible tap affordance */
+  .chat-tool-card--clickable {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-tool-card {
+    max-height: 60px;
+    padding: 8px;
+  }
+
+  /* Hide preview on very small screens — tap to view in sidebar */
+  .chat-tool-card__preview {
+    display: none;
+  }
+
+  .chat-tool-card__detail {
+    font-size: 11px;
+  }
+}
