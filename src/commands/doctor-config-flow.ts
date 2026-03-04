@@ -1395,14 +1395,27 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
 
       if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
-        if (fallbackToAllowFrom) {
-          warnings.push(
-            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
-          );
-        } else {
-          warnings.push(
-            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
-          );
+        // Check if any per-group allowFrom entries exist — runtime uses
+        // groupConfig?.allowFrom for sender filtering, so account-level
+        // groupAllowFrom is not required when per-group allowFrom is set.
+        const groups = asObjectRecord(account.groups);
+        const hasPerGroupAllowFrom =
+          groups != null &&
+          Object.values(groups).some((g) => {
+            const group = asObjectRecord(g);
+            return group != null && hasAllowFromEntries(group.allowFrom as Array<string | number>);
+          });
+
+        if (!hasPerGroupAllowFrom) {
+          if (fallbackToAllowFrom) {
+            warnings.push(
+              `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
+            );
+          } else {
+            warnings.push(
+              `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+            );
+          }
         }
       }
     }

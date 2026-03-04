@@ -126,6 +126,48 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("does not warn when per-group allowFrom is set even if account-level groupAllowFrom is empty", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123": {
+              allowFrom: ["sender1"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
+  it("still warns when groupPolicy is allowlist and neither account-level nor per-group allowFrom is set", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
