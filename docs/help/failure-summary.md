@@ -1,6 +1,10 @@
 ---
 title: Failure Summary Template
 summary: Lightweight format for reliability debugging and contributor handoff.
+read_when:
+  - Reporting operational regressions
+  - Handing off incidents to PRs
+  - Documenting reliability incidents for follow-up work
 ---
 
 # Failure Summary Template
@@ -59,4 +63,4 @@ The goal is to make every report actionable and reproducible.
 
 - This is intentionally lightweight: it should take 2-5 minutes to fill.
 - If issue spans multiple incidents, submit one summary per incident.
-- For security vulnerabilities, use the dedicated process in `SECURITY.md`.
+- For security vulnerabilities, use the dedicated process in [`SECURITY.md`](../../SECURITY.md).
