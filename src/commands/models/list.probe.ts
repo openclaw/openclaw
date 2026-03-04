@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
+  type AuthProfileEligibilityReasonCode,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
@@ -38,6 +40,14 @@ export type AuthProbeStatus =
   | "unknown"
   | "no_model";
 
+export type AuthProbeReasonCode =
+  | "excluded_by_auth_order"
+  | "missing_credential"
+  | "expired"
+  | "invalid_expires"
+  | "ineligible_profile"
+  | "no_model";
+
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -46,6 +56,7 @@ export type AuthProbeResult = {
   source: "profile" | "env" | "models.json";
   mode?: string;
   status: AuthProbeStatus;
+  reasonCode?: AuthProbeReasonCode;
   error?: string;
   latencyMs?: number;
 };
@@ -139,7 +150,36 @@ function selectProbeModel(params: {
   return null;
 }
 
-function buildProbeTargets(params: {
+function mapEligibilityReasonToProbeReasonCode(
+  reasonCode: AuthProfileEligibilityReasonCode,
+): AuthProbeReasonCode {
+  if (reasonCode === "missing_credential") {
+    return "missing_credential";
+  }
+  if (reasonCode === "expired") {
+    return "expired";
+  }
+  if (reasonCode === "invalid_expires") {
+    return "invalid_expires";
+  }
+  return "ineligible_profile";
+}
+
+function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): string {
+  const legacyLine = "Auth profile credentials are missing or expired.";
+  if (reasonCode === "expired") {
+    return `${legacyLine}\n↳ Auth reason [expired]: token credentials are expired.`;
+  }
+  if (reasonCode === "invalid_expires") {
+    return `${legacyLine}\n↳ Auth reason [invalid_expires]: token expires must be a positive Unix ms timestamp.`;
+  }
+  if (reasonCode === "missing_credential") {
+    return `${legacyLine}\n↳ Auth reason [missing_credential]: no inline credential or SecretRef is configured.`;
+  }
+  return `${legacyLine}\n↳ Auth reason [ineligible_profile]: profile is incompatible with provider config.`;
+}
+
+export function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   providers: string[];
   modelCandidates: string[];
@@ -197,11 +237,19 @@ function buildProbeTargets(params: {
               source: "profile",
               mode,
               status: "unknown",
+              reasonCode: "excluded_by_auth_order",
               error: "Excluded by auth.order for this provider.",
             });
             continue;
           }
           if (allowedProfiles && !allowedProfiles.has(profileId)) {
+            const eligibility = resolveAuthProfileEligibility({
+              cfg,
+              store,
+              provider: providerKey,
+              profileId,
+            });
+            const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
             results.push({
               provider: providerKey,
               model: model ? `${model.provider}/${model.model}` : undefined,
@@ -210,7 +258,8 @@ function buildProbeTargets(params: {
               source: "profile",
               mode,
               status: "unknown",
-              error: "Auth profile credentials are missing or expired.",
+              reasonCode,
+              error: formatMissingCredentialProbeError(reasonCode),
             });
             continue;
           }
@@ -223,6 +272,7 @@ function buildProbeTargets(params: {
               source: "profile",
               mode,
               status: "no_model",
+              reasonCode: "no_model",
               error: "No model available for probe",
             });
             continue;
@@ -261,6 +311,7 @@ function buildProbeTargets(params: {
           source,
           mode,
           status: "no_model",
+          reasonCode: "no_model",
           error: "No model available for probe",
         });
         continue;
@@ -299,6 +350,7 @@ async function probeTarget(params: {
       source: target.source,
       mode: target.mode,
       status: "no_model",
+      reasonCode: "no_model",
       error: "No model available for probe",
     };
   }
