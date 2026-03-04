@@ -423,7 +423,19 @@ export async function authorizeGatewayConnect(
     !req?.headers?.["x-forwarded-host"];
 
   if (auth.mode === "trusted-proxy") {
-    if (localDirect || localLoopbackWithoutProxyHeaders) {
+    if (localLoopbackWithoutProxyHeaders && limiter) {
+      const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+      if (!rlCheck.allowed) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          rateLimited: true,
+          retryAfterMs: rlCheck.retryAfterMs,
+        };
+      }
+    }
+
+    if (localLoopbackWithoutProxyHeaders) {
       const sharedSecretFallback = authorizeSharedSecretFallback({
         auth,
         connectAuth,
