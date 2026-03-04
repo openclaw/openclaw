@@ -10,6 +10,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
+import type { AuthStorage } from "../../agents/pi-model-discovery.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
 import { ConsolidationService } from "../../services/memory/ConsolidationService.js";
@@ -60,6 +61,30 @@ export default function register(api: PluginApi) {
   const graphService = new GraphService(graphitiUrl, debug);
   const subconscious = new SubconsciousService(graphService, debug);
   const consolidator = new ConsolidationService(graphService, debug);
+
+  /**
+   * Helper to wrap AuthStorage with automatic Copilot token exchange.
+   * This ensures background tasks (narrative, graphiti) can authenticate
+   * even if the primary model is local and hasn't triggered exchange.
+   */
+  function wrapAuthStorage(base: AuthStorage): AuthStorage {
+    return {
+      getApiKey: async (provider: string) => {
+        const key = await base.getApiKey(provider);
+        if (provider === "github-copilot" && key && key.startsWith("gh")) {
+          try {
+            const { resolveCopilotApiToken } =
+              await import("../../providers/github-copilot-token.js");
+            const { token } = await resolveCopilotApiToken({ githubToken: key });
+            return token;
+          } catch (err) {
+            api.logger.warn(`[mind-memory] Copilot token exchange failed: ${String(err)}`);
+          }
+        }
+        return key;
+      },
+    };
+  }
 
   api.logger.info(`[mind-memory] Initializing with debug=${debug}`);
 
@@ -212,7 +237,7 @@ export default function register(api: PluginApi) {
               await import("../../agents/pi-embedded-runner/subconscious-agent.js");
             activeClient = createSubconsciousAgent({
               model,
-              authStorage,
+              authStorage: wrapAuthStorage(authStorage),
               modelRegistry,
               debug,
               autoBootstrapHistory: false,
@@ -410,7 +435,7 @@ export default function register(api: PluginApi) {
           await import("../../agents/pi-embedded-runner/subconscious-agent.js");
         const subconsciousAgent = createSubconsciousAgent({
           model,
-          authStorage,
+          authStorage: wrapAuthStorage(authStorage),
           modelRegistry,
           debug,
           autoBootstrapHistory: false,
@@ -496,7 +521,7 @@ export default function register(api: PluginApi) {
       await import("../../agents/pi-embedded-runner/subconscious-agent.js");
     const narrativeAgent = createSubconsciousAgent({
       model,
-      authStorage,
+      authStorage: wrapAuthStorage(authStorage),
       modelRegistry,
       debug,
       autoBootstrapHistory: false,
@@ -519,7 +544,7 @@ export default function register(api: PluginApi) {
       if (oM) {
         observerAgent = createSubconsciousAgent({
           model: oM,
-          authStorage: oAs,
+          authStorage: wrapAuthStorage(oAs),
           modelRegistry: oMr,
           debug,
           autoBootstrapHistory: false,
