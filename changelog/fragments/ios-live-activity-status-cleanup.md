@@ -1,1 +1,0 @@
-- iOS: add Live Activity connection status (connecting/idle/disconnected) on Lock Screen and Dynamic Island, and clean up duplicate/stale activities before starting a new one (#33591) (thanks @mbelinky, @leepokai)
