@@ -1,8 +1,16 @@
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const rootSdk = require("./root-alias.cjs") as Record<string, unknown>;
+const rootAliasPath = require.resolve("./root-alias.cjs");
+const jitiPath = require.resolve("jiti");
+
+type CjsCacheEntry = {
+  id: string;
+  filename: string;
+  loaded: boolean;
+  exports: unknown;
+};
 
 type EmptySchema = {
   safeParse: (value: unknown) =>
@@ -13,8 +21,28 @@ type EmptySchema = {
       };
 };
 
+function loadRootSdk(stubExports: Record<string, unknown> = {}): Record<string, unknown> {
+  const jitiStubModule: CjsCacheEntry = {
+    id: jitiPath,
+    filename: jitiPath,
+    loaded: true,
+    exports: {
+      createJiti: () => () => stubExports,
+    },
+  };
+  require.cache[jitiPath] = jitiStubModule as never;
+  delete require.cache[rootAliasPath];
+  return require(rootAliasPath) as Record<string, unknown>;
+}
+
+afterEach(() => {
+  delete require.cache[rootAliasPath];
+  delete require.cache[jitiPath];
+});
+
 describe("plugin-sdk root alias", () => {
   it("exposes the fast empty config schema helper", () => {
+    const rootSdk = loadRootSdk();
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
     expect(typeof factory).toBe("function");
     if (!factory) {
@@ -28,6 +56,11 @@ describe("plugin-sdk root alias", () => {
   });
 
   it("loads legacy root exports lazily through the proxy", () => {
+    const rootSdk = loadRootSdk({
+      resolveControlCommandGate() {
+        return true;
+      },
+    });
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
@@ -35,6 +68,11 @@ describe("plugin-sdk root alias", () => {
   });
 
   it("preserves reflection semantics for lazily resolved exports", () => {
+    const rootSdk = loadRootSdk({
+      resolveControlCommandGate() {
+        return true;
+      },
+    });
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");

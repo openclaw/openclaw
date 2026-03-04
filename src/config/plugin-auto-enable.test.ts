@@ -4,14 +4,20 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
-function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
+function makeRegistry(
+  plugins: Array<{
+    id: string;
+    channels: string[];
+    origin?: "bundled" | "global" | "workspace" | "config";
+  }>,
+): PluginManifestRegistry {
   return {
     plugins: plugins.map((p) => ({
       id: p.id,
       channels: p.channels,
       providers: [],
       skills: [],
-      origin: "config" as const,
+      origin: p.origin ?? ("config" as const),
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
       manifestPath: `/fake/${p.id}/openclaw.plugin.json`,
@@ -310,6 +316,38 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+    });
+  });
+
+  describe("installed third-party plugins (default enabled)", () => {
+    it("does not write plugins.entries for installed global plugins when allowlist already includes them", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "cli_x", appSecret: "secret" } },
+          plugins: { allow: ["feishu"] },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "feishu", channels: ["feishu"], origin: "global" }]),
+      });
+
+      expect(result.config.plugins?.entries?.feishu).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["feishu"]);
+      expect(result.changes).toEqual([]);
+    });
+
+    it("only updates allowlist for installed global plugins when allowlist is missing the plugin", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { appId: "cli_x", appSecret: "secret" } },
+          plugins: { allow: ["memory-core"] },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "feishu", channels: ["feishu"], origin: "global" }]),
+      });
+
+      expect(result.config.plugins?.entries?.feishu).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["memory-core", "feishu"]);
+      expect(result.changes.join("\n")).toContain("feishu configured, enabled automatically.");
     });
   });
 });

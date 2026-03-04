@@ -202,6 +202,8 @@ export function loadPluginManifestRegistry(params: {
 
     const existing = seenIds.get(manifest.id);
     if (existing) {
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
@@ -217,7 +219,7 @@ export function loadPluginManifestRegistry(params: {
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (candidateRank < existingRank) {
           records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,
@@ -229,12 +231,25 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Distinct plugin directories with the same id can still be intentional
+      // when a higher-precedence origin overrides a lower-precedence one
+      // (e.g. a global install shadowing a bundled plugin). Keep both records
+      // so the loader can surface the overridden entry, but suppress the
+      // duplicate warning and track the higher-precedence candidate for any
+      // later comparisons.
+      if (candidateRank !== existingRank) {
+        if (candidateRank < existingRank) {
+          seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+        }
+      }
+      if (candidateRank === existingRank) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
