@@ -38,7 +38,6 @@ type ChatEventPayload = {
 const styles = {
   layout: {
     display: "grid",
-    gridTemplateColumns: "240px 1fr",
     gap: 20,
     minHeight: 500,
   } as React.CSSProperties,
@@ -269,6 +268,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatStream, setChatStream] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedSessionKeyRef = useRef<string | null>(null);
   selectedSessionKeyRef.current = selectedSessionKey;
@@ -433,12 +433,12 @@ export default function ChatPage() {
 
   const handleNewSession = useCallback(async () => {
     if (state !== "connected") {
+      alert("Not connected to gateway");
       return;
     }
 
     try {
       const res = await request<{ sessionKey: string }>("sessions.reset", {
-        reason: "new",
         key: "agent:main:main",
       });
       if (res.sessionKey) {
@@ -452,6 +452,7 @@ export default function ChatPage() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
+      alert(err instanceof Error ? err.message : "Failed to create session");
     }
   }, [state, request, loadSessions]);
 
@@ -499,51 +500,114 @@ export default function ChatPage() {
         </p>
       </div>
 
-      <div style={styles.layout}>
+      <div
+        style={{ ...styles.layout, gridTemplateColumns: isSidebarVisible ? "240px 1fr" : "1fr" }}
+      >
         {/* Sessions Sidebar */}
-        <div style={styles.sidebar}>
-          <div style={styles.cardTitle}>Sessions</div>
-          <button
-            style={{ ...styles.btn, ...styles.btnPrimary }}
-            disabled={isDisabled}
-            onClick={handleNewSession}
-          >
-            New Session
-          </button>
+        {isSidebarVisible && (
+          <div style={styles.sidebar}>
+            <div style={styles.cardTitle}>Sessions</div>
+            <button
+              style={{ ...styles.btn, ...styles.btnPrimary }}
+              disabled={isDisabled}
+              onClick={handleNewSession}
+            >
+              New Session
+            </button>
 
-          <div style={styles.sessionList}>
-            {sessions.length === 0 ? (
-              <div style={styles.muted}>No sessions yet.</div>
-            ) : (
-              sessions.map((session) => {
-                const isActive = selectedSessionKey === session.key;
-                return (
-                  <button
-                    key={session.key}
-                    type="button"
-                    style={{
-                      ...styles.sessionRow,
-                      ...(isActive ? styles.sessionRowActive : {}),
-                    }}
-                    onClick={() => setSelectedSessionKey(session.key)}
-                  >
-                    <div style={styles.sessionTitle}>
-                      {session.label || session.displayName || session.key}
-                    </div>
-                    <div style={styles.sessionSub}>
-                      {session.updatedAt
-                        ? formatRelativeTimestamp(session.updatedAt)
-                        : "No activity"}
-                    </div>
-                  </button>
-                );
-              })
-            )}
+            <div style={styles.sessionList}>
+              {sessions.length === 0 ? (
+                <div style={styles.muted}>No sessions yet.</div>
+              ) : (
+                sessions.map((session) => {
+                  const isActive = selectedSessionKey === session.key;
+                  return (
+                    <button
+                      key={session.key}
+                      type="button"
+                      style={{
+                        ...styles.sessionRow,
+                        ...(isActive ? styles.sessionRowActive : {}),
+                      }}
+                      onClick={() => setSelectedSessionKey(session.key)}
+                    >
+                      <div style={styles.sessionTitle}>
+                        {session.label || session.displayName || session.key}
+                      </div>
+                      <div style={styles.sessionSub}>
+                        {session.updatedAt
+                          ? formatRelativeTimestamp(session.updatedAt)
+                          : "No activity"}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Chat Area */}
         <div style={styles.card}>
+          {/* Chat Header */}
+          <div
+            style={{
+              padding: "12px 16px",
+              borderBottom: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "var(--bg-hover)",
+              borderTopLeftRadius: "var(--radius-lg)",
+              borderTopRightRadius: "var(--radius-lg)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <button
+                onClick={() => setIsSidebarVisible(!isSidebarVisible)}
+                style={{
+                  ...styles.btn,
+                  width: "auto",
+                  padding: "4px 8px",
+                  background: "var(--card)",
+                }}
+                title={isSidebarVisible ? "Hide Sidebar" : "Show Sidebar"}
+              >
+                {isSidebarVisible ? "◧ Hide" : "◨ Show Sidebar"}
+              </button>
+              <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0, color: "var(--text-strong)" }}>
+                {selectedSessionKey
+                  ? sessions.find((s) => s.key === selectedSessionKey)?.label ||
+                    sessions.find((s) => s.key === selectedSessionKey)?.displayName ||
+                    selectedSessionKey
+                  : "Select a Session"}
+              </h2>
+            </div>
+            {selectedSessionKey && (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--ok)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 500,
+                }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 8,
+                    height: 8,
+                    background: "var(--ok)",
+                    borderRadius: "50%",
+                  }}
+                />
+                Active Session
+              </div>
+            )}
+          </div>
+
           {error && <div style={{ ...styles.callout, ...styles.calloutDanger }}>{error}</div>}
 
           {!selectedSessionKey ? (
@@ -562,7 +626,12 @@ export default function ChatPage() {
                 )}
                 {/* Streaming response — shown while AI is typing */}
                 {chatStream !== null && (
-                  <div style={{ ...styles.messageRow, ...styles.messageRowAssistant }}>
+                  <div
+                    style={{
+                      ...styles.messageRow,
+                      ...styles.messageRowAssistant,
+                    }}
+                  >
                     <div
                       style={{
                         ...styles.bubble,

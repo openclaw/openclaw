@@ -193,6 +193,8 @@ import {
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
   type SkillsBinsResult,
+  type SkillsCreateParams,
+  SkillsCreateParamsSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
   type SkillsStatusParams,
@@ -234,6 +236,10 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type WorkflowsGetParams,
+  WorkflowsGetParamsSchema,
+  type WorkflowsSaveParams,
+  WorkflowsSaveParamsSchema,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -334,6 +340,7 @@ export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsList
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
+export const validateSkillsCreateParams = ajv.compile<SkillsCreateParams>(SkillsCreateParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
@@ -390,6 +397,9 @@ export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunPar
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+export const validateWorkflowsGetParams = ajv.compile<WorkflowsGetParams>(WorkflowsGetParamsSchema);
+export const validateWorkflowsSaveParams =
+  ajv.compile<WorkflowsSaveParams>(WorkflowsSaveParamsSchema);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -502,6 +512,7 @@ export {
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
+  SkillsCreateParamsSchema,
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
@@ -524,6 +535,8 @@ export {
   PROTOCOL_VERSION,
   ErrorCodes,
   errorShape,
+  WorkflowsGetParamsSchema,
+  WorkflowsSaveParamsSchema,
 };
 
 export type {
@@ -594,6 +607,7 @@ export type {
   ToolsCatalogResult,
   SkillsBinsParams,
   SkillsBinsResult,
+  SkillsCreateParams,
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
@@ -628,4 +642,6 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  WorkflowsGetParams,
+  WorkflowsSaveParams,
 };

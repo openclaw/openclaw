@@ -22,7 +22,11 @@ type SkillMessageMap = Record<string, { kind: "success" | "error"; message: stri
 // ============================================
 
 const SKILL_SOURCE_GROUPS = [
-  { id: "workspace", label: "Workspace Skills", sources: ["openclaw-workspace"] },
+  {
+    id: "workspace",
+    label: "Workspace Skills",
+    sources: ["openclaw-workspace"],
+  },
   { id: "built-in", label: "Built-in Skills", sources: ["openclaw-bundled"] },
   { id: "installed", label: "Installed Skills", sources: ["openclaw-managed"] },
   { id: "extra", label: "Extra Skills", sources: ["openclaw-extra"] },
@@ -278,7 +282,12 @@ function SkillItem({
         <div style={styles.chipRow}>
           <span style={styles.chip}>{skill.source}</span>
           {showBundledBadge && <span style={styles.chip}>bundled</span>}
-          <span style={{ ...styles.chip, ...(skill.eligible ? styles.chipOk : styles.chipWarn) }}>
+          <span
+            style={{
+              ...styles.chip,
+              ...(skill.eligible ? styles.chipOk : styles.chipWarn),
+            }}
+          >
             {skill.eligible ? "eligible" : "blocked"}
           </span>
           {skill.disabled && <span style={{ ...styles.chip, ...styles.chipWarn }}>disabled</span>}
@@ -404,6 +413,38 @@ export default function SkillsPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [messages, setMessages] = useState<SkillMessageMap>({});
 
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createSkillKey, setCreateSkillKey] = useState("");
+  const [createDescription, setCreateDescription] = useState("");
+  const [createInstructions, setCreateInstructions] = useState("");
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const handleCreateSkill = async () => {
+    if (!createSkillKey || !createDescription || !createInstructions) {
+      setCreateError("All fields are required");
+      return;
+    }
+    setCreateLoading(true);
+    setCreateError(null);
+    try {
+      await request("skills.create", {
+        skillKey: createSkillKey,
+        description: createDescription,
+        instructions: createInstructions,
+      });
+      setIsCreateModalOpen(false);
+      setCreateSkillKey("");
+      setCreateDescription("");
+      setCreateInstructions("");
+      await loadSkills();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Failed to create skill");
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
   const loadSkills = useCallback(async () => {
     if (state !== "connected") return;
 
@@ -442,16 +483,25 @@ export default function SkillsPage() {
       setBusyKey(skillKey);
       setMessages((m) => ({ ...m, [skillKey]: undefined }) as SkillMessageMap);
       try {
-        await request("skills.toggle", { skillKey, enabled: currentlyDisabled });
+        await request("skills.update", {
+          skillKey,
+          enabled: currentlyDisabled,
+        });
         setMessages((m) => ({
           ...m,
-          [skillKey]: { kind: "success", message: currentlyDisabled ? "Enabled" : "Disabled" },
+          [skillKey]: {
+            kind: "success",
+            message: currentlyDisabled ? "Enabled" : "Disabled",
+          },
         }));
         await loadSkills();
       } catch (err) {
         setMessages((m) => ({
           ...m,
-          [skillKey]: { kind: "error", message: err instanceof Error ? err.message : "Failed" },
+          [skillKey]: {
+            kind: "error",
+            message: err instanceof Error ? err.message : "Failed",
+          },
         }));
       } finally {
         setBusyKey(null);
@@ -472,7 +522,7 @@ export default function SkillsPage() {
       try {
         const skill = report?.skills.find((s) => s.skillKey === skillKey);
         if (skill?.primaryEnv) {
-          await request("config.setEnv", { key: skill.primaryEnv, value });
+          await request("skills.update", { skillKey, apiKey: value });
           setMessages((m) => ({
             ...m,
             [skillKey]: { kind: "success", message: "Key saved" },
@@ -482,7 +532,10 @@ export default function SkillsPage() {
       } catch (err) {
         setMessages((m) => ({
           ...m,
-          [skillKey]: { kind: "error", message: err instanceof Error ? err.message : "Failed" },
+          [skillKey]: {
+            kind: "error",
+            message: err instanceof Error ? err.message : "Failed",
+          },
         }));
       } finally {
         setBusyKey(null);
@@ -492,11 +545,11 @@ export default function SkillsPage() {
   );
 
   const handleInstall = useCallback(
-    async (skillKey: string, _name: string, installId: string) => {
+    async (skillKey: string, name: string, installId: string) => {
       if (!installId) return;
       setBusyKey(skillKey);
       try {
-        await request("skills.install", { skillKey, installId });
+        await request("skills.install", { name, installId });
         setMessages((m) => ({
           ...m,
           [skillKey]: { kind: "success", message: "Installed" },
@@ -505,7 +558,10 @@ export default function SkillsPage() {
       } catch (err) {
         setMessages((m) => ({
           ...m,
-          [skillKey]: { kind: "error", message: err instanceof Error ? err.message : "Failed" },
+          [skillKey]: {
+            kind: "error",
+            message: err instanceof Error ? err.message : "Failed",
+          },
         }));
       } finally {
         setBusyKey(null);
@@ -543,9 +599,18 @@ export default function SkillsPage() {
               {filteredSkills.length} of {report?.skills.length ?? 0} shown
             </div>
           </div>
-          <button style={styles.btn} disabled={isDisabled} onClick={loadSkills}>
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              style={{ ...styles.btn, ...styles.btnPrimary }}
+              disabled={isDisabled}
+              onClick={() => setIsCreateModalOpen(true)}
+            >
+              Create Skill
+            </button>
+            <button style={styles.btn} disabled={isDisabled} onClick={loadSkills}>
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         </div>
 
         <div style={styles.filters}>
@@ -583,6 +648,80 @@ export default function SkillsPage() {
           ))
         )}
       </div>
+
+      {isCreateModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--card)",
+              padding: 24,
+              borderRadius: "var(--radius-lg)",
+              width: 1800,
+              maxWidth: "90%",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Create New Skill</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
+              <div style={styles.field}>
+                <label style={styles.label}>Skill Name (ID)</label>
+                <input
+                  style={styles.input}
+                  value={createSkillKey}
+                  onChange={(e) => setCreateSkillKey(e.target.value)}
+                  placeholder="e.g. weather-lookup"
+                />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Description</label>
+                <input
+                  style={styles.input}
+                  value={createDescription}
+                  onChange={(e) => setCreateDescription(e.target.value)}
+                  placeholder="Brief summary of what this skill does"
+                />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Instructions</label>
+                <textarea
+                  style={{ ...styles.input, height: 400, padding: "8px 10px", resize: "vertical" }}
+                  value={createInstructions}
+                  onChange={(e) => setCreateInstructions(e.target.value)}
+                  placeholder="Markdown instructions"
+                />
+              </div>
+              {createError && (
+                <div style={{ color: "var(--danger)", fontSize: 13 }}>{createError}</div>
+              )}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+                <button style={styles.btn} onClick={() => setIsCreateModalOpen(false)}>
+                  Cancel
+                </button>
+                <button
+                  style={{ ...styles.btn, ...styles.btnPrimary }}
+                  onClick={handleCreateSkill}
+                  disabled={createLoading}
+                >
+                  {createLoading ? "Saving..." : "Create"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

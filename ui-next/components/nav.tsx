@@ -164,6 +164,24 @@ function IconSettings() {
     </svg>
   );
 }
+function IconWorkflows() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      stroke="currentColor"
+    >
+      <rect x="3" y="3" width="6" height="6" rx="1" />
+      <rect x="15" y="3" width="6" height="6" rx="1" />
+      <rect x="9" y="15" width="6" height="6" rx="1" />
+      <path d="M6 9v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9" />
+      <path d="M12 13v2" />
+    </svg>
+  );
+}
 
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -180,6 +198,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/channels", label: "Channels", icon: <IconChannels /> },
       { href: "/skills", label: "Skills", icon: <IconSkills /> },
+      { href: "/workflows", label: "Workflows", icon: <IconWorkflows /> },
       { href: "/cron", label: "Automations", icon: <IconCron /> },
       { href: "/config", label: "Config", icon: <IconConfig /> },
     ],

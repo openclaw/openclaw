@@ -325,6 +325,9 @@
     "test:watch": "vitest",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
+    "ui-next:build": "pnpm --filter openclaw-ui-next build",
+    "ui-next:dev": "pnpm --filter openclaw-ui-next dev",
+    "ui-next:lint": "pnpm --filter openclaw-ui-next lint",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
     "ui:install": "node scripts/ui.js install"

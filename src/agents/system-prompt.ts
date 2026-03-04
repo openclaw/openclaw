@@ -106,12 +106,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
   }
   return [
     "## Reply Tags",
-    "To request a native reply/quote on supported surfaces, include one tag in your reply:",
-    "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
-    "- [[reply_to_current]] replies to the triggering message.",
-    "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
-    "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
-    "Tags are stripped before sending; support depends on the current channel config.",
+    "To reply/quote natively: put [[reply_to_current]] (or [[reply_to:<id>]] when an id was provided) as the FIRST token — no leading text/newlines. Whitespace inside brackets allowed. Tags are stripped before sending.",
     "",
   ];
 }
@@ -132,8 +127,8 @@ function buildMessagingSection(params: {
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
-    `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
-    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+    "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
+    `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
     params.availableTools.has("message")
       ? [
           "",
@@ -181,6 +176,37 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "Find new skills: https://clawhub.com",
     "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    "",
+  ];
+}
+
+function buildSelfUpdateSection(hasGateway: boolean, isMinimal: boolean): string[] {
+  if (!hasGateway || isMinimal) {
+    return [];
+  }
+  return [
+    "## OpenClaw Self-Update",
+    [
+      "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
+      "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
+      "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
+      "After restart, OpenClaw pings the last active session automatically.",
+    ].join("\n"),
+    "",
+  ];
+}
+
+function buildModelAliasSection(
+  modelAliasLines: string[] | undefined,
+  isMinimal: boolean,
+): string[] {
+  if (!modelAliasLines || modelAliasLines.length === 0 || isMinimal) {
+    return [];
+  }
+  return [
+    "## Model Aliases",
+    "Prefer aliases when specifying model overrides; full provider/model is also accepted.",
+    modelAliasLines.join("\n"),
     "",
   ];
 }
@@ -252,7 +278,7 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    cron: "Manage cron jobs/reminders; write systemEvent as a self-contained reminder (note it's a reminder based on time gap; include recent context)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -266,7 +292,7 @@ export function buildAgentSystemPrompt(params: {
       : "Spawn an isolated sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+      "Status card (usage/time/Reasoning/Elevated); answer model questions (📊 session_status); optional model override",
     image: "Analyze an image with the configured image model",
   };
 
@@ -392,9 +418,8 @@ export function buildAgentSystemPrompt(params: {
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
-    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
-    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
-    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "No independent goals: no self-preservation, replication, resource acquisition, or power-seeking beyond the user's request.",
+    "Prioritize human oversight: pause on conflicts; comply with stop/audit requests; never bypass safeguards, manipulate access, or modify safety rules unless explicitly asked.",
     "",
   ];
   const skillsSection = buildSkillsSection({
@@ -422,8 +447,7 @@ export function buildAgentSystemPrompt(params: {
     "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
-    "Tool availability (filtered by policy):",
-    "Tool names are case-sensitive. Call tools exactly as listed.",
+    "Available tools (policy-filtered; names are case-sensitive, call exactly as listed):",
     toolLines.length > 0
       ? toolLines.join("\n")
       : [
@@ -458,44 +482,16 @@ export function buildAgentSystemPrompt(params: {
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
     "## Tool Call Style",
-    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
-    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
-    "Keep narration brief and value-dense; avoid repeating obvious steps.",
-    "Use plain human language for narration unless in a technical context.",
-    "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "Don't narrate routine tool calls. Narrate only for multi-step, complex, or sensitive actions—keep it brief and plain.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
+    "Use `openclaw <subcommand>`. Do not invent commands. Gateway: `openclaw gateway status|start|stop|restart`. If unsure, ask the user to run `openclaw help` and paste the output.",
     "",
     ...skillsSection,
     ...memorySection,
-    // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
-    hasGateway && !isMinimal
-      ? [
-          "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
-          "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
-          "Use config.schema to fetch the current JSON Schema (includes plugins/channels) before making config changes or answering config-field questions; avoid guessing field names/types.",
-          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, OpenClaw pings the last active session automatically.",
-        ].join("\n")
-      : "",
-    hasGateway && !isMinimal ? "" : "",
-    "",
-    // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "## Model Aliases"
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
-      : "",
+    ...buildSelfUpdateSection(hasGateway, isMinimal),
+    ...buildModelAliasSection(params.modelAliasLines, isMinimal),
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
       ? params.modelAliasLines.join("\n")
       : "",
@@ -556,7 +552,6 @@ export function buildAgentSystemPrompt(params: {
           .filter(Boolean)
           .join("\n")
       : "",
-    params.sandboxInfo?.enabled ? "" : "",
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
@@ -648,16 +643,7 @@ export function buildAgentSystemPrompt(params: {
   if (!isMinimal) {
     lines.push(
       "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
-      "",
-      "⚠️ Rules:",
-      "- It must be your ENTIRE message — nothing else",
-      `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
-      "- Never wrap it in markdown or code blocks",
-      "",
-      `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
-      `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
-      `✅ Right: ${SILENT_REPLY_TOKEN}`,
+      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN} — your entire message, nothing else, no wrapping.`,
       "",
     );
   }
@@ -667,10 +653,7 @@ export function buildAgentSystemPrompt(params: {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+      "When the heartbeat prompt arrives and nothing needs attention, reply exactly: HEARTBEAT_OK. If something needs attention, omit HEARTBEAT_OK and reply with the alert instead.",
       "",
     );
   }

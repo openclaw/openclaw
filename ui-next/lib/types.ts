@@ -284,6 +284,10 @@ export type CronJob = {
   state?: CronJobState;
 };
 
+export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  state?: Partial<CronJobState>;
+};
+
 export type CronStatus = {
   enabled: boolean;
   jobs: number;
@@ -401,4 +405,27 @@ export type AgentsFilesSetResult = {
   agentId: string;
   workspace: string;
   file: AgentFileEntry;
+};
+
+export type ToolsCatalogTool = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+};
+
+export type ToolsCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolsCatalogTool[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: Array<{ id: string; label: string }>;
+  groups: ToolsCatalogGroup[];
 };

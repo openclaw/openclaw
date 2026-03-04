@@ -45,6 +45,7 @@ const BASE_METHODS = [
   "agents.files.set",
   "skills.status",
   "skills.bins",
+  "skills.create",
   "skills.install",
   "skills.update",
   "update.run",
@@ -97,6 +98,8 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "workflows.get",
+  "workflows.save",
 ];
 
 export function listGatewayMethods(): string[] {

@@ -531,7 +531,12 @@ export default function SessionsPage() {
             <input
               style={styles.input}
               value={filters.activeMinutes}
-              onChange={(e) => handleFiltersChange({ ...filters, activeMinutes: e.target.value })}
+              onChange={(e) =>
+                handleFiltersChange({
+                  ...filters,
+                  activeMinutes: e.target.value,
+                })
+              }
             />
           </label>
           <label style={styles.field}>
@@ -547,7 +552,12 @@ export default function SessionsPage() {
               type="checkbox"
               style={styles.checkbox}
               checked={filters.includeGlobal}
-              onChange={(e) => handleFiltersChange({ ...filters, includeGlobal: e.target.checked })}
+              onChange={(e) =>
+                handleFiltersChange({
+                  ...filters,
+                  includeGlobal: e.target.checked,
+                })
+              }
             />
             <span>Include global</span>
           </label>
@@ -557,7 +567,10 @@ export default function SessionsPage() {
               style={styles.checkbox}
               checked={filters.includeUnknown}
               onChange={(e) =>
-                handleFiltersChange({ ...filters, includeUnknown: e.target.checked })
+                handleFiltersChange({
+                  ...filters,
+                  includeUnknown: e.target.checked,
+                })
               }
             />
             <span>Include unknown</span>

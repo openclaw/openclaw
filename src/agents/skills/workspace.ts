@@ -476,6 +476,7 @@ type WorkspaceSkillBuildOptions = {
   entries?: SkillEntry[];
   /** If provided, only include skills with these names */
   skillFilter?: string[];
+  loadedSkills?: string[];
   eligibility?: SkillEligibilityContext;
 };
 
@@ -503,9 +504,21 @@ function resolveWorkspaceSkillPromptState(
     skills: resolvedSkills,
     config: opts?.config,
   });
+
+  // Calculate lazy vs active based on metadata or implicit policy
+  // We assume skills in 'skillsForPrompt' are "active" normally.
+  // But if we want lazy loading, we might filter them here.
+
+  // For now, let's just append a note about lazy skills if truncated.
+  // Ideally, we'd split 'eligible' into 'full' and 'summary' lists.
+  // But without changing the whole pipeline, let's keep current behavior:
+  // EVERYTHING is active by default unless truncated.
+  // Users can use 'load_skill' to re-activate/prioritize specific skills if truncation happens.
+
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
+
   const prompt = [
     remoteNote,
     truncationNote,

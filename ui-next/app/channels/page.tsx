@@ -233,7 +233,12 @@ function AccountCard({ account }: { account: ChannelAccountSnapshot }) {
           <div style={styles.accountTitle}>{account.name || account.accountId}</div>
           <div style={styles.accountId}>{account.accountId}</div>
         </div>
-        <span style={{ ...styles.pill, ...(isActive ? styles.pillOk : styles.pillMuted) }}>
+        <span
+          style={{
+            ...styles.pill,
+            ...(isActive ? styles.pillOk : styles.pillMuted),
+          }}
+        >
           {isActive ? "Active" : "Inactive"}
         </span>
       </div>
@@ -261,7 +266,12 @@ function AccountCard({ account }: { account: ChannelAccountSnapshot }) {
 
       {account.lastError && (
         <div
-          style={{ ...styles.callout, ...styles.calloutDanger, marginTop: 8, padding: "6px 10px" }}
+          style={{
+            ...styles.callout,
+            ...styles.calloutDanger,
+            marginTop: 8,
+            padding: "6px 10px",
+          }}
         >
           {account.lastError}
         </div>
@@ -424,7 +434,15 @@ export default function ChannelsPage() {
       </div>
 
       {error && (
-        <div style={{ ...styles.callout, ...styles.calloutDanger, marginBottom: 16 }}>{error}</div>
+        <div
+          style={{
+            ...styles.callout,
+            ...styles.calloutDanger,
+            marginBottom: 16,
+          }}
+        >
+          {error}
+        </div>
       )}
 
       <div style={styles.grid}>

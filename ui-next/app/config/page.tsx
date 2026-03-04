@@ -298,13 +298,19 @@ export default function ConfigPage() {
 
         <div style={styles.tabs}>
           <button
-            style={{ ...styles.tab, ...(formMode === "form" ? styles.tabActive : {}) }}
+            style={{
+              ...styles.tab,
+              ...(formMode === "form" ? styles.tabActive : {}),
+            }}
             onClick={() => setFormMode("form")}
           >
             Form
           </button>
           <button
-            style={{ ...styles.tab, ...(formMode === "raw" ? styles.tabActive : {}) }}
+            style={{
+              ...styles.tab,
+              ...(formMode === "raw" ? styles.tabActive : {}),
+            }}
             onClick={() => setFormMode("raw")}
           >
             Raw YAML

@@ -316,6 +316,7 @@ export type SessionSkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+  loadedSkills?: string[];
 };
 
 export type SessionSystemPromptReport = {

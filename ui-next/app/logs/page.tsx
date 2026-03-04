@@ -23,6 +23,84 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
 // Helpers
 // ============================================
 
+function parseMaybeJsonString(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLevel(value: unknown): LogLevel | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const lowered = value.toLowerCase() as LogLevel;
+  return LEVELS.includes(lowered) ? lowered : null;
+}
+
+function parseLogLine(line: string): LogEntry {
+  if (!line.trim()) {
+    return { raw: line, message: line };
+  }
+  try {
+    const obj = JSON.parse(line) as Record<string, unknown>;
+    const meta =
+      obj && typeof obj._meta === "object" && obj._meta !== null
+        ? (obj._meta as Record<string, unknown>)
+        : null;
+    const time =
+      typeof obj.time === "string" ? obj.time : typeof meta?.date === "string" ? meta?.date : null;
+    const level = normalizeLevel(meta?.logLevelName ?? meta?.level);
+
+    const contextCandidate =
+      typeof obj["0"] === "string" ? obj["0"] : typeof meta?.name === "string" ? meta?.name : null;
+    const contextObj = parseMaybeJsonString(contextCandidate);
+    let subsystem: string | null = null;
+    if (contextObj) {
+      if (typeof contextObj.subsystem === "string") {
+        subsystem = contextObj.subsystem;
+      } else if (typeof contextObj.module === "string") {
+        subsystem = contextObj.module;
+      }
+    }
+    if (!subsystem && contextCandidate && contextCandidate.length < 120) {
+      subsystem = contextCandidate;
+    }
+
+    let message: string | null = null;
+    if (typeof obj["1"] === "string") {
+      message = obj["1"];
+    } else if (!contextObj && typeof obj["0"] === "string") {
+      message = obj["0"];
+    } else if (typeof obj.message === "string") {
+      message = obj.message;
+    }
+
+    return {
+      raw: line,
+      time,
+      level,
+      subsystem,
+      message: message ?? line,
+      meta: meta ?? undefined,
+    };
+  } catch {
+    return { raw: line, message: line };
+  }
+}
+
 function formatTime(value?: string | null): string {
   if (!value) {
     return "";
@@ -272,10 +350,10 @@ function LevelChip({
 // Main Logs Page
 // ============================================
 
-type LogsResult = {
-  entries?: LogEntry[];
-  file?: string;
-  truncated?: boolean;
+type LogsTailResult = {
+  lines: string[];
+  file: string;
+  truncated: boolean;
 };
 
 export default function LogsPage() {
@@ -308,8 +386,9 @@ export default function LogsPage() {
     setError(null);
 
     try {
-      const res = await request<LogsResult>("logs.get", {});
-      setEntries(res.entries ?? []);
+      const res = await request<LogsTailResult>("logs.tail", {});
+      const parsedEntries = (res.lines || []).map(parseLogLine);
+      setEntries(parsedEntries);
       setFile(res.file ?? null);
       setTruncated(res.truncated ?? false);
     } catch (err) {

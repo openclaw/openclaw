@@ -8,8 +8,10 @@ import type {
   CronJobsListResult,
   CronRunsResult,
   CronRunLogEntry,
+  CronJobCreate,
 } from "@/lib/types";
 import { useGateway } from "@/lib/use-gateway";
+import { CreateJobModal } from "./create-job-modal";
 
 // ============================================
 // Helpers
@@ -281,7 +283,12 @@ function JobCard({
         <div style={styles.jobTitle}>{job.name}</div>
         <div style={styles.jobSub}>{job.description || formatScheduleText(job)}</div>
         <div style={styles.jobMeta}>
-          <span style={{ ...styles.chip, ...(job.enabled ? styles.chipOk : styles.chipWarn) }}>
+          <span
+            style={{
+              ...styles.chip,
+              ...(job.enabled ? styles.chipOk : styles.chipWarn),
+            }}
+          >
             {job.enabled ? "Enabled" : "Disabled"}
           </span>
           {lastStatus && (
@@ -360,11 +367,11 @@ export default function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [jobsTotal, setJobsTotal] = useState(0);
   const [filter, setFilter] = useState("");
-  const [enabledFilter, setEnabledFilter] = useState<"all" | "enabled" | "disabled">("all");
   const [busy, setBusy] = useState(false);
   const [runsJobId, setRunsJobId] = useState<string | null>(null);
   const [runs, setRuns] = useState<CronRunLogEntry[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   const loadStatus = useCallback(async () => {
     if (state !== "connected") {
@@ -388,10 +395,8 @@ export default function CronPage() {
     setError(null);
 
     try {
-      const res = await request<CronJobsListResult>("cron.jobs.list", {
-        query: filter || undefined,
-        enabled: enabledFilter === "all" ? undefined : enabledFilter === "enabled",
-        limit: 50,
+      const res = await request<CronJobsListResult>("cron.list", {
+        includeDisabled: true,
       });
       setJobs(res.jobs ?? []);
       setJobsTotal(res.total ?? 0);
@@ -400,7 +405,7 @@ export default function CronPage() {
     } finally {
       setLoading(false);
     }
-  }, [state, request, filter, enabledFilter]);
+  }, [state, request, filter]);
 
   const loadRuns = useCallback(
     async (jobId: string) => {
@@ -412,7 +417,7 @@ export default function CronPage() {
       setRunsJobId(jobId);
 
       try {
-        const res = await request<CronRunsResult>("cron.runs.list", {
+        const res = await request<CronRunsResult>("cron.runs", {
           jobId,
           limit: 20,
         });
@@ -430,7 +435,10 @@ export default function CronPage() {
     async (job: CronJob) => {
       setBusy(true);
       try {
-        await request("cron.jobs.toggle", { jobId: job.id, enabled: !job.enabled });
+        await request("cron.update", {
+          jobId: job.id,
+          patch: { enabled: !job.enabled },
+        });
         await loadJobs();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to toggle job");
@@ -445,7 +453,7 @@ export default function CronPage() {
     async (job: CronJob) => {
       setBusy(true);
       try {
-        await request("cron.jobs.run", { jobId: job.id });
+        await request("cron.run", { jobId: job.id });
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to run job");
@@ -464,7 +472,7 @@ export default function CronPage() {
 
       setBusy(true);
       try {
-        await request("cron.jobs.delete", { jobId: job.id });
+        await request("cron.remove", { jobId: job.id });
         await loadJobs();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to delete job");
@@ -481,6 +489,14 @@ export default function CronPage() {
       void loadJobs();
     }
   }, [state, loadStatus, loadJobs]);
+
+  const handleCreateJob = useCallback(
+    async (job: CronJobCreate) => {
+      await request("cron.add", job);
+      await loadJobs();
+    },
+    [request, loadJobs],
+  );
 
   const filteredJobs = jobs.filter((job) => {
     if (!filter) {
@@ -538,13 +554,30 @@ export default function CronPage() {
             <span style={styles.summaryValue}>{formatNextRun(status?.nextWakeAtMs)}</span>
           </div>
         </div>
-        <button style={styles.btn} disabled={isDisabled} onClick={loadJobs}>
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={styles.btn} disabled={isDisabled} onClick={loadJobs}>
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+          <button
+            style={{ ...styles.btn, ...styles.btnPrimary }}
+            disabled={isDisabled}
+            onClick={() => setShowCreate(true)}
+          >
+            Add Job
+          </button>
+        </div>
       </div>
 
       {error && (
-        <div style={{ ...styles.callout, ...styles.calloutDanger, marginBottom: 16 }}>{error}</div>
+        <div
+          style={{
+            ...styles.callout,
+            ...styles.calloutDanger,
+            marginBottom: 16,
+          }}
+        >
+          {error}
+        </div>
       )}
 
       {/* Jobs Card */}
@@ -567,18 +600,6 @@ export default function CronPage() {
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Name, description, or agent"
             />
-          </div>
-          <div style={styles.field}>
-            <span style={styles.label}>Status</span>
-            <select
-              style={styles.select}
-              value={enabledFilter}
-              onChange={(e) => setEnabledFilter(e.target.value as "all" | "enabled" | "disabled")}
-            >
-              <option value="all">All</option>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
-            </select>
           </div>
         </div>
 
@@ -626,6 +647,10 @@ export default function CronPage() {
             )}
           </div>
         </div>
+      )}
+
+      {showCreate && (
+        <CreateJobModal onClose={() => setShowCreate(false)} onSubmit={handleCreateJob} />
       )}
     </div>
   );

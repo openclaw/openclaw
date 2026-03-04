@@ -151,7 +151,7 @@ export function Topbar() {
               lineHeight: 1.1,
             }}
           >
-            OpenClaw
+            TEI - Agent
           </div>
           <div
             style={{

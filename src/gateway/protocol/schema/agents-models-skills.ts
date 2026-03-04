@@ -198,6 +198,15 @@ export const SkillsInstallParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsCreateParamsSchema = Type.Object(
+  {
+    skillKey: NonEmptyString,
+    description: NonEmptyString,
+    instructions: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsUpdateParamsSchema = Type.Object(
   {
     skillKey: NonEmptyString,

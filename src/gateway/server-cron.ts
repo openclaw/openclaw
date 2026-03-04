@@ -1,11 +1,15 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
@@ -19,6 +23,7 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { isMessageReceivedEvent, registerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -29,6 +34,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { stripInlineDirectiveTagsFromMessageForDisplay } from "../utils/directive-tags.js";
+import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
+import { appendInjectedAssistantMessageToTranscript } from "./server-methods/chat-transcript-inject.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -499,6 +508,163 @@ export function buildGatewayCronService(params: {
         });
       }
     },
+  });
+
+  registerInternalHook("message:received", async (evt) => {
+    if (!isMessageReceivedEvent(evt)) {
+      return;
+    }
+    const log = getChildLogger({ subsystem: "workflow" });
+    try {
+      const stateDir = resolveStateDir(process.env);
+      const filePath = path.join(stateDir, "workflows", "workflows.json");
+      if (!fs.existsSync(filePath)) {
+        return;
+      }
+
+      const data = fs.readFileSync(filePath, "utf-8");
+      const workflows = JSON.parse(data) as Array<{
+        name?: string;
+        nodes?: Array<{ id: string; type: string; data?: Record<string, string | undefined> }>;
+        edges?: Array<{ source: string; target: string }>;
+      }>;
+      const incomingSessionKey = evt.sessionKey;
+      const incomingMsg = typeof evt.context.content === "string" ? evt.context.content : "";
+
+      log.info(
+        `[Workflow] Incoming message received in session: ${incomingSessionKey}. Evaluating triggers...`,
+      );
+
+      if (!Array.isArray(workflows)) {
+        return;
+      }
+
+      for (const wf of workflows) {
+        if (!wf.nodes || !wf.edges) {
+          continue;
+        }
+        const triggers = wf.nodes.filter((n) => n.data?.triggerType === "chat");
+
+        for (const trigger of triggers) {
+          const targetSessionKey = trigger.data?.targetSessionKey;
+          const matchKeyword = trigger.data?.matchKeyword;
+
+          let match = false;
+          if (!targetSessionKey || targetSessionKey === "*") {
+            match = true;
+          } else {
+            match = incomingSessionKey === targetSessionKey;
+          }
+
+          if (match && matchKeyword && matchKeyword.trim() !== "") {
+            match = incomingMsg.toLowerCase().includes(matchKeyword.toLowerCase());
+          }
+
+          if (match) {
+            const visited = new Set<string>();
+            const queue: Array<{ nodeId: string; input: string }> = [];
+
+            const startEdges = wf.edges.filter((e) => e.source === trigger.id);
+            for (const startEdge of startEdges) {
+              queue.push({ nodeId: startEdge.target, input: incomingMsg });
+            }
+
+            while (queue.length > 0) {
+              const current = queue.shift();
+              if (!current) {
+                continue;
+              }
+
+              // Cycle Detection: Prevent infinite loops
+              if (visited.has(current.nodeId)) {
+                continue;
+              }
+              visited.add(current.nodeId);
+
+              const actionNode = wf.nodes.find((n) => n.id === current.nodeId);
+              if (!actionNode || actionNode.type !== "action") {
+                continue;
+              }
+
+              const actionType = actionNode.data?.actionType;
+              let jobSessionKey: string = incomingSessionKey;
+
+              if (actionType === "ai-agent" || actionType === "agent-prompt") {
+                let prompt = actionNode.data?.prompt || "";
+                prompt = prompt.replace(/\{\{input\}\}/g, current.input);
+                if (targetSessionKey && targetSessionKey !== "*") {
+                  jobSessionKey = targetSessionKey;
+                }
+
+                enqueueSystemEvent(`[Workflow Prompt]: ${prompt}`, { sessionKey: jobSessionKey });
+                requestHeartbeatNow({ sessionKey: jobSessionKey, reason: "workflow_action" });
+              } else if (actionType === "system-event") {
+                let text = actionNode.data?.systemEventText || "System Event Occurred";
+                text = text.replace(/\{\{input\}\}/g, current.input);
+                jobSessionKey = incomingSessionKey;
+                enqueueSystemEvent(text, { sessionKey: jobSessionKey });
+              } else if (actionType === "send-message") {
+                let body = actionNode.data?.messageBody || "";
+                body = body.replace(/\{\{input\}\}/g, current.input);
+                if (targetSessionKey && targetSessionKey !== "*") {
+                  jobSessionKey = targetSessionKey;
+                }
+
+                const { cfg, storePath, entry } = loadSessionEntry(jobSessionKey);
+                const sessionId = entry?.sessionId;
+                if (sessionId && storePath) {
+                  const agentId = resolveSessionAgentId({
+                    sessionKey: jobSessionKey,
+                    config: cfg,
+                  });
+                  const sessionsDir = path.dirname(storePath);
+                  let transcriptPath: string | null = null;
+                  try {
+                    transcriptPath = resolveSessionFilePath(
+                      sessionId,
+                      entry?.sessionFile ? { sessionFile: entry.sessionFile } : undefined,
+                      sessionsDir || agentId ? { sessionsDir, agentId } : undefined,
+                    );
+                  } catch {
+                    // ignore
+                  }
+                  if (transcriptPath) {
+                    if (!fs.existsSync(transcriptPath)) {
+                      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+                      fs.writeFileSync(transcriptPath, "");
+                    }
+                    const appended = appendInjectedAssistantMessageToTranscript({
+                      message: body,
+                      transcriptPath,
+                    });
+                    if (appended.ok && appended.messageId && appended.message) {
+                      const chatPayload = {
+                        runId: `wf-${appended.messageId}`,
+                        sessionKey: jobSessionKey,
+                        seq: 0,
+                        state: "final" as const,
+                        message: stripInlineDirectiveTagsFromMessageForDisplay(
+                          stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
+                        ),
+                      };
+                      params.broadcast("chat", chatPayload);
+                    }
+                  }
+                }
+              }
+
+              // Traversal: Find next nodes connected to the current one
+              const nextEdges = wf.edges.filter((e) => e.source === current.nodeId);
+              for (const nextEdge of nextEdges) {
+                queue.push({ nodeId: nextEdge.target, input: current.input });
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      cronLogger.warn({ err: String(e) }, "cron: workflow trigger matching failed");
+    }
   });
 
   return { cron, storePath, cronEnabled };

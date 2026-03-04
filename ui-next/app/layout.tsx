@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "OpenClaw",
-  description: "OpenClaw Control UI",
+  title: "TEI Agent",
+  description: "TEI Agent Control UI",
 };
 
 export default function RootLayout({

@@ -9,12 +9,13 @@ import type {
   AgentsFilesSetResult,
 } from "@/lib/types";
 import { useGateway } from "@/lib/use-gateway";
+import { ToolsPanel } from "./tools-panel";
 
 // ============================================
 // Types
 // ============================================
 
-type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+type AgentsPanel = "overview" | "files" | "tools";
 
 // ============================================
 // Helpers
@@ -307,9 +308,6 @@ const TABS: Array<{ id: AgentsPanel; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "files", label: "Files" },
   { id: "tools", label: "Tools" },
-  { id: "skills", label: "Skills" },
-  { id: "channels", label: "Channels" },
-  { id: "cron", label: "Cron Jobs" },
 ];
 
 // ============================================
@@ -542,7 +540,10 @@ function FileEditor({ agentId, fileName, filePath, onClose, onSaved, request }: 
               borderBottom: "1px solid var(--border)",
               ...(error
                 ? { background: "var(--danger-subtle)", color: "var(--danger)" }
-                : { background: "var(--ok-subtle, rgba(34,197,94,0.1))", color: "var(--ok)" }),
+                : {
+                    background: "var(--ok-subtle, rgba(34,197,94,0.1))",
+                    color: "var(--ok)",
+                  }),
             }}
           >
             {error ?? "✓ File saved successfully"}
@@ -793,7 +794,13 @@ function FilesPanel({ agentId, filesLoading, filesResult, onRefresh, request }: 
                       {formatBytes(file.sizeBytes ?? file.size)}
                     </span>
                   )}
-                  <span style={{ fontSize: 12, color: "var(--accent)", flexShrink: 0 }}>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: "var(--accent)",
+                      flexShrink: 0,
+                    }}
+                  >
                     Edit →
                   </span>
                 </div>
@@ -1055,19 +1062,8 @@ export default function AgentsPage() {
                   />
                 )}
 
-                {(activePanel === "tools" ||
-                  activePanel === "skills" ||
-                  activePanel === "channels" ||
-                  activePanel === "cron") && (
-                  <div
-                    style={{
-                      ...styles.muted,
-                      padding: 40,
-                      textAlign: "center",
-                    }}
-                  >
-                    {activePanel.charAt(0).toUpperCase() + activePanel.slice(1)} panel coming soon.
-                  </div>
+                {activePanel === "tools" && selectedAgentId && (
+                  <ToolsPanel agentId={selectedAgentId} request={request} />
                 )}
               </div>
             </>

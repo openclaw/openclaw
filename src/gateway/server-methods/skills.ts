@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -17,6 +19,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateSkillsBinsParams,
+  validateSkillsCreateParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
@@ -142,6 +145,35 @@ export const skillsHandlers: GatewayRequestHandlers = {
       result,
       result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
     );
+  },
+  "skills.create": async ({ params, respond }) => {
+    if (!validateSkillsCreateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.create params: ${formatValidationErrors(validateSkillsCreateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      skillKey: string;
+      description: string;
+      instructions: string;
+    };
+    const cfg = loadConfig();
+    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const skillPath = path.join(workspaceDirRaw, "skills", p.skillKey);
+    try {
+      await fs.mkdir(skillPath, { recursive: true });
+      const content = `---\nname: ${p.skillKey}\ndescription: ${p.description}\n---\n\n${p.instructions}\n`;
+      await fs.writeFile(path.join(skillPath, "SKILL.md"), content, "utf-8");
+      respond(true, { ok: true, skillKey: p.skillKey }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    }
   },
   "skills.update": async ({ params, respond }) => {
     if (!validateSkillsUpdateParams(params)) {

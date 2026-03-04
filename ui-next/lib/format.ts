@@ -149,6 +149,8 @@ export function formatNextRun(ms?: number | null): string {
   if (!ms) {
     return "n/a";
   }
-  const weekday = new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
+  const weekday = new Date(ms).toLocaleDateString(undefined, {
+    weekday: "short",
+  });
   return `${weekday}, ${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
 }
