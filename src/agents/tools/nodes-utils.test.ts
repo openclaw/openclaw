@@ -133,6 +133,17 @@ describe("resolveCanvasNodeIds", () => {
     expect(ids).toEqual(["pair-1", "pair-2"]);
   });
 
+  it("throws when all canvas nodes are explicitly disconnected", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: false },
+        { nodeId: "ios-1", caps: ["canvas"], connected: false },
+      ],
+    });
+
+    await expect(resolveCanvasNodeIds({})).rejects.toThrow("no connected canvas-capable nodes");
+  });
+
   it("resolves to a single node when a query is provided", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({
       nodes: [
