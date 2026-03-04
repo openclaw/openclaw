@@ -94,7 +94,11 @@ export function resolveTranscriptPolicy(params: {
     (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
     modelId.toLowerCase().includes("gemini");
   const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
-  const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
+  // Only sanitize tool call IDs for first-party OpenAI endpoints.
+  // Custom openai-completions providers (e.g. Ollama, vLLM) are excluded
+  // because sanitized IDs can cause models to return empty tool names on turn 2+ (#33438).
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" && isOpenAi;
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
