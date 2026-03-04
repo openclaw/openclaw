@@ -19,6 +19,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { sanitizeForPromptLiteral } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
@@ -390,31 +391,18 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
 }
 
 function sanitizeUntrustedInstructionText(text: string): string {
-  const filteredChars: string[] = [];
-  for (const char of text) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint === undefined) {
-      continue;
-    }
-    if (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d) {
-      filteredChars.push(char);
-      continue;
-    }
-    if (codePoint >= 0x20 && codePoint !== 0x7f) {
-      filteredChars.push(char);
-    }
-  }
-  const withoutControlChars = filteredChars.join("");
-  const withoutInvisibles = withoutControlChars
-    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/gu, "")
-    .trim();
-  if (!withoutInvisibles) {
+  const normalizedLines = text.replace(/\r\n?/g, "\n").split("\n");
+  const withoutUnsafeChars = normalizedLines
+    .map((line) => sanitizeForPromptLiteral(line))
+    .join("\n");
+  const trimmed = withoutUnsafeChars.trim();
+  if (!trimmed) {
     return "";
   }
   const capped =
-    withoutInvisibles.length > MAX_UNTRUSTED_INSTRUCTION_CHARS
-      ? withoutInvisibles.slice(0, MAX_UNTRUSTED_INSTRUCTION_CHARS)
-      : withoutInvisibles;
+    trimmed.length > MAX_UNTRUSTED_INSTRUCTION_CHARS
+      ? trimmed.slice(0, MAX_UNTRUSTED_INSTRUCTION_CHARS)
+      : trimmed;
   return capped.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
