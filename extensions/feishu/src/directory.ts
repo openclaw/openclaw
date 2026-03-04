@@ -105,7 +105,8 @@ export async function listFeishuDirectoryPeersLive(params: {
     });
 
     if (response.code === 0 && response.data?.items) {
-      for (const user of response.data.items) {
+      const users = response.data?.items ?? [];
+      for (const user of users) {
         if (user.open_id) {
           const q = params.query?.trim().toLowerCase() || "";
           const name = user.name || "";
@@ -124,7 +125,11 @@ export async function listFeishuDirectoryPeersLive(params: {
     }
 
     return peers;
-  } catch {
+  } catch (err) {
+    console.error("Failed to fetch Feishu user directory:", {
+      accountId: account.accountId,
+      error: err,
+    });
     return listFeishuDirectoryPeers(params);
   }
 }
@@ -152,7 +157,8 @@ export async function listFeishuDirectoryGroupsLive(params: {
     });
 
     if (response.code === 0 && response.data?.items) {
-      for (const chat of response.data.items) {
+      const chats = response.data?.items ?? [];
+      for (const chat of chats) {
         if (chat.chat_id) {
           const q = params.query?.trim().toLowerCase() || "";
           const name = chat.name || "";
@@ -171,7 +177,11 @@ export async function listFeishuDirectoryGroupsLive(params: {
     }
 
     return groups;
-  } catch {
+  } catch (err) {
+    console.error("Failed to fetch Feishu group directory:", {
+      accountId: account.accountId,
+      error: err,
+    });
     return listFeishuDirectoryGroups(params);
   }
 }

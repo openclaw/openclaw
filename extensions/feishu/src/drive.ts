@@ -92,7 +92,8 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
   if (effectiveToken === "0") {
     try {
       effectiveToken = await getRootFolderToken(client);
-    } catch {
+    } catch (err) {
+      console.error("Failed to get root folder token:", { error: err });
       // ignore and keep "0"
     }
   }
