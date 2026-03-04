@@ -88,7 +88,7 @@ describe("createAccountListHelpers", () => {
           testchannel: {
             botToken: "xoxb-base",
             appToken: "xapp-base",
-            accounts: { tank: { botToken: "xoxb-tank" } },
+            accounts: { tank: { botToken: "xoxb-tank", appToken: "xapp-tank" } },
           },
         },
       } as unknown as OpenClawConfig;
@@ -106,6 +106,32 @@ describe("createAccountListHelpers", () => {
       } as unknown as OpenClawConfig;
       // teamB inherits base tokens — injecting default would duplicate teamB
       expect(listAccountIds(config)).toEqual(["teamA", "teamB"]);
+    });
+
+    it("does NOT inject default when account partially overrides (only appToken)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { teamA: { appToken: "xapp-own" } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // teamA overrides appToken but inherits botToken — still same bot identity
+      expect(listAccountIds(config)).toEqual(["teamA"]);
+    });
+
+    it("does NOT inject default when base token is whitespace-only", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "   ",
+            accounts: { teamA: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["teamA"]);
     });
 
     it("does NOT inject default when named accounts inherit base tokens (avoids duplicates)", () => {
