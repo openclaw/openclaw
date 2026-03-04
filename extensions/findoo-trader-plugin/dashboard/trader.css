@@ -1,0 +1,205 @@
+/* ════════════════════════════════════════════════════════════════
+   Trader Tab — Page-specific CSS
+   ════════════════════════════════════════════════════════════════ */
+
+/* Domain switcher */
+.domain-switcher {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--r-sm);
+  padding: 2px;
+}
+.domain-btn {
+  font-size: 9px;
+  font-weight: 600;
+  font-family: var(--mono);
+  padding: 3px 8px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  transition: all 0.15s;
+  letter-spacing: 0.03em;
+}
+.domain-btn:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.06);
+}
+.domain-btn.active {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.1);
+}
+.domain-btn--live.active {
+  color: var(--gain);
+  background: var(--gain-dim);
+}
+.domain-btn--paper.active {
+  color: var(--info);
+  background: var(--info-dim);
+}
+.domain-btn--backtest.active {
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Domain indicator */
+.domain-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.domain-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.domain-dot--live {
+  background: var(--gain);
+  box-shadow: 0 0 4px var(--gain);
+}
+.domain-dot--paper {
+  background: var(--info);
+  box-shadow: 0 0 4px var(--info);
+}
+.domain-dot--backtest {
+  background: var(--text-dim);
+}
+
+/* Buying power */
+.buying-power {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.buying-power__label {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+.buying-power__bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.buying-power__bar-fill {
+  height: 100%;
+  background: var(--gain);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+.buying-power__val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-hi);
+  white-space: nowrap;
+}
+
+/* Position detail row */
+.pos-detail-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 10px;
+  border-bottom: 1px solid rgba(35, 41, 58, 0.3);
+}
+.pos-detail-row__sym {
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.pos-row__side {
+  font-size: 8px;
+  font-weight: 700;
+  font-family: var(--mono);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.pos-row__side--long {
+  color: var(--gain);
+  background: var(--gain-dim);
+}
+.pos-row__side--short {
+  color: var(--loss);
+  background: var(--loss-dim);
+}
+.pos-row__close {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: all 0.15s;
+}
+.pos-row__close:hover {
+  background: var(--loss-dim);
+  color: var(--loss);
+}
+.pos-total {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+/* Quick order form inline */
+.order-form-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+.order-input {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+}
+.order-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Toast */
+.toast-container {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.toast {
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-hi);
+  opacity: 0;
+  transform: translateX(20px);
+  transition: all 0.3s;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+.toast--success {
+  border-color: var(--gain);
+}
+.toast--error {
+  border-color: var(--loss);
+}

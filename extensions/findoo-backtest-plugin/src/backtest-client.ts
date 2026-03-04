@@ -76,7 +76,7 @@ export class BacktestClient {
 
     const headers: Record<string, string> = {};
     if (this.apiKey) {
-      headers["Authorization"] = `Bearer ${this.apiKey}`;
+      headers["X-API-Key"] = this.apiKey;
     }
 
     const resp = await fetch(`${this.base}/backtests/upload`, {
@@ -104,7 +104,7 @@ export class BacktestClient {
   private headers(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
     if (this.apiKey) {
-      h["Authorization"] = `Bearer ${this.apiKey}`;
+      h["X-API-Key"] = this.apiKey;
     }
     return h;
   }

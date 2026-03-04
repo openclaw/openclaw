@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenFinClaw — Setting</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /*__SHARED_CSS__*/
+    </style>
+    <style>
+      /*__PAGE_CSS__*/
+    </style>
+  </head>
+  <body>
+    <script>
+      var pageData = /*__PAGE_DATA__*/ {};
+    </script>
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <span class="topbar__logo">OPENFINCLAW</span>
+      <div class="topbar__sep"></div>
+      <div class="topbar__eq">
+        <span class="topbar__eq-val num" id="eqVal">--</span>
+        <span class="topbar__eq-chg num" id="eqChg"></span>
+      </div>
+      <div class="topbar__sep"></div>
+      <nav class="topbar__nav">
+        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item active" href="/dashboard/setting">Setting</a>
+      </nav>
+      <div class="topbar__fill"></div>
+      <div class="topbar__sse" id="sseDots" title="SSE connections">
+        <span class="sse-dot" id="sseConfig" title="Config"></span>
+      </div>
+      <span class="topbar__clock num" id="clock">--:--</span>
+    </header>
+
+    <!-- SETTING LAYOUT -->
+    <div class="setting-layout">
+      <!-- LEFT NAV -->
+      <nav class="setting-nav">
+        <button class="setting-nav-item setting-nav-item--active" data-section="exchanges" onclick="SE.goSection('exchanges')">Exchanges</button>
+        <button class="setting-nav-item" data-section="risk" onclick="SE.goSection('risk')">Risk Management</button>
+        <button class="setting-nav-item" data-section="agent" onclick="SE.goSection('agent')">Agent Behavior</button>
+        <button class="setting-nav-item" data-section="gates" onclick="SE.goSection('gates')">Promotion Gates</button>
+        <button class="setting-nav-item" data-section="notifications" onclick="SE.goSection('notifications')">Notifications</button>
+        <button class="setting-nav-item" data-section="plugins" onclick="SE.goSection('plugins')">Plugins</button>
+        <button class="setting-nav-item" data-section="advanced" onclick="SE.goSection('advanced')">Advanced</button>
+      </nav>
+
+      <!-- RIGHT CONTENT -->
+      <div class="setting-content" id="settingContent">
+
+        <!-- Section: Exchanges -->
+        <section class="setting-section" id="section-exchanges">
+          <h2 class="setting-section__title">Exchange Connections</h2>
+          <p class="setting-section__desc">Manage your connected exchanges. Add API keys, test connections, and monitor health.</p>
+          <div class="exchange-grid" id="exchangeGrid"></div>
+          <button class="add-btn" onclick="SE.openAddExchange()">+ Add Exchange</button>
+        </section>
+
+        <!-- Section: Risk Management -->
+        <section class="setting-section" id="section-risk">
+          <h2 class="setting-section__title">Risk Management</h2>
+          <p class="setting-section__desc">Configure risk limits and trading constraints.</p>
+
+          <div class="preset-row">
+            <button class="preset-btn" onclick="SE.applyRiskPreset('conservative')">Conservative</button>
+            <button class="preset-btn preset-btn--active" onclick="SE.applyRiskPreset('balanced')">Balanced</button>
+            <button class="preset-btn" onclick="SE.applyRiskPreset('aggressive')">Aggressive</button>
+          </div>
+
+          <div class="setting-form" id="riskForm">
+            <div class="setting-field">
+              <label class="setting-field__label">Max Auto Trade (USD)</label>
+              <input type="number" id="riskMaxAuto" class="setting-input" step="1" />
+              <span class="setting-field__hint">Orders above this require confirmation</span>
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Confirm Threshold (USD)</label>
+              <input type="number" id="riskConfirm" class="setting-input" step="1" />
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Max Daily Loss (USD)</label>
+              <input type="number" id="riskDailyLoss" class="setting-input" step="1" />
+              <span class="setting-field__hint">Trading pauses when daily loss exceeds this</span>
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Max Position (%)</label>
+              <input type="number" id="riskMaxPos" class="setting-input" step="0.1" min="0" max="100" />
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Max Leverage</label>
+              <input type="number" id="riskMaxLev" class="setting-input" step="0.1" min="1" />
+            </div>
+            <button class="save-btn" onclick="SE.saveRisk()">Save Risk Config</button>
+          </div>
+        </section>
+
+        <!-- Section: Agent Behavior -->
+        <section class="setting-section" id="section-agent">
+          <h2 class="setting-section__title">Agent Behavior</h2>
+          <p class="setting-section__desc">Control how the AI agent discovers, evolves, and manages strategies.</p>
+
+          <div class="setting-form" id="agentForm">
+            <div class="setting-field">
+              <label class="setting-field__label">Heartbeat Interval (ms)</label>
+              <input type="number" id="agentHeartbeat" class="setting-input" step="1000" />
+            </div>
+            <div class="setting-toggle-row">
+              <label class="setting-field__label">Discovery Enabled</label>
+              <label class="toggle">
+                <input type="checkbox" id="agentDiscovery" />
+                <span class="toggle__slider"></span>
+              </label>
+            </div>
+            <div class="setting-toggle-row">
+              <label class="setting-field__label">Evolution Enabled</label>
+              <label class="toggle">
+                <input type="checkbox" id="agentEvolution" />
+                <span class="toggle__slider"></span>
+              </label>
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Mutation Rate</label>
+              <input type="number" id="agentMutRate" class="setting-input" step="0.01" min="0" max="1" />
+            </div>
+            <div class="setting-field">
+              <label class="setting-field__label">Max Concurrent Strategies</label>
+              <input type="number" id="agentMaxStrats" class="setting-input" step="1" min="1" />
+            </div>
+            <button class="save-btn" onclick="SE.saveAgent()">Save Agent Config</button>
+          </div>
+        </section>
+
+        <!-- Section: Promotion Gates -->
+        <section class="setting-section" id="section-gates">
+          <h2 class="setting-section__title">Promotion Gates</h2>
+          <p class="setting-section__desc">Define thresholds for strategy promotion through the pipeline.</p>
+
+          <div class="setting-form" id="gatesForm">
+            <div class="gate-group">
+              <h3 class="gate-group__title" style="color: var(--l1)">L0 &#8594; L1 (Incubate &#8594; Backtest)</h3>
+              <div class="gate-fields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Days</label>
+                  <input type="number" id="gate01Days" class="setting-input setting-input--sm" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Sharpe</label>
+                  <input type="number" id="gate01Sharpe" class="setting-input setting-input--sm" step="0.1" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Max DD</label>
+                  <input type="number" id="gate01DD" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Win%</label>
+                  <input type="number" id="gate01Win" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Trades</label>
+                  <input type="number" id="gate01Trades" class="setting-input setting-input--sm" />
+                </div>
+              </div>
+            </div>
+
+            <div class="gate-group">
+              <h3 class="gate-group__title" style="color: var(--l2)">L1 &#8594; L2 (Backtest &#8594; Paper)</h3>
+              <div class="gate-fields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Days</label>
+                  <input type="number" id="gate12Days" class="setting-input setting-input--sm" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Sharpe</label>
+                  <input type="number" id="gate12Sharpe" class="setting-input setting-input--sm" step="0.1" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Max DD</label>
+                  <input type="number" id="gate12DD" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Win%</label>
+                  <input type="number" id="gate12Win" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Trades</label>
+                  <input type="number" id="gate12Trades" class="setting-input setting-input--sm" />
+                </div>
+              </div>
+            </div>
+
+            <div class="gate-group">
+              <h3 class="gate-group__title" style="color: var(--l3)">L2 &#8594; L3 (Paper &#8594; Live)</h3>
+              <div class="gate-fields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Days</label>
+                  <input type="number" id="gate23Days" class="setting-input setting-input--sm" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Sharpe</label>
+                  <input type="number" id="gate23Sharpe" class="setting-input setting-input--sm" step="0.1" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Max DD</label>
+                  <input type="number" id="gate23DD" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Win%</label>
+                  <input type="number" id="gate23Win" class="setting-input setting-input--sm" step="0.01" />
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Min Trades</label>
+                  <input type="number" id="gate23Trades" class="setting-input setting-input--sm" />
+                </div>
+              </div>
+            </div>
+
+            <button class="save-btn" onclick="SE.saveGates()">Save Gate Config</button>
+          </div>
+        </section>
+
+        <!-- Section: Notifications -->
+        <section class="setting-section" id="section-notifications">
+          <h2 class="setting-section__title">Notifications</h2>
+          <p class="setting-section__desc">Configure notification channels for trading alerts and events.</p>
+
+          <div class="setting-form">
+            <div class="notif-card">
+              <div class="notif-card__head">
+                <span class="notif-card__name">Telegram</span>
+                <label class="toggle">
+                  <input type="checkbox" id="notifTelegram" />
+                  <span class="toggle__slider"></span>
+                </label>
+              </div>
+              <div class="notif-card__desc">Receive alerts via Telegram bot</div>
+            </div>
+            <div class="notif-card">
+              <div class="notif-card__head">
+                <span class="notif-card__name">Discord</span>
+                <label class="toggle">
+                  <input type="checkbox" id="notifDiscord" />
+                  <span class="toggle__slider"></span>
+                </label>
+              </div>
+              <div class="notif-card__desc">Receive alerts via Discord webhook</div>
+            </div>
+            <div class="notif-card">
+              <div class="notif-card__head">
+                <span class="notif-card__name">Email</span>
+                <label class="toggle">
+                  <input type="checkbox" id="notifEmail" />
+                  <span class="toggle__slider"></span>
+                </label>
+              </div>
+              <div class="notif-card__desc">Receive alerts via email</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Plugins -->
+        <section class="setting-section" id="section-plugins">
+          <h2 class="setting-section__title">Plugin Status</h2>
+          <p class="setting-section__desc">View installed financial plugins and their status.</p>
+          <div id="pluginList"></div>
+        </section>
+
+        <!-- Section: Advanced -->
+        <section class="setting-section" id="section-advanced">
+          <h2 class="setting-section__title">Advanced</h2>
+          <p class="setting-section__desc">Danger zone. These actions cannot be easily undone.</p>
+
+          <div class="danger-zone">
+            <div class="danger-action">
+              <div>
+                <div class="danger-action__title">Export Configuration</div>
+                <div class="danger-action__desc">Download all settings as JSON</div>
+              </div>
+              <button class="btn-outline" onclick="SE.exportConfig()">Export</button>
+            </div>
+            <div class="danger-action danger-action--destructive">
+              <div>
+                <div class="danger-action__title">Reset All Settings</div>
+                <div class="danger-action__desc">Reset all configuration to defaults. This cannot be undone.</div>
+              </div>
+              <button class="btn-danger" onclick="SE.confirmReset()">Reset</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <footer class="botbar">
+      <div class="botbar__avatar"></div>
+      <div class="botbar__msg" id="botMsg">Loading Settings...</div>
+      <div class="botbar__sse" id="botSse"></div>
+    </footer>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- MODAL: ADD EXCHANGE -->
+    <div class="modal-bg" id="addExchangeModal">
+      <div class="modal-box" style="max-width: 400px">
+        <div class="modal-box__title">Add Exchange</div>
+        <form id="addExchangeForm" onsubmit="event.preventDefault(); SE.submitAddExchange();">
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Exchange</label>
+            <select id="addExchType" style="width: 100%">
+              <option value="binance">Binance</option>
+              <option value="bybit">Bybit</option>
+              <option value="okx">OKX</option>
+              <option value="bitget">Bitget</option>
+              <option value="gate">Gate.io</option>
+              <option value="htx">HTX</option>
+            </select>
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">API Key</label>
+            <input name="apiKey" type="password" autocomplete="off" style="width: 100%" required />
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Secret</label>
+            <input name="secret" type="password" autocomplete="off" style="width: 100%" required />
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Passphrase (optional)</label>
+            <input name="passphrase" type="password" autocomplete="off" style="width: 100%" />
+          </div>
+          <div class="fg" style="margin-bottom: 10px">
+            <label class="fg__label">Label (optional)</label>
+            <input name="label" style="width: 100%" placeholder="my-binance" />
+          </div>
+          <div class="setting-toggle-row" style="margin-bottom: 12px">
+            <label class="setting-field__label">Testnet Mode</label>
+            <label class="toggle">
+              <input type="checkbox" name="testnet" />
+              <span class="toggle__slider"></span>
+            </label>
+          </div>
+          <div class="modal-box__actions">
+            <button type="button" class="modal-btn modal-btn--cancel" onclick="SE.closeAddExchange()">Cancel</button>
+            <button type="submit" class="modal-btn modal-btn--primary">Add Exchange</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL: CONFIRM RESET -->
+    <div class="modal-bg" id="resetModal">
+      <div class="modal-box">
+        <div class="modal-box__icon" style="color: var(--loss)">&#9888;</div>
+        <div class="modal-box__title">Reset All Settings</div>
+        <div class="modal-box__desc">
+          This will reset all configuration to defaults.<br />
+          All exchange connections will be removed.<br /><br />
+          <strong style="color: var(--text-hi)">This cannot be undone.</strong>
+        </div>
+        <div class="modal-box__actions">
+          <button class="modal-btn modal-btn--cancel" onclick="SE.closeReset()">Cancel</button>
+          <button class="modal-btn modal-btn--danger" onclick="SE.executeReset()">RESET ALL</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- JAVASCRIPT -->
+    <script>
+      (function () {
+        "use strict";
+
+        // ── Helpers ──
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function fmt(n, d) {
+          if (n == null) return "--";
+          return Number(n).toLocaleString("en-US", {
+            minimumFractionDigits: d || 0,
+            maximumFractionDigits: d || 0,
+          });
+        }
+        function fmtUsd(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + "$" + fmt(Math.abs(v), 2);
+        }
+        function fmtPct(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+        }
+        function pnlClass(n) {
+          return Number(n) >= 0 ? "gain" : "loss";
+        }
+        function esc(s) {
+          var d = document.createElement("div");
+          d.textContent = s || "";
+          return d.innerHTML;
+        }
+
+        // ── Clock ──
+        function tick() {
+          var n = new Date();
+          $("clock").textContent =
+            String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
+        }
+        tick();
+        setInterval(tick, 10000);
+
+        // ── Toast ──
+        function toast(msg, type) {
+          var el = document.createElement("div");
+          el.className = "toast" + (type ? " toast--" + type : "");
+          el.textContent = msg;
+          $("toastContainer").appendChild(el);
+          requestAnimationFrame(function () {
+            el.classList.add("show");
+          });
+          setTimeout(function () {
+            el.classList.remove("show");
+            setTimeout(function () {
+              el.remove();
+            }, 300);
+          }, 3000);
+        }
+
+        // ── State ──
+        var state = {
+          exchanges: pageData.exchanges || [],
+          exchangeHealth: pageData.exchangeHealth || [],
+          trading: pageData.trading || {},
+          agent: pageData.agent || {},
+          gates: pageData.gates || {},
+          notifications: pageData.notifications || {},
+          plugins: pageData.plugins || {},
+        };
+
+        // ── POST/PUT API helpers ──
+        function postApi(url, body) {
+          return fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        function putApi(url, body) {
+          return fetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        // ── Risk presets ──
+        var RISK_PRESETS = {
+          conservative: { maxAutoTradeUsd: 50, confirmThresholdUsd: 100, maxDailyLossUsd: 200, maxPositionPct: 5, maxLeverage: 1 },
+          balanced: { maxAutoTradeUsd: 200, confirmThresholdUsd: 500, maxDailyLossUsd: 1000, maxPositionPct: 10, maxLeverage: 3 },
+          aggressive: { maxAutoTradeUsd: 1000, confirmThresholdUsd: 2000, maxDailyLossUsd: 5000, maxPositionPct: 25, maxLeverage: 10 },
+        };
+
+        // ── Render: Exchanges ──
+        function renderExchanges(exchanges, health) {
+          var grid = $("exchangeGrid");
+          if (!exchanges || !exchanges.length) {
+            grid.innerHTML =
+              '<div class="exchange-empty">No exchanges connected. Add one to start trading.</div>';
+            return;
+          }
+          var healthMap = {};
+          (health || []).forEach(function (h) {
+            healthMap[h.exchangeId] = h;
+          });
+
+          var html = "";
+          exchanges.forEach(function (ex) {
+            var h = healthMap[ex.id] || {};
+            var connected = h.connected;
+            var latency = h.lastPingMs || 0;
+            var statusCls = connected ? "exchange-card--ok" : "exchange-card--err";
+            var statusDot = connected ? "gain" : "loss";
+
+            html +=
+              '<div class="exchange-card ' + statusCls + '" data-id="' + esc(ex.id) + '">' +
+              '<div class="exchange-card__head">' +
+              '<span class="exchange-card__name">' + esc(ex.exchange || ex.id) + "</span>" +
+              (ex.testnet ? '<span class="exchange-card__testnet">TESTNET</span>' : "") +
+              "</div>" +
+              '<div class="exchange-card__status">' +
+              '<span class="exchange-card__dot ' + statusDot + '"></span>' +
+              '<span>' + (connected ? "Connected" : "Disconnected") + "</span>" +
+              (latency > 0 ? '<span class="num" style="margin-left:auto">' + latency + "ms</span>" : "") +
+              "</div>" +
+              '<div class="exchange-card__id num">' + esc(ex.id) + "</div>" +
+              '<div class="exchange-card__actions">' +
+              '<button class="btn-sm" onclick="SE.testExchange(\'' + esc(ex.id) + '\')">Test</button>' +
+              '<button class="btn-sm btn-sm--danger" onclick="SE.removeExchange(\'' + esc(ex.id) + '\')">Remove</button>' +
+              "</div>" +
+              "</div>";
+          });
+          grid.innerHTML = html;
+        }
+
+        // ── Render: Risk form ──
+        function renderRiskForm(trading) {
+          var t = trading || {};
+          $("riskMaxAuto").value = t.maxAutoTradeUsd || 200;
+          $("riskConfirm").value = t.confirmThresholdUsd || 500;
+          $("riskDailyLoss").value = t.maxDailyLossUsd || 1000;
+          $("riskMaxPos").value = t.maxPositionPct || 10;
+          $("riskMaxLev").value = t.maxLeverage || 3;
+        }
+
+        // ── Render: Agent form ──
+        function renderAgentForm(agent) {
+          var a = agent || {};
+          $("agentHeartbeat").value = a.heartbeatIntervalMs || 60000;
+          $("agentDiscovery").checked = a.discoveryEnabled !== false;
+          $("agentEvolution").checked = a.evolutionEnabled === true;
+          $("agentMutRate").value = a.mutationRate || 0.1;
+          $("agentMaxStrats").value = a.maxConcurrentStrategies || 5;
+        }
+
+        // ── Render: Gates form ──
+        function renderGatesForm(gates) {
+          var g = gates || {};
+          var l01 = g.l0l1 || {};
+          var l12 = g.l1l2 || {};
+          var l23 = g.l2l3 || {};
+
+          $("gate01Days").value = l01.minDays || 7;
+          $("gate01Sharpe").value = l01.minSharpe || 0.5;
+          $("gate01DD").value = l01.maxDrawdown || -0.2;
+          $("gate01Win").value = l01.minWinRate || 0.4;
+          $("gate01Trades").value = l01.minTrades || 10;
+
+          $("gate12Days").value = l12.minDays || 14;
+          $("gate12Sharpe").value = l12.minSharpe || 1.0;
+          $("gate12DD").value = l12.maxDrawdown || -0.15;
+          $("gate12Win").value = l12.minWinRate || 0.45;
+          $("gate12Trades").value = l12.minTrades || 30;
+
+          $("gate23Days").value = l23.minDays || 30;
+          $("gate23Sharpe").value = l23.minSharpe || 1.5;
+          $("gate23DD").value = l23.maxDrawdown || -0.1;
+          $("gate23Win").value = l23.minWinRate || 0.5;
+          $("gate23Trades").value = l23.minTrades || 50;
+        }
+
+        // ── Render: Notifications ──
+        function renderNotifications(notif) {
+          var n = notif || {};
+          $("notifTelegram").checked = n.telegram && n.telegram.enabled;
+          $("notifDiscord").checked = n.discord && n.discord.enabled;
+          $("notifEmail").checked = n.email && n.email.enabled;
+        }
+
+        // ── Render: Plugins ──
+        function renderPlugins(plugins) {
+          var el = $("pluginList");
+          var entries = (plugins && plugins.entries) || [];
+          if (!entries.length) {
+            el.innerHTML = '<div class="setting-section__desc">No financial plugins detected.</div>';
+            return;
+          }
+          var html = "";
+          entries.forEach(function (p) {
+            html +=
+              '<div class="plugin-row">' +
+              '<span class="plugin-row__name">' + esc(p.id) + "</span>" +
+              '<span class="plugin-row__status ' + (p.enabled ? "gain" : "loss") + '">' +
+              (p.enabled ? "Active" : "Inactive") + "</span>" +
+              "</div>";
+          });
+          el.innerHTML = html;
+        }
+
+        // ── Master render ──
+        function renderAll() {
+          renderExchanges(state.exchanges, state.exchangeHealth);
+          renderRiskForm(state.trading);
+          renderAgentForm(state.agent);
+          renderGatesForm(state.gates);
+          renderNotifications(state.notifications);
+          renderPlugins(state.plugins);
+        }
+
+        // ── SSE Connection Manager ──
+        function connectSSE(name, url, onMessage, interval) {
+          var dotEl = $("sse" + name.charAt(0).toUpperCase() + name.slice(1));
+          var retryDelay = 1000;
+          var maxRetry = 30000;
+          var failures = 0;
+          var maxFailures = 3;
+
+          function connect() {
+            if (typeof EventSource === "undefined") {
+              startPolling();
+              return;
+            }
+            var es = new EventSource(url);
+
+            es.onopen = function () {
+              retryDelay = 1000;
+              failures = 0;
+              if (dotEl) dotEl.className = "sse-dot connected";
+            };
+            es.onmessage = function (ev) {
+              try {
+                var data = JSON.parse(ev.data);
+                onMessage(data);
+              } catch (e) {
+                console.warn("SSE parse error (" + name + "):", e);
+              }
+            };
+            es.onerror = function () {
+              es.close();
+              failures++;
+              if (dotEl) dotEl.className = "sse-dot error";
+              if (failures >= maxFailures) {
+                startPolling();
+                return;
+              }
+              setTimeout(connect, retryDelay);
+              retryDelay = Math.min(retryDelay * 2, maxRetry);
+            };
+          }
+
+          function startPolling() {
+            var pollUrl = url.replace("/stream", "");
+            if (dotEl) dotEl.className = "sse-dot";
+            fetch(pollUrl)
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                onMessage(d);
+                if (dotEl) dotEl.className = "sse-dot connected";
+              })
+              .catch(function () {
+                if (dotEl) dotEl.className = "sse-dot error";
+              });
+            setInterval(function () {
+              fetch(pollUrl)
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  onMessage(d);
+                  if (dotEl) dotEl.className = "sse-dot connected";
+                })
+                .catch(function () {
+                  if (dotEl) dotEl.className = "sse-dot error";
+                });
+            }, interval || 30000);
+          }
+
+          connect();
+        }
+
+        // ── SSE Handler ──
+        function onConfigData(data) {
+          if (data.exchanges) state.exchanges = data.exchanges;
+          if (data.exchangeHealth) state.exchangeHealth = data.exchangeHealth;
+          if (data.trading) state.trading = data.trading;
+          if (data.agent) state.agent = data.agent;
+          if (data.gates) state.gates = data.gates;
+          if (data.notifications) state.notifications = data.notifications;
+          if (data.plugins) state.plugins = data.plugins;
+          renderAll();
+        }
+
+        function initSSE() {
+          connectSSE("config", "/api/v1/finance/config/stream", onConfigData, 30000);
+        }
+
+        // ── Public API (SE namespace) ──
+        window.SE = {
+          goSection: function (section) {
+            // Update nav
+            document.querySelectorAll(".setting-nav-item").forEach(function (n) {
+              n.classList.remove("setting-nav-item--active");
+            });
+            var navBtn = document.querySelector('.setting-nav-item[data-section="' + section + '"]');
+            if (navBtn) navBtn.classList.add("setting-nav-item--active");
+
+            // Scroll to section
+            var el = $("section-" + section);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          },
+
+          openAddExchange: function () {
+            $("addExchangeModal").classList.add("open");
+          },
+          closeAddExchange: function () {
+            $("addExchangeModal").classList.remove("open");
+          },
+          submitAddExchange: function () {
+            var form = $("addExchangeForm");
+            var exchange = $("addExchType").value;
+            var apiKey = form.querySelector("[name=apiKey]").value;
+            var secret = form.querySelector("[name=secret]").value;
+            var passphrase = form.querySelector("[name=passphrase]").value;
+            var label = form.querySelector("[name=label]").value.trim();
+            var testnet = form.querySelector("[name=testnet]").checked;
+
+            postApi("/api/v1/finance/exchanges", {
+              exchange: exchange,
+              apiKey: apiKey,
+              secret: secret,
+              passphrase: passphrase || undefined,
+              label: label || undefined,
+              testnet: testnet,
+            })
+              .then(function (r) {
+                SE.closeAddExchange();
+                form.reset();
+                toast("Exchange added: " + (r.id || exchange), "success");
+                // Refresh exchanges
+                state.exchanges.push({ id: r.id, exchange: exchange, testnet: testnet });
+                renderExchanges(state.exchanges, state.exchangeHealth);
+              })
+              .catch(function (e) {
+                toast("Add failed: " + e.message, "error");
+              });
+          },
+
+          testExchange: function (id) {
+            $("botMsg").innerHTML = "<em>Testing " + esc(id) + "...</em>";
+            postApi("/api/v1/finance/exchanges/test", { id: id })
+              .then(function (r) {
+                if (r.success) {
+                  toast(id + ": Connected (" + r.latencyMs + "ms)", "success");
+                  $("botMsg").innerHTML = "<em>" + esc(id) + " OK - " + r.latencyMs + "ms</em>";
+                } else {
+                  toast(id + ": Failed - " + (r.error || "unknown"), "error");
+                  $("botMsg").textContent = id + " test failed: " + (r.error || "unknown");
+                }
+              })
+              .catch(function (e) {
+                toast("Test failed: " + e.message, "error");
+              });
+          },
+
+          removeExchange: function (id) {
+            if (!confirm("Remove exchange " + id + "?")) return;
+            postApi("/api/v1/finance/exchanges/remove", { id: id })
+              .then(function () {
+                toast("Exchange removed: " + id, "success");
+                state.exchanges = state.exchanges.filter(function (e) {
+                  return e.id !== id;
+                });
+                renderExchanges(state.exchanges, state.exchangeHealth);
+              })
+              .catch(function (e) {
+                toast("Remove failed: " + e.message, "error");
+              });
+          },
+
+          applyRiskPreset: function (preset) {
+            var p = RISK_PRESETS[preset];
+            if (!p) return;
+            $("riskMaxAuto").value = p.maxAutoTradeUsd;
+            $("riskConfirm").value = p.confirmThresholdUsd;
+            $("riskDailyLoss").value = p.maxDailyLossUsd;
+            $("riskMaxPos").value = p.maxPositionPct;
+            $("riskMaxLev").value = p.maxLeverage;
+
+            // Update preset button styles
+            document.querySelectorAll(".preset-btn").forEach(function (b) {
+              b.classList.remove("preset-btn--active");
+            });
+            var clicked = document.querySelector('.preset-btn[onclick*="' + preset + '"]');
+            if (clicked) clicked.classList.add("preset-btn--active");
+          },
+
+          saveRisk: function () {
+            var body = {
+              maxAutoTradeUsd: parseFloat($("riskMaxAuto").value) || 200,
+              confirmThresholdUsd: parseFloat($("riskConfirm").value) || 500,
+              maxDailyLossUsd: parseFloat($("riskDailyLoss").value) || 1000,
+              maxPositionPct: parseFloat($("riskMaxPos").value) || 10,
+              maxLeverage: parseFloat($("riskMaxLev").value) || 3,
+            };
+            putApi("/api/v1/finance/config/trading", body)
+              .then(function () {
+                toast("Risk config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          saveAgent: function () {
+            var body = {
+              heartbeatIntervalMs: parseInt($("agentHeartbeat").value) || 60000,
+              discoveryEnabled: $("agentDiscovery").checked,
+              evolutionEnabled: $("agentEvolution").checked,
+              mutationRate: parseFloat($("agentMutRate").value) || 0.1,
+              maxConcurrentStrategies: parseInt($("agentMaxStrats").value) || 5,
+            };
+            putApi("/api/v1/finance/config/agent", body)
+              .then(function () {
+                toast("Agent config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          saveGates: function () {
+            var pf = function (id) { return parseFloat($(id).value); };
+            var pi = function (id) { return parseInt($(id).value); };
+            var body = {
+              l0l1: {
+                minDays: pi("gate01Days") || 7,
+                minSharpe: pf("gate01Sharpe") || 0.5,
+                maxDrawdown: pf("gate01DD") || -0.2,
+                minWinRate: pf("gate01Win") || 0.4,
+                minTrades: pi("gate01Trades") || 10,
+              },
+              l1l2: {
+                minDays: pi("gate12Days") || 14,
+                minSharpe: pf("gate12Sharpe") || 1.0,
+                maxDrawdown: pf("gate12DD") || -0.15,
+                minWinRate: pf("gate12Win") || 0.45,
+                minTrades: pi("gate12Trades") || 30,
+              },
+              l2l3: {
+                minDays: pi("gate23Days") || 30,
+                minSharpe: pf("gate23Sharpe") || 1.5,
+                maxDrawdown: pf("gate23DD") || -0.1,
+                minWinRate: pf("gate23Win") || 0.5,
+                minTrades: pi("gate23Trades") || 50,
+              },
+            };
+            putApi("/api/v1/finance/config/gates", body)
+              .then(function () {
+                toast("Gate config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          exportConfig: function () {
+            var data = {
+              exchanges: state.exchanges.map(function (e) {
+                return { id: e.id, exchange: e.exchange, testnet: e.testnet };
+              }),
+              trading: state.trading,
+              agent: state.agent,
+              gates: state.gates,
+              notifications: state.notifications,
+              exportedAt: new Date().toISOString(),
+            };
+            var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = "openfinclaw-config-" + new Date().toISOString().slice(0, 10) + ".json";
+            a.click();
+            URL.revokeObjectURL(url);
+            toast("Config exported", "success");
+          },
+
+          confirmReset: function () {
+            $("resetModal").classList.add("open");
+          },
+          closeReset: function () {
+            $("resetModal").classList.remove("open");
+          },
+          executeReset: function () {
+            SE.closeReset();
+            toast("Reset is not yet implemented", "error");
+          },
+        };
+
+        // ── Section nav scroll spy ──
+        var settingContent = $("settingContent");
+        if (settingContent) {
+          settingContent.addEventListener("scroll", function () {
+            var sections = settingContent.querySelectorAll(".setting-section");
+            var scrollTop = settingContent.scrollTop;
+            var activeId = null;
+            sections.forEach(function (s) {
+              if (s.offsetTop - 20 <= scrollTop) {
+                activeId = s.id.replace("section-", "");
+              }
+            });
+            if (activeId) {
+              document.querySelectorAll(".setting-nav-item").forEach(function (n) {
+                n.classList.remove("setting-nav-item--active");
+              });
+              var navBtn = document.querySelector('.setting-nav-item[data-section="' + activeId + '"]');
+              if (navBtn) navBtn.classList.add("setting-nav-item--active");
+            }
+          });
+        }
+
+        // ── Modal backdrop close ──
+        document.querySelectorAll(".modal-bg").forEach(function (bg) {
+          bg.addEventListener("click", function (e) {
+            if (e.target === bg) bg.classList.remove("open");
+          });
+        });
+
+        // ── Boot ──
+        renderAll();
+        initSSE();
+        $("botMsg").innerHTML = "Settings online. <em>" + new Date().toLocaleString() + "</em>";
+      })();
+    </script>
+  </body>
+</html>

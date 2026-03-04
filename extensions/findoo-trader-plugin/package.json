@@ -14,7 +14,8 @@
   "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
   "type": "module",
   "dependencies": {
-    "ccxt": "^4.4.0"
+    "ccxt": "^4.4.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "openfinclaw": "workspace:*"

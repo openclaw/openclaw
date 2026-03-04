@@ -481,6 +481,9 @@ importers:
       openclaw:
         specifier: '>=2026.1.0'
         version: 2026.2.24(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       openfinclaw:
         specifier: workspace:*

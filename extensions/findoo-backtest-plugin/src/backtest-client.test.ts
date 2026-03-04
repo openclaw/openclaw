@@ -146,20 +146,20 @@ describe("BacktestClient", () => {
     await expect(client.getTask("t1")).rejects.toThrow("non-JSON");
   });
 
-  it("includes Authorization header when apiKey set", async () => {
+  it("includes X-API-Key header when apiKey set", async () => {
     vi.stubGlobal("fetch", mockFetch(200, { status: "ok" }));
 
     await client.health();
     const callArgs = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(callArgs[1].headers.Authorization).toBe("Bearer test-key");
+    expect(callArgs[1].headers["X-API-Key"]).toBe("test-key");
   });
 
-  it("omits Authorization header when apiKey empty", async () => {
+  it("omits X-API-Key header when apiKey empty", async () => {
     const noKeyClient = new BacktestClient(BASE_URL, "", 30_000);
     vi.stubGlobal("fetch", mockFetch(200, { status: "ok" }));
 
     await noKeyClient.health();
     const callArgs = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(callArgs[1].headers.Authorization).toBeUndefined();
+    expect(callArgs[1].headers["X-API-Key"]).toBeUndefined();
   });
 });

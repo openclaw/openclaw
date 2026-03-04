@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenFinClaw — Trader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <style>
+      /*__SHARED_CSS__*/
+    </style>
+    <style>
+      /*__PAGE_CSS__*/
+    </style>
+  </head>
+  <body>
+    <script>
+      var pageData = /*__PAGE_DATA__*/ {};
+    </script>
+
+    <!-- RISK HALO -->
+    <div class="risk-halo" id="riskHalo"></div>
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <span class="topbar__logo">OPENFINCLAW</span>
+      <div class="topbar__sep"></div>
+      <div class="topbar__eq">
+        <span class="topbar__eq-val num" id="eqVal">--</span>
+        <span class="topbar__eq-chg num" id="eqChg"></span>
+      </div>
+      <div class="topbar__sep"></div>
+      <nav class="topbar__nav">
+        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item active" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+      </nav>
+      <div class="topbar__fill"></div>
+      <!-- Domain Switcher -->
+      <div class="domain-switcher" id="domainSwitcher">
+        <button class="domain-btn domain-btn--live" data-domain="live" id="domLive">Live</button>
+        <button class="domain-btn domain-btn--paper active" data-domain="paper" id="domPaper">Paper</button>
+        <button class="domain-btn domain-btn--backtest" data-domain="backtest" id="domBacktest">Backtest</button>
+      </div>
+      <div class="topbar__sep"></div>
+      <span class="topbar__risk" id="riskBadge">--</span>
+      <div class="topbar__sse" id="sseDots" title="SSE connections">
+        <span class="sse-dot" id="sseTrade" title="Trading"></span>
+        <span class="sse-dot" id="sseEvents" title="Events"></span>
+      </div>
+      <span class="topbar__clock num" id="clock">--:--</span>
+      <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
+    </header>
+
+    <!-- 3-COLUMN LAYOUT -->
+    <div class="layout">
+      <!-- LEFT COLUMN -->
+      <aside class="col-l">
+        <!-- Account Summary -->
+        <div class="eq-mini fade-up d1">
+          <div class="eq-mini__val num" id="eqMiniVal">--</div>
+          <div class="eq-mini__chg num" id="eqMiniChg"></div>
+        </div>
+
+        <div class="col-l__section fade-up d2">
+          <div class="buying-power">
+            <div style="flex: 1">
+              <div class="buying-power__label">Buying Power</div>
+              <div class="buying-power__bar">
+                <div class="buying-power__bar-fill" id="bpBarFill" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="buying-power__val num" id="bpVal">--</div>
+          </div>
+        </div>
+
+        <!-- Positions -->
+        <div class="col-l__section fade-up d3">
+          <div class="col-l__title">Open Positions</div>
+          <div id="positionsList"></div>
+          <div class="pos-total" id="posTotal" style="display: none">
+            Total P&L <span class="num" id="posTotalVal"></span>
+          </div>
+        </div>
+
+        <!-- Recent Orders -->
+        <div class="col-l__section fade-up d4">
+          <div class="col-l__title">Recent Orders</div>
+          <div id="recentOrdersList"></div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="col-l__section fade-up d5">
+          <div class="qa-grid">
+            <button class="qa-btn qa-btn--primary" onclick="TR.openSlide('order')">Place Order</button>
+            <button class="qa-btn qa-btn--danger" onclick="TR.showEstop()">Emergency Stop</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER COLUMN -->
+      <main class="col-c">
+        <!-- Equity Curve -->
+        <div class="panel-card fade-up d2">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Equity Curve</div>
+            <div class="domain-indicator" id="domainIndicator">
+              <span class="domain-dot" id="domainDot"></span>
+              <span id="domainLabel">PAPER</span>
+            </div>
+          </div>
+          <div class="chart-wrap" id="equityChartWrap" style="height: 140px">
+            <canvas id="equityChart"></canvas>
+          </div>
+          <div class="chart-stats" id="chartStats">
+            <span class="chart-stat">Return: <span class="num" id="csReturn">--</span></span>
+            <span class="chart-stat">Sharpe: <span class="num" id="csSharpe">--</span></span>
+            <span class="chart-stat">MaxDD: <span class="num" id="csDd">--</span></span>
+          </div>
+        </div>
+
+        <!-- Order Form -->
+        <div class="panel-card fade-up d3">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Quick Order</div>
+          </div>
+          <div class="order-form-inline">
+            <div class="bs-toggle">
+              <button class="bs-toggle__btn active-buy" id="qoBuy" onclick="TR.setQoSide('buy')">BUY</button>
+              <button class="bs-toggle__btn" id="qoSell" onclick="TR.setQoSide('sell')">SELL</button>
+            </div>
+            <select id="qoSymbol" class="order-input" style="width: 90px"></select>
+            <select id="qoType" class="order-input" style="width: 70px">
+              <option>Market</option>
+              <option>Limit</option>
+            </select>
+            <input type="text" id="qoAmount" class="order-input" placeholder="Amount" value="0.01" style="width: 70px" />
+            <input type="text" id="qoPrice" class="order-input" placeholder="Price" disabled style="width: 70px; opacity: 0.5" />
+            <button class="submit-btn" style="padding: 4px 12px; font-size: 10px" onclick="TR.submitQuickOrder()">Submit</button>
+          </div>
+        </div>
+
+        <!-- Order History -->
+        <div class="panel-card fade-up d4" style="flex: 1; display: flex; flex-direction: column; min-height: 0">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Order History</div>
+            <span class="num" style="font-size: 9px; color: var(--text-dim)" id="orderCount"></span>
+          </div>
+          <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th style="text-align: right">Qty</th>
+                  <th style="text-align: right">Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="orderHistBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Backtest Results (visible only in backtest domain) -->
+        <div class="panel-card fade-up d5" id="backtestSection" style="display: none">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Backtest Results</div>
+          </div>
+          <div style="overflow-y: auto; max-height: 200px">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th style="text-align: right">Return</th>
+                  <th style="text-align: right">Sharpe</th>
+                  <th style="text-align: right">MaxDD</th>
+                  <th style="text-align: right">Trades</th>
+                </tr>
+              </thead>
+              <tbody id="btBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT COLUMN -->
+      <aside class="col-r">
+        <div class="col-r__head">
+          <div class="col-r__title">Trading Activity</div>
+          <div class="filter-chips" id="feedFilters">
+            <button class="fchip active" data-f="all">All</button>
+            <button class="fchip" data-f="trades">Trades</button>
+            <button class="fchip" data-f="alerts">Alerts</button>
+          </div>
+        </div>
+        <div class="col-r__feed" id="feedList"></div>
+      </aside>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <footer class="botbar">
+      <div class="botbar__avatar"></div>
+      <div class="botbar__msg" id="botMsg">Loading Trader...</div>
+      <div class="botbar__sse" id="botSse"></div>
+    </footer>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- SLIDE-OVER: PLACE ORDER -->
+    <div class="slideover-backdrop" id="slideOrder">
+      <div class="slideover">
+        <div class="slideover__head">
+          <span class="slideover__title">Place Order</span>
+          <button class="slideover__close" onclick="TR.closeSlide('order')">&times;</button>
+        </div>
+        <div class="slideover__body">
+          <div class="fg">
+            <span class="fg__label">Direction</span>
+            <div class="bs-toggle">
+              <button class="bs-toggle__btn active-buy" id="buyBtn" onclick="TR.setSide('buy')">BUY</button>
+              <button class="bs-toggle__btn" id="sellBtn" onclick="TR.setSide('sell')">SELL</button>
+            </div>
+          </div>
+          <div class="fg">
+            <div class="fg__row">
+              <div>
+                <span class="fg__label">Symbol</span>
+                <select id="orderSymbol" style="width: 100%"></select>
+              </div>
+              <div>
+                <span class="fg__label">Type</span>
+                <select id="orderType" style="width: 100%">
+                  <option>Market</option>
+                  <option>Limit</option>
+                  <option>Stop-Limit</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="fg">
+            <div class="fg__row">
+              <div>
+                <span class="fg__label">Amount</span>
+                <input type="text" id="orderAmount" value="0.01" style="width: 100%" />
+              </div>
+              <div>
+                <span class="fg__label">Price</span>
+                <input type="text" id="orderPrice" value="Market" disabled style="width: 100%; opacity: 0.5" />
+              </div>
+            </div>
+          </div>
+          <div class="fg">
+            <div class="fg__row">
+              <div>
+                <span class="fg__label">Stop Loss</span>
+                <input type="text" id="orderSl" style="width: 100%" />
+              </div>
+              <div>
+                <span class="fg__label">Take Profit</span>
+                <input type="text" id="orderTp" style="width: 100%" />
+              </div>
+            </div>
+          </div>
+          <button class="submit-btn" onclick="TR.submitOrder()">Submit Order</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: EMERGENCY STOP -->
+    <div class="modal-bg" id="estopModal">
+      <div class="modal-box">
+        <div class="modal-box__icon">&#9632;</div>
+        <div class="modal-box__title">Emergency Stop</div>
+        <div class="modal-box__desc">
+          This will immediately:<br />
+          &#8226; Cancel all open orders<br />
+          &#8226; Pause all active strategies<br />
+          &#8226; Freeze trading across all exchanges<br /><br />
+          <strong style="color: var(--text-hi)">Are you sure?</strong>
+        </div>
+        <div class="modal-box__actions">
+          <button class="modal-btn modal-btn--cancel" onclick="TR.closeEstop()">Cancel</button>
+          <button class="modal-btn modal-btn--danger" onclick="TR.confirmEstop()">CONFIRM STOP</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- JAVASCRIPT -->
+    <script>
+      (function () {
+        "use strict";
+
+        // ── Helpers ──
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function fmt(n, d) {
+          if (n == null) return "--";
+          return Number(n).toLocaleString("en-US", {
+            minimumFractionDigits: d || 0,
+            maximumFractionDigits: d || 0,
+          });
+        }
+        function fmtUsd(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + "$" + fmt(Math.abs(v), 2);
+        }
+        function fmtPct(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+        }
+        function pnlClass(n) {
+          return Number(n) >= 0 ? "gain" : "loss";
+        }
+        function timeAgo(ts) {
+          if (!ts) return "";
+          var diff = Date.now() - new Date(ts).getTime();
+          var m = Math.floor(diff / 60000);
+          if (m < 1) return "just now";
+          if (m < 60) return m + "m ago";
+          var h = Math.floor(m / 60);
+          if (h < 24) return h + "h ago";
+          return Math.floor(h / 24) + "d ago";
+        }
+        function esc(s) {
+          var d = document.createElement("div");
+          d.textContent = s || "";
+          return d.innerHTML;
+        }
+
+        // ── Clock ──
+        function tick() {
+          var n = new Date();
+          $("clock").textContent =
+            String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
+        }
+        tick();
+        setInterval(tick, 10000);
+
+        // ── Toast ──
+        function toast(msg, type) {
+          var el = document.createElement("div");
+          el.className = "toast" + (type ? " toast--" + type : "");
+          el.textContent = msg;
+          $("toastContainer").appendChild(el);
+          requestAnimationFrame(function () {
+            el.classList.add("show");
+          });
+          setTimeout(function () {
+            el.classList.remove("show");
+            setTimeout(function () {
+              el.remove();
+            }, 300);
+          }, 3000);
+        }
+
+        // ── State ──
+        var state = {
+          domain: pageData.domain || "paper",
+          trading: pageData.trading || {},
+          events: pageData.events || {},
+          alerts: pageData.alerts || [],
+          risk: pageData.risk || {},
+          backtestResults: pageData.backtestResults || [],
+          feedFilter: "all",
+        };
+
+        // ── POST API helper ──
+        function postApi(url, body) {
+          return fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        // ── Equity Chart ──
+        var equityChart = null;
+        function initEquityChart() {
+          var ctx = $("equityChart");
+          if (!ctx || typeof Chart === "undefined") return;
+          equityChart = new Chart(ctx, {
+            type: "line",
+            data: {
+              labels: [],
+              datasets: [
+                {
+                  data: [],
+                  borderColor: "#22c55e",
+                  backgroundColor: "rgba(34,197,94,0.08)",
+                  borderWidth: 1.5,
+                  fill: true,
+                  pointRadius: 0,
+                  tension: 0.3,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
+              scales: { x: { display: false }, y: { display: false } },
+              interaction: { mode: "nearest", axis: "x", intersect: false },
+              animation: { duration: 500 },
+            },
+          });
+        }
+
+        function updateEquityChart(snapshots) {
+          if (!equityChart || !snapshots || !snapshots.length) return;
+          var labels = snapshots.map(function (s) {
+            return s.timestamp ? new Date(s.timestamp).toLocaleDateString() : "";
+          });
+          var data = snapshots.map(function (s) {
+            return s.equity || s.totalEquity || 0;
+          });
+          var first = data[0] || 0;
+          var last = data[data.length - 1] || 0;
+          var color = last >= first ? "#22c55e" : "#ef4444";
+          equityChart.data.labels = labels;
+          equityChart.data.datasets[0].data = data;
+          equityChart.data.datasets[0].borderColor = color;
+          equityChart.data.datasets[0].backgroundColor =
+            last >= first ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)";
+          equityChart.update("none");
+        }
+
+        // ── Render: Domain Indicator ──
+        function renderDomainIndicator(domain) {
+          var dot = $("domainDot");
+          var label = $("domainLabel");
+          label.textContent = domain.toUpperCase();
+          dot.className = "domain-dot domain-dot--" + domain;
+
+          // Update domain switcher buttons
+          document.querySelectorAll(".domain-btn").forEach(function (b) {
+            b.classList.remove("active");
+          });
+          var activeBtn = $("dom" + domain.charAt(0).toUpperCase() + domain.slice(1));
+          if (activeBtn) activeBtn.classList.add("active");
+
+          // Show/hide backtest section
+          $("backtestSection").style.display = domain === "backtest" ? "" : "none";
+        }
+
+        // ── Render: Top bar equity ──
+        function renderTopEquity(trading) {
+          var summary = (trading && trading.summary) || {};
+          var eq = summary.totalEquity || summary.equity || 0;
+          var chg = summary.dailyPnl || summary.dayPnl || 0;
+          var pct = summary.dailyPnlPct || (eq > 0 ? (chg / eq) * 100 : 0);
+          $("eqVal").textContent = "$" + fmt(eq, 2);
+          var chgEl = $("eqChg");
+          chgEl.textContent = fmtUsd(chg) + " (" + fmtPct(pct) + ")";
+          chgEl.className = "topbar__eq-chg num " + pnlClass(chg);
+
+          $("eqMiniVal").innerHTML =
+            "$" + fmt(Math.floor(eq)) +
+            '<span style="font-size:14px;opacity:.5">.' +
+            String(Math.round((eq % 1) * 100)).padStart(2, "0") +
+            "</span>";
+          var miniChg = $("eqMiniChg");
+          miniChg.textContent = fmtUsd(chg) + " today (" + fmtPct(pct) + ")";
+          miniChg.className = "eq-mini__chg num " + pnlClass(chg);
+        }
+
+        // ── Render: Buying Power ──
+        function renderBuyingPower(trading) {
+          var allocations = (trading && trading.allocations) || {};
+          var summary = (trading && trading.summary) || {};
+          var cash = allocations.cashReserve || 0;
+          var equity = summary.totalEquity || summary.equity || 0;
+          $("bpVal").textContent = "$" + fmt(cash, 2);
+          var pct = equity > 0 ? Math.min((cash / equity) * 100, 100) : 0;
+          $("bpBarFill").style.width = pct + "%";
+        }
+
+        // ── Render: Risk badge ──
+        function renderRiskBadge(risk) {
+          var el = $("riskBadge");
+          var level = (risk && risk.level) || "NORMAL";
+          el.textContent = level.toUpperCase();
+          el.className = "topbar__risk";
+          if (/high|critical|danger/i.test(level)) el.classList.add("topbar__risk--danger");
+          else if (/medium|elevated|warning/i.test(level))
+            el.classList.add("topbar__risk--warning");
+        }
+
+        // ── Render: Positions ──
+        function renderPositions(positions) {
+          var el = $("positionsList");
+          if (!positions || !positions.length) {
+            el.innerHTML =
+              '<div style="font-size:10px;color:var(--text-dim);padding:4px 0">No open positions</div>';
+            $("posTotal").style.display = "none";
+            return;
+          }
+          var html = "";
+          var totalPnl = 0;
+          positions.forEach(function (p) {
+            var pnl = p.unrealizedPnl || p.pnl || 0;
+            totalPnl += pnl;
+            var side = (p.side || "long").toLowerCase();
+            html +=
+              '<div class="pos-detail-row">' +
+              '<span class="pos-detail-row__sym num">' + esc(p.symbol) + "</span>" +
+              '<span class="pos-row__side pos-row__side--' + side + '">' + side.toUpperCase() + "</span>" +
+              '<span class="num" style="text-align:right">' + fmt(p.quantity || p.amount, 4) + "</span>" +
+              '<span class="' + pnlClass(pnl) + ' num" style="text-align:right;font-weight:600">' +
+              fmtUsd(pnl) + "</span>" +
+              '<button class="pos-row__close" onclick="TR.closePosition(\'' + esc(p.symbol) +
+              '\')" title="Close">&times;</button>' +
+              "</div>";
+          });
+          el.innerHTML = html;
+          $("posTotal").style.display = "";
+          var tv = $("posTotalVal");
+          tv.textContent = fmtUsd(totalPnl);
+          tv.className = "num " + pnlClass(totalPnl);
+        }
+
+        // ── Render: Recent Orders (sidebar) ──
+        function renderRecentOrders(orders) {
+          var el = $("recentOrdersList");
+          if (!orders || !orders.length) {
+            el.innerHTML =
+              '<div style="font-size:10px;color:var(--text-dim);padding:4px 0">No recent orders</div>';
+            return;
+          }
+          var html = "";
+          orders.slice(0, 5).forEach(function (o) {
+            var side = (o.side || "").toLowerCase();
+            var status = o.status || "unknown";
+            var statusCls =
+              status === "filled" ? "gain" :
+              status === "cancelled" || status === "rejected" ? "loss" : "dim";
+            html +=
+              '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px;border-bottom:1px solid rgba(35,41,58,0.3)">' +
+              '<span class="num" style="width:42px;color:var(--text-dim)">' + timeAgo(o.createdAt || o.timestamp) + "</span>" +
+              '<span class="num" style="font-weight:600;color:var(--text-hi);width:60px">' + esc(o.symbol) + "</span>" +
+              '<span class="pos-row__side pos-row__side--' + (side === "sell" || side === "short" ? "short" : "long") +
+              '" style="width:32px;font-size:8px">' + side.toUpperCase() + "</span>" +
+              '<span class="num" style="flex:1;text-align:right">' + fmt(o.quantity, 4) + "</span>" +
+              '<span class="' + statusCls + '" style="font-size:9px;font-weight:600;width:50px;text-align:right">' + status + "</span>" +
+              "</div>";
+          });
+          el.innerHTML = html;
+        }
+
+        // ── Render: Chart Stats ──
+        function renderChartStats(trading) {
+          var summary = (trading && trading.summary) || {};
+          var ret = summary.totalReturn || summary.returnPct || 0;
+          var retEl = $("csReturn");
+          retEl.textContent = fmtPct(ret);
+          retEl.className = "num " + pnlClass(ret);
+          $("csSharpe").textContent = summary.avgSharpe != null ? summary.avgSharpe.toFixed(2) : "--";
+          $("csDd").textContent = summary.maxDrawdown != null ? fmtPct(summary.maxDrawdown) : "--";
+        }
+
+        // ── Render: Order History ──
+        function renderOrderHistory(orders) {
+          var body = $("orderHistBody");
+          if (!orders || !orders.length) {
+            body.innerHTML =
+              '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:14px">No orders</td></tr>';
+            $("orderCount").textContent = "";
+            return;
+          }
+          $("orderCount").textContent = orders.length + " total";
+          var html = "";
+          orders.slice(0, 50).forEach(function (o) {
+            var side = (o.side || "").toLowerCase();
+            var status = o.status || "unknown";
+            var statusCls =
+              status === "filled" ? "gain" :
+              status === "cancelled" || status === "rejected" ? "loss" : "";
+            html +=
+              "<tr>" +
+              '<td class="num">' + timeAgo(o.createdAt || o.timestamp) + "</td>" +
+              '<td class="num" style="font-weight:600;color:var(--text-hi)">' + esc(o.symbol) + "</td>" +
+              '<td><span class="pos-row__side pos-row__side--' +
+              (side === "sell" || side === "short" ? "short" : "long") + '">' +
+              side.toUpperCase() + "</span></td>" +
+              '<td class="num" style="text-align:right">' + fmt(o.quantity, 4) + "</td>" +
+              '<td class="num" style="text-align:right">$' + fmt(o.fillPrice || o.limitPrice || 0, 2) + "</td>" +
+              '<td class="' + statusCls + '">' + status + "</td>" +
+              "</tr>";
+          });
+          body.innerHTML = html;
+        }
+
+        // ── Render: Backtest Results ──
+        function renderBacktestResults(results) {
+          var body = $("btBody");
+          if (!results || !results.length) {
+            body.innerHTML =
+              '<tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:14px">No backtest results</td></tr>';
+            return;
+          }
+          var html = "";
+          results.forEach(function (b) {
+            var ret = b.totalReturn || b.returnPct || 0;
+            html +=
+              "<tr>" +
+              '<td style="color:var(--text-hi)">' + esc(b.strategyName || b.strategyId || "") + "</td>" +
+              '<td class="' + pnlClass(ret) + ' num" style="text-align:right;font-weight:600">' + fmtPct(ret) + "</td>" +
+              '<td class="num" style="text-align:right">' + (b.sharpe || 0).toFixed(2) + "</td>" +
+              '<td class="loss num" style="text-align:right">' + fmtPct(b.maxDrawdown || 0) + "</td>" +
+              '<td class="num" style="text-align:right">' + (b.totalTrades || 0) + "</td>" +
+              "</tr>";
+          });
+          body.innerHTML = html;
+        }
+
+        // ── Render: Activity Feed ──
+        function eventCategory(e) {
+          var t = (e.type || e.category || "").toLowerCase();
+          if (/trade|order|execut|close/i.test(t)) return "trades";
+          if (/alert|warn/i.test(t)) return "alerts";
+          return "trades";
+        }
+        function eventTypeLabel(e) {
+          var t = (e.type || "").toLowerCase();
+          if (/execut|auto/i.test(t)) return { label: "EXECUTED", cls: "executed" };
+          if (/alert/i.test(t)) return { label: "ALERT", cls: "alert" };
+          if (/close/i.test(t)) return { label: "CLOSED", cls: "trade" };
+          if (/trade|order/i.test(t)) return { label: "TRADE", cls: "trade" };
+          return { label: t.toUpperCase() || "EVENT", cls: "trade" };
+        }
+
+        function renderFeed(events, filter) {
+          var el = $("feedList");
+          if (!events || !events.length) {
+            el.innerHTML =
+              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No trade activity yet</div>';
+            return;
+          }
+          var html = "";
+          var count = 0;
+          events.forEach(function (e) {
+            var cat = eventCategory(e);
+            if (filter !== "all" && cat !== filter) return;
+            if (count >= 50) return;
+            count++;
+            var tl = eventTypeLabel(e);
+            html +=
+              '<div class="fcard fcard--' + tl.cls + '">' +
+              '<div class="fcard__top">' +
+              '<span class="fcard__type fcard__type--' + tl.cls + '">' + tl.label + "</span>" +
+              '<span class="fcard__time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
+              "</div>" +
+              '<div class="fcard__title">' + esc(e.title || e.summary || e.message || "") + "</div>" +
+              "</div>";
+          });
+          el.innerHTML = html;
+        }
+
+        // ── Master render ──
+        function renderAll() {
+          var t = state.trading || {};
+          renderDomainIndicator(state.domain);
+          renderTopEquity(t);
+          renderBuyingPower(t);
+          renderRiskBadge(state.risk);
+          renderPositions(t.positions);
+          renderRecentOrders(t.orders);
+          renderChartStats(t);
+          renderOrderHistory(t.orders);
+          renderBacktestResults(state.backtestResults);
+          renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          updateEquityChart(t.snapshots);
+        }
+
+        // ── Domain Switch ──
+        function switchDomain(domain) {
+          state.domain = domain;
+          renderDomainIndicator(domain);
+          $("botMsg").innerHTML = "<em>Switching to " + domain + "...</em>";
+
+          fetch("/api/v1/finance/dashboard/trader?domain=" + domain)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              state.domain = data.domain || domain;
+              state.trading = data.trading || {};
+              state.events = data.events || {};
+              state.risk = data.risk || {};
+              state.alerts = data.alerts || [];
+              state.backtestResults = data.backtestResults || [];
+              renderAll();
+              $("botMsg").innerHTML = "<em>" + domain + " mode active</em> " + new Date().toLocaleTimeString();
+            })
+            .catch(function (e) {
+              toast("Domain switch failed: " + e.message, "error");
+              $("botMsg").textContent = "Switch failed: " + e.message;
+            });
+        }
+
+        // ── Populate order symbols ──
+        function populateOrderSymbols() {
+          var sels = [$("orderSymbol"), $("qoSymbol")];
+          var symbols = new Set();
+          ((state.trading && state.trading.positions) || []).forEach(function (p) {
+            if (p.symbol) symbols.add(p.symbol);
+          });
+          ["BTC/USDT", "ETH/USDT", "SOL/USDT"].forEach(function (s) {
+            symbols.add(s);
+          });
+          sels.forEach(function (sel) {
+            if (!sel) return;
+            sel.innerHTML = "";
+            symbols.forEach(function (s) {
+              var opt = document.createElement("option");
+              opt.value = s;
+              opt.textContent = s;
+              sel.appendChild(opt);
+            });
+          });
+        }
+
+        // ── SSE Connection Manager ──
+        var sseStreams = {};
+        function connectSSE(name, url, onMessage, interval) {
+          var dotEl = $("sse" + name.charAt(0).toUpperCase() + name.slice(1));
+          var retryDelay = 1000;
+          var maxRetry = 30000;
+          var failures = 0;
+          var maxFailures = 3;
+
+          function connect() {
+            if (typeof EventSource === "undefined") {
+              startPolling();
+              return;
+            }
+            var es = new EventSource(url);
+            sseStreams[name] = es;
+
+            es.onopen = function () {
+              retryDelay = 1000;
+              failures = 0;
+              if (dotEl) dotEl.className = "sse-dot connected";
+            };
+            es.onmessage = function (ev) {
+              try {
+                var data = JSON.parse(ev.data);
+                onMessage(data);
+              } catch (e) {
+                console.warn("SSE parse error (" + name + "):", e);
+              }
+            };
+            es.onerror = function () {
+              es.close();
+              failures++;
+              if (dotEl) dotEl.className = "sse-dot error";
+              if (failures >= maxFailures) {
+                startPolling();
+                return;
+              }
+              setTimeout(connect, retryDelay);
+              retryDelay = Math.min(retryDelay * 2, maxRetry);
+            };
+          }
+
+          function startPolling() {
+            var pollUrl = url.replace("/stream", "");
+            if (dotEl) dotEl.className = "sse-dot";
+            fetch(pollUrl)
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                onMessage(d);
+                if (dotEl) dotEl.className = "sse-dot connected";
+              })
+              .catch(function () {
+                if (dotEl) dotEl.className = "sse-dot error";
+              });
+            setInterval(function () {
+              fetch(pollUrl)
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  onMessage(d);
+                  if (dotEl) dotEl.className = "sse-dot connected";
+                })
+                .catch(function () {
+                  if (dotEl) dotEl.className = "sse-dot error";
+                });
+            }, interval || 10000);
+          }
+
+          connect();
+        }
+
+        // ── SSE Handlers ──
+        function onTradingData(data) {
+          state.trading = data;
+          renderTopEquity(data);
+          renderBuyingPower(data);
+          renderPositions(data.positions);
+          renderRecentOrders(data.orders);
+          renderChartStats(data);
+          renderOrderHistory(data.orders);
+          updateEquityChart(data.snapshots);
+        }
+
+        function onEventsData(data) {
+          if (data.type === "new_event" && data.event) {
+            state.events.events = state.events.events || [];
+            state.events.events.push(data.event);
+          } else if (data.events) {
+            state.events = data;
+          }
+          renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+        }
+
+        function initSSE() {
+          connectSSE("trade", "/api/v1/finance/trading/stream", onTradingData, 10000);
+          connectSSE("events", "/api/v1/finance/events/stream", onEventsData, 5000);
+        }
+
+        // ── Public API (TR namespace) ──
+        window.TR = {
+          openSlide: function (id) {
+            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
+            if (el) el.classList.add("open");
+          },
+          closeSlide: function (id) {
+            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
+            if (el) el.classList.remove("open");
+          },
+          showEstop: function () {
+            $("estopModal").classList.add("open");
+          },
+          closeEstop: function () {
+            $("estopModal").classList.remove("open");
+          },
+          confirmEstop: function () {
+            TR.closeEstop();
+            postApi("/api/v1/finance/emergency-stop", {})
+              .then(function () {
+                $("riskHalo").className = "risk-halo risk-halo--danger";
+                $("riskBadge").textContent = "STOPPED";
+                $("riskBadge").className = "topbar__risk topbar__risk--danger";
+                $("botMsg").innerHTML = '<em style="color:var(--loss)">EMERGENCY STOP activated.</em>';
+              })
+              .catch(function (e) {
+                $("botMsg").textContent = "Emergency stop failed: " + e.message;
+              });
+          },
+          setSide: function (side) {
+            $("buyBtn").className = "bs-toggle__btn" + (side === "buy" ? " active-buy" : "");
+            $("sellBtn").className = "bs-toggle__btn" + (side === "sell" ? " active-sell" : "");
+          },
+          setQoSide: function (side) {
+            $("qoBuy").className = "bs-toggle__btn" + (side === "buy" ? " active-buy" : "");
+            $("qoSell").className = "bs-toggle__btn" + (side === "sell" ? " active-sell" : "");
+          },
+          submitOrder: function () {
+            var side = $("buyBtn").classList.contains("active-buy") ? "buy" : "sell";
+            var symbol = $("orderSymbol").value;
+            var type = $("orderType").value.toLowerCase();
+            var amount = parseFloat($("orderAmount").value);
+            var price = type === "market" ? undefined : parseFloat($("orderPrice").value.replace(/[^0-9.]/g, ""));
+
+            postApi("/api/v1/finance/orders", {
+              side: side,
+              symbol: symbol,
+              type: type,
+              amount: amount,
+              price: price,
+              domain: state.domain,
+            })
+              .then(function () {
+                TR.closeSlide("order");
+                toast(side.toUpperCase() + " " + amount + " " + symbol + " submitted", "success");
+              })
+              .catch(function (e) {
+                toast("Order failed: " + e.message, "error");
+              });
+          },
+          submitQuickOrder: function () {
+            var side = $("qoBuy").classList.contains("active-buy") ? "buy" : "sell";
+            var symbol = $("qoSymbol").value;
+            var type = $("qoType").value.toLowerCase();
+            var amount = parseFloat($("qoAmount").value);
+            var price = type === "market" ? undefined : parseFloat($("qoPrice").value.replace(/[^0-9.]/g, ""));
+
+            postApi("/api/v1/finance/orders", {
+              side: side,
+              symbol: symbol,
+              type: type,
+              amount: amount,
+              price: price,
+              domain: state.domain,
+            })
+              .then(function () {
+                toast(side.toUpperCase() + " " + amount + " " + symbol + " submitted", "success");
+              })
+              .catch(function (e) {
+                toast("Order failed: " + e.message, "error");
+              });
+          },
+          closePosition: function (symbol) {
+            postApi("/api/v1/finance/positions/close", { symbol: symbol, domain: state.domain })
+              .then(function () {
+                toast("Position " + symbol + " closed", "success");
+              })
+              .catch(function (e) {
+                toast("Close failed: " + e.message, "error");
+              });
+          },
+        };
+
+        // ── Domain switcher ──
+        document.querySelectorAll(".domain-btn").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            switchDomain(btn.dataset.domain);
+          });
+        });
+
+        // ── Quick order type toggle ──
+        $("qoType").addEventListener("change", function () {
+          var isMarket = this.value === "Market";
+          $("qoPrice").disabled = isMarket;
+          $("qoPrice").style.opacity = isMarket ? ".5" : "1";
+          $("qoPrice").value = isMarket ? "" : "";
+        });
+
+        // ── Order type toggle (slide-over) ──
+        $("orderType").addEventListener("change", function () {
+          var isMarket = this.value === "Market";
+          $("orderPrice").disabled = isMarket;
+          $("orderPrice").style.opacity = isMarket ? ".5" : "1";
+          $("orderPrice").value = isMarket ? "Market" : "";
+        });
+
+        // ── Filter chips ──
+        document.querySelectorAll(".fchip").forEach(function (c) {
+          c.addEventListener("click", function () {
+            document.querySelectorAll(".fchip").forEach(function (x) {
+              x.classList.remove("active");
+            });
+            c.classList.add("active");
+            state.feedFilter = c.dataset.f;
+            renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          });
+        });
+
+        // ── Slide-over backdrop close ──
+        document.querySelectorAll(".slideover-backdrop").forEach(function (bg) {
+          bg.addEventListener("click", function (e) {
+            if (e.target === bg) bg.classList.remove("open");
+          });
+        });
+
+        // ── Emergency stop button ──
+        $("estopBtn").addEventListener("click", function () {
+          $("estopModal").classList.add("open");
+        });
+
+        // ── Boot ──
+        renderAll();
+        populateOrderSymbols();
+        initEquityChart();
+        initSSE();
+        $("botMsg").innerHTML = "Trader online. <em>" + new Date().toLocaleString() + "</em>";
+      })();
+    </script>
+  </body>
+</html>

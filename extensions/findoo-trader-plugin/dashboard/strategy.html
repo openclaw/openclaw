@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenFinClaw — Strategy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <style>
+      /*__SHARED_CSS__*/
+    </style>
+    <style>
+      /*__PAGE_CSS__*/
+    </style>
+  </head>
+  <body>
+    <script>
+      var pageData = /*__PAGE_DATA__*/ {};
+    </script>
+
+    <!-- RISK HALO -->
+    <div class="risk-halo" id="riskHalo"></div>
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <span class="topbar__logo">OPENFINCLAW</span>
+      <div class="topbar__sep"></div>
+      <div class="topbar__eq">
+        <span class="topbar__eq-val num" id="eqVal">--</span>
+        <span class="topbar__eq-chg num" id="eqChg"></span>
+      </div>
+      <div class="topbar__sep"></div>
+      <nav class="topbar__nav">
+        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item active" href="/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+      </nav>
+      <div class="topbar__fill"></div>
+      <div class="topbar__agents" id="agentDots"></div>
+      <div class="topbar__sep"></div>
+      <span class="topbar__risk" id="riskBadge">--</span>
+      <div class="topbar__sse" id="sseDots" title="SSE connections">
+        <span class="sse-dot" id="sseStrategy" title="Strategy"></span>
+        <span class="sse-dot" id="sseEvents" title="Events"></span>
+      </div>
+      <span class="topbar__clock num" id="clock">--:--</span>
+      <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
+    </header>
+
+    <!-- 3-COLUMN LAYOUT -->
+    <div class="layout">
+      <!-- LEFT COLUMN -->
+      <aside class="col-l">
+        <!-- Pipeline Kanban -->
+        <div class="col-l__section fade-up d1">
+          <div class="col-l__title">Strategy Pipeline</div>
+          <div class="pipeline-vertical">
+            <div class="pipe-v-stage">
+              <span class="pipe-v-stage__badge pipe-v-stage__badge--l0">L0</span>
+              <div class="pipe-v-stage__info">
+                <div class="pipe-v-stage__name">INCUBATE</div>
+                <div class="pipe-v-stage__desc">Idea stage</div>
+              </div>
+              <div class="pipe-v-stage__count num" id="pipeL0">0</div>
+            </div>
+            <div class="pipe-v-arrow"></div>
+            <div class="pipe-v-stage">
+              <span class="pipe-v-stage__badge pipe-v-stage__badge--l1">L1</span>
+              <div class="pipe-v-stage__info">
+                <div class="pipe-v-stage__name">BACKTEST</div>
+                <div class="pipe-v-stage__desc">Historical validation</div>
+              </div>
+              <div class="pipe-v-stage__count num" id="pipeL1">0</div>
+            </div>
+            <div class="pipe-v-arrow"></div>
+            <div class="pipe-v-stage">
+              <span class="pipe-v-stage__badge pipe-v-stage__badge--l2">L2</span>
+              <div class="pipe-v-stage__info">
+                <div class="pipe-v-stage__name">PAPER</div>
+                <div class="pipe-v-stage__desc">Simulated trading</div>
+              </div>
+              <div class="pipe-v-stage__count num" id="pipeL2">0</div>
+            </div>
+            <div class="pipe-v-arrow"></div>
+            <div class="pipe-v-stage">
+              <span class="pipe-v-stage__badge pipe-v-stage__badge--l3">L3</span>
+              <div class="pipe-v-stage__info">
+                <div class="pipe-v-stage__name">LIVE</div>
+                <div class="pipe-v-stage__desc">Real capital</div>
+              </div>
+              <div class="pipe-v-stage__count num" id="pipeL3">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Evolution Stats -->
+        <div class="col-l__section fade-up d2">
+          <div class="col-l__title">Evolution Stats</div>
+          <div class="stat-pills">
+            <div class="stat-pill">
+              <div class="stat-pill__v num" id="spActive">0</div>
+              <div class="stat-pill__l">Active</div>
+              <div class="stat-pill__sub dim num" id="spTotal">0 total</div>
+            </div>
+            <div class="stat-pill">
+              <div class="stat-pill__v num" id="spAvgFit">0.000</div>
+              <div class="stat-pill__l">Avg Fitness</div>
+              <div class="stat-pill__sub dim num" id="spBestFit">best: 0.000</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="col-l__section fade-up d3">
+          <div class="qa-grid">
+            <button class="qa-btn qa-btn--primary" onclick="ST.openSlide('create')">New Strategy</button>
+            <button class="qa-btn" onclick="ST.triggerEvolution()">Evolve</button>
+            <button class="qa-btn" onclick="ST.runAllBacktests()">Backtest All</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER COLUMN -->
+      <main class="col-c">
+        <!-- Strategy Raceboard -->
+        <div class="panel-card fade-up d2" style="flex: 2; display: flex; flex-direction: column; min-height: 0">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Strategy Raceboard</div>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <div class="race-filters" id="lbFilters">
+                <button class="race-filter active" data-lf="all">All</button>
+                <button class="race-filter" data-lf="l0">L0</button>
+                <button class="race-filter" data-lf="l1">L1</button>
+                <button class="race-filter" data-lf="l2">L2</button>
+                <button class="race-filter" data-lf="l3">L3</button>
+              </div>
+              <span class="num" style="font-size: 9px; color: var(--text-dim)" id="lbCount"></span>
+            </div>
+          </div>
+          <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Name</th>
+                  <th>Level</th>
+                  <th>Score</th>
+                  <th>Fitness</th>
+                  <th>Sharpe</th>
+                  <th>MaxDD</th>
+                  <th>Win%</th>
+                  <th>Trades</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="lbBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Approval Queue -->
+        <div class="panel-card fade-up d3" id="approvalSection">
+          <div class="panel-card__head">
+            <div class="panel-card__title">
+              Pending Approvals
+              <span class="badge" id="approvalCount" style="display: none"></span>
+            </div>
+          </div>
+          <div id="approvalList"></div>
+        </div>
+
+        <!-- Backtest Results -->
+        <div class="panel-card fade-up d4" style="flex: 1; display: flex; flex-direction: column; min-height: 0">
+          <div class="panel-card__head">
+            <div class="panel-card__title">Backtest Results</div>
+          </div>
+          <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th style="text-align: right">Return</th>
+                  <th style="text-align: right">Sharpe</th>
+                  <th style="text-align: right">MaxDD</th>
+                  <th style="text-align: right">Win%</th>
+                  <th style="text-align: right">PF</th>
+                  <th style="text-align: right">Trades</th>
+                </tr>
+              </thead>
+              <tbody id="btBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT COLUMN -->
+      <aside class="col-r">
+        <div class="col-r__head">
+          <div class="col-r__title">Evolution Feed</div>
+          <div class="filter-chips" id="feedFilters">
+            <button class="fchip active" data-f="all">All</button>
+            <button class="fchip" data-f="mutation">Mutation</button>
+            <button class="fchip" data-f="promote">Promote</button>
+            <button class="fchip" data-f="kill">Kill</button>
+          </div>
+        </div>
+        <div class="col-r__feed" id="feedList"></div>
+      </aside>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <footer class="botbar">
+      <div class="botbar__avatar"></div>
+      <div class="botbar__msg" id="botMsg">Loading Strategy...</div>
+      <div class="botbar__sse" id="botSse"></div>
+    </footer>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- SLIDE-OVER: CREATE STRATEGY -->
+    <div class="slideover-backdrop" id="slideCreate">
+      <div class="slideover">
+        <div class="slideover__head">
+          <span class="slideover__title">Create Strategy</span>
+          <button class="slideover__close" onclick="ST.closeSlide('create')">&times;</button>
+        </div>
+        <div class="slideover__body">
+          <form id="createForm" onsubmit="event.preventDefault(); ST.submitCreate();">
+            <div class="fg">
+              <label class="fg__label">Strategy Name</label>
+              <input name="stratName" placeholder="momentum-btc-4h" style="width: 100%" required />
+            </div>
+            <div class="fg">
+              <label class="fg__label">Market</label>
+              <select name="stratMarket" style="width: 100%">
+                <option value="crypto">Crypto</option>
+                <option value="us-stock">US Stock</option>
+                <option value="hk-stock">HK Stock</option>
+                <option value="a-share">A-Share</option>
+              </select>
+            </div>
+            <div class="fg">
+              <label class="fg__label">Timeframe</label>
+              <select name="stratTimeframe" style="width: 100%">
+                <option value="1h">1h</option>
+                <option value="4h" selected>4h</option>
+                <option value="1d">1d</option>
+                <option value="1w">1w</option>
+              </select>
+            </div>
+            <div class="fg">
+              <label class="fg__label">Symbols (comma-separated)</label>
+              <input name="stratSymbols" placeholder="BTC/USDT, ETH/USDT" style="width: 100%" />
+            </div>
+            <div class="fg">
+              <label class="fg__label">Description</label>
+              <textarea name="stratDescription" rows="3" placeholder="Strategy description..." style="width: 100%; resize: vertical"></textarea>
+            </div>
+            <button type="submit" class="submit-btn">Create Strategy</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: EMERGENCY STOP -->
+    <div class="modal-bg" id="estopModal">
+      <div class="modal-box">
+        <div class="modal-box__icon">&#9632;</div>
+        <div class="modal-box__title">Emergency Stop</div>
+        <div class="modal-box__desc">
+          This will immediately:<br />
+          &#8226; Cancel all open orders<br />
+          &#8226; Pause all active strategies<br />
+          &#8226; Freeze trading across all exchanges<br /><br />
+          <strong style="color: var(--text-hi)">Are you sure?</strong>
+        </div>
+        <div class="modal-box__actions">
+          <button class="modal-btn modal-btn--cancel" onclick="ST.closeEstop()">Cancel</button>
+          <button class="modal-btn modal-btn--danger" onclick="ST.confirmEstop()">CONFIRM STOP</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- JAVASCRIPT -->
+    <script>
+      (function () {
+        "use strict";
+
+        // ── Helpers ──
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function fmt(n, d) {
+          if (n == null) return "--";
+          return Number(n).toLocaleString("en-US", {
+            minimumFractionDigits: d || 0,
+            maximumFractionDigits: d || 0,
+          });
+        }
+        function fmtUsd(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + "$" + fmt(Math.abs(v), 2);
+        }
+        function fmtPct(n) {
+          if (n == null) return "--";
+          var v = Number(n);
+          return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+        }
+        function pnlClass(n) {
+          return Number(n) >= 0 ? "gain" : "loss";
+        }
+        function timeAgo(ts) {
+          if (!ts) return "";
+          var diff = Date.now() - new Date(ts).getTime();
+          var m = Math.floor(diff / 60000);
+          if (m < 1) return "just now";
+          if (m < 60) return m + "m ago";
+          var h = Math.floor(m / 60);
+          if (h < 24) return h + "h ago";
+          return Math.floor(h / 24) + "d ago";
+        }
+        function esc(s) {
+          var d = document.createElement("div");
+          d.textContent = s || "";
+          return d.innerHTML;
+        }
+
+        // ── Clock ──
+        function tick() {
+          var n = new Date();
+          $("clock").textContent =
+            String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
+        }
+        tick();
+        setInterval(tick, 10000);
+
+        // ── Toast ──
+        function toast(msg, type) {
+          var el = document.createElement("div");
+          el.className = "toast" + (type ? " toast--" + type : "");
+          el.textContent = msg;
+          $("toastContainer").appendChild(el);
+          requestAnimationFrame(function () {
+            el.classList.add("show");
+          });
+          setTimeout(function () {
+            el.classList.remove("show");
+            setTimeout(function () {
+              el.remove();
+            }, 300);
+          }, 3000);
+        }
+
+        // ── State ──
+        var state = {
+          pipeline: pageData.pipeline || {},
+          strategies: pageData.strategies || [],
+          backtests: pageData.backtests || [],
+          allocations: pageData.allocations || {},
+          gates: pageData.gates || {},
+          events: pageData.events || {},
+          feedFilter: "all",
+        };
+
+        // ── Level constants ──
+        var levelLabels = {
+          L0_INCUBATE: "L0 INCUB",
+          L1_BACKTEST: "L1 BACK",
+          L2_PAPER: "L2 PAPER",
+          L3_LIVE: "L3 LIVE",
+          KILLED: "KILLED",
+          0: "L0 INCUB",
+          1: "L1 BACK",
+          2: "L2 PAPER",
+          3: "L3 LIVE",
+        };
+        var levelCls = {
+          L0_INCUBATE: "l0",
+          L1_BACKTEST: "l1",
+          L2_PAPER: "l2",
+          L3_LIVE: "l3",
+          KILLED: "l0",
+          0: "l0",
+          1: "l1",
+          2: "l2",
+          3: "l3",
+        };
+        var levelToNum = {
+          L0_INCUBATE: 0,
+          L1_BACKTEST: 1,
+          L2_PAPER: 2,
+          L3_LIVE: 3,
+          KILLED: -1,
+        };
+
+        function fitnessColor(f) {
+          if (f >= 0.7) return "var(--gain)";
+          if (f >= 0.4) return "var(--warn)";
+          return "var(--l0)";
+        }
+
+        // ── POST API helper ──
+        function postApi(url, body) {
+          return fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        function putApi(url, body) {
+          return fetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+          }).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          });
+        }
+
+        // ── Render: Top bar equity ──
+        function renderTopEquity(data) {
+          var summary = (data && data.summary) || {};
+          var eq = summary.totalEquity || 0;
+          var chg = summary.dailyPnl || 0;
+          var pct = summary.dailyPnlPct || (eq > 0 ? (chg / eq) * 100 : 0);
+          $("eqVal").textContent = "$" + fmt(eq, 2);
+          var chgEl = $("eqChg");
+          chgEl.textContent = fmtUsd(chg) + " (" + fmtPct(pct) + ")";
+          chgEl.className = "topbar__eq-chg num " + pnlClass(chg);
+        }
+
+        // ── Render: Risk badge ──
+        function renderRiskBadge(data) {
+          var el = $("riskBadge");
+          var level = (data && data.risk && data.risk.level) || "NORMAL";
+          el.textContent = level.toUpperCase();
+          el.className = "topbar__risk";
+          if (/high|critical|danger/i.test(level)) el.classList.add("topbar__risk--danger");
+          else if (/medium|elevated|warning/i.test(level))
+            el.classList.add("topbar__risk--warning");
+        }
+
+        // ── Render: Pipeline Kanban ──
+        function renderPipeline(pipeline) {
+          var p = pipeline || {};
+          $("pipeL0").textContent = p.l0 || 0;
+          $("pipeL1").textContent = p.l1 || 0;
+          $("pipeL2").textContent = p.l2 || 0;
+          $("pipeL3").textContent = p.l3 || 0;
+        }
+
+        // ── Render: Evolution Stats ──
+        function renderEvoStats(strategies) {
+          var strats = strategies || [];
+          var total = strats.length;
+          var active = strats.filter(function (s) {
+            return s.status !== "killed" && s.status !== "stopped";
+          }).length;
+          var fitnesses = strats
+            .filter(function (s) {
+              return s.fitness != null;
+            })
+            .map(function (s) {
+              return s.fitness;
+            });
+          var avgFit = fitnesses.length
+            ? fitnesses.reduce(function (a, b) {
+                return a + b;
+              }, 0) / fitnesses.length
+            : 0;
+          var bestFit = fitnesses.length ? Math.max.apply(null, fitnesses) : 0;
+
+          $("spActive").textContent = active;
+          $("spTotal").textContent = total + " total";
+          $("spAvgFit").textContent = avgFit.toFixed(3);
+          $("spBestFit").textContent = "best: " + bestFit.toFixed(3);
+        }
+
+        // ── Render: Strategy Leaderboard ──
+        function renderLeaderboard(strategies) {
+          var body = $("lbBody");
+          if (!strategies || !strategies.length) {
+            body.innerHTML =
+              '<tr><td colspan="10" style="text-align:center;color:var(--text-dim);padding:20px">No strategies registered</td></tr>';
+            $("lbCount").textContent = "";
+            return;
+          }
+          var sorted = strategies.slice().sort(function (a, b) {
+            return (b.fitness || b.sharpe || 0) - (a.fitness || a.sharpe || 0);
+          });
+          $("lbCount").textContent = sorted.length + " strategies";
+
+          var html = "";
+          sorted.forEach(function (s, i) {
+            var rank = i + 1;
+            var rankCls = rank <= 3 ? "race-rank--" + rank : "race-rank--n";
+            var lvl = s.level || "L0_INCUBATE";
+            var lvlNum = levelToNum[lvl] != null ? levelToNum[lvl] : 0;
+            var score = s.leaderboardScore || s.fitness || 0;
+            var fit = s.fitness || 0;
+            var sharpe = s.sharpe || 0;
+            var dd = s.maxDrawdown || 0;
+            var win = s.winRate || 0;
+            var trades = s.totalTrades || s.tradeCount || 0;
+
+            html +=
+              '<tr data-level="' + lvlNum + '" data-id="' + esc(s.id || s.name || "") + '">' +
+              '<td><span class="race-rank ' + rankCls + '">' + rank + "</span></td>" +
+              '<td style="color:var(--text-hi);font-weight:600">' + esc(s.name || s.id) + "</td>" +
+              '<td><span class="level-badge level-badge--' + (levelCls[lvl] || "l0") + '">' +
+              (levelLabels[lvl] || lvl) + "</span></td>" +
+              '<td class="num">' + score.toFixed(2) + "</td>" +
+              '<td><span class="fitness-bar-inline"><span class="fitness-bar-inline__fill" style="width:' +
+              fit * 100 + "%;background:" + fitnessColor(fit) + '"></span></span>' +
+              '<span class="' + (fit >= 0.7 ? "gain" : fit >= 0.4 ? "num" : "dim") +
+              ' num" style="font-weight:700">' + fit.toFixed(2) + "</span></td>" +
+              '<td class="num" style="color:var(--text-hi)">' + sharpe.toFixed(2) + "</td>" +
+              '<td class="loss num">' + fmtPct(dd) + "</td>" +
+              '<td class="num">' + win.toFixed(1) + "%</td>" +
+              '<td class="num">' + trades + "</td>" +
+              '<td><div class="race-actions">' +
+              (lvlNum < 3
+                ? '<button class="race-act race-act--promote" title="Promote" data-strat-id="' +
+                  esc(s.id || s.name) + '" data-strat-action="promote">&#11014;</button>'
+                : "") +
+              '<button class="race-act race-act--detail" title="Mutate" data-strat-id="' +
+              esc(s.id || s.name) + '" data-strat-action="mutate">&#128260;</button>' +
+              '<button class="race-act race-act--kill" title="Kill" data-strat-id="' +
+              esc(s.id || s.name) + '" data-strat-action="kill">&#10005;</button>' +
+              "</div></td>" +
+              "</tr>";
+          });
+          body.innerHTML = html;
+        }
+
+        // ── Render: Approval Queue ──
+        function renderApprovals(events) {
+          var pending = ((events && events.events) || []).filter(function (e) {
+            return e.status === "pending" || e.needsApproval;
+          });
+          var section = $("approvalSection");
+          var badge = $("approvalCount");
+          if (!pending.length) {
+            $("approvalList").innerHTML =
+              '<div style="font-size:10px;color:var(--text-dim);padding:8px 0">No pending approvals</div>';
+            badge.style.display = "none";
+            return;
+          }
+          badge.style.display = "";
+          badge.textContent = pending.length;
+          var html = "";
+          pending.forEach(function (e) {
+            html +=
+              '<div class="fcard fcard--approval" style="margin-bottom:6px" data-id="' + esc(e.id || "") + '">' +
+              '<div class="fcard__top">' +
+              '<span class="fcard__type fcard__type--approval">APPROVAL</span>' +
+              '<span class="fcard__time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
+              "</div>" +
+              '<div class="fcard__title">' + esc(e.title || e.summary || e.message || "") + "</div>" +
+              '<div class="fcard__actions">' +
+              '<button class="fcard__btn fcard__btn--approve" data-event-id="' + esc(e.id) +
+              '" data-event-approve="true">Approve &#9656;</button>' +
+              '<button class="fcard__btn fcard__btn--reject" data-event-id="' + esc(e.id) +
+              '" data-event-approve="false">Reject</button>' +
+              "</div>" +
+              "</div>";
+          });
+          $("approvalList").innerHTML = html;
+        }
+
+        // ── Render: Backtest Results ──
+        function renderBacktests(backtests) {
+          var body = $("btBody");
+          if (!backtests || !backtests.length) {
+            body.innerHTML =
+              '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:16px">No backtest results</td></tr>';
+            return;
+          }
+          var html = "";
+          backtests.forEach(function (b) {
+            var ret = b.totalReturn || b.returnPct || 0;
+            var sharpe = b.sharpe || 0;
+            var dd = b.maxDrawdown || 0;
+            var win = b.winRate || 0;
+            var pf = b.profitFactor || 0;
+            var trades = b.totalTrades || b.tradeCount || 0;
+
+            html +=
+              "<tr>" +
+              '<td style="color:var(--text-hi)">' + esc(b.strategyName || b.strategyId || b.name || "") + "</td>" +
+              '<td class="' + pnlClass(ret) + ' num" style="text-align:right;font-weight:600">' + fmtPct(ret) + "</td>" +
+              '<td class="num" style="text-align:right">' + sharpe.toFixed(2) + "</td>" +
+              '<td class="loss num" style="text-align:right">' + fmtPct(dd) + "</td>" +
+              '<td class="num" style="text-align:right">' + win.toFixed(1) + "%</td>" +
+              '<td class="num" style="text-align:right">' + pf.toFixed(2) + "</td>" +
+              '<td class="num" style="text-align:right">' + trades + "</td>" +
+              "</tr>";
+          });
+          body.innerHTML = html;
+        }
+
+        // ── Render: Evolution Feed ──
+        function eventCategory(e) {
+          var t = (e.type || e.action || "").toLowerCase();
+          if (/mutat|crossover|gene/i.test(t)) return "mutation";
+          if (/promot/i.test(t)) return "promote";
+          if (/kill|extinct|cull/i.test(t)) return "kill";
+          return "mutation";
+        }
+        function eventTypeLabel(e) {
+          var t = (e.type || e.action || "").toLowerCase();
+          if (/mutat/i.test(t)) return { label: "MUTATION", cls: "mutation" };
+          if (/crossover/i.test(t)) return { label: "CROSSOVER", cls: "crossover" };
+          if (/promot/i.test(t)) return { label: "PROMOTED", cls: "promotion" };
+          if (/kill|extinct/i.test(t)) return { label: "KILLED", cls: "extinction" };
+          if (/approv/i.test(t)) return { label: "APPROVAL", cls: "approval" };
+          return { label: t.toUpperCase() || "EVENT", cls: "mutation" };
+        }
+
+        function renderFeed(events, filter) {
+          var el = $("feedList");
+          if (!events || !events.length) {
+            el.innerHTML =
+              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No evolution events yet</div>';
+            return;
+          }
+          var html = "";
+          var count = 0;
+          events.forEach(function (e) {
+            var cat = eventCategory(e);
+            if (filter !== "all" && cat !== filter) return;
+            if (count >= 50) return;
+            count++;
+            var tl = eventTypeLabel(e);
+            html +=
+              '<div class="fcard fcard--' + tl.cls + '">' +
+              '<div class="fcard__top">' +
+              '<span class="fcard__type fcard__type--' + tl.cls + '">' + tl.label + "</span>" +
+              '<span class="fcard__time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
+              "</div>" +
+              '<div class="fcard__title">' + esc(e.title || e.summary || e.message || "") + "</div>" +
+              (e.description || e.detail
+                ? '<div class="fcard__desc">' + esc(e.description || e.detail) + "</div>"
+                : "") +
+              "</div>";
+          });
+          el.innerHTML = html;
+        }
+
+        // ── Master render ──
+        function renderAll() {
+          renderPipeline(state.pipeline);
+          renderEvoStats(state.strategies);
+          renderLeaderboard(state.strategies);
+          renderApprovals(state.events);
+          renderBacktests(state.backtests);
+          renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+        }
+
+        // ── SSE Connection Manager ──
+        var sseStreams = {};
+        function connectSSE(name, url, onMessage, interval) {
+          var dotEl = $("sse" + name.charAt(0).toUpperCase() + name.slice(1));
+          var retryDelay = 1000;
+          var maxRetry = 30000;
+          var failures = 0;
+          var maxFailures = 3;
+
+          function connect() {
+            if (typeof EventSource === "undefined") {
+              startPolling();
+              return;
+            }
+            var es = new EventSource(url);
+            sseStreams[name] = es;
+
+            es.onopen = function () {
+              retryDelay = 1000;
+              failures = 0;
+              if (dotEl) dotEl.className = "sse-dot connected";
+            };
+            es.onmessage = function (ev) {
+              try {
+                var data = JSON.parse(ev.data);
+                onMessage(data);
+              } catch (e) {
+                console.warn("SSE parse error (" + name + "):", e);
+              }
+            };
+            es.onerror = function () {
+              es.close();
+              failures++;
+              if (dotEl) dotEl.className = "sse-dot error";
+              if (failures >= maxFailures) {
+                startPolling();
+                return;
+              }
+              setTimeout(connect, retryDelay);
+              retryDelay = Math.min(retryDelay * 2, maxRetry);
+            };
+          }
+
+          function startPolling() {
+            var pollUrl = url.replace("/stream", "");
+            if (dotEl) dotEl.className = "sse-dot";
+            fetch(pollUrl)
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                onMessage(d);
+                if (dotEl) dotEl.className = "sse-dot connected";
+              })
+              .catch(function () {
+                if (dotEl) dotEl.className = "sse-dot error";
+              });
+            setInterval(function () {
+              fetch(pollUrl)
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  onMessage(d);
+                  if (dotEl) dotEl.className = "sse-dot connected";
+                })
+                .catch(function () {
+                  if (dotEl) dotEl.className = "sse-dot error";
+                });
+            }, interval || 15000);
+          }
+
+          connect();
+        }
+
+        // ── SSE Handlers ──
+        function onStrategyData(data) {
+          if (data.pipeline) state.pipeline = data.pipeline;
+          if (data.strategies) state.strategies = data.strategies;
+          if (data.backtests) state.backtests = data.backtests;
+          if (data.events) state.events = data.events;
+          renderAll();
+        }
+
+        function onEventsData(data) {
+          if (data.type === "new_event" && data.event) {
+            state.events.events = state.events.events || [];
+            state.events.events.push(data.event);
+          } else if (data.events) {
+            state.events = data;
+          }
+          renderApprovals(state.events);
+          renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+        }
+
+        function initSSE() {
+          connectSSE("strategy", "/api/v1/finance/strategy/stream", onStrategyData, 15000);
+          connectSSE("events", "/api/v1/finance/events/stream", onEventsData, 5000);
+        }
+
+        // ── Public API (ST namespace) ──
+        window.ST = {
+          openSlide: function (id) {
+            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
+            if (el) el.classList.add("open");
+          },
+          closeSlide: function (id) {
+            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
+            if (el) el.classList.remove("open");
+          },
+          closeEstop: function () {
+            $("estopModal").classList.remove("open");
+          },
+          confirmEstop: function () {
+            ST.closeEstop();
+            postApi("/api/v1/finance/emergency-stop", {})
+              .then(function () {
+                $("riskHalo").className = "risk-halo risk-halo--danger";
+                var rb = $("riskBadge");
+                rb.textContent = "STOPPED";
+                rb.className = "topbar__risk topbar__risk--danger";
+                $("botMsg").innerHTML =
+                  '<em style="color:var(--loss)">EMERGENCY STOP activated.</em>';
+              })
+              .catch(function (e) {
+                $("botMsg").textContent = "Emergency stop failed: " + e.message;
+              });
+          },
+          submitCreate: function () {
+            var form = $("createForm");
+            var name = form.querySelector("[name=stratName]").value.trim();
+            var market = form.querySelector("[name=stratMarket]").value;
+            var timeframe = form.querySelector("[name=stratTimeframe]").value;
+            var symbols = form.querySelector("[name=stratSymbols]").value;
+            var description = form.querySelector("[name=stratDescription]").value.trim();
+
+            if (!name) {
+              toast("Strategy name is required", "error");
+              return;
+            }
+
+            postApi("/api/v1/finance/strategies/create", {
+              name: name,
+              market: market,
+              timeframe: timeframe,
+              symbols: symbols
+                ? symbols.split(",").map(function (s) { return s.trim(); })
+                : [],
+              description: description || undefined,
+            })
+              .then(function (r) {
+                ST.closeSlide("create");
+                toast("Strategy '" + name + "' created", "success");
+                form.reset();
+                $("botMsg").innerHTML = "<em>Strategy '" + esc(name) + "' created</em>";
+              })
+              .catch(function (e) {
+                toast("Create failed: " + e.message, "error");
+              });
+          },
+          triggerEvolution: function () {
+            $("botMsg").innerHTML = "<em>Triggering evolution cycle...</em>";
+            postApi("/api/v1/finance/evolution/trigger", {})
+              .then(function () {
+                toast("Evolution cycle triggered", "success");
+              })
+              .catch(function (e) {
+                toast("Evolution trigger failed: " + e.message, "error");
+              });
+          },
+          runAllBacktests: function () {
+            $("botMsg").innerHTML = "<em>Running all backtests...</em>";
+            postApi("/api/v1/finance/strategies/backtest-all", {})
+              .then(function () {
+                toast("Backtests started", "success");
+              })
+              .catch(function (e) {
+                toast("Backtest failed: " + e.message, "error");
+              });
+          },
+          stratAction: function (id, action) {
+            postApi("/api/v1/finance/strategies/" + action, { strategyId: id })
+              .then(function () {
+                toast("Strategy " + id + " \u2014 " + action + " OK", "success");
+              })
+              .catch(function (e) {
+                toast("Action failed: " + e.message, "error");
+              });
+          },
+          approveEvent: function (id, approved) {
+            postApi("/api/v1/finance/events/approve", { eventId: id, approved: approved })
+              .then(function () {
+                var card = document.querySelector('.fcard[data-id="' + id + '"]');
+                if (card) card.style.display = "none";
+                toast("Event " + (approved ? "approved" : "rejected"), "success");
+              })
+              .catch(function (e) {
+                toast("Approval failed: " + e.message, "error");
+              });
+          },
+        };
+
+        // ── Filter chips ──
+        document.querySelectorAll(".fchip").forEach(function (c) {
+          c.addEventListener("click", function () {
+            document.querySelectorAll(".fchip").forEach(function (x) {
+              x.classList.remove("active");
+            });
+            c.classList.add("active");
+            state.feedFilter = c.dataset.f;
+            renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          });
+        });
+
+        // ── Race filters ──
+        document.querySelectorAll(".race-filter").forEach(function (f) {
+          f.addEventListener("click", function () {
+            var val = f.dataset.lf;
+            if (val === "all") {
+              document.querySelectorAll(".race-filter").forEach(function (x) {
+                x.classList.remove("active");
+              });
+              f.classList.add("active");
+            } else {
+              document.querySelector('.race-filter[data-lf="all"]').classList.remove("active");
+              f.classList.toggle("active");
+              if (!document.querySelector(".race-filter.active")) {
+                document.querySelector('.race-filter[data-lf="all"]').classList.add("active");
+              }
+            }
+            var activeFilters = [];
+            document.querySelectorAll(".race-filter.active").forEach(function (a) {
+              activeFilters.push(a.dataset.lf);
+            });
+            var showAll = activeFilters.indexOf("all") >= 0;
+            document.querySelectorAll("#lbBody tr").forEach(function (row) {
+              if (showAll) {
+                row.style.display = "";
+                return;
+              }
+              var lvl = row.dataset.level;
+              var match = false;
+              activeFilters.forEach(function (filt) {
+                if (filt === "l" + lvl) match = true;
+              });
+              row.style.display = match ? "" : "none";
+            });
+          });
+        });
+
+        // ── Delegated click handlers ──
+        document.addEventListener("click", function (e) {
+          var stratBtn = e.target.closest("[data-strat-action]");
+          if (stratBtn) {
+            ST.stratAction(stratBtn.dataset.stratId, stratBtn.dataset.stratAction);
+            return;
+          }
+          var evtBtn = e.target.closest("[data-event-approve]");
+          if (evtBtn) {
+            ST.approveEvent(evtBtn.dataset.eventId, evtBtn.dataset.eventApprove === "true");
+            return;
+          }
+        });
+
+        // ── Slide-over backdrop close ──
+        document.querySelectorAll(".slideover-backdrop").forEach(function (bg) {
+          bg.addEventListener("click", function (e) {
+            if (e.target === bg) bg.classList.remove("open");
+          });
+        });
+
+        // ── Emergency stop button ──
+        $("estopBtn").addEventListener("click", function () {
+          $("estopModal").classList.add("open");
+        });
+
+        // ── Boot ──
+        renderAll();
+        initSSE();
+        $("botMsg").innerHTML = "Strategy online. <em>" + new Date().toLocaleString() + "</em>";
+      })();
+    </script>
+  </body>
+</html>

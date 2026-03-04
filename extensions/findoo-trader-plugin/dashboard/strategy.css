@@ -1,0 +1,189 @@
+/* ════════════════════════════════════════════════════════════════
+   Strategy Tab — Page-specific CSS
+   ════════════════════════════════════════════════════════════════ */
+
+/* Pipeline vertical (inherits from unified but add spacing tweaks) */
+.pipeline-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Approval badge */
+.badge {
+  background: var(--warn);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+
+/* Race filters */
+.race-filters {
+  display: flex;
+  gap: 2px;
+}
+.race-filter {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  transition: all 0.15s;
+}
+.race-filter:hover {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.04);
+}
+.race-filter.active {
+  color: var(--text-hi);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Fitness bar inline */
+.fitness-bar-inline {
+  display: inline-block;
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.fitness-bar-inline__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+/* Level badges */
+.level-badge {
+  font-size: 8px;
+  font-weight: 700;
+  font-family: var(--mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+}
+.level-badge--l0 {
+  color: var(--l0);
+  background: rgba(107, 114, 128, 0.12);
+}
+.level-badge--l1 {
+  color: var(--l1);
+  background: rgba(59, 130, 246, 0.12);
+}
+.level-badge--l2 {
+  color: var(--l2);
+  background: rgba(245, 158, 11, 0.12);
+}
+.level-badge--l3 {
+  color: var(--l3);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+/* Race actions */
+.race-actions {
+  display: flex;
+  gap: 2px;
+}
+.race-act {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.15s;
+  color: var(--text-dim);
+}
+.race-act:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-hi);
+}
+.race-act--promote:hover {
+  color: var(--gain);
+}
+.race-act--kill:hover {
+  color: var(--loss);
+}
+
+/* Race rank */
+.race-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+.race-rank--1 {
+  background: linear-gradient(135deg, #ffd700, #ff8c00);
+  color: #000;
+}
+.race-rank--2 {
+  background: linear-gradient(135deg, #c0c0c0, #808080);
+  color: #000;
+}
+.race-rank--3 {
+  background: linear-gradient(135deg, #cd7f32, #8b4513);
+  color: #fff;
+}
+.race-rank--n {
+  color: var(--text-dim);
+}
+
+/* Toast */
+.toast-container {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.toast {
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-hi);
+  opacity: 0;
+  transform: translateX(20px);
+  transition: all 0.3s;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+.toast--success {
+  border-color: var(--gain);
+}
+.toast--error {
+  border-color: var(--loss);
+}
+
+/* Feed card type badges for strategy-specific events */
+.fcard__type--mutation {
+  color: var(--accent);
+}
+.fcard__type--crossover {
+  color: var(--purple);
+}
+.fcard__type--promotion {
+  color: var(--gain);
+}
+.fcard__type--extinction {
+  color: var(--loss);
+}
+.fcard__type--approval {
+  color: var(--warn);
+}

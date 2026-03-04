@@ -11,6 +11,7 @@
  * SSE Streams: 3 (config, trading, events)
  * CLI Commands: exchange list/add/remove
  * Hook: before_tool_call risk gate
+ * Notification: Telegram event routing + inline approval buttons
  */
 
 import { dirname, join } from "node:path";
@@ -21,9 +22,11 @@ import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
 import type { DataGatheringDeps } from "./src/core/data-gathering.js";
 import { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/core/exchange-registry.js";
+import { NotificationRouter } from "./src/core/notification-router.js";
 import { RiskController } from "./src/core/risk-controller.js";
 import { registerHttpRoutes } from "./src/core/route-handlers.js";
 import { registerSseRoutes } from "./src/core/sse-handlers.js";
+import { registerTelegramApprovalRoute } from "./src/core/telegram-approval.js";
 import { loadDashboardTemplates } from "./src/core/template-renderer.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
@@ -48,6 +51,7 @@ export { PaperEngine } from "./src/paper/paper-engine.js";
 export { PaperStore } from "./src/paper/paper-store.js";
 export { BacktestEngine } from "./src/strategy/backtest-engine.js";
 export { StrategyRegistry } from "./src/strategy/strategy-registry.js";
+export { NotificationRouter } from "./src/core/notification-router.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -159,6 +163,7 @@ const findooTraderPlugin = {
       riskController,
       runtime,
       templates,
+      registry,
     });
 
     // ── Register SSE streams ──
@@ -267,6 +272,39 @@ const findooTraderPlugin = {
           }
         });
     });
+
+    // ── Notification Router + Telegram Approval ──
+
+    const notificationConfig = (api.pluginConfig as Record<string, unknown> | undefined)
+      ?.notifications as Record<string, unknown> | undefined;
+    const telegramChatId =
+      (notificationConfig?.telegramChatId as string | undefined) ??
+      process.env.FINDOO_TELEGRAM_CHAT_ID;
+    const telegramBotToken = notificationConfig?.telegramBotToken as string | undefined;
+
+    if (telegramChatId) {
+      const notificationRouter = new NotificationRouter(eventStore, {
+        telegramChatId,
+        telegramBotToken,
+        minLevel:
+          (notificationConfig?.minLevel as "critical" | "action_required" | "info") ?? "info",
+        suppressTypes: notificationConfig?.suppressTypes as string[] | undefined as never,
+      });
+      notificationRouter.start();
+
+      // Register notification stats endpoint
+      api.registerHttpRoute({
+        path: "/api/v1/finance/notifications/stats",
+        handler: async (_req: unknown, res: unknown) => {
+          const httpRes = res as import("./src/types-http.js").HttpRes;
+          httpRes.writeHead(200, { "Content-Type": "application/json" });
+          httpRes.end(JSON.stringify(notificationRouter.getStats()));
+        },
+      });
+    }
+
+    // Register Telegram approval callback route (always active — handles button clicks)
+    registerTelegramApprovalRoute(api, eventStore, { telegramBotToken });
 
     // ── Risk control hook: intercept fin_* trading tool calls ──
 
