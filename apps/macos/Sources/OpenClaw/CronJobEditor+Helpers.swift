@@ -46,13 +46,16 @@ extension CronJobEditor {
         }
 
         if let delivery = job.delivery {
-            self.deliveryMode = delivery.mode == .announce ? .announce : .none
+            self.deliveryMode = delivery.mode
             let trimmed = (delivery.channel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.channel = trimmed.isEmpty ? "last" : trimmed
             self.to = delivery.to ?? ""
             self.bestEffortDeliver = delivery.bestEffort ?? false
-        } else if self.sessionTarget == .isolated {
-            self.deliveryMode = .announce
+        } else {
+            self.deliveryMode = .none
+            self.channel = "last"
+            self.to = ""
+            self.bestEffortDeliver = false
         }
     }
 
@@ -67,6 +70,16 @@ extension CronJobEditor {
     }
 
     func buildPayload() throws -> [String: AnyCodable] {
+        let root = try self.buildPayloadRoot()
+        guard let job else {
+            return root.mapValues { AnyCodable($0) }
+        }
+        let current = self.buildComparableRoot(from: job)
+        let patch = self.diffPatch(next: root, current: current)
+        return patch.mapValues { AnyCodable($0) }
+    }
+
+    func buildPayloadRoot() throws -> [String: Any] {
         let name = try self.requireName()
         let description = self.trimmed(self.description)
         let agentId = self.trimmed(self.agentId)
@@ -85,35 +98,217 @@ extension CronJobEditor {
             "payload": payload,
         ]
         self.applyDeleteAfterRun(to: &root)
-        if !description.isEmpty { root["description"] = description }
+        if !description.isEmpty {
+            root["description"] = description
+        } else if self.job?.description != nil {
+            root["description"] = NSNull()
+        }
         if !agentId.isEmpty {
             root["agentId"] = agentId
         } else if self.job?.agentId != nil {
             root["agentId"] = NSNull()
         }
 
-        if self.sessionTarget == .isolated {
+        if self.shouldIncludeDeliveryInRoot() {
             root["delivery"] = self.buildDelivery()
         }
-
-        return root.mapValues { AnyCodable($0) }
+        return root
     }
 
     func buildDelivery() -> [String: Any] {
-        let mode = self.deliveryMode == .announce ? "announce" : "none"
+        let mode = self.deliveryMode.rawValue
         var delivery: [String: Any] = ["mode": mode]
         if self.deliveryMode == .announce {
             let trimmed = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
             delivery["channel"] = trimmed.isEmpty ? "last" : trimmed
             let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !to.isEmpty { delivery["to"] = to }
+            if !to.isEmpty {
+                delivery["to"] = to
+            } else if self.job?.delivery?.to != nil {
+                delivery["to"] = NSNull()
+            }
             if self.bestEffortDeliver {
                 delivery["bestEffort"] = true
             } else if self.job?.delivery?.bestEffort == true {
                 delivery["bestEffort"] = false
             }
+        } else if self.deliveryMode == .webhook {
+            let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !to.isEmpty {
+                delivery["to"] = to
+            } else if self.job?.delivery?.to != nil {
+                delivery["to"] = NSNull()
+            }
+        } else if self.deliveryMode == .raw || self.isUnknownDeliveryMode(self.deliveryMode) {
+            let channel = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !channel.isEmpty {
+                delivery["channel"] = channel
+            }
+            let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !to.isEmpty {
+                delivery["to"] = to
+            }
+            if self.bestEffortDeliver {
+                delivery["bestEffort"] = true
+            }
         }
         return delivery
+    }
+
+    func shouldIncludeDeliveryInRoot() -> Bool {
+        guard self.sessionTarget == .isolated else { return false }
+        guard let job else { return true }
+        if job.delivery != nil { return true }
+        if self.deliveryMode != .none { return true }
+        if !self.trimmed(self.to).isEmpty { return true }
+        if self.trimmed(self.channel).lowercased() != "last" { return true }
+        if self.bestEffortDeliver { return true }
+        return false
+    }
+
+    func buildComparableRoot(from job: CronJob) -> [String: Any] {
+        var root: [String: Any] = [
+            "name": self.trimmed(job.name),
+            "enabled": job.enabled,
+            "schedule": self.scheduleDictionary(from: job.schedule),
+            "sessionTarget": job.sessionTarget.rawValue,
+            "wakeMode": job.wakeMode.rawValue,
+            "payload": self.payloadDictionary(from: job.payload),
+        ]
+
+        if let description = job.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty
+        {
+            root["description"] = description
+        }
+        if let agentId = job.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agentId.isEmpty
+        {
+            root["agentId"] = agentId
+        }
+
+        switch job.schedule {
+        case .at:
+            root["deleteAfterRun"] = job.deleteAfterRun ?? false
+        case .every, .cron:
+            if job.deleteAfterRun != nil {
+                root["deleteAfterRun"] = false
+            }
+        }
+
+        if job.sessionTarget == .isolated, let delivery = job.delivery {
+            root["delivery"] = self.deliveryDictionary(from: delivery)
+        }
+
+        return root
+    }
+
+    func scheduleDictionary(from schedule: CronSchedule) -> [String: Any] {
+        switch schedule {
+        case let .at(at):
+            return ["kind": "at", "at": at]
+        case let .every(everyMs, _):
+            return ["kind": "every", "everyMs": everyMs]
+        case let .cron(expr, tz):
+            let trimmedTz = tz?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if trimmedTz.isEmpty {
+                return ["kind": "cron", "expr": expr]
+            }
+            return ["kind": "cron", "expr": expr, "tz": trimmedTz]
+        }
+    }
+
+    func payloadDictionary(from payload: CronPayload) -> [String: Any] {
+        switch payload {
+        case let .systemEvent(text):
+            return ["kind": "systemEvent", "text": text]
+        case let .agentTurn(message, thinking, timeoutSeconds, _, _, _, _):
+            var dict: [String: Any] = ["kind": "agentTurn", "message": message]
+            let trimmedThinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedThinking.isEmpty {
+                dict["thinking"] = trimmedThinking
+            }
+            if let timeoutSeconds, timeoutSeconds > 0 {
+                dict["timeoutSeconds"] = timeoutSeconds
+            }
+            return dict
+        }
+    }
+
+    func deliveryDictionary(from delivery: CronDelivery) -> [String: Any] {
+        var dict: [String: Any] = ["mode": delivery.mode.rawValue]
+        let channel = delivery.channel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let to = delivery.to?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch delivery.mode {
+        case .announce:
+            dict["channel"] = channel.isEmpty ? "last" : channel
+            if !to.isEmpty {
+                dict["to"] = to
+            }
+            if delivery.bestEffort == true {
+                dict["bestEffort"] = true
+            }
+        case .webhook:
+            if !to.isEmpty {
+                dict["to"] = to
+            }
+        case .raw:
+            if !channel.isEmpty {
+                dict["channel"] = channel
+            }
+            if !to.isEmpty {
+                dict["to"] = to
+            }
+            if delivery.bestEffort == true {
+                dict["bestEffort"] = true
+            }
+        case .none:
+            break
+        case .unknown(_):
+            if !channel.isEmpty {
+                dict["channel"] = channel
+            }
+            if !to.isEmpty {
+                dict["to"] = to
+            }
+            if delivery.bestEffort == true {
+                dict["bestEffort"] = true
+            }
+        }
+        return dict
+    }
+
+    func isUnknownDeliveryMode(_ mode: CronDeliveryMode) -> Bool {
+        if case .unknown(_) = mode {
+            return true
+        }
+        return false
+    }
+
+    func diffPatch(next: [String: Any], current: [String: Any]) -> [String: Any] {
+        var patch: [String: Any] = [:]
+        for (key, value) in next {
+            if !self.valuesEqual(value, current[key]) {
+                patch[key] = value
+            }
+        }
+        return patch
+    }
+
+    func valuesEqual(_ lhs: Any, _ rhs: Any?) -> Bool {
+        guard let rhs else { return false }
+        guard let lhsData = self.jsonComparableData(lhs),
+              let rhsData = self.jsonComparableData(rhs)
+        else {
+            return String(describing: lhs) == String(describing: rhs)
+        }
+        return lhsData == rhsData
+    }
+
+    func jsonComparableData(_ value: Any) -> Data? {
+        let wrapped: [String: Any] = ["v": value]
+        guard JSONSerialization.isValidJSONObject(wrapped) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: wrapped, options: [.sortedKeys])
     }
 
     func trimmed(_ value: String) -> String {

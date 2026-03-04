@@ -1,30 +1,143 @@
 import Foundation
 
-enum CronSessionTarget: String, CaseIterable, Identifiable, Codable {
+enum CronSessionTarget: CaseIterable, Identifiable, Codable, Equatable, Hashable {
     case main
     case isolated
+    case current
+    case unknown(String)
+
+    static var allCases: [CronSessionTarget] {
+        [.main, .isolated, .current]
+    }
+
+    var rawValue: String {
+        switch self {
+        case .main: "main"
+        case .isolated: "isolated"
+        case .current: "current"
+        case let .unknown(value): value
+        }
+    }
 
     var id: String {
         self.rawValue
     }
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "main":
+            self = .main
+        case "isolated":
+            self = .isolated
+        case "current":
+            self = .current
+        default:
+            self = .unknown(rawValue)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = .init(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.rawValue)
+    }
 }
 
-enum CronWakeMode: String, CaseIterable, Identifiable, Codable {
+enum CronWakeMode: CaseIterable, Identifiable, Codable, Equatable, Hashable {
     case now
-    case nextHeartbeat = "next-heartbeat"
+    case nextHeartbeat
+    case unknown(String)
+
+    static var allCases: [CronWakeMode] {
+        [.now, .nextHeartbeat]
+    }
+
+    var rawValue: String {
+        switch self {
+        case .now: "now"
+        case .nextHeartbeat: "next-heartbeat"
+        case let .unknown(value): value
+        }
+    }
 
     var id: String {
         self.rawValue
     }
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "now":
+            self = .now
+        case "next-heartbeat":
+            self = .nextHeartbeat
+        default:
+            self = .unknown(rawValue)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = .init(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.rawValue)
+    }
 }
 
-enum CronDeliveryMode: String, CaseIterable, Identifiable, Codable {
+enum CronDeliveryMode: CaseIterable, Identifiable, Codable, Equatable, Hashable {
     case none
     case announce
     case webhook
+    case raw
+    case unknown(String)
+
+    static var allCases: [CronDeliveryMode] {
+        [.none, .announce, .webhook]
+    }
+
+    var rawValue: String {
+        switch self {
+        case .none: "none"
+        case .announce: "announce"
+        case .webhook: "webhook"
+        case .raw: "raw"
+        case let .unknown(value): value
+        }
+    }
 
     var id: String {
         self.rawValue
+    }
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "none":
+            self = .none
+        case "announce":
+            self = .announce
+        case "webhook":
+            self = .webhook
+        case "raw":
+            self = .raw
+        default:
+            self = .unknown(rawValue)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = .init(rawValue: try container.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self.rawValue)
     }
 }
 
@@ -223,6 +336,60 @@ struct CronJob: Identifiable, Codable, Equatable {
     var lastRunDate: Date? {
         guard let ms = self.state.lastRunAtMs else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+    }
+}
+
+extension CronJob {
+    private enum EncodingKeys: String, CodingKey {
+        case id, agentId, name, description, enabled, deleteAfterRun, createdAtMs, updatedAtMs
+        case schedule, sessionTarget, wakeMode, payload, delivery, state
+    }
+
+    private enum DecodingKeys: String, CodingKey {
+        case id, agentId, name, description, enabled, deleteAfterRun, createdAtMs, updatedAtMs
+        case schedule, sessionTarget, wakeMode, postRun, payload, delivery, state
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: EncodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encodeIfPresent(self.agentId, forKey: .agentId)
+        try container.encode(self.name, forKey: .name)
+        try container.encodeIfPresent(self.description, forKey: .description)
+        try container.encode(self.enabled, forKey: .enabled)
+        try container.encodeIfPresent(self.deleteAfterRun, forKey: .deleteAfterRun)
+        try container.encode(self.createdAtMs, forKey: .createdAtMs)
+        try container.encode(self.updatedAtMs, forKey: .updatedAtMs)
+        try container.encode(self.schedule, forKey: .schedule)
+        try container.encode(self.sessionTarget, forKey: .sessionTarget)
+        try container.encode(self.wakeMode, forKey: .wakeMode)
+        try container.encode(self.payload, forKey: .payload)
+        try container.encodeIfPresent(self.delivery, forKey: .delivery)
+        try container.encode(self.state, forKey: .state)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DecodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.enabled = try container.decode(Bool.self, forKey: .enabled)
+        self.deleteAfterRun = try container.decodeIfPresent(Bool.self, forKey: .deleteAfterRun)
+        self.createdAtMs = try container.decode(Int.self, forKey: .createdAtMs)
+        self.updatedAtMs = try container.decode(Int.self, forKey: .updatedAtMs)
+        self.schedule = try container.decode(CronSchedule.self, forKey: .schedule)
+        self.sessionTarget = try container.decode(CronSessionTarget.self, forKey: .sessionTarget)
+        if let wakeMode = try container.decodeIfPresent(CronWakeMode.self, forKey: .wakeMode) {
+            self.wakeMode = wakeMode
+        } else if let postRunRaw = try container.decodeIfPresent(String.self, forKey: .postRun) {
+            self.wakeMode = postRunRaw == "trigger-heartbeat" ? .nextHeartbeat : .unknown(postRunRaw)
+        } else {
+            self.wakeMode = .now
+        }
+        self.payload = try container.decode(CronPayload.self, forKey: .payload)
+        self.delivery = try container.decodeIfPresent(CronDelivery.self, forKey: .delivery)
+        self.state = try container.decode(CronJobState.self, forKey: .state)
     }
 }
 
