@@ -26,6 +26,7 @@ import {
 } from "../../discord/send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
+import { resolvePollMaxSelections } from "../../polls.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import { assertMediaNotDataUrl } from "../sandbox-paths.js";
 import {
@@ -172,7 +173,7 @@ export async function handleDiscordMessagingAction(
       const durationRaw = params.durationHours;
       const durationHours =
         typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
-      const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
+      const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
       await sendPollDiscord(
         to,
         { question, options: answers, maxSelections, durationHours },

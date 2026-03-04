@@ -496,6 +496,42 @@ describe("handleDiscordMessageAction", () => {
 });
 
 describe("telegramMessageActions", () => {
+  it("lists poll when telegram is configured", () => {
+    const actions = telegramMessageActions.listActions?.({ cfg: telegramCfg() }) ?? [];
+
+    expect(actions).toContain("poll");
+  });
+
+  it("omits poll when sendMessage is disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { sendMessage: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
+  it("omits poll when poll actions are disabled", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { poll: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
   it("lists sticker actions only when enabled by config", () => {
     const cases = [
       {
@@ -592,6 +628,35 @@ describe("telegramMessageActions", () => {
           messageId: 42,
           content: "Updated",
           buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "poll maps to telegram poll action",
+        action: "poll" as const,
+        params: {
+          to: "123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: true,
+          pollDurationSeconds: 60,
+          pollPublic: true,
+          replyTo: 55,
+          threadId: 77,
+          silent: true,
+        },
+        expectedPayload: {
+          action: "poll",
+          to: "123",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          allowMultiselect: true,
+          durationHours: undefined,
+          durationSeconds: 60,
+          replyToMessageId: 55,
+          messageThreadId: 77,
+          isAnonymous: false,
+          silent: true,
           accountId: undefined,
         },
       },

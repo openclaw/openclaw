@@ -1,0 +1,51 @@
+export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
+
+export type PollCreationParamDef = {
+  kind: PollCreationParamKind;
+  telegramOnly?: boolean;
+};
+
+export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
+  pollQuestion: { kind: "string" },
+  pollOption: { kind: "stringArray" },
+  pollDurationHours: { kind: "number" },
+  pollMulti: { kind: "boolean" },
+  pollDurationSeconds: { kind: "number", telegramOnly: true },
+  pollAnonymous: { kind: "boolean", telegramOnly: true },
+  pollPublic: { kind: "boolean", telegramOnly: true },
+};
+
+export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
+
+export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
+
+export const TELEGRAM_POLL_CREATION_PARAM_NAMES = POLL_CREATION_PARAM_NAMES.filter(
+  (name) => POLL_CREATION_PARAM_DEFS[name].telegramOnly === true,
+);
+
+export function resolveTelegramPollVisibility(params: {
+  pollAnonymous?: boolean;
+  pollPublic?: boolean;
+}): boolean | undefined {
+  if (params.pollAnonymous && params.pollPublic) {
+    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+  }
+  return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
+}
+
+export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  for (const key of POLL_CREATION_PARAM_NAMES) {
+    const def = POLL_CREATION_PARAM_DEFS[key];
+    const value = params[key];
+    if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
+      return true;
+    }
+    if (def.kind === "stringArray" && Array.isArray(value) && value.length > 0) {
+      return true;
+    }
+    if ((def.kind === "number" || def.kind === "boolean") && value !== undefined) {
+      return true;
+    }
+  }
+  return false;
+}

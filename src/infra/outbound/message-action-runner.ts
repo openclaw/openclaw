@@ -14,6 +14,9 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { hasPollCreationParams } from "../../poll-params.js";
+import { resolveTelegramPollVisibility } from "../../poll-params.js";
+import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
@@ -579,17 +582,14 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
   const pollAnonymous = readBooleanParam(params, "pollAnonymous");
   const pollPublic = readBooleanParam(params, "pollPublic");
-  if (pollAnonymous && pollPublic) {
-    throw new Error("pollAnonymous and pollPublic are mutually exclusive");
-  }
-  const isAnonymous = pollAnonymous ? true : pollPublic ? false : undefined;
+  const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
   const durationHours = readNumberParam(params, "pollDurationHours", {
     integer: true,
   });
   const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
     integer: true,
   });
-  const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+  const maxSelections = resolvePollMaxSelections(options.length, allowMultiselect);
 
   if (durationSeconds !== undefined && channel !== "telegram") {
     throw new Error("pollDurationSeconds is only supported for Telegram polls");
@@ -765,6 +765,10 @@ export async function runMessageAction(
     toolContext: input.toolContext,
     cfg,
   });
+
+  if (action === "send" && hasPollCreationParams(params)) {
+    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+  }
 
   const gateway = resolveGateway(input);
 
