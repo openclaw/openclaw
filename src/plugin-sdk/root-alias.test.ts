@@ -36,9 +36,14 @@ describe("plugin-sdk root alias", () => {
 
   it("preserves reflection semantics for lazily resolved exports", () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
+    // Enumeration must expose the full legacy root namespace, not just fast/lazy shims.
+    expect("normalizeAllowFrom" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
+    expect(keys).toContain("normalizeAllowFrom");
     const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
     expect(descriptor).toBeDefined();
+    const legacyDescriptor = Object.getOwnPropertyDescriptor(rootSdk, "normalizeAllowFrom");
+    expect(legacyDescriptor).toBeDefined();
   });
 });

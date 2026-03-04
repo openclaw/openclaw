@@ -5,6 +5,8 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
+let monolithicExportKeys = null;
+let monolithicExportKeySet = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -65,7 +67,6 @@ function getJiti() {
   if (jitiLoader) {
     return jitiLoader;
   }
-
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
@@ -74,20 +75,28 @@ function getJiti() {
   return jitiLoader;
 }
 
+function resolveMonolithicCandidates() {
+  const srcCandidate = path.join(__dirname, "index.ts");
+  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
+  // Prefer source when present to avoid stale dist metadata/runtime skew in repo checkouts.
+  const candidates = [srcCandidate, distCandidate].filter((candidate, index, all) => {
+    return all.indexOf(candidate) === index && fs.existsSync(candidate);
+  });
+  return candidates.length > 0 ? candidates : [srcCandidate, distCandidate];
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
   const jiti = getJiti();
-
-  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
-  if (fs.existsSync(distCandidate)) {
+  for (const candidate of resolveMonolithicCandidates()) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = jiti(candidate);
       return monolithicSdk;
     } catch {
-      // Fall through to source alias if dist is unavailable or stale.
+      // Try the next candidate (e.g. stale dist fallback to source).
     }
   }
 
@@ -95,12 +104,72 @@ function loadMonolithicSdk() {
   return monolithicSdk;
 }
 
-function tryLoadMonolithicSdk() {
-  try {
-    return loadMonolithicSdk();
-  } catch {
-    return null;
+function parseNamedExports(content) {
+  const keys = [];
+  const exportBlock = /export\s+(?!type\b)\{([\s\S]*?)\}\s*(?:from\s+["'][^"']+["'])?\s*;/g;
+  let match = null;
+  while ((match = exportBlock.exec(content)) !== null) {
+    const block = match[1] ?? "";
+    const parts = block.split(",");
+    for (const rawPart of parts) {
+      const part = rawPart.trim();
+      if (!part || part.startsWith("type ")) {
+        continue;
+      }
+      const asMatch = /\bas\s+([A-Za-z_$][\w$]*)$/u.exec(part);
+      if (asMatch) {
+        keys.push(asMatch[1]);
+        continue;
+      }
+      const nameMatch = /([A-Za-z_$][\w$]*)$/u.exec(part);
+      if (nameMatch) {
+        keys.push(nameMatch[1]);
+      }
+    }
   }
+  return [...new Set(keys)];
+}
+
+function resolveMonolithicExportKeys() {
+  if (monolithicSdk) {
+    return Reflect.ownKeys(monolithicSdk);
+  }
+  if (monolithicExportKeys) {
+    return monolithicExportKeys;
+  }
+
+  for (const candidate of resolveMonolithicCandidates()) {
+    try {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      const parsed = parseNamedExports(fs.readFileSync(candidate, "utf8"));
+      if (parsed.length > 0) {
+        monolithicExportKeys = parsed;
+        monolithicExportKeySet = new Set(parsed);
+        return monolithicExportKeys;
+      }
+    } catch {
+      // Fall through to monolithic runtime loading.
+    }
+  }
+
+  monolithicExportKeys = Reflect.ownKeys(loadMonolithicSdk());
+  monolithicExportKeySet = new Set(monolithicExportKeys.filter((key) => typeof key === "string"));
+  return monolithicExportKeys;
+}
+
+function hasKnownMonolithicExport(prop) {
+  if (typeof prop !== "string") {
+    return false;
+  }
+  if (monolithicSdk) {
+    return prop in monolithicSdk;
+  }
+  if (!monolithicExportKeySet) {
+    resolveMonolithicExportKeys();
+  }
+  return Boolean(monolithicExportKeySet?.has(prop));
 }
 
 const fastExports = {
@@ -128,18 +197,16 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
-    const monolithic = tryLoadMonolithicSdk();
-    return monolithic ? prop in monolithic : false;
+    if (hasKnownMonolithicExport(prop)) {
+      return true;
+    }
+    return prop in loadMonolithicSdk();
   },
   ownKeys(target) {
-    const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    // Keep Object.keys/property reflection fast and deterministic.
-    // Only expose monolithic keys if it was already loaded by direct access.
-    if (monolithicSdk) {
-      for (const key of Reflect.ownKeys(monolithicSdk)) {
-        keys.add(key);
-      }
-    }
+    const monolithicKeys = monolithicSdk
+      ? Reflect.ownKeys(monolithicSdk)
+      : resolveMonolithicExportKeys();
+    const keys = new Set([...Reflect.ownKeys(target), ...monolithicKeys, "default", "__esModule"]);
     return [...keys];
   },
   getOwnPropertyDescriptor(target, prop) {
@@ -163,15 +230,21 @@ const rootProxy = new Proxy(fastExports, {
     if (own) {
       return own;
     }
-    const monolithic = tryLoadMonolithicSdk();
-    if (!monolithic) {
-      return undefined;
+    if (!monolithicSdk && hasKnownMonolithicExport(prop)) {
+      return {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return loadMonolithicSdk()[prop];
+        },
+      };
     }
-    const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
+    const descriptor = Object.getOwnPropertyDescriptor(loadMonolithicSdk(), prop);
     if (!descriptor) {
       return undefined;
     }
     if (descriptor.get || descriptor.set) {
+      const monolithic = loadMonolithicSdk();
       return {
         configurable: true,
         enumerable: descriptor.enumerable ?? true,

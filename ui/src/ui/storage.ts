@@ -18,6 +18,40 @@ export type UiSettings = {
   locale?: string;
 };
 
+function parseUrl(input: string): URL | null {
+  try {
+    return new URL(input);
+  } catch {
+    return null;
+  }
+}
+
+function isSupportedGatewayProtocol(url: URL): boolean {
+  return url.protocol === "ws:" || url.protocol === "wss:";
+}
+
+function shouldPreferDefaultGatewayUrl(
+  savedGatewayUrl: string,
+  defaultGatewayUrl: string,
+): boolean {
+  const saved = parseUrl(savedGatewayUrl);
+  const fallback = parseUrl(defaultGatewayUrl);
+  if (!saved || !fallback) {
+    return true;
+  }
+  // Saved value must be a websocket URL.
+  if (!isSupportedGatewayProtocol(saved)) {
+    return true;
+  }
+  // Prefer secure default when dashboard is served over HTTPS.
+  // Keeping a stale ws:// URL causes mixed-content failures and "offline" UI state.
+  if (saved.host === fallback.host && fallback.protocol === "wss:" && saved.protocol === "ws:") {
+    return true;
+  }
+  // Preserve explicit saved gateway endpoints when they are syntactically valid websocket URLs.
+  return false;
+}
+
 export function loadSettings(): UiSettings {
   const defaultUrl = (() => {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -50,11 +84,16 @@ export function loadSettings(): UiSettings {
       return defaults;
     }
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
+    const savedGatewayUrl =
+      typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
+        ? parsed.gatewayUrl.trim()
+        : null;
+    const gatewayUrl =
+      savedGatewayUrl && !shouldPreferDefaultGatewayUrl(savedGatewayUrl, defaults.gatewayUrl)
+        ? savedGatewayUrl
+        : defaults.gatewayUrl;
     return {
-      gatewayUrl:
-        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
-          ? parsed.gatewayUrl.trim()
-          : defaults.gatewayUrl,
+      gatewayUrl,
       token: typeof parsed.token === "string" ? parsed.token : defaults.token,
       sessionKey:
         typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()

@@ -60,4 +60,112 @@ describe("loadSettings default gateway URL derivation", () => {
     const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe("ws://gateway.example:18789/apps/openclaw");
   });
+
+  it("keeps saved private gateway URLs when page host changed", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "dashboard.example.com",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://10.0.0.82:18789",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://10.0.0.82:18789");
+  });
+
+  it("keeps saved gateway URL when both saved and current hosts are private", async () => {
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "10.0.0.90:18789",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://10.0.0.82:18789",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://10.0.0.82:18789");
+  });
+
+  it("upgrades saved ws URL to secure default when host is unchanged and dashboard is https", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "dashboard.example.com",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://dashboard.example.com",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("wss://dashboard.example.com");
+  });
+
+  it("keeps saved ws URL on https dashboards when host differs", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "dashboard.example.com",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://127.0.0.1:18789",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("falls back to default for non-websocket saved URLs", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "dashboard.example.com",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "https://dashboard.example.com",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("wss://dashboard.example.com");
+  });
+
+  it("falls back to default for invalid saved gateway URLs", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "dashboard.example.com",
+      pathname: "/",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "dashboard.example.com",
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("wss://dashboard.example.com");
+  });
 });
