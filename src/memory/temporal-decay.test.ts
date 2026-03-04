@@ -218,8 +218,8 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeLessThan(0.01);
-      expect(decayed[1]!.score).toBeCloseTo(0.8);
+      expect(decayed[0].score).toBeLessThan(0.01);
+      expect(decayed[1].score).toBeCloseTo(0.8);
     });
 
     it("applies decay to nested YYYY/MM/DD paths", async () => {
@@ -232,8 +232,8 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeLessThan(0.01);
-      expect(decayed[1]!.score).toBeLessThan(0.01);
+      expect(decayed[0].score).toBeLessThan(0.01);
+      expect(decayed[1].score).toBeLessThan(0.01);
     });
 
     it("applies decay to YYYY-MM/DD paths", async () => {
@@ -247,9 +247,9 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeCloseTo(0.9);
-      expect(decayed[1]!.score).toBeCloseTo(0.85, 1);
-      expect(decayed[2]!.score).toBeLessThan(0.01);
+      expect(decayed[0].score).toBeCloseTo(0.9);
+      expect(decayed[1].score).toBeCloseTo(0.85, 1);
+      expect(decayed[2].score).toBeLessThan(0.01);
     });
 
     it("still treats non-dated memory files as evergreen", async () => {
@@ -276,8 +276,8 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeCloseTo(0.9);
-      expect(decayed[1]!.score).toBeCloseTo(0.85);
+      expect(decayed[0].score).toBeCloseTo(0.9);
+      expect(decayed[1].score).toBeCloseTo(0.85);
     });
 
     it("handles mixed dated and non-dated files correctly", async () => {
@@ -302,11 +302,11 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeLessThan(0.01);
-      expect(decayed[1]!.score).toBeLessThan(0.01);
-      expect(decayed[2]!.score).toBeLessThan(0.01);
-      expect(decayed[3]!.score).toBeCloseTo(0.7);
-      expect(decayed[4]!.score).toBeCloseTo(0.6);
+      expect(decayed[0].score).toBeLessThan(0.01);
+      expect(decayed[1].score).toBeLessThan(0.01);
+      expect(decayed[2].score).toBeLessThan(0.01);
+      expect(decayed[3].score).toBeCloseTo(0.7);
+      expect(decayed[4].score).toBeCloseTo(0.6);
     });
 
     it("handles Windows-style backslash paths", async () => {
@@ -319,8 +319,8 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      expect(decayed[0]!.score).toBeLessThan(0.01);
-      expect(decayed[1]!.score).toBeCloseTo(0.9);
+      expect(decayed[0].score).toBeLessThan(0.01);
+      expect(decayed[1].score).toBeCloseTo(0.9);
     });
   });
 
@@ -345,7 +345,7 @@ describe("temporal decay", () => {
       });
 
       // Should decay based on mtime (30 days old = half-life), NOT stay at 1.0
-      expect(decayed[0]!.score).toBeCloseTo(0.5, 1);
+      expect(decayed[0].score).toBeCloseTo(0.5, 1);
     });
 
     it("falls back to mtime for impossible day like Feb 31", async () => {
@@ -365,8 +365,8 @@ describe("temporal decay", () => {
       });
 
       // Should decay slightly based on 3-day-old mtime, NOT be treated as evergreen
-      expect(decayed[0]!.score).toBeLessThan(0.9);
-      expect(decayed[0]!.score).toBeGreaterThan(0.8);
+      expect(decayed[0].score).toBeLessThan(0.9);
+      expect(decayed[0].score).toBeGreaterThan(0.8);
     });
 
     it("does not treat invalid-dated files as evergreen", async () => {
@@ -387,7 +387,7 @@ describe("temporal decay", () => {
       });
 
       // 60 days old = 2 half-lives = ~0.25, definitely not 1.0 (evergreen)
-      expect(decayed[0]!.score).toBeCloseTo(0.25, 1);
+      expect(decayed[0].score).toBeCloseTo(0.25, 1);
     });
   });
 });
