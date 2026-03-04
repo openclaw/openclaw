@@ -43,4 +43,41 @@ describe("gateway startup legacy migration fallback", () => {
     );
     expect(message).not.toContain("Legacy config entries detected but auto-migration failed.");
   });
+
+  test("keeps detailed validation errors when heartbeat comes from include-resolved config", async () => {
+    testState.legacyIssues = [
+      {
+        path: "heartbeat",
+        message:
+          "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+      },
+    ];
+    // Simulate a parsed source that only contains include directives, while
+    // legacy heartbeat is surfaced from the resolved config.
+    testState.legacyParsed = {
+      $include: ["heartbeat.defaults.json"],
+    };
+    testState.migrationConfig = null;
+    testState.migrationChanges = [];
+
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let thrown: unknown;
+    try {
+      server = await startGatewayServer(await getFreePort());
+    } catch (err) {
+      thrown = err;
+    }
+
+    if (server) {
+      await server.close();
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = String((thrown as Error).message);
+    expect(message).toContain("Invalid config at");
+    expect(message).toContain(
+      "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+    );
+    expect(message).not.toContain("Legacy config entries detected but auto-migration failed.");
+  });
 });
