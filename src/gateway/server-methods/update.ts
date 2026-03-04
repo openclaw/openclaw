@@ -22,7 +22,22 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const actor = resolveControlPlaneActor(client);
     const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
-    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    // Prefer live deliveryContext from params over extractDeliveryInfo() (see #18612).
+    const paramsDeliveryContextRaw = (params as { deliveryContext?: unknown }).deliveryContext;
+    const paramsDeliveryContext =
+      paramsDeliveryContextRaw && typeof paramsDeliveryContextRaw === "object"
+        ? (() => {
+            const dc = paramsDeliveryContextRaw as Record<string, unknown>;
+            const channel =
+              typeof dc.channel === "string" ? dc.channel.trim() || undefined : undefined;
+            const to = typeof dc.to === "string" ? dc.to.trim() || undefined : undefined;
+            const accountId =
+              typeof dc.accountId === "string" ? dc.accountId.trim() || undefined : undefined;
+            return channel || to ? { channel, to, accountId } : undefined;
+          })()
+        : undefined;
+    const { deliveryContext: extractedDeliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
