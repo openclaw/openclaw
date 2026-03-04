@@ -7,7 +7,7 @@ import {
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
   resolveWebhookPath,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
