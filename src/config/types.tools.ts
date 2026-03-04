@@ -352,6 +352,8 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /** Context size (max tokens) for local embedding model (default: 8192). */
+    contextSize?: number;
   };
   /** Index storage configuration. */
   store?: {

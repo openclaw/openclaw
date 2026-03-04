@@ -104,6 +104,7 @@ async function createLocalEmbeddingProvider(
 ): Promise<EmbeddingProvider> {
   const modelPath = options.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = options.local?.modelCacheDir?.trim();
+  const contextSize = options.local?.contextSize || 8192;
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
@@ -118,10 +119,10 @@ async function createLocalEmbeddingProvider(
     }
     if (!embeddingModel) {
       const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-      embeddingModel = await llama.loadModel({ modelPath: resolved });
+      embeddingModel = await llama.loadModel({ modelPath: resolved, contextSize });
     }
     if (!embeddingContext) {
-      embeddingContext = await embeddingModel.createEmbeddingContext();
+      embeddingContext = await embeddingModel.createEmbeddingContext({ contextSize });
     }
     return embeddingContext;
   };

@@ -747,6 +747,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum wait time for a full embedding batch operation in minutes (default: 60). Increase for very large corpora or slower providers, and lower it to fail fast in automation-heavy flows.",
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
+  "agents.defaults.memorySearch.local.contextSize":
+    "Maximum context size (in tokens) for the local embedding model. Defaults to 8192, which matches the nomic-embed-text-v1.5 specification. Increase this if using a model that supports longer contexts, or decrease it for smaller models. If chunks exceed this limit, embedding will fail.",
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
