@@ -129,13 +129,27 @@ export class OpenClawApp extends LitElement {
       this.voiceInputEnabled = true;
       this._voiceBase = this.chatMessage;
       void import("./services/voice.ts").then((m) => {
-        m.startRecording((interim) => {
-          // Show live transcript while recording
-          const sep = this._voiceBase && interim ? " " : "";
-          this.chatMessage = this._voiceBase + sep + interim;
-        }).catch((err) => {
+        m.startRecording(
+          (interim) => {
+            // Show live transcript while recording
+            const sep = this._voiceBase && interim ? " " : "";
+            this.chatMessage = this._voiceBase + sep + interim;
+          },
+          (errorCode) => {
+            // Recognition ended naturally (error or browser timeout) — reset mic state
+            if (this.voiceInputEnabled) {
+              if (errorCode) {
+                console.warn("voice recognition ended:", errorCode);
+              }
+              this.chatMessage = this._voiceBase;
+              this._voiceBase = "";
+              this.voiceInputEnabled = false;
+            }
+          },
+        ).catch((err) => {
           console.error("voice start failed", err);
           this.chatMessage = this._voiceBase;
+          this._voiceBase = "";
           this.voiceInputEnabled = false;
         });
       });
