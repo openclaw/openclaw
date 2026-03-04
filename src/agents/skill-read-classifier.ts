@@ -9,20 +9,22 @@
 import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
-export type SkillReadClassification = {
-  isSkillRead: true;
-  skillName: string;
-  skillBaseDir: string;
-  /**
-   * "entry" — the SKILL.md file itself (the agent is activating this skill).
-   * "sub"   — a supporting file within the skill directory.
-   */
-  readType: "entry" | "sub";
-  /** The normalized path that was read. */
-  filePath: string;
-} | {
-  isSkillRead: false;
-};
+export type SkillReadClassification =
+  | {
+      isSkillRead: true;
+      skillName: string;
+      skillBaseDir: string;
+      /**
+       * "entry" — the SKILL.md file itself (the agent is activating this skill).
+       * "sub"   — a supporting file within the skill directory.
+       */
+      readType: "entry" | "sub";
+      /** The normalized path that was read. */
+      filePath: string;
+    }
+  | {
+      isSkillRead: false;
+    };
 
 /**
  * Classify a file read path against the loaded skill set.
@@ -52,14 +54,16 @@ export function classifySkillRead(
     const skillMd = path.resolve(skill.filePath);
 
     // Check if the file is within this skill's directory
-    if (!normalized.startsWith(skillDir + path.sep) && normalized !== skillDir && normalized !== skillMd) {
+    if (
+      !normalized.startsWith(skillDir + path.sep) &&
+      normalized !== skillDir &&
+      normalized !== skillMd
+    ) {
       continue;
     }
 
     // Determine if this is the SKILL.md entry point or a sub-file
-    const isEntry = normalized === skillMd
-      || normalized.endsWith("/SKILL.md")
-      || normalized.endsWith(path.sep + "SKILL.md");
+    const isEntry = normalized === skillMd || normalized.endsWith(path.sep + "SKILL.md");
 
     return {
       isSkillRead: true,

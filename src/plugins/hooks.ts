@@ -457,7 +457,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("after_tool_call", event, ctx);
   }
 
-
   /**
    * Run skill_read hook.
    * Fired when the agent reads a file inside a known skill directory.

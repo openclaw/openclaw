@@ -1,6 +1,6 @@
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import { describe, it, expect } from "vitest";
 import { classifySkillRead } from "./skill-read-classifier.js";
-import type { Skill } from "@mariozechner/pi-coding-agent";
 
 const testSkills: Skill[] = [
   {
@@ -23,10 +23,7 @@ const testSkills: Skill[] = [
 
 describe("classifySkillRead", () => {
   it("detects SKILL.md as entry read", () => {
-    const result = classifySkillRead(
-      "/home/user/.openclaw/skills/github/SKILL.md",
-      testSkills,
-    );
+    const result = classifySkillRead("/home/user/.openclaw/skills/github/SKILL.md", testSkills);
     expect(result.isSkillRead).toBe(true);
     if (result.isSkillRead) {
       expect(result.skillName).toBe("github");
@@ -60,18 +57,12 @@ describe("classifySkillRead", () => {
   });
 
   it("returns false for non-skill paths", () => {
-    const result = classifySkillRead(
-      "/home/user/random/file.md",
-      testSkills,
-    );
+    const result = classifySkillRead("/home/user/random/file.md", testSkills);
     expect(result.isSkillRead).toBe(false);
   });
 
   it("returns false for empty skills list", () => {
-    const result = classifySkillRead(
-      "/home/user/.openclaw/skills/github/SKILL.md",
-      [],
-    );
+    const result = classifySkillRead("/home/user/.openclaw/skills/github/SKILL.md", []);
     expect(result.isSkillRead).toBe(false);
   });
 
