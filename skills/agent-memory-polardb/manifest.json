@@ -1,37 +1,65 @@
 {
-  "name": "Agent Memory Management (by PolarDB)",
+  "name": "PolarDB Mem0 Long-term Memory",
   "id": "polardb-mem0",
-  "version": "1.1.0",
-  "description": "Enterprise-grade persistent memory for AI Agents. Powered by Alibaba Cloud PolarDB and Mem0 for sub-millisecond fact retrieval and cross-session learning.",
+  "version": "1.0.0",
+  "description": "Managed long-term memory service powered by Alibaba Cloud PolarDB. Supports millisecond-level fact extraction and semantic retrieval via the Mem0 protocol.",
   "author": "PolarDB Team",
-  "homepage": "https://help.aliyun.com/zh/polardb/polardb-for-mysql/polardb-mem0",
-  "repository": "https://github.com/your-username/clawhub",
-  "license": "MIT",
-  "keywords": [
-    "memory",
-    "polardb",
-    "mem0",
-    "long-term-context",
-    "fact-extraction",
-    "cloud-database"
+  "icon": "易",
+  "entrypoint": "handler.py",
+  "dependencies": [
+    "mem0ai"
   ],
-  "metadata": {
-    "openclaw": {
-      "emoji": "易",
-      "category": "intelligence",
-      "tags": ["Vector DB", "Managed Service", "Alibaba Cloud"],
-      "requires": {
-        "env": [
-          "MEM0_API_KEY",
-          "MEM0_ORG_ID"
-        ],
-        "bins": ["python3"]
-      },
-      "primaryEnv": "MEM0_API_KEY",
-      "ui": {
-        "color": "#0070CC",
-        "icon": "https://img.alicdn.com/tfs/TB1_uT8n7P2gK0jSZPxXXac4pXa-32-32.png"
+  "env_vars": [
+    {
+      "name": "MEM0_API_KEY",
+      "description": "API Key obtained from the Alibaba Cloud PolarDB Console",
+      "required": true
+    },
+    {
+      "name": "MEM0_ORG_ID",
+      "description": "Your Mem0 Organization ID",
+      "required": true
+    }
+  ],
+  "tools": [
+    {
+      "name": "save_fact",
+      "description": "Proactively save a specific user fact, preference, or context into PolarDB cloud memory.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fact": {
+            "type": "string",
+            "description": "The core information to remember (e.g., 'User prefers Python for data analysis')."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Unique identifier for the user.",
+            "default": "default_user"
+          }
+        },
+        "required": ["fact"]
+      }
+    },
+    {
+      "name": "search_memories",
+      "description": "Retrieve relevant historical context or user facts from PolarDB using semantic search.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Natural language query or question to search the memory bank."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Unique identifier for the user.",
+            "default": "default_user"
+          }
+        },
+        "required": ["query"]
       }
     }
-  }
+  ]
 }
+          
