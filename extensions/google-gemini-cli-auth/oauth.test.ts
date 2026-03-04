@@ -540,7 +540,7 @@ describe("loginGeminiCliOAuth", () => {
       "Gemini CLI OAuth project discovery failed (loadCodeAssist).",
     );
     expect((error as Error).message).toContain(
-      "Try signing in with a Google account that can use Gemini CLI",
+      "Verify the request/config for loadCodeAssist and use provider `google` with API key auth as a temporary workaround.",
     );
   });
 });

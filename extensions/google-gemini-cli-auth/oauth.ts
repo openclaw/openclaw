@@ -784,9 +784,15 @@ function buildLoadCodeAssistFailureError(
         "Set GOOGLE_CLOUD_PROJECT only if your account already has access but requires project binding.",
       );
     }
-    lines.push(
-      "Try signing in with a Google account that can use Gemini CLI, or use provider `google` with API key auth.",
-    );
+    if (hasAuthLikeFailure) {
+      lines.push(
+        "Try signing in with a Google account that can use Gemini CLI, or use provider `google` with API key auth.",
+      );
+    } else {
+      lines.push(
+        "Verify the request/config for loadCodeAssist and use provider `google` with API key auth as a temporary workaround.",
+      );
+    }
   } else {
     lines.push("All loadCodeAssist endpoints failed transiently.");
     if (!hasEnvProject) {
