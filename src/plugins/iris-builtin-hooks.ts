@@ -71,6 +71,8 @@ function registerPatternDetectorRoutes(registry: PluginRegistry): void {
           res.end();
         }
       },
+      auth: "gateway",
+      match: "exact",
       source: "iris-builtin",
     },
     {
@@ -83,6 +85,8 @@ function registerPatternDetectorRoutes(registry: PluginRegistry): void {
           res.end();
         }
       },
+      auth: "gateway",
+      match: "exact",
       source: "iris-builtin",
     },
     {
@@ -90,6 +94,8 @@ function registerPatternDetectorRoutes(registry: PluginRegistry): void {
       handler: async (req, res) => {
         await handlePatternsUi(req, res);
       },
+      auth: "gateway",
+      match: "exact",
       source: "iris-builtin",
     },
   );

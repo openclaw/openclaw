@@ -408,6 +408,7 @@ export default function register(api: OpenClawPluginApi) {
 
   api.registerHttpRoute({
     path: "/conversations",
+    auth: "gateway",
     handler: (_req: IncomingMessage, res: ServerResponse) => {
       const html = htmlTemplate.replace(
         "<!-- __CONVERSATIONS_CONFIG__ -->",
@@ -422,6 +423,7 @@ export default function register(api: OpenClawPluginApi) {
   // ── POST /conversations/send — envio de texto ──
   api.registerHttpRoute({
     path: "/conversations/send",
+    auth: "gateway",
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       if (req.method !== "POST") {
         jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });
@@ -462,6 +464,7 @@ export default function register(api: OpenClawPluginApi) {
   // ── POST /conversations/send-tts — texto → áudio ElevenLabs ──
   api.registerHttpRoute({
     path: "/conversations/send-tts",
+    auth: "gateway",
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       if (req.method !== "POST") {
         jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });
@@ -525,6 +528,7 @@ export default function register(api: OpenClawPluginApi) {
   // Query params: chatId, channel, accountId, contentType, filename, caption
   api.registerHttpRoute({
     path: "/conversations/send-media",
+    auth: "gateway",
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       if (req.method !== "POST") {
         jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });

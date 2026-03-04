@@ -29,32 +29,34 @@ export default function register(api: OpenClawPluginApi) {
   const log = (msg: string) => console.log(`[iris-dashboard] ${msg}`);
 
   // Handler for all /iris-dashboard/* requests
-  api.registerHttpHandler(async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const url = req.url ?? "/";
-    if (!url.startsWith("/iris-dashboard")) return false;
+  api.registerHttpRoute({
+    path: "/iris-dashboard",
+    match: "prefix",
+    auth: "gateway",
+    handler: async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+      // 1. Try UI + static assets
+      if (handleUi(req, res)) return true;
 
-    // 1. Try UI + static assets
-    if (handleUi(req, res)) return true;
+      // 2. Try API routes
+      if (await handleApiRoutes(req, res, config, client)) return true;
 
-    // 2. Try API routes
-    if (await handleApiRoutes(req, res, config, client)) return true;
+      // 3. Try webhook
+      if (
+        await handleWebhookRoute(req, res, config, async (taskId) => {
+          log(`Webhook: task ${taskId} completed`);
+        })
+      ) {
+        return true;
+      }
 
-    // 3. Try webhook
-    if (
-      await handleWebhookRoute(req, res, config, async (taskId) => {
-        log(`Webhook: task ${taskId} completed`);
-      })
-    ) {
-      return true;
-    }
-
-    return false;
+      return false;
+    },
   });
 
   // Hook: generate HEARTBEAT.md on gateway start
   api.on("gateway_start", async (_event, _ctx) => {
     log("gateway_start — generating HEARTBEAT.md...");
-    await generateHeartbeat(client, config, api.config.workspaceDir as string | undefined);
+    await generateHeartbeat(client, config, undefined as string | undefined);
   });
 
   // Hook: also generate on session_start as fallback (first session after cold boot)
@@ -63,7 +65,7 @@ export default function register(api: OpenClawPluginApi) {
     if (sessionStartFired) return;
     sessionStartFired = true;
     log("session_start — generating HEARTBEAT.md (fallback)...");
-    await generateHeartbeat(client, config, api.config.workspaceDir as string | undefined);
+    await generateHeartbeat(client, config, undefined as string | undefined);
   });
 
   log("Plugin registered — serving at /iris-dashboard");
