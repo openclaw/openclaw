@@ -341,8 +341,8 @@ describe("runOnboardingWizard", () => {
     );
 
     expect(writeConfigFile).toHaveBeenCalled();
-    const wroteZhLocale = writeConfigFile.mock.calls.some(
-      (call) => call[0]?.cli?.locale === "zh-CN",
+    const wroteZhLocale = (writeConfigFile.mock.calls as Array<[Record<string, unknown>?]>).some(
+      (call) => (call[0]?.cli as { locale?: string } | undefined)?.locale === "zh-CN",
     );
     expect(wroteZhLocale).toBe(true);
 
