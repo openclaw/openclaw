@@ -9,6 +9,8 @@ describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
   const profileStatuses = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.status]));
+  const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
+    Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -88,6 +90,31 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["google:no-refresh"]).toBe("expired");
+  });
+
+  it("marks token profiles with invalid expires as missing with reason code", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "github-copilot:invalid-expires": {
+          type: "token" as const,
+          provider: "github-copilot",
+          token: "gh-token",
+          expires: 0,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+    const statuses = profileStatuses(summary);
+    const reasonCodes = profileReasonCodes(summary);
+
+    expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
+    expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
   });
 });
 
