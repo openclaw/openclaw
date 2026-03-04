@@ -76,16 +76,8 @@ Attach at least one:
 
 - [ ] Failing test/log before + passing after
 - [ ] Trace/log snippets
-- [ ] Screenshot/recording (before = upstream `main` baseline; after = this PR's behaviour)
+- [ ] Screenshot/recording
 - [ ] Perf numbers (if relevant)
-
-## AI-Assisted (if applicable)
-
-If any part of this PR was generated or significantly shaped by an AI tool:
-
-- [ ] AI-assisted — tool(s) used: <!-- e.g. Claude, Codex, Copilot -->
-- [ ] Testing level: <!-- untested / lightly tested / fully tested -->
-- [ ] I have personally reviewed all code changes prior to this commit and take responsibility for their correctness.
 
 ## Human Verification (required)
 

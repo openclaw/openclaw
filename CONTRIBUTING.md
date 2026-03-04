@@ -64,7 +64,7 @@ Welcome to the lobster tank! 🦞
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
-2. **New features / architecture** → **Discussion first, then PR.** Open a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) (or ask in Discord) before writing code. PRs that introduce new features or architectural changes without a prior discussion may be closed and redirected.
+2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
 3. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
 ## Before You PR
@@ -73,9 +73,8 @@ Welcome to the lobster tank! 🦞
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
-- **Explain what & why** — the PR body must describe what changed and why it matters. "Fixed it" is not enough; reviewers need context to evaluate correctness and impact.
-- **Before/after screenshots for UI changes** — capture the upstream `main` baseline as "before" (not just a mid-PR state), and the new behaviour as "after". Attach them directly to the PR body.
-- **AI-assisted PRs need a transparency note** — see the [AI/Vibe-Coded PRs](#aivibe-coded-prs-welcome-) section below.
+- Describe what & why
+- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
 ## Control UI Decorators
 
@@ -99,9 +98,9 @@ Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
 Please include in your PR:
 
 - [ ] Mark as AI-assisted in the PR title or description
-- [ ] State the testing level: `untested` / `lightly tested` / `fully tested`
-- [ ] Include a line such as: _"I have personally reviewed all code changes prior to this commit and take responsibility for their correctness."_
-- [ ] Include prompts or session logs if possible (super helpful for reviewers!)
+- [ ] Note the degree of testing (untested / lightly tested / fully tested)
+- [ ] Include prompts or session logs if possible (super helpful!)
+- [ ] Confirm you understand what the code does
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
 
