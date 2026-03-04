@@ -467,6 +467,51 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests).toContain(ONBOARD_DAILY);
   });
 
+  it("does not mask non-retryable failures when a later endpoint returns sparse data", async () => {
+    process.env.GOOGLE_CLOUD_PROJECT = "env-project";
+
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if (url === LOAD_PROD) {
+        return responseJson(
+          {
+            error: {
+              message: "The caller does not have permission",
+              details: [{ reason: "PERMISSION_DENIED" }],
+            },
+          },
+          403,
+        );
+      }
+      if (url === LOAD_DAILY) {
+        return responseJson({});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    await expect(runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth)).rejects.toThrow(
+      "non-retryable errors cannot be bypassed with project fallback",
+    );
+    expect(requests).toContain(LOAD_PROD);
+    expect(requests).toContain(LOAD_DAILY);
+    expect(requests).not.toContain(ONBOARD_DAILY);
+  });
+
   it("does not bypass permission errors with GOOGLE_CLOUD_PROJECT fallback", async () => {
     process.env.GOOGLE_CLOUD_PROJECT = "env-project";
 

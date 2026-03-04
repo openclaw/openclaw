@@ -551,12 +551,17 @@ async function discoverProject(accessToken: string): Promise<string> {
     Boolean(data.cloudaicompanionProject) ||
     Boolean(data.allowedTiers?.length);
 
-  if (!hasLoadCodeAssistData && !hasSuccessfulLoadCodeAssistResponse && loadFailures.length > 0) {
+  if (!hasLoadCodeAssistData && loadFailures.length > 0) {
     const hasPermanentFailure = loadFailures.some((failure) => !failure.transient);
-    if (envProject && !hasPermanentFailure) {
-      return envProject;
+    const hasSilentNonTransientFailure = hasSuccessfulLoadCodeAssistResponse && hasPermanentFailure;
+    const shouldSurfaceFailure =
+      !hasSuccessfulLoadCodeAssistResponse || hasSilentNonTransientFailure;
+    if (shouldSurfaceFailure) {
+      if (envProject && !hasPermanentFailure) {
+        return envProject;
+      }
+      throw buildLoadCodeAssistFailureError(loadFailures, Boolean(envProject));
     }
-    throw buildLoadCodeAssistFailureError(loadFailures, Boolean(envProject));
   }
 
   if (data.currentTier) {
