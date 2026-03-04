@@ -1,29 +1,23 @@
 import { execFile } from "node:child_process";
-import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
-function runMp(
-  args: string[],
-  env?: Record<string, string>,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+function runMp(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    execFile(
-      "mp",
-      args,
-      { timeout: 120_000, env: { ...process.env, ...env } },
-      (error, stdout, stderr) => {
-        resolve({
-          stdout: stdout?.toString() ?? "",
-          stderr: stderr?.toString() ?? "",
-          exitCode: error
-            ? ((error as NodeJS.ErrnoException & { status?: number })?.status ?? 1)
-            : 0,
-        });
-      },
-    );
+    execFile("mp", args, { timeout: 120_000, env: process.env }, (error, stdout, stderr) => {
+      resolve({
+        stdout: stdout?.toString() ?? "",
+        stderr: stderr?.toString() ?? "",
+        exitCode: error ? ((error as NodeJS.ErrnoException & { status?: number })?.status ?? 1) : 0,
+      });
+    });
   });
 }
+
+const BLOCKED_TOP_LEVEL = new Set(["consent", "skill"]);
+const BLOCKED_SUBCOMMANDS: Record<string, Set<string>> = {
+  wallet: new Set(["delete", "export"]),
+};
 
 const moonpayPlugin = {
   id: "moonpay",
@@ -33,24 +27,28 @@ const moonpayPlugin = {
 
   register(api: OpenClawPluginApi) {
     api.registerTool(
-      () => ({
+      {
         name: "moonpay_cli",
+        label: "MoonPay CLI",
         description:
-          "Run a MoonPay CLI (`mp`) command. Use for crypto operations: check wallet balances, swap tokens, bridge across chains, buy crypto with fiat, manage wallets, discover tokens, and more. Pass the full command arguments as a string array.",
-        parameters: Type.Object({
-          args: Type.Array(Type.String(), {
-            description:
-              'CLI arguments to pass to `mp`. Examples: ["wallet", "list"], ["token", "balance", "list", "--wallet", "0x...", "--chain", "ethereum"], ["token", "swap", "--wallet", "main", "--chain", "base", "--from-token", "0x...", "--to-token", "0x...", "--from-amount", "10"]',
-          }),
-        }),
-        async execute({ args }: { args: string[] }) {
-          const blockedTopLevel = ["consent", "skill"];
-          const blockedSubcommands: Record<string, string[]> = {
-            wallet: ["delete", "export"],
-          };
-          const cmd = args[0];
-          const sub = args[1];
-          if (cmd && blockedTopLevel.includes(cmd)) {
+          "Run a MoonPay CLI (`mp`) command. Use for crypto operations: check wallet balances, swap tokens, bridge across chains, buy crypto with fiat, manage wallets, discover tokens, and more.",
+        parameters: {
+          type: "object",
+          properties: {
+            args: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                'CLI arguments to pass to `mp`. Examples: ["wallet", "list"], ["token", "balance", "list", "--wallet", "0x...", "--chain", "ethereum"]',
+            },
+          },
+          required: ["args"],
+        },
+        async execute(_id: string, params: { args: string[] }) {
+          const cmd = params.args[0];
+          const sub = params.args[1];
+
+          if (cmd && BLOCKED_TOP_LEVEL.has(cmd)) {
             return {
               content: [
                 {
@@ -58,9 +56,10 @@ const moonpayPlugin = {
                   text: `Command "${cmd}" is not available in this context.`,
                 },
               ],
+              details: undefined,
             };
           }
-          if (cmd && sub && blockedSubcommands[cmd]?.includes(sub)) {
+          if (cmd && sub && BLOCKED_SUBCOMMANDS[cmd]?.has(sub)) {
             return {
               content: [
                 {
@@ -68,10 +67,11 @@ const moonpayPlugin = {
                   text: `Command "${cmd} ${sub}" is not available in this context. This operation requires manual confirmation.`,
                 },
               ],
+              details: undefined,
             };
           }
 
-          const { stdout, stderr, exitCode } = await runMp(args);
+          const { stdout, stderr, exitCode } = await runMp(params.args);
           const output = [stdout, stderr].filter(Boolean).join("\n").trim();
           return {
             content: [
@@ -84,9 +84,10 @@ const moonpayPlugin = {
                     : `Command failed (exit ${exitCode}).`),
               },
             ],
+            details: undefined,
           };
         },
-      }),
+      },
       { names: ["moonpay_cli"] },
     );
 
