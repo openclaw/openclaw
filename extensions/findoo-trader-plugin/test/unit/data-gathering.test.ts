@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import {
   gatherFinanceConfigData,
   gatherTradingData,
+  gatherLiveTradingData,
+  gatherTraderData,
   gatherStrategyLabData,
   gatherOverviewData,
   type DataGatheringDeps,
@@ -267,5 +269,166 @@ describe("gatherOverviewData", () => {
     expect(data.events).toBeDefined();
     expect(data.alerts).toBeDefined();
     expect(data.risk).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gatherLiveTradingData (Live domain — real exchange data)
+// ---------------------------------------------------------------------------
+
+describe("gatherLiveTradingData", () => {
+  it("should return empty structure when no liveExecutor", async () => {
+    const deps = makeDeps();
+    const data = await gatherLiveTradingData(deps);
+
+    expect(data.summary.totalEquity).toBe(0);
+    expect(data.summary.positionCount).toBe(0);
+    expect(data.summary.exchangeCount).toBe(0);
+    expect(data.positions).toEqual([]);
+    expect(data.balances).toEqual([]);
+    expect(data.exchanges).toEqual([]);
+  });
+
+  it("should aggregate multi-exchange balances", async () => {
+    const registry = new ExchangeRegistry();
+    registry.addExchange("binance-main", {
+      exchange: "binance",
+      apiKey: "k",
+      secret: "s",
+      testnet: false,
+    });
+    registry.addExchange("okx-sub", {
+      exchange: "okx",
+      apiKey: "k2",
+      secret: "s2",
+      testnet: false,
+    });
+
+    const mockLiveExecutor = {
+      fetchBalance: vi.fn(async (exchangeId: string) => {
+        if (exchangeId === "binance-main") {
+          return { total: { USDT: 5000, BTC: 0.1 }, free: { USDT: 4000 } };
+        }
+        return { total: { USDT: 3000 }, free: { USDT: 3000 } };
+      }),
+      fetchPositions: vi.fn(async () => []),
+    };
+
+    const deps = makeDeps({
+      registry,
+      liveExecutor: mockLiveExecutor as unknown as DataGatheringDeps["liveExecutor"],
+    });
+
+    const data = await gatherLiveTradingData(deps);
+
+    expect(data.balances).toHaveLength(2);
+    // 5000 + 0.1 + 3000 = 8000.1
+    expect(data.summary.totalEquity).toBeCloseTo(8000.1);
+    expect(data.summary.exchangeCount).toBe(2);
+    expect(data.exchanges).toHaveLength(2);
+    expect(data.exchanges.every((e) => e.status === "ok")).toBe(true);
+  });
+
+  it("should aggregate multi-exchange positions", async () => {
+    const registry = new ExchangeRegistry();
+    registry.addExchange("ex1", { exchange: "binance", apiKey: "k", secret: "s", testnet: false });
+
+    const mockLiveExecutor = {
+      fetchBalance: vi.fn(async () => ({ total: { USDT: 1000 } })),
+      fetchPositions: vi.fn(async () => [
+        { symbol: "BTC/USDT", side: "long", contracts: 1 },
+        { symbol: "ETH/USDT", side: "short", contracts: 5 },
+      ]),
+    };
+
+    const deps = makeDeps({
+      registry,
+      liveExecutor: mockLiveExecutor as unknown as DataGatheringDeps["liveExecutor"],
+    });
+
+    const data = await gatherLiveTradingData(deps);
+
+    expect(data.positions).toHaveLength(2);
+    expect(data.summary.positionCount).toBe(2);
+    expect(data.positions[0]).toHaveProperty("exchangeId", "ex1");
+  });
+
+  it("should gracefully skip on exchange error", async () => {
+    const registry = new ExchangeRegistry();
+    registry.addExchange("good", { exchange: "binance", apiKey: "k", secret: "s", testnet: false });
+    registry.addExchange("bad", { exchange: "okx", apiKey: "k", secret: "s", testnet: false });
+
+    const mockLiveExecutor = {
+      fetchBalance: vi.fn(async (exchangeId: string) => {
+        if (exchangeId === "bad") throw new Error("API key invalid");
+        return { total: { USDT: 2000 } };
+      }),
+      fetchPositions: vi.fn(async () => []),
+    };
+
+    const deps = makeDeps({
+      registry,
+      liveExecutor: mockLiveExecutor as unknown as DataGatheringDeps["liveExecutor"],
+    });
+
+    const data = await gatherLiveTradingData(deps);
+
+    expect(data.balances).toHaveLength(1);
+    expect(data.summary.totalEquity).toBe(2000);
+    expect(data.exchanges).toHaveLength(2);
+    expect(data.exchanges.find((e) => e.id === "bad")?.status).toBe("error");
+    expect(data.exchanges.find((e) => e.id === "good")?.status).toBe("ok");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gatherTraderData live/paper domain switching
+// ---------------------------------------------------------------------------
+
+describe("gatherTraderData live domain", () => {
+  it("should use gatherLiveTradingData for domain=live", async () => {
+    const registry = new ExchangeRegistry();
+    registry.addExchange("ex1", { exchange: "binance", apiKey: "k", secret: "s", testnet: false });
+
+    const mockLiveExecutor = {
+      fetchBalance: vi.fn(async () => ({ total: { USDT: 7777 } })),
+      fetchPositions: vi.fn(async () => [{ symbol: "BTC/USDT", side: "long" }]),
+    };
+
+    const deps = makeDeps({
+      registry,
+      liveExecutor: mockLiveExecutor as unknown as DataGatheringDeps["liveExecutor"],
+    });
+
+    const data = await gatherTraderData(deps, { domain: "live" });
+
+    expect(data.domain).toBe("live");
+    expect(data.trading.summary.totalEquity).toBe(7777);
+    expect(data.trading.positions).toHaveLength(1);
+    expect(mockLiveExecutor.fetchBalance).toHaveBeenCalled();
+  });
+
+  it("should not affect paper domain (regression)", async () => {
+    const mockPaperEngine = {
+      listAccounts: vi.fn(() => [{ id: "acct-1", name: "Main", equity: 10000 }]),
+      getAccountState: vi.fn(() => ({
+        id: "acct-1",
+        name: "Main",
+        equity: 10000,
+        positions: [],
+        orders: [],
+      })),
+      getSnapshots: vi.fn(() => []),
+      getOrders: vi.fn(() => []),
+    };
+
+    const deps = makeDeps({
+      runtime: makeMockRuntime({ "fin-paper-engine": mockPaperEngine }),
+    });
+
+    const data = await gatherTraderData(deps, { domain: "paper" });
+
+    expect(data.domain).toBe("paper");
+    expect(data.trading.summary.totalEquity).toBe(10000);
   });
 });

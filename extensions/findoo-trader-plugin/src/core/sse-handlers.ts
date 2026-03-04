@@ -4,6 +4,7 @@
  */
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { BacktestProgressStore } from "../strategy/backtest-progress-store.js";
 import type { HttpRes } from "../types-http.js";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
 import type { DataGatheringDeps } from "./data-gathering.js";
@@ -17,6 +18,7 @@ export function registerSseRoutes(
   api: OpenClawPluginApi,
   deps: DataGatheringDeps,
   eventStore: AgentEventSqliteStore,
+  progressStore?: BacktestProgressStore,
 ): void {
   // ── Finance config SSE (30s interval) ──
   api.registerHttpRoute({
@@ -103,4 +105,30 @@ export function registerSseRoutes(
       req.on("close", () => clearInterval(interval));
     },
   });
+
+  // ── Backtest progress SSE (event-driven) ──
+  if (progressStore) {
+    api.registerHttpRoute({
+      path: "/api/v1/finance/backtest/progress/stream",
+      handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        // Send current active backtests
+        const active = progressStore.getActive();
+        if (active.length > 0) {
+          res.write(`data: ${JSON.stringify({ type: "active", backtests: active })}\n\n`);
+        }
+        // Subscribe to all progress updates
+        const unsubscribe = progressStore.subscribe("*", (progress) => {
+          res.write(`data: ${JSON.stringify({ type: "progress", ...progress })}\n\n`);
+        });
+        req.on("close", () => {
+          unsubscribe();
+        });
+      },
+    });
+  }
 }

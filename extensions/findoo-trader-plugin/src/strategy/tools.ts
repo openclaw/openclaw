@@ -11,6 +11,7 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { LiveExecutor } from "../execution/live-executor.js";
 import type { PaperEngine } from "../paper/paper-engine.js";
 import { BacktestEngine, buildIndicatorLib } from "./backtest-engine.js";
+import type { BacktestProgressStore } from "./backtest-progress-store.js";
 import { createBollingerBands } from "./builtin-strategies/bollinger-bands.js";
 import { buildCustomStrategy } from "./builtin-strategies/custom-rule-engine.js";
 import { createMacdDivergence } from "./builtin-strategies/macd-divergence.js";
@@ -48,6 +49,7 @@ export function registerStrategyTools(
   engine: BacktestEngine,
   liveExecutor: LiveExecutor | null,
   paperEngine: PaperEngine | null,
+  progressStore?: BacktestProgressStore,
 ): void {
   // Per-strategy tick memory, persisted across ticks
   const tickMemory = new Map<string, Map<string, unknown>>();
@@ -316,7 +318,9 @@ export function registerStrategyTools(
                 })
               : await getOHLCV(symbol, timeframe, 365);
 
-          const result = await engine.run(record.definition, ohlcvData, config);
+          const result = await engine.run(record.definition, ohlcvData, config, (p) => {
+            progressStore?.report(p);
+          });
           registry.updateBacktest(strategyId, result);
 
           return json({

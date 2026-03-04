@@ -133,6 +133,29 @@ export class NotificationRouter {
   private sendCount = 0;
   private errorCount = 0;
 
+  /** Try to resolve chat ID from config or Telegram getUpdates API. */
+  static async resolveChatId(config: NotificationConfig): Promise<string | undefined> {
+    if (config.telegramChatId) return config.telegramChatId;
+
+    const token = config.telegramBotToken ?? process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return undefined;
+
+    try {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=1`);
+      if (!resp.ok) return undefined;
+      const data = (await resp.json()) as {
+        ok: boolean;
+        result: Array<{ message?: { chat?: { id: number } } }>;
+      };
+      if (data.ok && data.result?.[0]?.message?.chat?.id) {
+        return String(data.result[0].message.chat.id);
+      }
+    } catch {
+      // Silently degrade — no chat_id available
+    }
+    return undefined;
+  }
+
   constructor(
     private eventStore: AgentEventSqliteStore,
     config: NotificationConfig,

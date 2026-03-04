@@ -1,15 +1,17 @@
 /**
  * findoo-trader-plugin — unified trading infrastructure.
- * Merges fin-core + fin-trading + fin-paper-trading + fin-strategy-engine
+ * Merges fin-core + fin-trading + fin-paper-trading + fin-strategy-engine + fin-fund-manager
  * into a single cohesive plugin.
  *
  * Services: fin-exchange-registry, fin-risk-controller, fin-event-store,
  *           fin-exchange-health-store, fin-live-executor,
- *           fin-paper-engine, fin-strategy-registry, fin-backtest-engine
- * AI Tools (16): 5 trading + 6 paper + 5 strategy
- * HTTP Routes: 28 (API + dashboards)
- * SSE Streams: 3 (config, trading, events)
- * CLI Commands: exchange list/add/remove
+ *           fin-paper-engine, fin-strategy-registry, fin-backtest-engine,
+ *           fin-fund-manager
+ * AI Tools (23): 5 trading + 6 paper + 5 strategy + 7 fund
+ * HTTP Routes: 38 (API + dashboards)
+ * SSE Streams: 4 (config, trading, events, fund)
+ * CLI Commands: exchange list/add/remove, fund pipeline
+ * Bot Commands: /fund, /risk, /lb, /alloc, /promote
  * Hook: before_tool_call risk gate
  * Notification: Telegram event routing + inline approval buttons
  */
@@ -19,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { resolveConfig } from "./src/config.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
+import { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 import type { DataGatheringDeps } from "./src/core/data-gathering.js";
 import { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/core/exchange-registry.js";
@@ -30,10 +33,18 @@ import { registerTelegramApprovalRoute } from "./src/core/telegram-approval.js";
 import { loadDashboardTemplates } from "./src/core/template-renderer.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
+import { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
+import { FundManager } from "./src/fund/fund-manager.js";
+import { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
+import { registerFundRoutes } from "./src/fund/routes.js";
+import { registerFundTools } from "./src/fund/tools.js";
+import type { FundConfig } from "./src/fund/types.js";
 import { PaperEngine } from "./src/paper/paper-engine.js";
+import { PaperScheduler } from "./src/paper/paper-scheduler.js";
 import { PaperStore } from "./src/paper/paper-store.js";
 import { registerPaperTools } from "./src/paper/tools.js";
 import { BacktestEngine } from "./src/strategy/backtest-engine.js";
+import { BacktestProgressStore } from "./src/strategy/backtest-progress-store.js";
 import { StrategyRegistry } from "./src/strategy/strategy-registry.js";
 import { registerStrategyTools } from "./src/strategy/tools.js";
 import type { RuntimeServices } from "./src/types-http.js";
@@ -52,6 +63,17 @@ export { PaperStore } from "./src/paper/paper-store.js";
 export { BacktestEngine } from "./src/strategy/backtest-engine.js";
 export { StrategyRegistry } from "./src/strategy/strategy-registry.js";
 export { NotificationRouter } from "./src/core/notification-router.js";
+export { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
+export { PaperScheduler } from "./src/paper/paper-scheduler.js";
+export { BacktestProgressStore } from "./src/strategy/backtest-progress-store.js";
+export { FundManager } from "./src/fund/fund-manager.js";
+export { CapitalAllocator } from "./src/fund/capital-allocator.js";
+export { PromotionPipeline } from "./src/fund/promotion-pipeline.js";
+export { FundRiskManager } from "./src/fund/fund-risk-manager.js";
+export { Leaderboard } from "./src/fund/leaderboard.js";
+export { CorrelationMonitor } from "./src/fund/correlation-monitor.js";
+export { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
+export { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -151,7 +173,12 @@ const findooTraderPlugin = {
       eventStore,
       runtime,
       pluginEntries,
+      liveExecutor,
     };
+
+    // ── Backtest Progress Store (created early for SSE + tools wiring) ──
+
+    const progressStore = new BacktestProgressStore();
 
     // ── Register HTTP routes (API + dashboards) ──
 
@@ -168,7 +195,7 @@ const findooTraderPlugin = {
 
     // ── Register SSE streams ──
 
-    registerSseRoutes(api, gatherDeps, eventStore);
+    registerSseRoutes(api, gatherDeps, eventStore, progressStore);
 
     // ── Register trading AI tools (5 tools from fin-trading) ──
 
@@ -220,7 +247,127 @@ const findooTraderPlugin = {
 
     // ── Register strategy AI tools (5 tools, L3 uses liveExecutor directly) ──
 
-    registerStrategyTools(api, strategyRegistry, backtestEngine, liveExecutor, paperEngine);
+    registerStrategyTools(
+      api,
+      strategyRegistry,
+      backtestEngine,
+      liveExecutor,
+      paperEngine,
+      progressStore,
+    );
+
+    // ── Fund Manager ──
+
+    const financialConfig = (api.config as Record<string, unknown>)?.financial as
+      | Record<string, unknown>
+      | undefined;
+    const fundCfg = (financialConfig?.fund ?? {}) as Partial<FundConfig>;
+
+    const fundConfig: FundConfig = {
+      totalCapital: fundCfg.totalCapital,
+      cashReservePct: fundCfg.cashReservePct ?? 30,
+      maxSingleStrategyPct: fundCfg.maxSingleStrategyPct ?? 30,
+      maxTotalExposurePct: fundCfg.maxTotalExposurePct ?? 70,
+      rebalanceFrequency: fundCfg.rebalanceFrequency ?? "weekly",
+    };
+
+    const fundManager = new FundManager(
+      api.resolvePath("state/findoo-fund-state.json"),
+      fundConfig,
+    );
+    const perfStore = new PerformanceSnapshotStore(
+      api.resolvePath("state/findoo-performance-snapshots.sqlite"),
+    );
+    const flowStore = new CapitalFlowStore(api.resolvePath("state/findoo-capital-flows.sqlite"));
+
+    api.registerService({
+      id: "fin-fund-manager",
+      instance: fundManager,
+      start() {
+        const equity = fundConfig.totalCapital ?? 100000;
+        fundManager.markDayStart(equity);
+      },
+    } as Parameters<typeof api.registerService>[0]);
+
+    // Getter helpers for lazy service lookup
+    const getRegistry = () =>
+      (runtime.services?.get?.("fin-strategy-registry") as { instance?: unknown } | undefined)
+        ?.instance as Parameters<typeof registerFundTools>[1]["getRegistry"] extends () => infer R
+        ? R
+        : never;
+    const getPaper = () =>
+      (runtime.services?.get?.("fin-paper-engine") as { instance?: unknown } | undefined)
+        ?.instance as Parameters<typeof registerFundTools>[1]["getPaper"] extends () => infer R
+        ? R
+        : never;
+
+    const fundDeps = {
+      manager: fundManager,
+      config: fundConfig,
+      flowStore,
+      perfStore,
+      getRegistry,
+      getPaper,
+    };
+
+    // ── Register fund AI tools (7 tools) ──
+
+    registerFundTools(api, fundDeps);
+
+    // ── Register fund HTTP routes + SSE + bot commands + CLI ──
+
+    registerFundRoutes(api, fundDeps);
+
+    // ── Paper Scheduler (auto-tick L2_PAPER strategies) ──
+
+    const paperScheduler = new PaperScheduler({
+      paperEngine,
+      strategyRegistry,
+      tickIntervalMs: 60_000,
+      snapshotIntervalMs: 3_600_000,
+    });
+
+    // Delayed start: inject dataProvider from runtime services after all plugins register
+    setTimeout(() => {
+      try {
+        const dp = (api.runtime as unknown as Record<string, unknown>).services as
+          | Map<string, { instance?: unknown }>
+          | undefined;
+        const dataSvc = dp?.get?.("fin-data-provider");
+        if (dataSvc?.instance) {
+          paperScheduler.deps.dataProvider =
+            dataSvc.instance as typeof paperScheduler.deps.dataProvider;
+        }
+      } catch {
+        // dataProvider unavailable — scheduler will no-op
+      }
+      paperScheduler.start();
+    }, 5_000);
+
+    // ── Daily Brief Scheduler ──
+
+    const briefScheduler = new DailyBriefScheduler({
+      paperEngine,
+      strategyRegistry,
+      eventStore,
+      intervalMs: 86_400_000, // 24 hours
+    });
+    briefScheduler.start();
+
+    // ── Daily Brief HTTP endpoint ──
+
+    api.registerHttpRoute({
+      path: "/api/v1/finance/daily-brief",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        let brief = briefScheduler.getLastBrief();
+        if (!brief) {
+          brief = await briefScheduler.generateBrief();
+        }
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify({ brief }));
+      },
+    });
 
     // ── CLI commands for exchange management ──
 

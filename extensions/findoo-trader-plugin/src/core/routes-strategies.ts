@@ -194,6 +194,19 @@ export function registerStrategyRoutes(
           return;
         }
 
+        // L3 requires approval — real money trading must be explicitly confirmed
+        if (nextLevel === "L3_LIVE") {
+          eventStore.addEvent({
+            type: "trade_pending",
+            title: `Promote ${strategy.name} → L3_LIVE (approval required)`,
+            detail: `Strategy ${strategy.name} promotion from ${strategy.level} to L3_LIVE requires human confirmation`,
+            status: "pending",
+            actionParams: { action: "promote_l3", strategyId: id, from: strategy.level },
+          });
+          jsonResponse(res, 202, { status: "pending_approval", id, targetLevel: "L3_LIVE" });
+          return;
+        }
+
         strategyRegistry.updateLevel(id, nextLevel);
 
         eventStore.addEvent({

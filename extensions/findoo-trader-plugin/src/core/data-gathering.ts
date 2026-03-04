@@ -3,6 +3,7 @@
  * for dashboard rendering and API responses.
  */
 
+import type { LiveExecutor } from "../execution/live-executor.js";
 import type {
   AlertEngineLike,
   FundManagerLike,
@@ -38,6 +39,7 @@ export type DataGatheringDeps = {
   eventStore: AgentEventSqliteStore;
   runtime: RuntimeServices;
   pluginEntries: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
+  liveExecutor?: LiveExecutor;
 };
 
 /** Gather finance configuration overview (exchanges, trading limits, plugin status). */
@@ -365,8 +367,87 @@ export function gatherSettingData(deps: DataGatheringDeps & { healthStore?: Exch
   };
 }
 
+/** Gather live trading data from real exchanges via LiveExecutor. */
+export async function gatherLiveTradingData(deps: DataGatheringDeps) {
+  const { registry, liveExecutor } = deps;
+
+  const emptyResult = {
+    summary: {
+      totalEquity: 0,
+      dailyPnl: 0,
+      dailyPnlPct: 0,
+      positionCount: 0,
+      exchangeCount: 0,
+    },
+    positions: [] as Array<Record<string, unknown>>,
+    balances: [] as Array<Record<string, unknown>>,
+    exchanges: [] as Array<{ id: string; exchange: string; status: string }>,
+  };
+
+  if (!liveExecutor) return emptyResult;
+
+  const exchanges = registry.listExchanges();
+  const allPositions: Array<Record<string, unknown>> = [];
+  const allBalances: Array<Record<string, unknown>> = [];
+  const exchangeStatuses: Array<{ id: string; exchange: string; status: string }> = [];
+  let totalEquity = 0;
+
+  for (const ex of exchanges) {
+    let balance: Record<string, unknown> | undefined;
+    let positions: unknown[] | undefined;
+
+    try {
+      balance = await liveExecutor.fetchBalance(ex.id);
+    } catch {
+      exchangeStatuses.push({ id: ex.id, exchange: ex.exchange, status: "error" });
+      continue;
+    }
+
+    try {
+      positions = await liveExecutor.fetchPositions(ex.id);
+    } catch {
+      // Balance succeeded but positions failed — still include balance
+    }
+
+    exchangeStatuses.push({ id: ex.id, exchange: ex.exchange, status: "ok" });
+
+    if (balance) {
+      allBalances.push({ exchangeId: ex.id, ...balance });
+      // Sum total equity from balance.total (CCXT format: { total: { USDT: 1000, BTC: 0.5, ... } })
+      const total = balance.total as Record<string, number> | undefined;
+      if (total) {
+        for (const value of Object.values(total)) {
+          if (typeof value === "number") totalEquity += value;
+        }
+      }
+    }
+
+    if (positions) {
+      for (const pos of positions) {
+        allPositions.push({ exchangeId: ex.id, ...(pos as Record<string, unknown>) });
+      }
+    }
+  }
+
+  return {
+    summary: {
+      totalEquity,
+      dailyPnl: 0,
+      dailyPnlPct: 0,
+      positionCount: allPositions.length,
+      exchangeCount: exchanges.length,
+    },
+    positions: allPositions,
+    balances: allBalances,
+    exchanges: exchangeStatuses,
+  };
+}
+
 /** Gather Trader Tab data with domain switching (live/paper/backtest). */
-export function gatherTraderData(deps: DataGatheringDeps, options?: { domain?: TradingDomain }) {
+export async function gatherTraderData(
+  deps: DataGatheringDeps,
+  options?: { domain?: TradingDomain },
+) {
   const { runtime, eventStore, riskConfig } = deps;
   const domain = options?.domain ?? "paper";
 
@@ -401,8 +482,8 @@ export function gatherTraderData(deps: DataGatheringDeps, options?: { domain?: T
   }
 
   if (domain === "live") {
-    // Live trading data — exchanges + live positions (future: real exchange data)
-    const trading = gatherTradingData(deps);
+    // Live trading data — real exchange balances + positions via LiveExecutor
+    const trading = await gatherLiveTradingData(deps);
     const alertEngine = runtime.services?.get?.("fin-alert-engine") as AlertEngineLike | undefined;
     const alerts = alertEngine?.listAlerts() ?? [];
 

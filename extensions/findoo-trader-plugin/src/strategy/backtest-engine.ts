@@ -20,6 +20,16 @@ import type {
   TradeRecord,
 } from "./types.js";
 
+/** Progress report emitted during backtest simulation. */
+export type BacktestProgress = {
+  strategyId: string;
+  currentBar: number;
+  totalBars: number;
+  percentComplete: number;
+  currentEquity: number;
+  status: "running" | "completed" | "error";
+};
+
 /** Internal mutable position used during simulation. */
 interface InternalPosition {
   symbol: string;
@@ -56,6 +66,7 @@ export class BacktestEngine {
     strategy: StrategyDefinition,
     data: OHLCV[],
     config: BacktestConfig,
+    onProgress?: (p: BacktestProgress) => void,
   ): Promise<BacktestResult> {
     if (data.length === 0) {
       return emptyResult(strategy.id, config.capital);
@@ -133,6 +144,21 @@ export class BacktestEngine {
 
       equityCurve.push(getEquity(bar.close));
 
+      // Report progress every 5%
+      if (onProgress && data.length > 0) {
+        const pct = Math.floor(((i + 1) / data.length) * 100);
+        if (pct % 5 === 0 && (i === 0 || Math.floor((i / data.length) * 100) < pct)) {
+          onProgress({
+            strategyId: strategy.id,
+            currentBar: i + 1,
+            totalBars: data.length,
+            percentComplete: pct,
+            currentEquity: equityCurve[equityCurve.length - 1]!,
+            status: "running",
+          });
+        }
+      }
+
       if (strategy.onDayEnd) {
         await strategy.onDayEnd(buildContext(i));
       }
@@ -151,6 +177,15 @@ export class BacktestEngine {
 
     // Update final equity curve entry (now all positions are closed)
     equityCurve[equityCurve.length - 1] = cash;
+
+    onProgress?.({
+      strategyId: strategy.id,
+      currentBar: data.length,
+      totalBars: data.length,
+      percentComplete: 100,
+      currentEquity: cash,
+      status: "completed",
+    });
 
     const dailyReturns = computeDailyReturns(equityCurve);
     const totalReturn = ((cash - config.capital) / config.capital) * 100;

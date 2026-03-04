@@ -454,6 +454,16 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           return;
         }
 
+        // Post-approval action: execute promote_l3
+        if (event?.actionParams?.action === "promote_l3") {
+          const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
+            | StrategyRegistryLike
+            | undefined;
+          if (strategyRegistry?.updateLevel && event.actionParams.strategyId) {
+            strategyRegistry.updateLevel(event.actionParams.strategyId as string, "L3_LIVE");
+          }
+        }
+
         jsonResponse(res, 200, { status: "approved", event });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
@@ -558,7 +568,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
       const url = (req as { url?: string }).url ?? "";
       const match = url.match(/[?&]domain=(live|paper|backtest)/);
       const domain = (match?.[1] ?? "paper") as "live" | "paper" | "backtest";
-      const data = gatherTraderData(gatherDeps, { domain });
+      const data = await gatherTraderData(gatherDeps, { domain });
       const html = renderUnifiedDashboard(templates.trader, data);
       if (!html) {
         jsonResponse(res, 200, data);
@@ -598,7 +608,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
       const url = (req as { url?: string }).url ?? "";
       const match = url.match(/[?&]domain=(live|paper|backtest)/);
       const domain = (match?.[1] ?? "paper") as "live" | "paper" | "backtest";
-      jsonResponse(res, 200, gatherTraderData(gatherDeps, { domain }));
+      jsonResponse(res, 200, await gatherTraderData(gatherDeps, { domain }));
     },
   });
 
