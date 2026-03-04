@@ -127,8 +127,8 @@ export function toWhatsappJid(number: string): string {
     return withoutPrefix;
   }
   const e164 = normalizeE164(withoutPrefix);
-  const digits = e164.replace(/\D/g, "");
-  return `${digits}@s.whatsapp.net`;
+  // e164 is always "+digits", so we can slice off the leading "+"
+  return `${e164.slice(1)}@s.whatsapp.net`;
 }
 
 export type JidToE164Options = {
