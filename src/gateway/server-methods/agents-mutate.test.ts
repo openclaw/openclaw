@@ -566,7 +566,7 @@ describe("agents.files.get/set symlink safety", () => {
     },
   );
 
-  it("allows in-workspace symlink targets for get/set", async () => {
+  it("allows in-workspace symlink reads but rejects writes through symlink aliases", async () => {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
     const target = path.resolve(workspace, "policies", "AGENTS.md");
@@ -626,12 +626,11 @@ describe("agents.files.get/set symlink safety", () => {
     });
     await setCall.promise;
     expect(setCall.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        file: expect.objectContaining({ missing: false, content: "updated\n" }),
-      }),
+      false,
       undefined,
+      expect.objectContaining({
+        message: expect.stringContaining('unsafe workspace file "AGENTS.md"'),
+      }),
     );
   });
 
