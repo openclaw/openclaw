@@ -13,7 +13,10 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
-import { FeishuStreamingSession } from "./streaming-card.js";
+import {
+  FeishuStreamingSession,
+  mergeStreamingText as mergeStreamingTextBase,
+} from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -147,19 +150,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
 
   const mergeStreamingText = (nextText: string) => {
-    if (!streamText) {
-      streamText = nextText;
-      return;
-    }
-    if (nextText.startsWith(streamText)) {
-      // Handle cumulative partial payloads where nextText already includes prior text.
-      streamText = nextText;
-      return;
-    }
-    if (streamText.endsWith(nextText)) {
-      return;
-    }
-    streamText += nextText;
+    streamText = mergeStreamingTextBase(streamText, nextText);
   };
 
   const queueStreamingUpdate = (
