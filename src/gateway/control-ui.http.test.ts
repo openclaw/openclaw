@@ -197,6 +197,22 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("normalizes Windows-style basePath separators when matching routes", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, res, end } = runControlUiRequest({
+          url: "/ui/",
+          method: "GET",
+          rootPath: tmp,
+          basePath: "\\ui",
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("<html");
+      },
+    });
+  });
+
   it("serves local avatar bytes through hardened avatar handler", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
     try {
