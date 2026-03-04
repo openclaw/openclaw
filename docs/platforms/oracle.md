@@ -332,9 +332,11 @@ mkdir -p ~/agents/{dev,growth,content,shared}
 ```json5
 {
   agents: {
-    dev:     { workspace: "~/agents/dev" },
-    growth:  { workspace: "~/agents/growth" },
-    content: { workspace: "~/agents/content" },
+    list: [
+      { id: "dev",     workspace: "~/agents/dev" },
+      { id: "growth",  workspace: "~/agents/growth" },
+      { id: "content", workspace: "~/agents/content" },
+    ],
   },
 }
 ```
