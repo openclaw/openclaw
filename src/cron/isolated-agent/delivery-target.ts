@@ -149,10 +149,11 @@ export async function resolveDeliveryTarget(
   }
 
   let allowFromOverride: string[] | undefined;
+  let allowSendToOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw =
-      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
+    const whatsappAccount = resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId });
+    const configuredAllowFromRaw = whatsappAccount.allowFrom ?? [];
     const configuredAllowFrom = configuredAllowFromRaw
       .map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
@@ -162,20 +163,20 @@ export async function resolveDeliveryTarget(
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    allowSendToOverride = whatsappAccount.allowSendTo;
 
-    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+    // When allowSendTo is defined, use it for implicit-mode target validation
+    // instead of allowFrom. A wildcard bypasses substitution entirely.
+    const effectiveSendList = allowSendToOverride ?? allowFromOverride;
+    const hasWildcard = effectiveSendList.some((e) => e === "*");
+
+    if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
-        toCandidate = allowFromOverride[0];
+      if (!normalizedCurrentTarget || !effectiveSendList.includes(normalizedCurrentTarget)) {
+        toCandidate = effectiveSendList[0];
       }
     }
   }
-
-  // allowSendTo is resolved from config — no pairing-store merge needed.
-  const allowSendToOverride =
-    channel === "whatsapp"
-      ? resolveWhatsAppAccount({ cfg, accountId: normalizeAccountId(accountId) }).allowSendTo
-      : undefined;
 
   const docked = resolveOutboundTarget({
     channel,
