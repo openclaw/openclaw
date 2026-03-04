@@ -148,6 +148,9 @@ export function renderApp(state: AppViewState) {
     state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
       ? state.updateAvailable
       : null;
+  const updateDismissed = sessionStorage.getItem("updateBannerDismissed");
+  const effectiveUpdate =
+    availableUpdate && updateDismissed !== availableUpdate.latestVersion ? availableUpdate : null;
   const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -307,15 +310,22 @@ export function renderApp(state: AppViewState) {
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
-          availableUpdate
+          effectiveUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
-              (running v${availableUpdate.currentVersion}).
+              <strong>Update available:</strong> v${effectiveUpdate.latestVersion}
+              (running v${effectiveUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              <button
+                class="btn btn--sm update-banner__close"
+                @click=${() => {
+                  sessionStorage.setItem("updateBannerDismissed", effectiveUpdate.latestVersion);
+                  window.location.reload();
+                }}
+              >✕</button>
             </div>`
             : nothing
         }
