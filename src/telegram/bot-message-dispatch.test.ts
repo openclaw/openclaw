@@ -1002,8 +1002,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("forces message transport for DM answer lane when replyToMode is off", async () => {
     setupDraftStreams({ answerMessageId: 999 });
 
-    const context = createStreamingContext();
-    context.threadSpec = { scope: "dm" };
+    const context = createContext({ threadSpec: { scope: "dm" } });
+    const bot = createBot();
 
     await dispatchTelegramMessage({
       context,
