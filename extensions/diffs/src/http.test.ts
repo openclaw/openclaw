@@ -42,6 +42,7 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe("<html>viewer</html>");
     expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
+    expect(res.getHeader("permissions-policy")).toBe("camera=(), microphone=(), geolocation=()");
   });
 
   it("rejects invalid tokens", async () => {

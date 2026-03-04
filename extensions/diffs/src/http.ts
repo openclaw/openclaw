@@ -170,6 +170,7 @@ function setSharedHeaders(res: ServerResponse, contentType: string): void {
   res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
 }
 
 function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
