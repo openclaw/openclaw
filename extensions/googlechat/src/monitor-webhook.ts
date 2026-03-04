@@ -5,7 +5,7 @@ import {
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargets,
   type WebhookInFlightLimiter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
