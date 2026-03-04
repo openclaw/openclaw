@@ -83,12 +83,22 @@ rm -f "$0"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
+      // Resolve HOME at generation time via env/process.env to match launchd.ts,
+      // and shell-escape the label in the plist filename to prevent injection.
+      const home = env.HOME?.trim() || process.env.HOME || os.homedir();
+      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
+# Try kickstart first (works when the service is still registered).
+# If it fails (e.g. after bootout), re-register via bootstrap then kickstart.
+if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
+  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;

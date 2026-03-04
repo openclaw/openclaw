@@ -7,6 +7,8 @@ import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
+const enqueueSystemEventMock = vi.fn();
+const requestHeartbeatNowMock = vi.fn();
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -16,6 +18,14 @@ vi.mock("../process/supervisor/index.js", () => ({
     reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 
 type MockRunExit = {
@@ -49,6 +59,8 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
 describe("runCliAgent with process supervisor", () => {
   beforeEach(() => {
     supervisorSpawnMock.mockClear();
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -122,6 +134,46 @@ describe("runCliAgent with process supervisor", () => {
         cliSessionId: "thread-123",
       }),
     ).rejects.toThrow("produced no output");
+  });
+
+  it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-2b",
+        cliSessionId: "thread-123",
+      }),
+    ).rejects.toThrow("produced no output");
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [notice, opts] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    expect(String(notice)).toContain("produced no output");
+    expect(String(notice)).toContain("interactive input or an approval prompt");
+    expect(opts).toMatchObject({ sessionKey: "agent:main:main" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "cli:watchdog:stall",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("fails with timeout when overall timeout trips", async () => {
