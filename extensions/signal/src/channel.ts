@@ -68,6 +68,7 @@ async function sendSignalOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   accountId?: string;
   deps?: { sendSignal?: SignalSendFn };
 }) {
@@ -80,6 +81,7 @@ async function sendSignalOutbound(params: {
   });
   return await send(params.to, params.text, {
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
   });
@@ -270,12 +272,13 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       });
       return { channel: "signal", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
         text,
         mediaUrl,
+        mediaLocalRoots,
         accountId: accountId ?? undefined,
         deps,
       });
