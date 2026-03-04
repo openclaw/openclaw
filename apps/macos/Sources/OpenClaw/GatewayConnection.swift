@@ -365,11 +365,12 @@ actor GatewayConnection {
             await client.shutdown()
         }
         self.lastSnapshot = nil
+        let effectiveSessionBox = self.sessionBox ?? Self.buildTLSSessionBox(for: url)
         self.client = GatewayChannelActor(
             url: url,
             token: token,
             password: password,
-            session: self.sessionBox,
+            session: effectiveSessionBox,
             pushHandler: { [weak self] push in
                 await self?.handle(push: push)
             })
@@ -384,6 +385,20 @@ actor GatewayConnection {
 
     private static func defaultConfigProvider() async throws -> Config {
         try await GatewayEndpointStore.shared.requireConfig()
+    }
+
+    private static func buildTLSSessionBox(for url: URL) -> WebSocketSessionBox? {
+        guard url.scheme?.lowercased() == "wss" else { return nil }
+        let host = url.host ?? "gateway"
+        let port = url.port ?? 443
+        let stableID = "\(host):\(port)"
+        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: stored,
+            allowTOFU: stored == nil,
+            storeKey: stableID)
+        return WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
     }
 }
 

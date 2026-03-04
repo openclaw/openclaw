@@ -113,15 +113,11 @@ final class GatewayConnectionController {
         let tlsRequired = true
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
 
-        guard gateway.tlsEnabled || stored != nil else {
-            return "Discovered gateway is missing TLS and no trusted fingerprint is stored."
-        }
-
         if tlsRequired, stored == nil {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return "Failed to build TLS URL for trust verification." }
             guard let fp = await self.probeTLSFingerprint(url: url) else {
-                return "Failed to read TLS fingerprint from discovered gateway."
+                return "Failed to read TLS fingerprint from discovered gateway. Make sure the gateway is serving TLS on the discovered port."
             }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: false)
             self.pendingTrustPrompt = TrustPrompt(
