@@ -40,7 +40,7 @@ BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.3.8 \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
-scripts/package-mac-app.sh
+scripts/package-mac-dist.sh
 
 # Zip for distribution (includes resource forks for Sparkle delta support)
 ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.8.zip
