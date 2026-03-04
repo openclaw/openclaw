@@ -11,6 +11,7 @@ import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { isAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
@@ -179,6 +180,31 @@ function appendPluginCommandSpecs(params: {
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
 
+function isLegacyMissingSessionError(message: string): boolean {
+  return (
+    message.includes("Session is not ACP-enabled") ||
+    message.includes("ACP session metadata missing")
+  );
+}
+
+function classifyAcpStatusProbeError(params: { error: unknown; isStaleRunning: boolean }): {
+  status: "stale" | "uncertain";
+  reason: string;
+} {
+  if (isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
+    return { status: "stale", reason: "session-init-failed" };
+  }
+
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  if (isLegacyMissingSessionError(message)) {
+    return { status: "stale", reason: "session-missing" };
+  }
+
+  return params.isStaleRunning
+    ? { status: "stale", reason: "status-error-running-stale" }
+    : { status: "uncertain", reason: "status-error" };
+}
+
 async function probeDiscordAcpBindingHealth(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -219,17 +245,10 @@ async function probeDiscordAcpBindingHealth(params: {
       : { status: "uncertain", reason: "status-timeout" };
   }
   if (result.kind === "error") {
-    const error = result.error;
-    const message = error instanceof Error ? error.message : String(error);
-    if (
-      message.includes("Session is not ACP-enabled") ||
-      message.includes("ACP session metadata missing")
-    ) {
-      return { status: "stale", reason: "session-missing" };
-    }
-    return isStaleRunning
-      ? { status: "stale", reason: "status-error-running-stale" }
-      : { status: "uncertain", reason: "status-error" };
+    return classifyAcpStatusProbeError({
+      error: result.error,
+      isStaleRunning,
+    });
   }
   if (result.status.state === "error") {
     // ACP error state is recoverable (next turn can clear it), so keep the

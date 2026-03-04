@@ -1073,6 +1073,80 @@ describe("thread binding lifecycle", () => {
     expect(result.removed).toBe(0);
   });
 
+  it("caps ACP startup health probe concurrency", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    for (let index = 0; index < 12; index += 1) {
+      const key = `agent:codex:acp:cap-${index}`;
+      await manager.bindTarget({
+        threadId: `thread-acp-cap-${index}`,
+        channelId: "parent-1",
+        targetKind: "acp",
+        targetSessionKey: key,
+        agentId: "codex",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
+    }
+
+    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: `runtime:${sessionKey}`,
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+
+    const PROBE_LIMIT = 8;
+    let probeCalls = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let releaseFirstWave: (() => void) | undefined;
+    const firstWaveGate = new Promise<void>((resolve) => {
+      releaseFirstWave = resolve;
+    });
+
+    const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      healthProbe: async () => {
+        probeCalls += 1;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (probeCalls <= PROBE_LIMIT) {
+          await firstWaveGate;
+        }
+        inFlight -= 1;
+        return { status: "healthy" as const };
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(probeCalls).toBe(PROBE_LIMIT);
+    });
+    expect(maxInFlight).toBe(PROBE_LIMIT);
+
+    releaseFirstWave?.();
+    const result = await reconcilePromise;
+    expect(result.checked).toBe(12);
+    expect(result.removed).toBe(0);
+    expect(maxInFlight).toBeLessThanOrEqual(PROBE_LIMIT);
+  });
+
   it("migrates legacy expiresAt bindings to idle/max-age semantics", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));

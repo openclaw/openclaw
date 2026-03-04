@@ -42,6 +42,37 @@ export type AcpThreadBindingHealthProbe = (params: {
   reason?: string;
 }>;
 
+// Cap startup fan-out so large binding sets do not create unbounded ACP probe spikes.
+const ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT = 8;
+
+async function mapWithConcurrency<TItem, TResult>(params: {
+  items: TItem[];
+  limit: number;
+  worker: (item: TItem, index: number) => Promise<TResult>;
+}): Promise<TResult[]> {
+  if (params.items.length === 0) {
+    return [];
+  }
+  const limit = Math.max(1, Math.floor(params.limit));
+  const results = Array.from({ length: params.items.length });
+  let nextIndex = 0;
+
+  const runWorker = async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= params.items.length) {
+        return;
+      }
+      results[index] = await params.worker(params.items[index], index);
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(limit, params.items.length) }, () => runWorker());
+  await Promise.all(workers);
+  return results;
+}
+
 function normalizeNonNegativeMs(raw: number): number {
   if (!Number.isFinite(raw)) {
     return 0;
@@ -335,8 +366,10 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   }
 
   if (params.healthProbe && probeTargets.length > 0) {
-    const probeResults = await Promise.all(
-      probeTargets.map(async ({ binding, sessionKey, session }) => {
+    const probeResults = await mapWithConcurrency({
+      items: probeTargets,
+      limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
+      worker: async ({ binding, sessionKey, session }) => {
         try {
           const result = await params.healthProbe?.({
             cfg: params.cfg,
@@ -356,8 +389,8 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
             status: "uncertain" satisfies AcpThreadBindingHealthStatus,
           };
         }
-      }),
-    );
+      },
+    });
 
     for (const probeResult of probeResults) {
       if (probeResult.status === "stale") {

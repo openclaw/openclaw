@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -280,6 +281,21 @@ vi.mock("./thread-bindings.js", () => ({
 }));
 
 describe("monitorDiscordProvider", () => {
+  type ReconcileHealthProbeParams = {
+    cfg: OpenClawConfig;
+    accountId: string;
+    sessionKey: string;
+    binding: unknown;
+    session: unknown;
+  };
+
+  type ReconcileStartupParams = {
+    cfg: OpenClawConfig;
+    healthProbe?: (
+      params: ReconcileHealthProbeParams,
+    ) => Promise<{ status: string; reason?: string }>;
+  };
+
   const baseRuntime = (): RuntimeEnv => {
     return {
       log: vi.fn(),
@@ -305,6 +321,16 @@ describe("monitorDiscordProvider", () => {
       eventQueue?: { listenerTimeout?: number };
     };
     return opts.eventQueue;
+  };
+
+  const getHealthProbe = () => {
+    expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
+    const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
+      | [ReconcileStartupParams]
+      | undefined;
+    const reconcileParams = firstCall?.[0];
+    expect(typeof reconcileParams?.healthProbe).toBe("function");
+    return reconcileParams?.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
   };
 
   beforeEach(() => {
@@ -386,21 +412,7 @@ describe("monitorDiscordProvider", () => {
       runtime: baseRuntime(),
     });
 
-    const reconcileParams = reconcileAcpThreadBindingsOnStartupMock.mock.calls[0]?.[0] as
-      | {
-          cfg: OpenClawConfig;
-          healthProbe?: (params: {
-            cfg: OpenClawConfig;
-            accountId: string;
-            sessionKey: string;
-            binding: unknown;
-            session: unknown;
-          }) => Promise<{ status: string; reason?: string }>;
-        }
-      | undefined;
-    expect(typeof reconcileParams?.healthProbe).toBe("function");
-
-    const probeResult = await reconcileParams!.healthProbe!({
+    const probeResult = await getHealthProbe()({
       cfg: baseConfig(),
       accountId: "default",
       sessionKey: "agent:codex:acp:error",
@@ -416,6 +428,94 @@ describe("monitorDiscordProvider", () => {
     expect(probeResult).toEqual({
       status: "uncertain",
       reason: "status-error-state",
+    });
+  });
+
+  it("classifies typed ACP session init failures as stale", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getAcpSessionStatusMock.mockRejectedValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const probeResult = await getHealthProbe()({
+      cfg: baseConfig(),
+      accountId: "default",
+      sessionKey: "agent:codex:acp:stale",
+      binding: {} as never,
+      session: {
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      } as never,
+    });
+
+    expect(probeResult).toEqual({
+      status: "stale",
+      reason: "session-init-failed",
+    });
+  });
+
+  it("classifies typed non-init ACP errors as uncertain when not stale-running", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getAcpSessionStatusMock.mockRejectedValue(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const probeResult = await getHealthProbe()({
+      cfg: baseConfig(),
+      accountId: "default",
+      sessionKey: "agent:codex:acp:uncertain",
+      binding: {} as never,
+      session: {
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      } as never,
+    });
+
+    expect(probeResult).toEqual({
+      status: "uncertain",
+      reason: "status-error",
+    });
+  });
+
+  it("falls back to legacy missing-session message classification", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getAcpSessionStatusMock.mockRejectedValue(new Error("ACP session metadata missing"));
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const probeResult = await getHealthProbe()({
+      cfg: baseConfig(),
+      accountId: "default",
+      sessionKey: "agent:codex:acp:legacy",
+      binding: {} as never,
+      session: {
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      } as never,
+    });
+
+    expect(probeResult).toEqual({
+      status: "stale",
+      reason: "session-missing",
     });
   });
 
