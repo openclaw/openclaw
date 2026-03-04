@@ -312,6 +312,47 @@ describe("runOnboardingWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("persists selected onboarding locale into config", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    delete process.env.OPENCLAW_LOCALE;
+
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Language / 语言") {
+        return "zh-CN";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(writeConfigFile).toHaveBeenCalled();
+    const wroteZhLocale = writeConfigFile.mock.calls.some(
+      (call) => call[0]?.cli?.locale === "zh-CN",
+    );
+    expect(wroteZhLocale).toBe(true);
+
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
+  });
+
   async function runTuiHatchTest(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;

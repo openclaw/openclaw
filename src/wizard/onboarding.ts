@@ -21,12 +21,37 @@ import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
-async function promptCliLocaleSelection(prompter: WizardPrompter): Promise<void> {
-  const explicit = process.env.OPENCLAW_LOCALE?.trim();
-  if (explicit) {
-    return;
+function normalizeCliLocale(value: string | undefined): "en" | "zh-CN" | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
   }
-  const locale = await prompter.select({
+  if (normalized === "en") {
+    return "en";
+  }
+  if (normalized === "zh-CN") {
+    return "zh-CN";
+  }
+  return undefined;
+}
+
+async function promptCliLocaleSelection(params: {
+  prompter: WizardPrompter;
+  baseConfig: OpenClawConfig;
+}): Promise<"en" | "zh-CN" | undefined> {
+  const explicit = normalizeCliLocale(process.env.OPENCLAW_LOCALE);
+  if (explicit) {
+    process.env.OPENCLAW_LOCALE = explicit;
+    return undefined;
+  }
+
+  const configured = normalizeCliLocale(params.baseConfig.cli?.locale);
+  if (configured) {
+    process.env.OPENCLAW_LOCALE = configured;
+    return undefined;
+  }
+
+  const locale = await params.prompter.select({
     message: "Language / 语言",
     options: [
       { value: "en", label: "English", hint: "Default" },
@@ -35,6 +60,7 @@ async function promptCliLocaleSelection(prompter: WizardPrompter): Promise<void>
     initialValue: "en",
   });
   process.env.OPENCLAW_LOCALE = locale;
+  return locale;
 }
 
 async function requireRiskAcknowledgement(params: {
@@ -91,13 +117,7 @@ export async function runOnboardingWizard(
   runtime: RuntimeEnv = defaultRuntime,
   prompter: WizardPrompter,
 ) {
-  await promptCliLocaleSelection(prompter);
-  const t = (key: Parameters<typeof cliT>[0]) => cliT(key, process.env);
   const onboardHelpers = await import("../commands/onboard-helpers.js");
-  onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro(t("wizard.onboardingTitle"));
-  await requireRiskAcknowledgement({ opts, prompter });
-
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
 
@@ -110,7 +130,7 @@ export async function runOnboardingWizard(
           "",
           "Docs: https://docs.openclaw.ai/gateway/configuration",
         ].join("\n"),
-        t("wizard.configIssuesTitle"),
+        cliT("wizard.configIssuesTitle", process.env),
       );
     }
     await prompter.outro(
@@ -121,6 +141,22 @@ export async function runOnboardingWizard(
     runtime.exit(1);
     return;
   }
+
+  const selectedLocale = await promptCliLocaleSelection({ prompter, baseConfig });
+  if (selectedLocale) {
+    baseConfig = {
+      ...baseConfig,
+      cli: {
+        ...baseConfig.cli,
+        locale: selectedLocale,
+      },
+    };
+  }
+
+  const t = (key: Parameters<typeof cliT>[0]) => cliT(key, process.env);
+  onboardHelpers.printWizardHeader(runtime);
+  await prompter.intro(t("wizard.onboardingTitle"));
+  await requireRiskAcknowledgement({ opts, prompter });
 
   const quickstartHint = cliT("wizard.modeQuickstartHint", process.env, {
     configureCommand: formatCliCommand("openclaw configure"),
