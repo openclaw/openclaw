@@ -1,16 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { generateSummary } from "@mariozechner/pi-coding-agent";
+import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
-import { estimateMessagesTokensWithTokenizer } from "../infra/tokenizer.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
 const log = createSubsystemLogger("compaction");
 
-export const BASE_CHUNK_RATIO = 0.4;
+export const BASE_CHUNK_RATIO = 0.499; // Based on MiniMax M2.1/M2.5 token analysis (char/token ≈ 2.0)
 export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
@@ -73,7 +72,7 @@ export function buildCompactionSummarizationInstructions(
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
-  return estimateMessagesTokensWithTokenizer(safe);
+  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
 function estimateCompactionMessageTokens(message: AgentMessage): number {
