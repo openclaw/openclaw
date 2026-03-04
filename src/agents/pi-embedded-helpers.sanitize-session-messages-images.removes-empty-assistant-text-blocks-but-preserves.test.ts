@@ -385,6 +385,46 @@ describe("sanitizeSessionMessagesImages", () => {
     });
   });
 
+  it("does not preserve older thinking assistant when a newer plain assistant follows", async () => {
+    const olderThinkingAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "chain of thought",
+          thought_signature: "msg_immutable",
+        },
+        { type: "text", text: "I will use a tool" },
+      ],
+      stopReason: "stop",
+      timestamp: nextTimestamp(),
+    };
+    const newerPlainAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Plain follow-up" }],
+      stopReason: "stop",
+      timestamp: nextTimestamp(),
+    };
+    const input = castAgentMessages([
+      { role: "user", content: "hello", timestamp: nextTimestamp() },
+      olderThinkingAssistant,
+      { role: "user", content: "retry", timestamp: nextTimestamp() },
+      newerPlainAssistant,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      preserveLatestAssistantThinking: true,
+    });
+
+    // The older thinking assistant should NOT be preserved verbatim
+    // because the latest assistant (newerPlainAssistant) has no thinking blocks.
+    // Its msg_-prefixed thought_signature should be stripped (normal sanitization).
+    const olderContent = (out[1] as { content?: Array<Record<string, unknown>> }).content;
+    const thinkingBlock = olderContent?.find((b) => b.type === "thinking");
+    expect(thinkingBlock).toBeDefined();
+    expect("thought_signature" in (thinkingBlock ?? {})).toBe(false);
+  });
+
   it("preserves latest assistant thinking message verbatim when requested", async () => {
     const protectedAssistant = {
       role: "assistant",

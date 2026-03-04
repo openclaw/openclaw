@@ -29,9 +29,12 @@ function hasThinkingOrRedactedThinkingBlocks(message: AgentMessage): boolean {
 }
 
 function resolveLatestAssistantThinkingIndex(messages: AgentMessage[]): number {
+  // Find the actual latest assistant message first.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (hasThinkingOrRedactedThinkingBlocks(messages[i])) {
-      return i;
+    const msg = messages[i];
+    if (msg && typeof msg === "object" && (msg as { role?: unknown }).role === "assistant") {
+      // Only protect it if it contains thinking/redacted_thinking blocks.
+      return hasThinkingOrRedactedThinkingBlocks(msg) ? i : -1;
     }
   }
   return -1;

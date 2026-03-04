@@ -485,6 +485,38 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
   });
 
+  it("strips dangling toolUse from older thinking assistant when a newer plain assistant follows", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use a tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+        ],
+        stopReason: "error",
+      },
+      { role: "user", content: [{ type: "text", text: "retry" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Plain follow-up" }],
+      },
+      { role: "user", content: [{ type: "text", text: "thanks" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    // The older thinking assistant at index 1 should NOT be protected
+    // because the latest assistant (index 3) has no thinking blocks.
+    // Its dangling toolUse should be stripped.
+    const olderAssistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(olderAssistantContent).not.toContainEqual(
+      expect.objectContaining({ type: "toolUse", id: "tool-1" }),
+    );
+    // The thinking block should remain (only toolUse without matching toolResult is stripped)
+    expect(olderAssistantContent).toContainEqual(expect.objectContaining({ type: "thinking" }));
+  });
+
   it("preserves latest assistant message with thinking blocks exactly", () => {
     const latestAssistant = {
       role: "assistant",
