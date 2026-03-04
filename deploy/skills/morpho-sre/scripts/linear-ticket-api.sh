@@ -97,11 +97,39 @@ lookup_entity_id() {
   printf '%s\n' "$entity_id"
 }
 
+lookup_label_id_optional() {
+  local name="$1"
+  local vars_json response label_id
+  vars_json="$(jq -nc --arg name "$name" '{ name: $name }')"
+  response="$(linear_graphql 'query($name:String!){ issueLabels(filter:{name:{eq:$name}}){ nodes { id name } } }' "$vars_json")"
+  label_id="$(printf '%s\n' "$response" | jq -r '.data.issueLabels.nodes[0].id // empty')"
+  [[ -n "$label_id" ]] || return 1
+  printf '%s\n' "$label_id"
+}
+
+create_label() {
+  local name="$1"
+  local color="${2:-#0E8A16}"
+  local vars_json response success label_id
+  vars_json="$(
+    jq -nc \
+      --arg name "$name" \
+      --arg color "$color" \
+      '{ name: $name, color: $color }'
+  )"
+  response="$(linear_graphql 'mutation($name:String!,$color:String!){ issueLabelCreate(input:{name:$name,color:$color}){ success issueLabel { id name } } }' "$vars_json")"
+  success="$(printf '%s\n' "$response" | jq -r '.data.issueLabelCreate.success // empty')"
+  [[ "$success" == "true" ]] || die "issueLabelCreate returned success=false"
+  label_id="$(printf '%s\n' "$response" | jq -r '.data.issueLabelCreate.issueLabel.id // empty')"
+  [[ -n "$label_id" ]] || die "issueLabelCreate missing label id"
+  printf '%s\n' "$label_id"
+}
+
 issue_json_by_ref() {
   local issue_ref="$1"
   local vars_json response
   vars_json="$(jq -nc --arg id "$issue_ref" '{ id: $id }')"
-  response="$(linear_graphql 'query($id:String!){ issue(id:$id){ id identifier title description } }' "$vars_json")"
+  response="$(linear_graphql 'query($id:String!){ issue(id:$id){ id identifier title description labels { nodes { id name } } } }' "$vars_json")"
   printf '%s\n' "$response"
 }
 
@@ -184,6 +212,43 @@ cmd_issue_add_comment() {
   printf 'commented\t%s\t%s\n' "$issue_ref" "${comment_id:-unknown}"
 }
 
+cmd_issue_ensure_label() {
+  local issue_ref="$1"
+  local label_name="$2"
+  local issue_json issue_id existing_names_json existing_label_ids_json label_id merged_label_ids_json
+  local vars_json response success
+
+  issue_json="$(issue_json_by_ref "$issue_ref")"
+  issue_id="$(printf '%s\n' "$issue_json" | jq -r '.data.issue.id // empty')"
+  [[ -n "$issue_id" ]] || die "issue not found: ${issue_ref}"
+
+  existing_names_json="$(printf '%s\n' "$issue_json" | jq -c '[.data.issue.labels.nodes[]?.name]')"
+  if printf '%s\n' "$existing_names_json" | jq -e --arg name "$label_name" 'index($name) != null' >/dev/null 2>&1; then
+    printf 'label_present\t%s\t%s\n' "$issue_ref" "$label_name"
+    return 0
+  fi
+
+  if ! label_id="$(lookup_label_id_optional "$label_name" 2>/dev/null)"; then
+    label_id="$(create_label "$label_name")"
+  fi
+
+  existing_label_ids_json="$(printf '%s\n' "$issue_json" | jq -c '[.data.issue.labels.nodes[]?.id]')"
+  merged_label_ids_json="$(
+    printf '%s\n' "$existing_label_ids_json" \
+      | jq -c --arg label_id "$label_id" 'if index($label_id) != null then . else . + [$label_id] end'
+  )"
+  vars_json="$(
+    jq -nc \
+      --arg id "$issue_id" \
+      --argjson labelIds "$merged_label_ids_json" \
+      '{ id: $id, labelIds: $labelIds }'
+  )"
+  response="$(linear_graphql 'mutation($id:String!,$labelIds:[String!]!){ issueUpdate(id:$id,input:{labelIds:$labelIds}){ success issue { identifier labels { nodes { id name } } } } }' "$vars_json")"
+  success="$(printf '%s\n' "$response" | jq -r '.data.issueUpdate.success // empty')"
+  [[ "$success" == "true" ]] || die "issueUpdate(labelIds) returned success=false"
+  printf 'labeled\t%s\t%s\n' "$issue_ref" "$label_name"
+}
+
 cmd_probe_write() {
   local issue_ref="$1"
   local response issue_id issue_title vars_json mutation_response success identifier
@@ -213,6 +278,7 @@ Usage:
   linear-ticket-api.sh issue get <issue-ref>
   linear-ticket-api.sh issue update-description <issue-ref> (--file <path> | --text <text> | --stdin)
   linear-ticket-api.sh issue add-comment <issue-ref> (--file <path> | --text <text> | --stdin)
+  linear-ticket-api.sh issue ensure-label <issue-ref> <label-name>
   linear-ticket-api.sh probe-write <issue-ref>
 
 Compatibility:
@@ -245,7 +311,7 @@ main() {
       lookup_entity_id "$2" "$3"
       ;;
     issue)
-      [[ "$#" -ge 3 ]] || die "usage: issue <get|update-description|add-comment> <issue-ref> ..."
+      [[ "$#" -ge 3 ]] || die "usage: issue <get|update-description|add-comment|ensure-label> <issue-ref> ..."
       case "$2" in
         get)
           [[ "$#" -eq 3 ]] || die "usage: issue get <issue-ref>"
@@ -270,6 +336,10 @@ main() {
             [[ "$#" -eq 5 ]] || die "usage: issue add-comment <issue-ref> (--file <path>|--text <text>)"
             cmd_issue_add_comment "$3" "$4" "$5"
           fi
+          ;;
+        ensure-label)
+          [[ "$#" -eq 4 ]] || die "usage: issue ensure-label <issue-ref> <label-name>"
+          cmd_issue_ensure_label "$3" "$4"
           ;;
         *)
           die "unknown issue command: $2"
