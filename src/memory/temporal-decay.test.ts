@@ -54,9 +54,9 @@ describe("temporal decay", () => {
     const topicPath = path.join(dir, "memory", "projects.md");
     await fs.mkdir(path.dirname(topicPath), { recursive: true });
     await fs.writeFile(rootMemoryPath, "evergreen");
-    await fs.writeFile(topicPath, "topic evergreen");
+    await fs.writeFile(topicPath, "evergreen topic");
 
-    const veryOld = new Date(Date.UTC(2010, 0, 1));
+    const veryOld = new Date(NOW_MS - 365 * DAY_MS);
     await fs.utimes(rootMemoryPath, veryOld, veryOld);
     await fs.utimes(topicPath, veryOld, veryOld);
 
@@ -135,7 +135,7 @@ describe("temporal decay", () => {
           vectorScore: 0.8,
         },
         {
-          id: "very-old",
+          id: "ancient",
           path: "memory/2000-01-01.md",
           startLine: 1,
           endLine: 1,
@@ -169,5 +169,172 @@ describe("temporal decay", () => {
     });
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  // ===== New tests for expanded date pattern matching =====
+
+  describe("expanded date pattern matching", () => {
+    it("applies decay to suffixed daily logs (memory/YYYY-MM-DD-suffix.md)", async () => {
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        mmr: { enabled: false },
+        nowMs: NOW_MS,
+        vector: [
+          {
+            id: "suffixed-old",
+            path: "memory/2025-01-01-standup.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "old standup notes",
+            vectorScore: 0.95,
+          },
+          {
+            id: "suffixed-new",
+            path: "memory/2026-02-09-retro.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "recent retro",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+      });
+
+      // Recent suffixed file should rank higher despite lower vectorScore
+      expect(merged[0]?.path).toBe("memory/2026-02-09-retro.md");
+      expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
+    });
+
+    it("applies decay to date-subdirectory files (memory/YYYY-MM-DD/name.md)", async () => {
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2025-01-01/notes.md", score: 1, source: "memory" },
+          { path: "memory/2026-02-10/tasks.md", score: 0.8, source: "memory" },
+        ],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Old date-subdir file should be heavily decayed
+      expect(decayed[0]!.score).toBeLessThan(0.01);
+      // Today's file should keep its score
+      expect(decayed[1]!.score).toBeCloseTo(0.8);
+    });
+
+    it("applies decay to nested YYYY/MM/DD paths", async () => {
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2025/01/01.md", score: 1, source: "memory" },
+          { path: "memory/2025/06/15-meeting.md", score: 0.9, source: "memory" },
+        ],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Both should be significantly decayed (months old)
+      expect(decayed[0]!.score).toBeLessThan(0.01);
+      expect(decayed[1]!.score).toBeLessThan(0.01);
+    });
+
+    it("applies decay to YYYY-MM/DD paths", async () => {
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2026-02/10.md", score: 0.9, source: "memory" },
+          { path: "memory/2026-02/09-standup.md", score: 0.85, source: "memory" },
+          { path: "memory/2025-01/15.md", score: 1, source: "memory" },
+        ],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Today's file: no decay
+      expect(decayed[0]!.score).toBeCloseTo(0.9);
+      // Yesterday's file: minimal decay
+      expect(decayed[1]!.score).toBeCloseTo(0.85, 1);
+      // Old file: heavy decay
+      expect(decayed[2]!.score).toBeLessThan(0.01);
+    });
+
+    it("still treats non-dated memory files as evergreen", async () => {
+      const dir = await makeTempDir();
+
+      const topicPath = path.join(dir, "memory", "architecture.md");
+      const subTopicPath = path.join(dir, "memory", "decisions", "adr-001.md");
+      await fs.mkdir(path.dirname(topicPath), { recursive: true });
+      await fs.mkdir(path.dirname(subTopicPath), { recursive: true });
+      await fs.writeFile(topicPath, "architecture notes");
+      await fs.writeFile(subTopicPath, "decision record");
+
+      const veryOld = new Date(NOW_MS - 365 * DAY_MS);
+      await fs.utimes(topicPath, veryOld, veryOld);
+      await fs.utimes(subTopicPath, veryOld, veryOld);
+
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/architecture.md", score: 0.9, source: "memory" },
+          { path: "memory/decisions/adr-001.md", score: 0.85, source: "memory" },
+        ],
+        workspaceDir: dir,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Evergreen files should not decay
+      expect(decayed[0]!.score).toBeCloseTo(0.9);
+      expect(decayed[1]!.score).toBeCloseTo(0.85);
+    });
+
+    it("handles mixed dated and non-dated files correctly", async () => {
+      const dir = await makeTempDir();
+
+      const evergreenPath = path.join(dir, "memory", "preferences.md");
+      await fs.mkdir(path.dirname(evergreenPath), { recursive: true });
+      await fs.writeFile(evergreenPath, "user preferences");
+      const veryOld = new Date(NOW_MS - 365 * DAY_MS);
+      await fs.utimes(evergreenPath, veryOld, veryOld);
+
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          // Dated: should decay
+          { path: "memory/2025-01-01.md", score: 1, source: "memory" },
+          { path: "memory/2025-06-15-standup.md", score: 0.9, source: "memory" },
+          { path: "memory/2025-03-20/notes.md", score: 0.85, source: "memory" },
+          // Evergreen: should NOT decay
+          { path: "memory/preferences.md", score: 0.7, source: "memory" },
+          { path: "MEMORY.md", score: 0.6, source: "memory" },
+        ],
+        workspaceDir: dir,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Dated files: all significantly decayed (months old)
+      expect(decayed[0]!.score).toBeLessThan(0.01);
+      expect(decayed[1]!.score).toBeLessThan(0.01);
+      expect(decayed[2]!.score).toBeLessThan(0.01);
+      // Evergreen files: unchanged
+      expect(decayed[3]!.score).toBeCloseTo(0.7);
+      expect(decayed[4]!.score).toBeCloseTo(0.6);
+    });
+
+    it("handles Windows-style backslash paths", async () => {
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory\\2025-01-01-standup.md", score: 1, source: "memory" },
+          { path: "memory\\2026-02\\10.md", score: 0.9, source: "memory" },
+        ],
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Old file should be decayed even with backslash paths
+      expect(decayed[0]!.score).toBeLessThan(0.01);
+      // Today's file should keep score
+      expect(decayed[1]!.score).toBeCloseTo(0.9);
+    });
   });
 });

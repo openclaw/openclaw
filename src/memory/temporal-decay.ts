@@ -12,7 +12,34 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+
+/**
+ * Date extraction patterns for memory file paths, ordered from most specific to least.
+ *
+ * Supported formats:
+ *   memory/YYYY-MM-DD.md           (exact daily log)
+ *   memory/YYYY-MM-DD-<suffix>.md  (daily log with descriptive suffix)
+ *   memory/YYYY-MM-DD/<name>.md    (date-based subdirectory)
+ *   memory/YYYY/MM/DD.md           (nested year/month/day)
+ *   memory/YYYY/MM/DD-<suffix>.md  (nested with suffix)
+ *   memory/YYYY-MM/DD.md           (year-month dir, day file)
+ *   memory/YYYY-MM/DD-<suffix>.md  (year-month dir, day file with suffix)
+ */
+const DATED_MEMORY_PATH_PATTERNS: RegExp[] = [
+  // memory/YYYY-MM-DD.md (original exact match)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/,
+  // memory/YYYY-MM-DD-<suffix>.md (e.g. memory/2024-03-15-standup.md)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})-[^/]+\.md$/,
+  // memory/YYYY-MM-DD/<anything>.md (date subdirectory)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\/[^/]+\.md$/,
+  // memory/YYYY/MM/DD.md or memory/YYYY/MM/DD-<suffix>.md
+  /(?:^|\/)memory\/(\d{4})\/(\d{2})\/(\d{2})(?:-[^/]+)?\.md$/,
+  // memory/YYYY-MM/DD.md or memory/YYYY-MM/DD-<suffix>.md
+  /(?:^|\/)memory\/(\d{4})-(\d{2})\/(\d{2})(?:-[^/]+)?\.md$/,
+];
+
+// Keep the original pattern exported for backward compatibility in tests
+const DATED_MEMORY_PATH_RE = DATED_MEMORY_PATH_PATTERNS[0]!;
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -43,29 +70,34 @@ export function applyTemporalDecayToScore(params: {
 
 function parseMemoryDateFromPath(filePath: string): Date | null {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const match = DATED_MEMORY_PATH_RE.exec(normalized);
-  if (!match) {
-    return null;
+
+  for (const pattern of DATED_MEMORY_PATH_PATTERNS) {
+    const match = pattern.exec(normalized);
+    if (!match) {
+      continue;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      continue;
+    }
+
+    const timestamp = Date.UTC(year, month - 1, day);
+    const parsed = new Date(timestamp);
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() !== month - 1 ||
+      parsed.getUTCDate() !== day
+    ) {
+      continue;
+    }
+
+    return parsed;
   }
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
-    return null;
-  }
-
-  const timestamp = Date.UTC(year, month - 1, day);
-  const parsed = new Date(timestamp);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return parsed;
+  return null;
 }
 
 function isEvergreenMemoryPath(filePath: string): boolean {
@@ -76,7 +108,8 @@ function isEvergreenMemoryPath(filePath: string): boolean {
   if (!normalized.startsWith("memory/")) {
     return false;
   }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
+  // A file is evergreen if none of the dated patterns match
+  return parseMemoryDateFromPath(normalized) === null;
 }
 
 async function extractTimestamp(params: {
@@ -127,7 +160,7 @@ export async function applyTemporalDecayToHybridResults<
   nowMs?: number;
 }): Promise<T[]> {
   const config = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
-  if (!config.enabled) {
+  if (!config.enabled || config.halfLifeDays <= 0) {
     return [...params.results];
   }
 
