@@ -511,6 +511,11 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          if (info.kind === "final") {
+            // Assistant callbacks are fire-and-forget; ensure queued boundary
+            // rotations/partials are applied before final delivery mapping.
+            await enqueueDraftLaneEvent(async () => {});
+          }
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
@@ -684,13 +689,16 @@ export const dispatchTelegramMessage = async ({
         continue;
       }
       // Don't clear (delete) the stream if: (a) it was finalized, or
-      // (b) boundary-finalized archived previews exist (content was already
-      // delivered as permanent messages via sendPayload in the final step).
-      const hasBoundaryFinalizedPreviews =
+      // (b) the active stream message is itself a boundary-finalized archive.
+      const activePreviewMessageId = stream.messageId();
+      const hasBoundaryFinalizedActivePreview =
         laneState.laneName === "answer" &&
-        archivedAnswerPreviews.some((p) => p.deleteIfUnused === false);
+        typeof activePreviewMessageId === "number" &&
+        archivedAnswerPreviews.some(
+          (p) => p.deleteIfUnused === false && p.messageId === activePreviewMessageId,
+        );
       const shouldClear =
-        !finalizedPreviewByLane[laneState.laneName] && !hasBoundaryFinalizedPreviews;
+        !finalizedPreviewByLane[laneState.laneName] && !hasBoundaryFinalizedActivePreview;
       const existing = streamCleanupStates.get(stream);
       if (!existing) {
         streamCleanupStates.set(stream, { shouldClear });

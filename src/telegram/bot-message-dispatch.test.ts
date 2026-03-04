@@ -440,7 +440,76 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const deleteMessageCalls = (
+      bot.api as unknown as { deleteMessage: { mock: { calls: unknown[][] } } }
+    ).deleteMessage.mock.calls;
+    expect(deleteMessageCalls).not.toContainEqual([123, 4321]);
+  });
+
+  it("waits for queued boundary rotation before final lane delivery", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    let resolveMaterialize: ((value: number | undefined) => void) | undefined;
+    const materializePromise = new Promise<number | undefined>((resolve) => {
+      resolveMaterialize = resolve;
+    });
+    answerDraftStream.materialize.mockImplementation(() => materializePromise);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        const startPromise = replyOptions?.onAssistantMessageStart?.();
+        const finalPromise = dispatcherOptions.deliver(
+          { text: "Message B final" },
+          { kind: "final" },
+        );
+        resolveMaterialize?.(1001);
+        await startPromise;
+        await finalPromise;
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("clears active preview even when an unrelated boundary archive exists", async () => {
+    const answerDraftStream = createDraftStream(999);
+    answerDraftStream.materialize.mockResolvedValue(4321);
+    answerDraftStream.forceNewMessage.mockImplementation(() => {
+      answerDraftStream.setMessageId(5555);
+    });
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Before tool boundary" });
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onPartialReply?.({ text: "Unfinalized next preview" });
+      return { queuedFinal: false };
+    });
+
+    const bot = createBot();
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
     const deleteMessageCalls = (
       bot.api as unknown as { deleteMessage: { mock: { calls: unknown[][] } } }
     ).deleteMessage.mock.calls;
