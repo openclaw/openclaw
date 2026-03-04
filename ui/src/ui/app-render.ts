@@ -10,7 +10,7 @@ import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-iden
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { armSecurityApproval, loadChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
   loadConfig,
@@ -1150,19 +1150,40 @@ export function renderApp(state: AppViewState) {
                 securityApprovalPassphrase: state.securityApprovalPassphrase,
                 onSecurityApprovalPassphraseChange: (value) =>
                   (state.securityApprovalPassphrase = value),
+                securityApprovalLane: state.securityApprovalLane,
+                onSecurityApprovalLaneChange: (value) => (state.securityApprovalLane = value),
+                securityApprovalLaneCredential: state.securityApprovalLaneCredential,
+                onSecurityApprovalLaneCredentialChange: (value) =>
+                  (state.securityApprovalLaneCredential = value),
                 onSecurityApprove: (passphrase) => {
                   const normalizedPassphrase = (passphrase ?? "").trim();
-                  const approvalMessage = normalizedPassphrase
-                    ? `securitySentinelApproved=true securitySentinelPassphrase=${normalizedPassphrase}`
-                    : "securitySentinelApproved=true";
-                  state.securityApprovalPassphrase = "";
-                  void state.handleSendChat(approvalMessage, {
-                    suppressLocalEcho: true,
-                  });
+                  const lane = state.securityApprovalLane === "lane1" ? "lane1" : "lane2";
+                  const laneCredential = state.securityApprovalLaneCredential.trim();
+                  if (!laneCredential) {
+                    state.lastError = "Security approval lane credential is required.";
+                    return;
+                  }
+                  void (async () => {
+                    const armed = await armSecurityApproval(state, {
+                      lane,
+                      laneCredential,
+                      passphrase: normalizedPassphrase || undefined,
+                    });
+                    if (!armed.ok) {
+                      state.lastError = armed.error;
+                      return;
+                    }
+                    state.lastError = null;
+                    state.securityApprovalPassphrase = "";
+                    void state.handleSendChat("Continue with the last blocked action.", {
+                      suppressLocalEcho: true,
+                    });
+                  })();
                 },
                 onSecurityDeny: () => {
                   state.securityApprovalPassphrase = "";
-                  void state.handleSendChat("SecuritySentinelApproved=false", {
+                  state.securityApprovalLaneCredential = "";
+                  void state.handleSendChat("Do not continue with the blocked action.", {
                     suppressLocalEcho: true,
                   });
                 },

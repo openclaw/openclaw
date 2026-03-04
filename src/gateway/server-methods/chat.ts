@@ -3,6 +3,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { armSecurityApprovalForSession } from "../../agents/security-approval-session-store.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -752,6 +753,37 @@ export const chatHandlers: GatewayRequestHandlers = {
       ok: true,
       aborted: res.aborted,
       runIds: res.aborted ? [runId] : [],
+    });
+  },
+  "security.approval.arm": ({ params, respond }) => {
+    if (!params || typeof params !== "object") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid request payload"));
+      return;
+    }
+    const p = params;
+    const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
+    const lane = p.lane;
+    const laneCredential = p.laneCredential;
+    const passphrase = p.passphrase;
+    if (!sessionKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey is required"));
+      return;
+    }
+    const armed = armSecurityApprovalForSession({
+      sessionKey,
+      lane,
+      laneCredential,
+      passphrase,
+    });
+    if (!armed.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, armed.reason));
+      return;
+    }
+    respond(true, {
+      ok: true,
+      sessionKey,
+      lane: armed.lane,
+      expiresAtMs: armed.expiresAtMs,
     });
   },
   "chat.send": async ({ params, respond, context, client }) => {

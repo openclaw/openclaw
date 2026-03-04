@@ -67,6 +67,8 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   securityApprovalPassphrase: string;
+  securityApprovalLane: "lane1" | "lane2";
+  securityApprovalLaneCredential: string;
   chatManualRefreshInFlight: boolean;
   chatVoiceSupported: boolean;
   chatVoiceProfiles: VoiceboxProfile[];

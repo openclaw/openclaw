@@ -7,7 +7,19 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
-import { evaluateSecuritySentinel, writeSecuritySentinelAudit } from "./security-sentinel.js";
+import {
+  isSecuritySentinelBrokerEnabled,
+  issueSecuritySentinelApprovalToken,
+} from "./security-approval-broker.js";
+import {
+  clearArmedSecurityApprovalForSession,
+  peekArmedSecurityApprovalForSession,
+} from "./security-approval-session-store.js";
+import {
+  evaluateSecuritySentinel,
+  isSecuritySentinelApprovalRequiredTool,
+  writeSecuritySentinelAudit,
+} from "./security-sentinel.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -70,6 +82,58 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+
+function injectArmedSecurityApprovalParams(args: {
+  toolName: string;
+  params: unknown;
+  ctx?: HookContext;
+  env?: NodeJS.ProcessEnv;
+}): unknown {
+  const env = args.env ?? process.env;
+  if (!args.ctx?.sessionKey) {
+    return args.params;
+  }
+  if (!isSecuritySentinelApprovalRequiredTool(args.toolName, env)) {
+    return args.params;
+  }
+  const armed = peekArmedSecurityApprovalForSession({
+    sessionKey: args.ctx.sessionKey,
+  });
+  if (!armed) {
+    return args.params;
+  }
+
+  const paramsRecord = isPlainObject(args.params) ? { ...args.params } : {};
+  if (isSecuritySentinelBrokerEnabled(env)) {
+    const issue = issueSecuritySentinelApprovalToken({
+      lane: armed.lane,
+      laneCredential: armed.laneCredential,
+      toolName: args.toolName,
+      params: paramsRecord,
+      env,
+    });
+    if (!issue.ok) {
+      log.warn(
+        `security approval token issue failed: session=${args.ctx.sessionKey} tool=${args.toolName} reason=${issue.reason}`,
+      );
+      return args.params;
+    }
+    clearArmedSecurityApprovalForSession(args.ctx.sessionKey);
+    return {
+      ...paramsRecord,
+      securitySentinelLane: armed.lane,
+      securitySentinelLaneCredential: armed.laneCredential,
+      securitySentinelToken: issue.token,
+    };
+  }
+
+  clearArmedSecurityApprovalForSession(args.ctx.sessionKey);
+  return {
+    ...paramsRecord,
+    securitySentinelApproved: true,
+    ...(armed.passphrase ? { securitySentinelPassphrase: armed.passphrase } : {}),
+  };
+}
 
 function resolveSentinelAlertSessionKey(
   ctx?: HookContext,
@@ -143,7 +207,11 @@ export async function runBeforeToolCallHook(args: {
   ctx?: HookContext;
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
-  const params = args.params;
+  const params = injectArmedSecurityApprovalParams({
+    toolName,
+    params: args.params,
+    ctx: args.ctx,
+  });
 
   // Lockdown check — first gate, before all other evaluations.
   // When a lockdown file is present, ALL tool calls are blocked regardless of type.
@@ -241,7 +309,7 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
-    return { blocked: false, params: args.params };
+    return { blocked: false, params };
   }
 
   try {

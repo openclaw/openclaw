@@ -12,6 +12,11 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
+import { issueSecuritySentinelApprovalToken } from "./security-approval-broker.js";
+import {
+  armSecurityApprovalForSession,
+  __testing as securityApprovalSessionStoreTesting,
+} from "./security-approval-session-store.js";
 import { __testing as securitySentinelTesting } from "./security-sentinel.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -330,6 +335,7 @@ describe("before_tool_call loop detection behavior", () => {
 describe("before_tool_call security sentinel", () => {
   beforeEach(() => {
     securitySentinelTesting.clearApprovalGrantsForTest();
+    securityApprovalSessionStoreTesting.clearArmedSecurityApprovalsForTest();
   });
 
   it("blocks web_search without explicit approval when sentinel is enabled", async () => {
@@ -373,6 +379,156 @@ describe("before_tool_call security sentinel", () => {
       });
       expect(outcome.blocked).toBe(false);
     });
+  });
+
+  it("rejects plaintext approvals when broker mode is enabled", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_SECRET: "test-broker-secret",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_LANE2_CREDENTIAL: "lane2-secret",
+      },
+      async () => {
+        const outcome = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: {
+            url: "https://example.com",
+            securitySentinelLane: "lane2",
+            securitySentinelLaneCredential: "lane2-secret",
+            securitySentinelApproved: true,
+          },
+        });
+        expect(outcome.blocked).toBe(true);
+        expect(outcome.blocked ? outcome.reason : "").toContain("plaintext approvals are disabled");
+      },
+    );
+  });
+
+  it("accepts broker token approvals and blocks token replay", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_SECRET: "test-broker-secret",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_LANE2_CREDENTIAL: "lane2-secret",
+      },
+      async () => {
+        const issue = issueSecuritySentinelApprovalToken({
+          lane: "lane2",
+          laneCredential: "lane2-secret",
+          toolName: "web_search",
+          params: { query: "warwickshire vacancies" },
+        });
+        expect(issue.ok).toBe(true);
+        if (!issue.ok) {
+          return;
+        }
+
+        const allowed = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: {
+            query: "warwickshire vacancies",
+            securitySentinelLane: "lane2",
+            securitySentinelLaneCredential: "lane2-secret",
+            securitySentinelToken: issue.token,
+          },
+        });
+        expect(allowed.blocked).toBe(false);
+
+        const replayBlocked = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: {
+            query: "warwickshire vacancies",
+            securitySentinelLane: "lane2",
+            securitySentinelLaneCredential: "lane2-secret",
+            securitySentinelToken: issue.token,
+          },
+        });
+        expect(replayBlocked.blocked).toBe(true);
+        expect(replayBlocked.blocked ? replayBlocked.reason : "").toContain("already used");
+      },
+    );
+  });
+
+  it("injects armed broker approvals for the next matching tool call only", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_SECRET: "test-broker-secret",
+        OPENCLAW_SECURITY_SENTINEL_BROKER_LANE2_CREDENTIAL: "lane2-secret",
+      },
+      async () => {
+        const armed = armSecurityApprovalForSession({
+          sessionKey: "agent:web:broker",
+          lane: "lane2",
+          laneCredential: "lane2-secret",
+        });
+        expect(armed.ok).toBe(true);
+
+        const first = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: { query: "warwickshire vacancies" },
+          ctx: { sessionKey: "agent:web:broker", messageProvider: "webchat" },
+        });
+        expect(first.blocked).toBe(false);
+        if (first.blocked) {
+          return;
+        }
+        const firstParams = first.params as Record<string, unknown>;
+        expect(typeof firstParams.securitySentinelToken).toBe("string");
+        expect(firstParams.securitySentinelLane).toBe("lane2");
+        expect(firstParams.securitySentinelLaneCredential).toBe("lane2-secret");
+
+        const second = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: { query: "warwickshire vacancies" },
+          ctx: { sessionKey: "agent:web:broker", messageProvider: "webchat" },
+        });
+        expect(second.blocked).toBe(true);
+      },
+    );
+  });
+
+  it("injects armed legacy approvals with passphrase when broker mode is disabled", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_REQUIRE_PASSPHRASE: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE: "letmein",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES: "1",
+      },
+      async () => {
+        const armed = armSecurityApprovalForSession({
+          sessionKey: "agent:web:legacy",
+          lane: "lane2",
+          laneCredential: "lane2-secret",
+          passphrase: "letmein",
+        });
+        expect(armed.ok).toBe(true);
+
+        const first = await runBeforeToolCallHook({
+          toolName: "message",
+          params: { action: "send", text: "test signal send" },
+          ctx: { sessionKey: "agent:web:legacy", messageProvider: "signal" },
+        });
+        expect(first.blocked).toBe(false);
+        if (first.blocked) {
+          return;
+        }
+        const firstParams = first.params as Record<string, unknown>;
+        expect(firstParams.securitySentinelApproved).toBe(true);
+        expect(firstParams.securitySentinelPassphrase).toBe("letmein");
+
+        const second = await runBeforeToolCallHook({
+          toolName: "message",
+          params: { action: "send", text: "test signal send" },
+          ctx: { sessionKey: "agent:web:legacy", messageProvider: "signal" },
+        });
+        expect(second.blocked).toBe(true);
+      },
+    );
   });
 
   it("rejects legacy approval aliases and only accepts securitySentinelApproved", async () => {

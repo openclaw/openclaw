@@ -96,6 +96,7 @@ const BASE_METHODS = [
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
+  "security.approval.arm",
   "chat.send",
 ];
 

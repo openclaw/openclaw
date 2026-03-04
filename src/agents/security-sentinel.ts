@@ -4,6 +4,11 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import {
+  __testing as securityApprovalBrokerTesting,
+  authorizeSecuritySentinelApproval,
+  isSecuritySentinelBrokerEnabled,
+} from "./security-approval-broker.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const log = createSubsystemLogger("agents/tools");
@@ -90,6 +95,17 @@ function resolveApprovalRequiredTools(env: NodeJS.ProcessEnv): Set<string> {
       .map((entry) => normalizeToolName(entry))
       .filter((entry) => entry.length > 0),
   );
+}
+
+export function isSecuritySentinelApprovalRequiredTool(
+  toolName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!isSentinelEnabled(env)) {
+    return false;
+  }
+  const normalized = normalizeToolName(toolName || "tool");
+  return resolveApprovalRequiredTools(env).has(normalized);
 }
 
 function resolveApprovalGrantUses(env: NodeJS.ProcessEnv): number {
@@ -307,6 +323,27 @@ function resolveApprovalState(args: {
   grantRemainingUses?: number;
 } {
   const matched: string[] = [];
+  if (isSecuritySentinelBrokerEnabled(args.env)) {
+    const brokerDecision = authorizeSecuritySentinelApproval({
+      toolName: args.toolName,
+      params: args.params,
+      env: args.env,
+    });
+    matched.push(...brokerDecision.matched);
+    if (!brokerDecision.approved) {
+      return {
+        approved: false,
+        matched,
+        reason: brokerDecision.reason ?? "broker approval rejected the tool call",
+      };
+    }
+    return {
+      approved: true,
+      matched,
+      grantRemainingUses: 0,
+    };
+  }
+
   const approvedFlag = resolveApprovalFlag(args.params);
   const usedLegacyAlias = resolveLegacyApprovalAliasUsed(args.params);
   const nowMs = Date.now();
@@ -665,5 +702,6 @@ export async function writeSecuritySentinelAudit(args: {
 export const __testing = {
   clearApprovalGrantsForTest() {
     approvalGrantsByScope.clear();
+    securityApprovalBrokerTesting.clearUsedNoncesForTest();
   },
 };

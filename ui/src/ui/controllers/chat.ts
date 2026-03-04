@@ -54,6 +54,42 @@ export type SendChatMessageOptions = {
   suppressLocalEcho?: boolean;
 };
 
+export type SecurityApprovalArmState = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  sessionKey: string;
+};
+
+export async function armSecurityApproval(
+  state: SecurityApprovalArmState,
+  params: {
+    lane: "lane1" | "lane2";
+    laneCredential: string;
+    passphrase?: string;
+  },
+): Promise<{ ok: true; expiresAtMs: number } | { ok: false; error: string }> {
+  if (!state.client || !state.connected) {
+    return { ok: false, error: "gateway not connected" };
+  }
+  try {
+    const result = await state.client.request("security.approval.arm", {
+      sessionKey: state.sessionKey,
+      lane: params.lane,
+      laneCredential: params.laneCredential,
+      passphrase: params.passphrase,
+    });
+    if (result && result.ok === true && typeof result.expiresAtMs === "number") {
+      return {
+        ok: true,
+        expiresAtMs: result.expiresAtMs,
+      };
+    }
+    return { ok: false, error: "approval broker rejected the request" };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;

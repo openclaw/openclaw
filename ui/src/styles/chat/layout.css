@@ -238,6 +238,33 @@
   outline-offset: 0;
 }
 
+.chat-approval-strip__lane {
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.chat-approval-strip__credential {
+  width: 160px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.chat-approval-strip__lane:focus,
+.chat-approval-strip__credential:focus {
+  outline: 2px solid color-mix(in srgb, var(--warn) 65%, transparent 35%);
+  outline-offset: 0;
+}
+
 .chat-approval-strip__btn {
   height: 28px;
   min-height: 28px;

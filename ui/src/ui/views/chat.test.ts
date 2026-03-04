@@ -45,6 +45,9 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    onSecurityApprovalPassphraseChange: () => undefined,
+    onSecurityApprovalLaneChange: () => undefined,
+    onSecurityApprovalLaneCredentialChange: () => undefined,
     ...overrides,
   };
 }
@@ -334,6 +337,75 @@ describe("chat view", () => {
     );
     approve?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onSecurityApprove).toHaveBeenCalledWith("letmein");
+  });
+
+  it("shows lane credential controls when broker approval is requested", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval denied: missing lane credential (provide securitySentinelLaneCredential). action_hash=abc",
+                },
+              ],
+            },
+          ],
+          securityApprovalLane: "lane2",
+          securityApprovalLaneCredential: "",
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+          onSecurityApprovalLaneChange: vi.fn(),
+          onSecurityApprovalLaneCredentialChange: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip__lane")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-strip__credential")).not.toBeNull();
+    const approve = Array.from(container.querySelectorAll(".chat-approval-strip button")).find(
+      (btn) => btn.textContent?.trim() === "Approve",
+    ) as HTMLButtonElement | undefined;
+    expect(approve?.disabled).toBe(true);
+  });
+
+  it("enables broker approve button when lane credential is present", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval denied: plaintext approvals are disabled by broker policy. action_hash=abc",
+                },
+              ],
+            },
+          ],
+          securityApprovalLane: "lane2",
+          securityApprovalLaneCredential: "lane2-secret",
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+          onSecurityApprovalLaneChange: vi.fn(),
+          onSecurityApprovalLaneCredentialChange: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const approve = Array.from(container.querySelectorAll(".chat-approval-strip button")).find(
+      (btn) => btn.textContent?.trim() === "Approve",
+    ) as HTMLButtonElement | undefined;
+    expect(approve).not.toBeUndefined();
+    expect(approve?.disabled).toBe(false);
   });
 
   it("hides security approval strip after explicit user approval response", () => {

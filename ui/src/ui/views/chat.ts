@@ -81,6 +81,10 @@ export type ChatProps = {
   onSecurityDeny?: () => void;
   securityApprovalPassphrase?: string;
   onSecurityApprovalPassphraseChange?: (value: string) => void;
+  securityApprovalLane?: "lane1" | "lane2";
+  onSecurityApprovalLaneChange?: (value: "lane1" | "lane2") => void;
+  securityApprovalLaneCredential?: string;
+  onSecurityApprovalLaneCredentialChange?: (value: string) => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -457,12 +461,47 @@ export function renderChat(props: ChatProps) {
                         `
                       : nothing
                   }
+                  ${
+                    pendingSecurityApproval.requiresLaneCredential &&
+                    props.onSecurityApprovalLaneChange &&
+                    props.onSecurityApprovalLaneCredentialChange
+                      ? html`
+                          <select
+                            class="chat-approval-strip__lane"
+                            .value=${props.securityApprovalLane ?? "lane2"}
+                            @change=${(event: Event) =>
+                              props.onSecurityApprovalLaneChange?.(
+                                ((event.target as HTMLSelectElement).value || "lane2") as
+                                  | "lane1"
+                                  | "lane2",
+                              )}
+                          >
+                            <option value="lane2">Lane 2</option>
+                            <option value="lane1">Lane 1</option>
+                          </select>
+                          <input
+                            class="chat-approval-strip__credential"
+                            type="password"
+                            autocomplete="off"
+                            spellcheck="false"
+                            placeholder="Lane credential"
+                            .value=${props.securityApprovalLaneCredential ?? ""}
+                            @input=${(event: Event) =>
+                              props.onSecurityApprovalLaneCredentialChange?.(
+                                (event.target as HTMLInputElement).value,
+                              )}
+                          />
+                        `
+                      : nothing
+                  }
                   <button
                     class="btn chat-approval-strip__btn"
                     type="button"
                     ?disabled=${
-                      pendingSecurityApproval.requiresPassphrase &&
-                      !(props.securityApprovalPassphrase ?? "").trim()
+                      (pendingSecurityApproval.requiresPassphrase &&
+                        !(props.securityApprovalPassphrase ?? "").trim()) ||
+                      (pendingSecurityApproval.requiresLaneCredential &&
+                        !(props.securityApprovalLaneCredential ?? "").trim())
                     }
                     @click=${() =>
                       props.onSecurityApprove?.(
@@ -545,6 +584,7 @@ export function renderChat(props: ChatProps) {
 type PendingSecurityApproval = {
   summary: string;
   requiresPassphrase: boolean;
+  requiresLaneCredential: boolean;
 };
 
 const SECURITY_APPROVAL_STALE_MS = 15 * 60 * 1000;
@@ -556,7 +596,11 @@ function resolvePendingSecurityApproval(
   const history = Array.isArray(messages) ? messages : [];
   const tools = Array.isArray(toolMessages) ? toolMessages : [];
   const fallbackBase = resolveFallbackOrderBase(history, tools);
-  const requests: Array<{ order: number; requiresPassphrase: boolean }> = [];
+  const requests: Array<{
+    order: number;
+    requiresPassphrase: boolean;
+    requiresLaneCredential: boolean;
+  }> = [];
   let latestRequestOrder = -1;
   let latestRequestEpochMs: number | null = null;
   let latestResolutionOrder = -1;
@@ -573,6 +617,10 @@ function resolvePendingSecurityApproval(
     requests.push({
       order,
       requiresPassphrase: /securitysentinelpassphrase|passphrase/i.test(text),
+      requiresLaneCredential:
+        /securitysentinellanecredential|securitysentinellane|securitysentineltoken|approval broker|action_hash|plaintext approvals are disabled/i.test(
+          text,
+        ) || /lane credential/i.test(text),
     });
   };
 
@@ -583,9 +631,11 @@ function resolvePendingSecurityApproval(
     }
     const msg = raw as Record<string, unknown>;
     const role = normalizeRoleForGrouping(typeof msg.role === "string" ? msg.role : "other");
-    const order = fallbackOrder;
     const epochMs = resolveMessageEpochMs(msg);
-    fallbackOrder += 1;
+    const explicitOrder = resolveMessageOrder(msg);
+    const order =
+      explicitOrder !== null ? explicitOrder * 1000 + (fallbackOrder % 1000) : fallbackOrder;
+    fallbackOrder = Math.max(fallbackOrder + 1, order + 1);
     if (role === "user") {
       latestUserOrder = Math.max(latestUserOrder, order);
     }
@@ -600,24 +650,28 @@ function resolvePendingSecurityApproval(
       continue;
     }
     if (role === "assistant") {
+      const isDenyAck = isSecurityApprovalDenyAcknowledgement(text);
       const isPrompt = isSecurityApprovalPrompt(text);
       const isSignal = isSecuritySentinelSignal(text);
-      const isDenyAck = isSecurityApprovalDenyAcknowledgement(text);
-      if (isPrompt) {
-        noteRequest(text, order, epochMs);
-      }
-      if (isSignal) {
-        noteRequest(text, order, epochMs);
-      }
-      if (!isPrompt && !isSignal && isDenyAck) {
+      if (isDenyAck) {
         const hasFreshOperatorAction =
           latestActionUserOrder > Math.max(latestResolutionOrder, latestRequestOrder);
-        if (hasFreshOperatorAction) {
+        const isExplicitRePrompt =
+          /securitysentinelpassphrase|passphrase credential|enable approval in the ui|approval ui controls|use the approval ui|securitysentinellanecredential|lane credential/i.test(
+            text,
+          );
+        if (hasFreshOperatorAction || isExplicitRePrompt) {
           noteRequest(text, order, epochMs);
         } else {
           latestResolutionOrder = Math.max(latestResolutionOrder, order);
         }
         continue;
+      }
+      if (isPrompt) {
+        noteRequest(text, order, epochMs);
+      }
+      if (isSignal) {
+        noteRequest(text, order, epochMs);
       }
       if (!isPrompt && !isSignal && isSecurityApprovalResolution(text)) {
         latestResolutionOrder = Math.max(latestResolutionOrder, order);
@@ -636,9 +690,11 @@ function resolvePendingSecurityApproval(
     }
     const msg = raw as Record<string, unknown>;
     const text = extractSecurityText(msg);
-    const order = fallbackOrder;
     const epochMs = resolveMessageEpochMs(msg);
-    fallbackOrder += 1;
+    const explicitOrder = resolveMessageOrder(msg);
+    const order =
+      explicitOrder !== null ? explicitOrder * 1000 + (fallbackOrder % 1000) : fallbackOrder;
+    fallbackOrder = Math.max(fallbackOrder + 1, order + 1);
     if (!text) {
       continue;
     }
@@ -668,14 +724,28 @@ function resolvePendingSecurityApproval(
     const unresolvedCutoff = Math.max(latestResolutionOrder, latestUserOrder);
     const unresolvedRequests = requests.filter((entry) => entry.order > unresolvedCutoff);
     const requiresPassphrase = unresolvedRequests.some((entry) => entry.requiresPassphrase);
+    const requiresLaneCredential = unresolvedRequests.some((entry) => entry.requiresLaneCredential);
     return {
-      summary: requiresPassphrase
-        ? "Access denied: approval and passphrase required"
-        : "Access denied: approval required",
+      summary: requiresLaneCredential
+        ? requiresPassphrase
+          ? "Access denied: lane credential and passphrase required"
+          : "Access denied: lane credential required"
+        : requiresPassphrase
+          ? "Access denied: approval and passphrase required"
+          : "Access denied: approval required",
       requiresPassphrase,
+      requiresLaneCredential,
     };
   }
   return null;
+}
+
+function resolveMessageOrder(message: Record<string, unknown>): number | null {
+  const timestamp = message.timestamp;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return null;
+  }
+  return timestamp;
 }
 
 function resolveMessageEpochMs(message: Record<string, unknown>): number | null {
@@ -708,9 +778,9 @@ function resolveFallbackOrderBase(messages: unknown[], toolMessages: unknown[]):
     }
   }
   if (candidates.length === 0) {
-    return Date.now();
+    return Date.now() * 1000;
   }
-  return Math.max(...candidates);
+  return Math.max(...candidates) * 1000;
 }
 
 function normalizeEpochMs(value: number): number | null {
