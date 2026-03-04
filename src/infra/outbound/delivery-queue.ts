@@ -387,6 +387,18 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // HTTP 400 Bad Request is non-transient — retrying won't help (#33403)
+  /\b400\b.*bad request/i,
+  /bad request.*\b400\b/i,
+  // Telegram-specific permanent errors
+  /message is not modified/i,
+  /message to delete not found/i,
+  /message can't be deleted/i,
+  /have no rights to send a message/i,
+  // Discord-specific permanent errors
+  /unknown channel/i,
+  /missing access/i,
+  /missing permissions/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
