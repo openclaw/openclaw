@@ -600,6 +600,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, text, {
+        cfg,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
         textMode: "plain",
@@ -636,6 +637,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, formatted.text, {
+        cfg,
         mediaUrl,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
