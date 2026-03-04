@@ -130,7 +130,7 @@ export function renderAgentTools(params: {
           <div class="card-title">${t("agents.tools.title")}</div>
           <div class="card-sub">
             ${t("agents.tools.subtitle")}
-            <span class="mono">${enabledCount}/${toolIds.length}</span> ${t("agents.tools.enabledLabel")}
+            <span class="mono">${t("agents.tools.enabledCount", { enabled: String(enabledCount), total: String(toolIds.length) })}</span> ${t("agents.tools.enabledLabel")}
           </div>
         </div>
         <div class="row" style="gap: 8px;">
