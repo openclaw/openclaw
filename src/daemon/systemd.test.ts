@@ -86,8 +86,30 @@ describe("isSystemdServiceEnabled", () => {
       err.code = 1;
       cb(err, "", "Failed to connect to bus");
     });
+    await expect(isSystemdServiceEnabled({ env: {} })).resolves.toBe(false);
+  });
+
+  it("returns false when systemctl cannot connect to user bus", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("Failed to connect to bus: No medium found") as Error & {
+        code?: number;
+      };
+      err.code = 1;
+      cb(err, "", "Failed to connect to bus: No medium found");
+    });
+    await expect(isSystemdServiceEnabled({ env: {} })).resolves.toBe(false);
+  });
+
+  it("throws when systemctl is-enabled fails with unrelated errors", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("Permission denied") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "", "Permission denied");
+    });
     await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: Failed to connect to bus",
+      "systemctl is-enabled unavailable: Permission denied",
     );
   });
 });

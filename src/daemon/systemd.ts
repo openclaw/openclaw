@@ -143,7 +143,12 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  const stderr = result.stderr.trim();
+  const stdout = result.stdout.trim();
+  if (stderr && stdout) {
+    return `${stderr}\n${stdout}`.trim();
+  }
+  return (stderr || stdout).trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
@@ -172,6 +177,19 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
     normalized.includes("failed to get unit file state")
+  );
+}
+
+function isSystemdUserBusUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("not been booted with systemd") ||
+    normalized.includes("no medium found") ||
+    normalized.includes("failed to get d-bus connection")
   );
 }
 
@@ -352,7 +370,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (
+    isSystemctlMissing(detail) ||
+    isSystemdUnitNotEnabled(detail) ||
+    isSystemdUserBusUnavailable(detail)
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
