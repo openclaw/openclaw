@@ -4,6 +4,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { FeishuOpenIdCrossAppError } from "./send-result.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
@@ -53,11 +54,26 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId });
-  }
+  try {
+    if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+      return await sendMarkdownCardFeishu({ cfg, to, text, accountId });
+    }
 
-  return sendMessageFeishu({ cfg, to, text, accountId });
+    return await sendMessageFeishu({ cfg, to, text, accountId });
+  } catch (error) {
+    // Re-throw open_id cross app error with additional context
+    // This allows the gateway to detect and reset the session
+    if (error instanceof FeishuOpenIdCrossAppError) {
+      console.error(`[feishu] Open ID cross app error for target ${to}. Session needs reset.`);
+      // Re-throw with a specific message prefix that the gateway can detect
+      throw new Error(
+        `[FEISHU_SESSION_RESET_REQUIRED] ${error.message}. ` +
+          `The session contains an open_id from a different Feishu app. ` +
+          `Please run: openclaw sessions reset --channel feishu`,
+      );
+    }
+    throw error;
+  }
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
