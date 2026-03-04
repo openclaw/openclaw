@@ -431,7 +431,6 @@ describe("trusted-proxy auth", () => {
         socket: { remoteAddress: "127.0.0.1" },
         headers: {
           host: "gateway.local",
-          "x-forwarded-for": "203.0.113.10",
           "x-forwarded-user": "nick@example.com",
           "x-forwarded-proto": "https",
         },

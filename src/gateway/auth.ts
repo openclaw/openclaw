@@ -393,6 +393,24 @@ function authorizeSharedSecretFallback(params: SharedSecretAuthParams): GatewayA
   return null;
 }
 
+function hasConfiguredTrustedProxyHeaders(
+  req: IncomingMessage | undefined,
+  trustedProxyConfig: GatewayTrustedProxyConfig | undefined,
+): boolean {
+  if (!req || !trustedProxyConfig) {
+    return false;
+  }
+
+  const headers = [trustedProxyConfig.userHeader, ...(trustedProxyConfig.requiredHeaders ?? [])]
+    .map((header) => header?.trim().toLowerCase())
+    .filter((header): header is string => Boolean(header));
+
+  return headers.some((header) => {
+    const value = headerValue(req.headers[header]);
+    return typeof value === "string" && value.trim() !== "";
+  });
+}
+
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
@@ -414,9 +432,7 @@ export async function authorizeGatewayConnect(
   const localLoopbackWithoutProxyHeaders =
     Boolean(req) &&
     isLoopbackAddress(req?.socket?.remoteAddress) &&
-    !req?.headers?.["x-forwarded-for"] &&
-    !req?.headers?.["x-real-ip"] &&
-    !req?.headers?.["x-forwarded-host"];
+    !hasConfiguredTrustedProxyHeaders(req, auth.trustedProxy);
 
   if (auth.mode === "trusted-proxy") {
     if (localLoopbackWithoutProxyHeaders && limiter) {
