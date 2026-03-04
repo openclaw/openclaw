@@ -568,7 +568,7 @@ const SECRET_PATTERNS: SecretPattern[] = [
     ruleId: "secret-generic-api-key",
     name: "Generic API Key Pattern",
     pattern:
-      /(api[_-]?key|apikey|secret[_-]?key|auth[_-]?token)\s*[=:]\s*['"][A-Za-z0-9_-]{20,}['"]/i,
+      /\b(api[_-]?key|apikey|secret[_-]?key|auth[_-]?token)\s*[=:]\s*['"][A-Za-z0-9_-]{20,}['"]/i,
     severity: "warn",
   },
   {
@@ -580,7 +580,8 @@ const SECRET_PATTERNS: SecretPattern[] = [
   {
     ruleId: "secret-openai-key",
     name: "OpenAI API Key",
-    pattern: /sk-[A-Za-z0-9]{20,}T3BlbkFJ/,
+    // Match current and legacy OpenAI key formats
+    pattern: /sk-(?:proj-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,}T3BlbkFJ|[A-Za-z0-9]{48})/,
     severity: "critical",
   },
   {
@@ -1235,11 +1236,12 @@ export async function validateSkillManifestFile(
     // Parse frontmatter if present
     let manifest: SkillManifest = {};
 
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    // Accept both LF and CRLF line endings for cross-platform compatibility
+    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
     if (frontmatterMatch) {
       const frontmatter = frontmatterMatch[1];
       // Simple YAML-like parsing for basic fields
-      for (const line of frontmatter.split("\n")) {
+      for (const line of frontmatter.split(/\r?\n/)) {
         const colonIdx = line.indexOf(":");
         if (colonIdx > 0) {
           const key = line.slice(0, colonIdx).trim();
@@ -1265,7 +1267,7 @@ export async function validateSkillManifestFile(
     if (!manifest.description) {
       let bodyContent = content;
       // Remove YAML frontmatter if present
-      const frontmatterMatch = content.match(/^---\n[\s\S]*?\n---\n/);
+      const frontmatterMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
       if (frontmatterMatch) {
         bodyContent = content.slice(frontmatterMatch[0].length);
       }
