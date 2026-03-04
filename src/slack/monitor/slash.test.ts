@@ -38,6 +38,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
   };
 
   return {
+    listChatCommands: () => [],
     buildCommandTextFromArgs: (
       cmd: { nativeName?: string; key: string },
       args?: { values?: Record<string, unknown> },
