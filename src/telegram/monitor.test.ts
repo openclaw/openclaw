@@ -22,6 +22,12 @@ const api = {
   sendDocument: vi.fn(),
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
+  getMe: vi.fn(async () => ({
+    id: 1,
+    is_bot: true,
+    username: "mybot",
+    first_name: "MyBot",
+  })),
 };
 const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   initSpy: vi.fn(async () => undefined),
@@ -211,6 +217,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    api.getMe.mockClear();
+    api.getMe.mockResolvedValue({ id: 1, is_bot: true, username: "mybot", first_name: "MyBot" });
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -489,5 +497,102 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  describe("health check watchdog", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts polling immediately without backoff on health check failure", async () => {
+      const abort = new AbortController();
+
+      // First runner is held open; health check failure triggers stop and restart.
+      let releaseTask: (() => void) | undefined;
+      runSpy
+        .mockImplementationOnce(() =>
+          makeRunnerStub({
+            task: () =>
+              new Promise<void>((resolve) => {
+                releaseTask = resolve;
+              }),
+            stop: vi.fn(() => {
+              releaseTask?.();
+            }),
+          }),
+        )
+        .mockImplementationOnce(() =>
+          makeRunnerStub({
+            task: async () => {
+              abort.abort();
+            },
+          }),
+        );
+
+      api.getMe.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+      // Advance timers to fire the health check, then let the second runner finish.
+      await vi.runAllTimersAsync();
+      await monitor;
+
+      // Stale-connection restart must skip backoff entirely.
+      expect(computeBackoff).not.toHaveBeenCalled();
+      expect(sleepWithAbort).not.toHaveBeenCalled();
+      expect(runSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("exits cleanly when abort fires concurrently with stale connection detection", async () => {
+      const abort = new AbortController();
+
+      let releaseTask: (() => void) | undefined;
+      runSpy.mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop: vi.fn(() => {
+            // Abort fires at same time as health-check-triggered stop.
+            abort.abort();
+            releaseTask?.();
+          }),
+        }),
+      );
+
+      api.getMe.mockRejectedValueOnce(new Error("timeout"));
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+      await vi.runAllTimersAsync();
+      await monitor;
+
+      // Abort wins — must exit cleanly with no second runner.
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the health check timer when the runner exits before the interval elapses", async () => {
+      const abort = new AbortController();
+      runSpy.mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: async () => {
+            abort.abort();
+          },
+        }),
+      );
+
+      // Runner aborts; do not advance the fake clock.
+      await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+      // Timer was cancelled — getMe must never be called.
+      expect(api.getMe).not.toHaveBeenCalled();
+    });
   });
 });
