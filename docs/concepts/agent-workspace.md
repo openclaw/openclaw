@@ -99,6 +99,11 @@ These are the standard files OpenClaw expects inside the workspace:
   - Only created for a brand-new workspace.
   - Delete it after the ritual is complete.
 
+- `WORKFLOW_AUTO.md` (optional)
+  - Post-compaction recovery checklist for your agent.
+  - Keep this as procedural "what to re-read after compaction" guidance.
+  - Reference it from your `AGENTS.md` `Session Startup` section so compaction refresh hints can point the agent to it.
+
 - `memory/YYYY-MM-DD.md`
   - Daily memory log (one file per day).
   - Recommended to read today + yesterday on session start.

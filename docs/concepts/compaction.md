@@ -36,6 +36,18 @@ You’ll see:
 Before compaction, OpenClaw can run a **silent memory flush** turn to store
 durable notes to disk. See [Memory](/concepts/memory) for details and config.
 
+### Post-compaction context refresh
+
+After auto-compaction completes, OpenClaw can enqueue a small system refresh
+message derived from your workspace `AGENTS.md`:
+
+- `## Session Startup`
+- `## Red Lines`
+
+Use `Session Startup` to declare the files your agent should re-read after
+compaction. If you keep a dedicated checklist in `WORKFLOW_AUTO.md`, reference
+it from that section.
+
 ## Manual compaction
 
 Use `/compact` (optionally with instructions) to force a compaction pass:
