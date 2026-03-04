@@ -5,6 +5,9 @@ import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
 } from "./accounts.js";
+import type { FeishuConfig } from "./types.js";
+
+const asConfig = (value: Partial<FeishuConfig>) => value as FeishuConfig;
 
 describe("resolveDefaultFeishuAccountId", () => {
   it("prefers channels.feishu.defaultAccount when configured", () => {
@@ -102,19 +105,21 @@ describe("resolveDefaultFeishuAccountId", () => {
 describe("resolveFeishuCredentials", () => {
   it("throws unresolved SecretRef errors by default for unsupported secret sources", () => {
     expect(() =>
-      resolveFeishuCredentials({
-        appId: "cli_123",
-        appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
-      }),
+      resolveFeishuCredentials(
+        asConfig({
+          appId: "cli_123",
+          appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
+        }),
+      ),
     ).toThrow(/unresolved SecretRef/i);
   });
 
   it("returns null (without throwing) when unresolved SecretRef is allowed", () => {
     const creds = resolveFeishuCredentials(
-      {
+      asConfig({
         appId: "cli_123",
         appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
-      },
+      }),
       { allowUnresolvedSecretRef: true },
     );
 
@@ -127,10 +132,12 @@ describe("resolveFeishuCredentials", () => {
     delete process.env[key];
     try {
       expect(() =>
-        resolveFeishuCredentials({
-          appId: "cli_123",
-          appSecret: { source: "env", provider: "default", id: key } as never,
-        }),
+        resolveFeishuCredentials(
+          asConfig({
+            appId: "cli_123",
+            appSecret: { source: "env", provider: "default", id: key } as never,
+          }),
+        ),
       ).toThrow(/unresolved SecretRef/i);
     } finally {
       if (prev === undefined) {
@@ -148,10 +155,10 @@ describe("resolveFeishuCredentials", () => {
 
     try {
       const creds = resolveFeishuCredentials(
-        {
+        asConfig({
           appId: "cli_123",
           appSecret: { source: "env", provider: "default", id: key } as never,
-        },
+        }),
         { allowUnresolvedSecretRef: true },
       );
 
@@ -178,10 +185,10 @@ describe("resolveFeishuCredentials", () => {
 
     try {
       const creds = resolveFeishuCredentials(
-        {
+        asConfig({
           appId: "cli_123",
           appSecret: { source: "env", provider: "corp-env", id: key } as never,
-        },
+        }),
         { allowUnresolvedSecretRef: true },
       );
 
@@ -201,10 +208,12 @@ describe("resolveFeishuCredentials", () => {
     process.env[key] = "secret_from_env";
     try {
       expect(() =>
-        resolveFeishuCredentials({
-          appId: "cli_123",
-          appSecret: { source: "env", provider: "default", id: key } as never,
-        }),
+        resolveFeishuCredentials(
+          asConfig({
+            appId: "cli_123",
+            appSecret: { source: "env", provider: "default", id: key } as never,
+          }),
+        ),
       ).toThrow(/unresolved SecretRef/i);
     } finally {
       if (prev === undefined) {
@@ -216,12 +225,14 @@ describe("resolveFeishuCredentials", () => {
   });
 
   it("trims and returns credentials when values are valid strings", () => {
-    const creds = resolveFeishuCredentials({
-      appId: " cli_123 ",
-      appSecret: " secret_456 ",
-      encryptKey: " enc ",
-      verificationToken: " vt ",
-    });
+    const creds = resolveFeishuCredentials(
+      asConfig({
+        appId: " cli_123 ",
+        appSecret: " secret_456 ",
+        encryptKey: " enc ",
+        verificationToken: " vt ",
+      }),
+    );
 
     expect(creds).toEqual({
       appId: "cli_123",

@@ -6,6 +6,17 @@ vi.mock("./probe.js", () => ({
 
 import { feishuOnboardingAdapter } from "./onboarding.js";
 
+const baseConfigureContext = {
+  runtime: {} as never,
+  accountOverrides: {},
+  shouldPromptAccountIds: false,
+  forceAllowFrom: false,
+};
+
+const baseStatusContext = {
+  accountOverrides: {},
+};
+
 describe("feishuOnboardingAdapter.configure", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
@@ -34,6 +45,7 @@ describe("feishuOnboardingAdapter.configure", () => {
           },
         } as never,
         prompter,
+        ...baseConfigureContext,
       }),
     ).resolves.toBeTruthy();
   });
@@ -55,6 +67,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
           },
         },
       } as never,
+      ...baseStatusContext,
     });
 
     expect(status.configured).toBe(false);
@@ -78,6 +91,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
             },
           },
         } as never,
+        ...baseStatusContext,
       });
 
       expect(status.configured).toBe(false);
@@ -113,6 +127,7 @@ describe("feishuOnboardingAdapter.getStatus", () => {
             },
           },
         } as never,
+        ...baseStatusContext,
       });
 
       expect(status.configured).toBe(true);

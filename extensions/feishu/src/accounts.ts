@@ -213,16 +213,14 @@ export function resolveFeishuAccount(params: {
 
   // Resolve credentials from merged config
   const creds = resolveFeishuCredentials(merged);
+  const accountName = (merged as FeishuAccountConfig).name;
 
   return {
     accountId,
     selectionSource,
     enabled,
     configured: Boolean(creds),
-    name:
-      typeof (merged as FeishuAccountConfig).name === "string"
-        ? (merged as FeishuAccountConfig).name.trim() || undefined
-        : undefined,
+    name: typeof accountName === "string" ? accountName.trim() || undefined : undefined,
     appId: creds?.appId,
     appSecret: creds?.appSecret,
     encryptKey: creds?.encryptKey,
