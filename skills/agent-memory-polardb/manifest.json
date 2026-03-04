@@ -1,0 +1,37 @@
+{
+  "name": "Agent Memory Management (by PolarDB)",
+  "id": "polardb-mem0",
+  "version": "1.1.0",
+  "description": "Enterprise-grade persistent memory for AI Agents. Powered by Alibaba Cloud PolarDB and Mem0 for sub-millisecond fact retrieval and cross-session learning.",
+  "author": "PolarDB Team",
+  "homepage": "https://help.aliyun.com/zh/polardb/polardb-for-mysql/polardb-mem0",
+  "repository": "https://github.com/your-username/clawhub",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "polardb",
+    "mem0",
+    "long-term-context",
+    "fact-extraction",
+    "cloud-database"
+  ],
+  "metadata": {
+    "openclaw": {
+      "emoji": "易",
+      "category": "intelligence",
+      "tags": ["Vector DB", "Managed Service", "Alibaba Cloud"],
+      "requires": {
+        "env": [
+          "MEM0_API_KEY",
+          "MEM0_ORG_ID"
+        ],
+        "bins": ["python3"]
+      },
+      "primaryEnv": "MEM0_API_KEY",
+      "ui": {
+        "color": "#0070CC",
+        "icon": "https://img.alicdn.com/tfs/TB1_uT8n7P2gK0jSZPxXXac4pXa-32-32.png"
+      }
+    }
+  }
+}
