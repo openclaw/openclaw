@@ -94,6 +94,32 @@ describe("gateway hooks helpers", () => {
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
   });
 
+  test("normalizeWakePayload extracts optional sessionKey", () => {
+    const withKey = normalizeWakePayload({ text: "hello", sessionKey: " agent:ops:main " });
+    expect(withKey.ok).toBe(true);
+    if (withKey.ok) {
+      expect(withKey.value.sessionKey).toBe("agent:ops:main");
+    }
+
+    const withoutKey = normalizeWakePayload({ text: "hello" });
+    expect(withoutKey.ok).toBe(true);
+    if (withoutKey.ok) {
+      expect(withoutKey.value.sessionKey).toBeUndefined();
+    }
+
+    const emptyKey = normalizeWakePayload({ text: "hello", sessionKey: "  " });
+    expect(emptyKey.ok).toBe(true);
+    if (emptyKey.ok) {
+      expect(emptyKey.value.sessionKey).toBeUndefined();
+    }
+
+    const nonStringKey = normalizeWakePayload({ text: "hello", sessionKey: 123 });
+    expect(nonStringKey.ok).toBe(true);
+    if (nonStringKey.ok) {
+      expect(nonStringKey.value.sessionKey).toBeUndefined();
+    }
+  });
+
   test("normalizeAgentPayload defaults + validates channel", () => {
     const ok = normalizeAgentPayload({ message: "hello" });
     expect(ok.ok).toBe(true);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
@@ -28,6 +28,13 @@ function setPlatform(platform: string) {
     value: platform,
   });
 }
+
+// Clear host env vars before each test so they don't interfere.
+// Tests that need specific vars will set them explicitly.
+beforeEach(() => {
+  delete process.env.OPENCLAW_NO_RESPAWN;
+  clearSupervisorHints();
+});
 
 afterEach(() => {
   envSnapshot.restore();

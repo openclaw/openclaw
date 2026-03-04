@@ -68,7 +68,11 @@ const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
@@ -386,7 +390,21 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      dispatchWakeHook(normalized.value);
+      // Validate session key policy when provided
+      if (normalized.value.sessionKey) {
+        const sessionKeyResult = resolveHookSessionKey({
+          hooksConfig,
+          source: "request",
+          sessionKey: normalized.value.sessionKey,
+        });
+        if (!sessionKeyResult.ok) {
+          sendJson(res, 400, { ok: false, error: sessionKeyResult.error });
+          return true;
+        }
+        dispatchWakeHook({ ...normalized.value, sessionKey: sessionKeyResult.value });
+      } else {
+        dispatchWakeHook(normalized.value);
+      }
       sendJson(res, 200, { ok: true, mode: normalized.value.mode });
       return true;
     }
@@ -445,6 +463,7 @@ export function createHooksRequestHandler(
             dispatchWakeHook({
               text: mapped.action.text,
               mode: mapped.action.mode,
+              sessionKey: mapped.action.sessionKey,
             });
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
