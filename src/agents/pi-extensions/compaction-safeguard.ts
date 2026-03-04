@@ -5,7 +5,7 @@ import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isQueryStopWordToken } from "../../memory/query-expansion.js";
+import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -567,9 +567,15 @@ function extractLatestUserAsk(messages: AgentMessage[]): string | null {
 }
 
 function tokenizeAskOverlapText(text: string): string[] {
-  return text
-    .toLocaleLowerCase()
-    .normalize("NFKC")
+  const normalized = text.toLocaleLowerCase().normalize("NFKC").trim();
+  if (!normalized) {
+    return [];
+  }
+  const keywords = extractKeywords(normalized);
+  if (keywords.length > 0) {
+    return keywords;
+  }
+  return normalized
     .split(/[^\p{L}\p{N}]+/u)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);

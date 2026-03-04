@@ -840,6 +840,27 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(quality.reasons).toContain("latest_user_ask_not_reflected");
   });
 
+  it("accepts non-latin latest asks when summary reflects a shorter cjk phrase", () => {
+    const quality = auditSummaryQuality({
+      summary: [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve safety checks.",
+        "## Pending user asks",
+        "状态更新 pending.",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+      identifiers: [],
+      latestAsk: "请提供状态更新",
+    });
+
+    expect(quality.ok).toBe(true);
+  });
+
   it("rejects latest-ask overlap when only stopwords overlap", () => {
     const quality = auditSummaryQuality({
       summary: [
