@@ -67,7 +67,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
       accountId,
@@ -89,7 +89,12 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       if (mediaUrl) {
         const core = getGoogleChatRuntime();
         const maxBytes = (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-        const loaded = await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes });
+        const loaded = /^https?:\/\//i.test(mediaUrl)
+          ? await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes })
+          : await core.media.loadWebMedia(mediaUrl, {
+              maxBytes,
+              localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+            });
         const upload = await uploadGoogleChatAttachment({
           account,
           space,
