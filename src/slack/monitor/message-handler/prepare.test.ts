@@ -457,6 +457,49 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
+  it("adds retry hint when the same user question is repeated in thread history", async () => {
+    const { storePath } = makeTmpStorePath();
+    const repeated = "can you answer the initial db query here?";
+    const threadTs = "900.000";
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: threadTs }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter", user: "U2", ts: threadTs },
+          { text: repeated, user: "U1", ts: "900.500" },
+          { text: "I can't run that here", bot_id: "B1", ts: "900.700" },
+          { text: repeated, user: "U1", ts: "901.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bob" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: repeated,
+      ts: "901.000",
+      thread_ts: threadTs,
+      parent_user_id: "U2",
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain(
+      "Retry policy: same question repeated in thread.",
+    );
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("I can't run that here");
+  });
+
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
     const { storePath } = makeTmpStorePath();
     const cfg = {
