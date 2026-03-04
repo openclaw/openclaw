@@ -1,14 +1,7 @@
 ---
 name: coscli
 description: Tencent Cloud COS CLI for bucket/object operations (install, config, ls/cp/sync/rm/signurl).
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "COS",
-        "requires": { "bins": ["coscli"] },
-      },
-  }
+metadata: { "openclaw": { "emoji": "COS", "requires": { "bins": ["coscli"] } } }
 ---
 
 # coscli

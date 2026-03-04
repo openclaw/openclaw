@@ -1,14 +1,7 @@
 ---
 name: ossutil
 description: Alibaba Cloud OSS CLI for bucket/object operations (install, config, ls/cp/sync/rm/sign).
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "OSS",
-        "requires": { "bins": ["ossutil"] },
-      },
-  }
+metadata: { "openclaw": { "emoji": "OSS", "requires": { "bins": ["ossutil"] } } }
 ---
 
 # ossutil
