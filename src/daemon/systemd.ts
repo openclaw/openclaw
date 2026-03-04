@@ -167,6 +167,11 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     return false;
   }
   const normalized = detail.toLowerCase();
+  const hasGenericIsEnabledFailure =
+    normalized.includes("command failed: systemctl --user is-enabled") &&
+    !normalized.includes("failed to connect to bus") &&
+    !normalized.includes("not been booted") &&
+    !normalized.includes("permission denied");
   return (
     normalized.includes("disabled") ||
     normalized.includes("static") ||
@@ -174,7 +179,8 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("masked") ||
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
-    normalized.includes("failed to get unit file state")
+    normalized.includes("failed to get unit file state") ||
+    hasGenericIsEnabledFailure
   );
 }
 
