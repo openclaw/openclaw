@@ -159,7 +159,10 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    const hasConfigApiKey =
+      typeof newEntry.apiKey === "string" && newEntry.apiKey.trim().length > 0;
+    // Keep existing apiKey only when config does not provide one.
+    if (!hasConfigApiKey && typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
     if (typeof existing.baseUrl === "string" && existing.baseUrl) {
