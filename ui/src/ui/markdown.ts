@@ -114,7 +114,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     renderer: htmlEscapeRenderer,
     gfm: true,
     breaks: true,
-  }) as string;
+  });
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(input, sanitized);
