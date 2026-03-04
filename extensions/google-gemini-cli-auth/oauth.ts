@@ -245,6 +245,7 @@ async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    pinDns: false,
   });
   try {
     const body = await response.arrayBuffer();
