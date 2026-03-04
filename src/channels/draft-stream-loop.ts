@@ -42,6 +42,7 @@ export function createDraftStreamLoop(params: {
       const sent = await current;
       if (sent === false) {
         pendingText = text;
+        schedule(); // re-schedule so pending content is retried
         return;
       }
       lastSentAt = Date.now();
