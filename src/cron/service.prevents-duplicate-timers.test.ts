@@ -77,6 +77,7 @@ describe("CronService", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();
