@@ -50,6 +50,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { extractHeartbeatNotifyTargets } from "./heartbeat-notify-parse.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -64,6 +65,7 @@ import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
+  resolveOutboundTarget,
 } from "./outbound/targets.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
@@ -397,6 +399,48 @@ async function pruneHeartbeatTranscript(params: {
   }
 }
 
+/** Deliver heartbeat alert to HEARTBEAT.md notify targets. Best-effort; failures are logged. */
+async function deliverHeartbeatNotifyTargets(params: {
+  cfg: OpenClawConfig;
+  notifyTargets: HeartbeatNotifyTarget[];
+  alertText: string;
+  session: ReturnType<typeof buildOutboundSessionContext>;
+  deps: HeartbeatDeps | undefined;
+}): Promise<void> {
+  for (const target of params.notifyTargets) {
+    const resolved = resolveOutboundTarget({
+      channel: target.channel,
+      to: target.to,
+      cfg: params.cfg,
+      mode: "heartbeat",
+    });
+    if (!resolved.ok) {
+      log.debug("heartbeat: skip notify target (unresolvable)", {
+        channel: target.channel,
+        to: target.to,
+        reason: resolved.error?.message,
+      });
+      continue;
+    }
+    try {
+      await deliverOutboundPayloads({
+        cfg: params.cfg,
+        channel: target.channel,
+        to: resolved.to,
+        payloads: [{ text: `[Heartbeat Alert]\n${params.alertText}` }],
+        session: params.session,
+        deps: params.deps,
+      });
+    } catch (err) {
+      log.warn("heartbeat: notify target delivery failed", {
+        channel: target.channel,
+        to: target.to,
+        error: formatErrorMessage(err),
+      });
+    }
+  }
+}
+
 /**
  * Get the transcript file path and its current size before a heartbeat run.
  * Returns undefined values if the session or transcript doesn't exist yet.
@@ -477,12 +521,16 @@ type HeartbeatReasonFlags = {
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
 
+type HeartbeatNotifyTarget = import("./heartbeat-notify-parse.js").HeartbeatNotifyTarget;
+
 type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
+  /** Notify targets from HEARTBEAT.md notify: lines. Empty when file not read or bypassed. */
+  notifyTargets: HeartbeatNotifyTarget[];
 };
 
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
@@ -519,13 +567,14 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
     hasTaggedCronEvents;
-  const basePreflight = {
+  const basePreflight: HeartbeatPreflight = {
     ...reasonFlags,
     session,
     pendingEventEntries,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
-  } satisfies Omit<HeartbeatPreflight, "skipReason">;
+    notifyTargets: [],
+  };
 
   if (shouldBypassFileGates) {
     return basePreflight;
@@ -541,6 +590,8 @@ async function resolveHeartbeatPreflight(params: {
         skipReason: "empty-heartbeat-file",
       };
     }
+    const notifyTargets = extractHeartbeatNotifyTargets(heartbeatFileContent);
+    return { ...basePreflight, notifyTargets };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
       // Missing HEARTBEAT.md is intentional in some setups (for example, when
@@ -866,6 +917,15 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+        await deliverHeartbeatNotifyTargets({
+          cfg,
+          notifyTargets: preflight.notifyTargets,
+          alertText: previewText.slice(0, 2000),
+          session: outboundSession,
+          deps: opts.deps,
+        });
+      }
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -905,6 +965,15 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+          await deliverHeartbeatNotifyTargets({
+            cfg,
+            notifyTargets: preflight.notifyTargets,
+            alertText: previewText.slice(0, 2000),
+            session: outboundSession,
+            deps: opts.deps,
+          });
+        }
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -942,6 +1011,16 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+
+    if (visibility.showAlerts && preflight.notifyTargets.length > 0 && previewText?.trim()) {
+      await deliverHeartbeatNotifyTargets({
+        cfg,
+        notifyTargets: preflight.notifyTargets,
+        alertText: previewText.slice(0, 2000),
+        session: outboundSession,
+        deps: opts.deps,
+      });
+    }
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {

@@ -330,6 +330,37 @@ Example `HEARTBEAT.md`:
 - If a task is blocked, write down _what is missing_ and ask Peter next time.
 ```
 
+### Notify targets
+
+You can add `notify:` lines to push heartbeat alerts to specific channels when a
+check produces a non-OK result. If the model replies `HEARTBEAT_OK`, no
+notification is sent.
+
+Syntax: `notify: channel:target` (e.g. `discord:#autopilot`, `telegram:@user`).
+Multiple targets: `notify: discord:#incidents, slack:#ops`.
+
+Example:
+
+```md
+## Check: codex status
+
+notify: discord:#autopilot
+
+- Check if Codex is idle in tmux
+- If stuck or errored, report the issue
+
+## Check: disk space
+
+notify: telegram:@wesley
+
+- Check if disk usage > 90%
+- Report the filesystem and usage percentage
+```
+
+When any check returns a non-OK result, the alert is pushed to all configured
+notify targets (in addition to the main `target`/`to` from config). Invalid or
+unresolvable targets are skipped. Respects `channels.*.heartbeat.showAlerts`.
+
 ### Can the agent update HEARTBEAT.md?
 
 Yes — if you ask it to.
