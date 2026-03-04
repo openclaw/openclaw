@@ -142,7 +142,36 @@ export function sanitizeTextContent(text: string): string {
   if (!text) {
     return text;
   }
-  return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
+  let cleaned = stripMinimaxToolCallXml(text);
+  cleaned = stripDowngradedToolCallText(cleaned);
+  cleaned = stripThinkingTagsFromText(cleaned);
+  cleaned = stripLeakedXmlToolTags(cleaned);
+  cleaned = stripTemplateDelimiters(cleaned);
+  return cleaned;
+}
+
+/**
+ * Strip generic XML tool invocation tags that leak from provider responses.
+ * Matches: <tool_call>, </tool_call>, <arg_value>, </arg_value>, <function_call>, etc.
+ */
+function stripLeakedXmlToolTags(text: string): string {
+  if (!/<\/?\w*(?:tool_call|arg_value|function_call|tool_result)\b/i.test(text)) {
+    return text;
+  }
+  return text
+    .replace(/<\/?(?:tool_call|arg_value|function_call|tool_result)\b[^>]*>/gi, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Strip template delimiters that leak from model responses.
+ * Matches: <|assistant|>, <|user|>, <|system|>, <|end|>, <|im_start|>, <|im_end|>, etc.
+ */
+function stripTemplateDelimiters(text: string): string {
+  if (!/<\|/.test(text)) {
+    return text;
+  }
+  return text.replace(/<\|\w+\|>/g, "").replace(/\n{3,}/g, "\n\n");
 }
 
 export function extractAssistantText(message: unknown): string | undefined {
