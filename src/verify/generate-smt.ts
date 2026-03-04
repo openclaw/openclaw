@@ -6,9 +6,10 @@
  *   npx tsx src/verify/generate-smt.ts [--output-dir ./verify-output] [--verify]
  */
 
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import type { ParsedAll } from "./types.js";
 import { emitOwnerOnlySmt2 } from "./emit-smt/owner-only.js";
 import { emitPipelineSmt2 } from "./emit-smt/pipeline.js";
 import { emitProfilesSmt2 } from "./emit-smt/profiles.js";
@@ -18,7 +19,6 @@ import { emitToolsSmt2 } from "./emit-smt/tools.js";
 import { parsePipeline } from "./parse-pipeline.js";
 import { parsePolicies } from "./parse-policies.js";
 import { parseToolCatalog } from "./parse-tools.js";
-import type { ParsedAll } from "./types.js";
 
 function parseArgs(): { outputDir: string; verify: boolean; srcDir: string; refDir: string } {
   const args = process.argv.slice(2);
@@ -106,20 +106,19 @@ function verifyWithZ3(outputDir: string) {
     return;
   }
 
-  try {
-    const result = execSync(`z3 "${allPath}" 2>&1`, { encoding: "utf-8", cwd: modelDir });
-    console.log("  Model verification output:");
-    for (const line of result.trim().split("\n")) {
+  const z3Result = spawnSync("z3", [allPath], {
+    encoding: "utf-8",
+    cwd: modelDir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  console.log("  Model verification output:");
+  if (z3Result.stdout) {
+    for (const line of z3Result.stdout.trim().split("\n")) {
       console.log(`    ${line}`);
     }
-  } catch (err: any) {
-    console.log(`  Model verification output (non-zero exit):`);
-    if (err.stdout) {
-      console.log(`    ${err.stdout.trim()}`);
-    }
-    if (err.stderr) {
-      console.log(`    ${err.stderr.trim()}`);
-    }
+  }
+  if (z3Result.stderr) {
+    console.log(`    ${z3Result.stderr.trim()}`);
   }
 
   // Run property checks if available
@@ -127,19 +126,18 @@ function verifyWithZ3(outputDir: string) {
   if (fs.existsSync(runAll)) {
     console.log();
     console.log("  Running property verification...");
-    try {
-      const result = execSync(`bash "${runAll}" 2>&1`, {
-        encoding: "utf-8",
-        cwd: path.join(outputDir, "properties"),
-      });
-      console.log(result);
-    } catch (err: any) {
+    const propResult = spawnSync("bash", [runAll], {
+      encoding: "utf-8",
+      cwd: path.join(outputDir, "properties"),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (propResult.stdout) {
+      console.log(propResult.stdout);
+    }
+    if (propResult.status !== 0) {
       console.log(`  Property verification had errors:`);
-      if (err.stdout) {
-        console.log(err.stdout);
-      }
-      if (err.stderr) {
-        console.log(err.stderr);
+      if (propResult.stderr) {
+        console.log(propResult.stderr);
       }
     }
   }

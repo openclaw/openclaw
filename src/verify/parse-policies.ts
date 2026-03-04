@@ -2,7 +2,7 @@
  * AST parser for policy files:
  * - tool-policy-shared.ts → TOOL_NAME_ALIASES
  * - tool-policy.ts → OWNER_ONLY_TOOL_NAME_FALLBACKS
- * - pi-tools.policy.ts → SUBAGENT_TOOL_DENY_ALWAYS, SUBAGENT_TOOL_DENY_LEAF
+ * - pi-tools.policy.ts → DEFAULT_SUBAGENT_TOOL_DENY
  */
 
 import * as fs from "fs";
@@ -121,22 +121,15 @@ function parseSubagentDenyLists(srcDir: string): {
   const filePath = path.join(srcDir, "agents", "pi-tools.policy.ts");
   const sourceFile = parseSourceFile(filePath);
 
-  const alwaysDecl = findVariableDeclaration(sourceFile, "SUBAGENT_TOOL_DENY_ALWAYS");
-  if (!alwaysDecl?.initializer) {
-    throw new Error(`[parse-policies] Could not find SUBAGENT_TOOL_DENY_ALWAYS in ${filePath}`);
+  const decl = findVariableDeclaration(sourceFile, "DEFAULT_SUBAGENT_TOOL_DENY");
+  if (!decl?.initializer) {
+    throw new Error(`[parse-policies] Could not find DEFAULT_SUBAGENT_TOOL_DENY in ${filePath}`);
   }
-  const denyAlways = parseStringArray(alwaysDecl.initializer);
+  const denyAlways = parseStringArray(decl.initializer);
 
-  const leafDecl = findVariableDeclaration(sourceFile, "SUBAGENT_TOOL_DENY_LEAF");
-  if (!leafDecl?.initializer) {
-    throw new Error(`[parse-policies] Could not find SUBAGENT_TOOL_DENY_LEAF in ${filePath}`);
-  }
-  const denyLeaf = parseStringArray(leafDecl.initializer);
-
-  console.log(
-    `[parse-policies] Parsed subagent deny lists: always=${denyAlways.length}, leaf=${denyLeaf.length}`,
-  );
-  return { denyAlways, denyLeaf };
+  console.log(`[parse-policies] Parsed subagent deny list: ${denyAlways.length} tools`);
+  // main has a single flat deny list (no depth tiers), so denyLeaf is empty.
+  return { denyAlways, denyLeaf: [] };
 }
 
 export function parsePolicies(srcDir: string): ParsedPolicies {

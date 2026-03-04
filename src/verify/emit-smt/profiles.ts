@@ -57,7 +57,9 @@ export function emitProfilesSmt2(data: ParsedAll): string {
       w(`;   ${toolIds.join(", ")}`);
       w(``);
       w(`(define-fun profile_${name}_allows ((t Tool)) Bool`);
-      if (toolIds.length === 1) {
+      if (toolIds.length === 0) {
+        w(`  false)`);
+      } else if (toolIds.length === 1) {
         w(`  (= t ${tc(toolIds[0])}))`);
       } else {
         // Format in rows of ~4

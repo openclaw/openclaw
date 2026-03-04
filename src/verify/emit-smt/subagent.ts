@@ -17,21 +17,17 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   const w = (s: string) => lines.push(s);
 
   w(`; ============================================================================`);
-  w(`; subagent.smt2 — Subagent Deny Lists and alsoAllow Override`);
+  w(`; subagent.smt2 — Subagent Deny List`);
   w(`; ============================================================================`);
   w(`; Models resolveSubagentToolPolicy from pi-tools.policy.ts.`);
   w(`;`);
-  w(`; Subagents have two tiers of denied tools:`);
-  w(`;   1. SUBAGENT_TOOL_DENY_ALWAYS — always denied regardless of depth`);
-  w(`;   2. SUBAGENT_TOOL_DENY_LEAF — additional denies at leaf depth`);
+  w(`; The runtime uses a single flat deny list (DEFAULT_SUBAGENT_TOOL_DENY)`);
+  w(`; applied to all subagents regardless of depth. The model retains a`);
+  w(`; two-tier structure (deny_always + deny_leaf_extra) for forward`);
+  w(`; compatibility; currently deny_leaf_extra is empty so both tiers`);
+  w(`; produce the same deny set.`);
   w(`;`);
-  w(`; Leaf detection: depth >= max(1, floor(maxSpawnDepth))`);
-  w(`;`);
-  w(`; The alsoAllow mechanism lets config override specific denies:`);
-  w(`;   effective_deny = base_deny.filter(t => !explicitAllow.has(t))`);
-  w(`;   where explicitAllow = union(allow, alsoAllow)`);
-  w(`;`);
-  w(`; Faithful to: pi-tools.policy.ts (resolveSubagentDenyList, resolveSubagentToolPolicy)`);
+  w(`; Faithful to: pi-tools.policy.ts (resolveSubagentToolPolicy)`);
   w(`; ============================================================================`);
   w(``);
   w(`; Requires tools.smt2 to be loaded first.`);
@@ -45,7 +41,13 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`;   ${denyAlways.join(", ")}`);
   w(``);
   w(`(define-fun subagent_deny_always ((t Tool)) Bool`);
-  w(`  (or ${denyAlways.map((id) => `(= t ${tc(id)})`).join("\n      ")}))`);
+  if (denyAlways.length === 0) {
+    w(`  false)`);
+  } else if (denyAlways.length === 1) {
+    w(`  (= t ${tc(denyAlways[0])}))`);
+  } else {
+    w(`  (or ${denyAlways.map((id) => `(= t ${tc(id)})`).join("\n      ")}))`);
+  }
   w(``);
 
   // 2. deny_leaf
@@ -56,7 +58,13 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`;   ${denyLeaf.join(", ")}`);
   w(``);
   w(`(define-fun subagent_deny_leaf_extra ((t Tool)) Bool`);
-  w(`  (or ${denyLeaf.map((id) => `(= t ${tc(id)})`).join("\n      ")}))`);
+  if (denyLeaf.length === 0) {
+    w(`  false)`);
+  } else if (denyLeaf.length === 1) {
+    w(`  (= t ${tc(denyLeaf[0])}))`);
+  } else {
+    w(`  (or ${denyLeaf.map((id) => `(= t ${tc(id)})`).join("\n      ")}))`);
+  }
   w(``);
   w(`; Combined leaf deny (always + leaf extras)`);
   w(`(define-fun subagent_deny_leaf ((t Tool)) Bool`);
@@ -138,22 +146,22 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`(check-sat) ; Expected: unsat (gateway in deny_always, not overridden)`);
   w(`(pop 1)`);
   w(``);
-  w(`; Smoke test: sessions_spawn allowed for orchestrator (depth < maxSpawnDepth)`);
+  w(`; Smoke test: sessions_spawn denied at any depth (flat deny list)`);
   w(`(push 1)`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (not (explicit_allow sessions_spawn_)))`);
-  w(`(assert (not (passes_subagent_gate sessions_spawn_)))`);
-  w(`(check-sat) ; Expected: unsat (sessions_spawn NOT in deny_always, so it passes)`);
+  w(`(assert (passes_subagent_gate sessions_spawn_))`);
+  w(`(check-sat) ; Expected: unsat (sessions_spawn in deny list, not overridden)`);
   w(`(pop 1)`);
   w(``);
-  w(`; Smoke test: sessions_spawn denied at leaf depth`);
+  w(`; Smoke test: sessions_spawn also denied at leaf depth`);
   w(`(push 1)`);
   w(`(assert (= depth 2))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (not (explicit_allow sessions_spawn_)))`);
   w(`(assert (passes_subagent_gate sessions_spawn_))`);
-  w(`(check-sat) ; Expected: unsat (sessions_spawn in deny_leaf, depth=max)`);
+  w(`(check-sat) ; Expected: unsat (sessions_spawn in deny list, not overridden)`);
   w(`(pop 1)`);
   w(``);
   w(`; Smoke test: alsoAllow can override a deny`);

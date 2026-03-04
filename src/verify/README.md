@@ -11,19 +11,19 @@ The `src/verify/` module reads the following TypeScript source files using the T
 | `src/agents/tool-catalog.ts`         | `CORE_TOOL_DEFINITIONS` (25 tools, section groups, profiles, openclaw group), `CORE_TOOL_SECTION_ORDER` |
 | `src/agents/tool-policy-shared.ts`   | `TOOL_NAME_ALIASES` (e.g. `bash` -> `exec`, `apply-patch` -> `apply_patch`)                             |
 | `src/agents/tool-policy.ts`          | `OWNER_ONLY_TOOL_NAME_FALLBACKS` (tools restricted to owner sender)                                     |
-| `src/agents/pi-tools.policy.ts`      | `SUBAGENT_TOOL_DENY_ALWAYS`, `SUBAGENT_TOOL_DENY_LEAF`                                                  |
+| `src/agents/pi-tools.policy.ts`      | `DEFAULT_SUBAGENT_TOOL_DENY`                                                                            |
 | `src/agents/tool-policy-pipeline.ts` | `buildDefaultToolPolicyPipelineSteps` (7-step filtering pipeline)                                       |
 
 From this parsed data, it generates 6 SMT-LIB2 model files:
 
-| Output file             | Contents                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| `model/tools.smt2`      | Tool universe as an enumerated datatype, aliases, section groups, glob helpers       |
-| `model/pipeline.smt2`   | 7-step pipeline survival semantics (allow/deny per step, `apply_patch` special case) |
-| `model/profiles.smt2`   | Profile presets (minimal, coding, messaging, full) with subset relationships         |
-| `model/owner-only.smt2` | Owner-only post-pipeline gate (`passes_owner_gate`)                                  |
-| `model/subagent.smt2`   | Subagent deny lists, leaf-depth logic, `alsoAllow` override mechanism                |
-| `model/all.smt2`        | Combined loader that includes all components in dependency order                     |
+| Output file             | Contents                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| `model/tools.smt2`      | Tool universe as an enumerated datatype, aliases, section groups, glob helpers        |
+| `model/pipeline.smt2`   | 7-step pipeline survival semantics (allow/deny per step, `apply_patch` special case)  |
+| `model/profiles.smt2`   | Profile presets (minimal, coding, messaging, full) with subset relationships          |
+| `model/owner-only.smt2` | Owner-only post-pipeline gate (`passes_owner_gate`)                                   |
+| `model/subagent.smt2`   | Subagent deny list (flat), depth structure (reserved), `alsoAllow` override mechanism |
+| `model/all.smt2`        | Combined loader that includes all components in dependency order                      |
 
 Each generated `.smt2` file includes inline smoke tests (push/pop assertions with expected `unsat` results).
 
@@ -44,7 +44,7 @@ src/verify/
 │   ├── subagent.ts            # Emitter for subagent.smt2
 │   └── properties.ts          # Emitter for all.smt2 + property file copier (P1-P6)
 └── __tests__/
-    ├── parse-tools.test.ts    # Vitest tests (17 assertions)
+    ├── parse-tools.test.ts    # Vitest tests (12 assertions)
     └── run-tests.ts           # Standalone test runner (no vitest dependency)
 ```
 
@@ -61,7 +61,7 @@ The generator can copy 6 property files from a reference directory (`../openclaw
 
 ## How to Test
 
-### 1. Run the Vitest unit tests (17 parser assertions)
+### 1. Run the Vitest unit tests (12 parser tests)
 
 ```bash
 pnpm test src/verify/__tests__/parse-tools.test.ts
@@ -72,7 +72,7 @@ This validates that the AST parsers correctly extract:
 - All 25 tool definitions with correct ids, sections, profiles, and openclaw group membership
 - Tool name aliases (`bash` -> `exec`, `apply-patch` -> `apply_patch`)
 - Owner-only fallback list (gateway, cron, whatsapp_login, etc.)
-- Subagent deny-always and deny-leaf lists
+- Subagent deny list
 - All 7 pipeline steps with `stripPluginOnlyAllowlist: true`
 
 ### 2. Run the standalone test runner (no vitest needed)
@@ -117,6 +117,8 @@ Each file's smoke tests use push/pop scopes and expect `unsat` for their asserti
 ## Counter Examples
 
 The Vitest suite documents expectations for the parsed tool metadata. The snippets below show what currently **passes** the tests versus intentionally broken variants that those tests would catch.
+
+> **Scope note:** These tests catch _accidental_ regressions — a developer changing a constant without realizing the security implications. They do not protect against adversarial source modifications (an attacker who can edit source code can also edit the tests). The real security value comes from the Z3 property checks (P1-P6), which prove invariants over the _generated model_ rather than spot-checking individual constants.
 
 ### Tool catalog extraction
 
@@ -169,7 +171,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
 
 The failing version violates the section (`read` should be `"fs"`), profile (`read` should be `"coding"`), and OpenClaw group membership expectations (`browser` must stay `true`, `read` must stay `false`). The `parseToolCatalog` tests would flag every deviation.
 
-Why this matters: the SMT model (plus runtime policy pipeline) treats `CORE_TOOL_DEFINITIONS` as the canonical source of each tool’s section, profile, and group membership. If an adversary rewired `read` as a messaging/runtime tool that participates in the default OpenClaw group, messaging-only channels and onboarding flows would inherit filesystem access even though that profile is supposed to be sandboxed. Similarly, removing `browser` from the UI section and OpenClaw group would invalidate the profile monotonicity proofs that guarantee browser control is always available to the default tool set. In short, the test stops silent privilege escalations in the catalog before they leak into the SMT proofs or live policy enforcement.
+Why this matters: the SMT model treats `CORE_TOOL_DEFINITIONS` as the canonical source of each tool's section, profile, and group membership. If someone accidentally moved `read` into the messaging profile, messaging-only channels would inherit filesystem access. These tests catch such regressions before they propagate into the SMT model.
 
 ### Tool name normalization (aliases)
 
@@ -191,7 +193,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 
 If either alias disappears or maps to anything other than the canonical ids above, `parsePolicies` fails because it asserts the alias dictionary equals the passing snippet.
 
-The alias map is security-critical because all policy inputs (user configs, CLI flags, env vars) go through `normalizeToolName` before we match them against allow/deny lists. If `bash` stopped normalizing to `exec`, a user could think they disabled shell execution with `deny: ["bash"]` when the runtime would still allow the canonical `exec` tool. Likewise, if `apply-patch` (our OpenAI-style tool spelling) lost its alias, an external policy that only knows the hyphenated name would fail open, silently re-enabling `apply_patch`. Locking the alias map via tests keeps the parser, SMT model, and runtime policy engine aligned on which strings map to sensitive tool identifiers.
+The alias map matters because policy inputs go through `normalizeToolName` before matching allow/deny lists. If `bash` stopped normalizing to `exec`, a `deny: ["bash"]` config would fail to block the canonical `exec` tool. These tests ensure the parser and SMT model stay aligned with the runtime's alias resolution.
 
 ### Owner-only fallback + subagent deny lists
 
@@ -199,7 +201,11 @@ The alias map is security-critical because all policy inputs (user configs, CLI 
 // ✅ src/agents/tool-policy.ts + src/agents/pi-tools.policy.ts
 const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set(["whatsapp_login", "cron", "gateway"]);
 
-const SUBAGENT_TOOL_DENY_ALWAYS = [
+const DEFAULT_SUBAGENT_TOOL_DENY = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
   "gateway",
   "agents_list",
   "whatsapp_login",
@@ -207,28 +213,23 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "cron",
   "memory_search",
   "memory_get",
-  "sessions_send",
 ];
-
-const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list", "sessions_history", "sessions_spawn"];
 ```
 
 ```ts
 // ❌ Counter example: parsePolicies would catch these regressions
 const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set(["cron"]); // missing gateway + whatsapp_login
 
-const SUBAGENT_TOOL_DENY_ALWAYS = [
+const DEFAULT_SUBAGENT_TOOL_DENY = [
   "gateway",
   "agents_list",
-  // "sessions_send" removed
+  // "sessions_send", "sessions_spawn" removed
 ];
-
-const SUBAGENT_TOOL_DENY_LEAF = ["sessions_list"]; // missing history + spawn entries
 ```
 
-The owners-only and subagent tests assert that `gateway`, `cron`, and `whatsapp_login` stay in `OWNER_ONLY_TOOL_NAME_FALLBACKS`, that `gateway`, `session_status`, and `sessions_send` remain in `SUBAGENT_TOOL_DENY_ALWAYS`, and that `sessions_spawn`/`sessions_list` stay in `SUBAGENT_TOOL_DENY_LEAF`. The broken snippet would fail every assertion.
+The owners-only and subagent tests assert that `gateway`, `cron`, and `whatsapp_login` stay in `OWNER_ONLY_TOOL_NAME_FALLBACKS`, and that `gateway`, `session_status`, `sessions_send`, `sessions_spawn`, and `sessions_list` remain in `DEFAULT_SUBAGENT_TOOL_DENY`. The broken snippet would fail every assertion.
 
-Keeping these lists stable is critical for two security boundaries: owner-only tools and subagent containment. The fallback list enforces that `gateway`, `cron`, and `whatsapp_login` stay owner-gated even if a plugin forgets `ownerOnly: true`. If any entry drops out, a non-owner could invoke those sensitive tools via an unguarded plugin definition. Likewise, the subagent deny lists ensure that spawned agents can’t escalate into session management, memory, or gateway control regardless of spawn depth. Removing `sessions_send` or `sessions_spawn` would let a leaf agent spam user sessions or recursively spawn more agents, defeating our containment guarantees. By pinning the exact lists, the parser and SMT rules can prove “deny always” dominance and owner-only completeness without drifting from the actual runtime configuration.
+These tests guard two security boundaries: owner-only tools and subagent containment. If `gateway` accidentally dropped out of the owner-only fallbacks, non-owners could invoke it. If `sessions_spawn` dropped from the subagent deny list, subagents could recursively spawn more agents. The tests catch accidental removals from these lists so the SMT model stays in sync with the runtime.
 
 ### Pipeline step stripping guarantees
 
@@ -259,4 +260,4 @@ return [
 
 `parsePipeline` asserts exactly seven steps and that each one sets `stripPluginOnlyAllowlist: true`. Dropping the steps or toggling the flag prevents the SMT model from proving that plugin-only allowlists are stripped before filtering core tools, so the counter example is rejected by the tests straight away.
 
-This guarantee matters because each pipeline step evaluates user/agent configuration before we check subagent deny lists, owner-only fallbacks, and profile monotonicity. If even one step skipped `stripPluginOnlyAllowlist`, a malicious operator could place `group:plugins` in an earlier allowlist, causing core tools to disappear once a plugin resolves to nothing—exactly the leak P3 (“stripping soundness”) guards against. Ensuring all seven steps exist with the stripping flag set keeps core tools available unless explicitly denied and prevents unknown plugin tool ids from silently blocking canonical tools when resolving policies.
+This matters because if a step accidentally omitted `stripPluginOnlyAllowlist`, a plugin-only allowlist could block core tools — the scenario P3 ("stripping soundness") guards against. The test ensures all seven steps retain the flag so the SMT model can prove this property.

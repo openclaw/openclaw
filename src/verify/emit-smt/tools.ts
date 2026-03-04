@@ -102,11 +102,16 @@ export function emitToolsSmt2(data: ParsedAll): string {
 
   // 3. Core tool predicate
   w(`; --------------------------------------------------------------------------`);
-  w(`; 3. Core Tool Predicate (excludes PLUGIN)`);
+  w(`; 3. Core Tool Predicate (excludes PLUGIN and non-catalog special cases)`);
   w(`; --------------------------------------------------------------------------`);
   w(``);
   w(`(define-fun is_core_tool ((t Tool)) Bool`);
-  w(`  (not (= t PLUGIN)))`);
+  if (extraTools.length === 0) {
+    w(`  (not (= t PLUGIN)))`);
+  } else {
+    const exclusions = ["PLUGIN", ...extraTools.map((id) => toolConstructor(id))];
+    w(`  (and ${exclusions.map((e) => `(not (= t ${e}))`).join("\n       ")}))`);
+  }
   w(``);
 
   // 4. Section groups
