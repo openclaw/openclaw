@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
+const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
 
 function formatDateStamp(nowMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -53,18 +54,26 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract "## Session Startup" and "## Red Lines" sections.
-    // Also accept legacy names "Every Session" and "Safety" for backward
-    // compatibility with older AGENTS.md templates.
-    // Each section ends at the next "## " heading or end of file
-    let sections = extractSections(content, ["Session Startup", "Red Lines"]);
-    if (sections.length === 0) {
-      sections = extractSections(content, ["Every Session", "Safety"]);
+    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
+    // An explicit empty array disables post-compaction context injection entirely.
+    const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
+    const sectionNames = Array.isArray(configuredSections)
+      ? configuredSections
+      : DEFAULT_POST_COMPACTION_SECTIONS;
+
+    if (sectionNames.length === 0) {
+      return null;
     }
+
+    const foundSectionNames: string[] = [];
+    const sections = extractSections(content, sectionNames, foundSectionNames);
 
     if (sections.length === 0) {
       return null;
     }
+
+    // Only reference section names that were actually found and injected.
+    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
 
     const resolvedNowMs = nowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
@@ -79,11 +88,31 @@ export async function readPostCompactionContext(
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
 
+    // When using the default section set, use precise prose that names the
+    // "Session Startup" sequence explicitly. When custom sections are configured,
+    // use generic prose — referencing a hardcoded "Session Startup" sequence
+    // would be misleading for deployments that use different section names.
+    const isDefaultSections =
+      !Array.isArray(configuredSections) ||
+      (configuredSections.length === DEFAULT_POST_COMPACTION_SECTIONS.length &&
+        configuredSections.every(
+          (s, i) => s.toLowerCase() === DEFAULT_POST_COMPACTION_SECTIONS[i].toLowerCase(),
+        ));
+
+    const prose = isDefaultSections
+      ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
+        "Execute your Session Startup sequence now — read the required files before responding to the user."
+      : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
+        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
+
+    const sectionLabel = isDefaultSections
+      ? "Critical rules from AGENTS.md:"
+      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
+
     return (
       "[Post-compaction context refresh]\n\n" +
-      "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-      "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
-      `Critical rules from AGENTS.md:\n\n${safeContent}\n\n${timeLine}`
+      `${prose}\n\n` +
+      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
     );
   } catch {
     return null;
@@ -96,7 +125,11 @@ export async function readPostCompactionContext(
  * Skips content inside fenced code blocks.
  * Captures until the next heading of same or higher level, or end of string.
  */
-export function extractSections(content: string, sectionNames: string[]): string[] {
+export function extractSections(
+  content: string,
+  sectionNames: string[],
+  foundNames?: string[],
+): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
 
@@ -157,6 +190,7 @@ export function extractSections(content: string, sectionNames: string[]): string
 
     if (sectionLines.length > 0) {
       results.push(sectionLines.join("\n").trim());
+      foundNames?.push(name);
     }
   }
 
