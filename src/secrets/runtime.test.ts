@@ -169,7 +169,7 @@ describe("secrets runtime snapshot", () => {
               key: { source: "env", provider: "default", id: "SHADOW_KEY" },
             },
           },
-        }) as AuthProfileStore,
+        }) as unknown as AuthProfileStore,
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
