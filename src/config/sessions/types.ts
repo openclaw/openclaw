@@ -150,6 +150,10 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  /** Highest context alert threshold already surfaced for this session (85/95). */
+  contextAlertLevel?: 85 | 95;
+  /** Timestamp (ms) for the last emitted context alert. */
+  contextAlertAt?: number;
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
