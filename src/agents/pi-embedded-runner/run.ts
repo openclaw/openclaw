@@ -850,6 +850,7 @@ export async function runEmbeddedPiAgent(
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
+            sourceProvider: params.sourceProvider,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
