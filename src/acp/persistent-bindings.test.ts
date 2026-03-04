@@ -1,7 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+const managerMocks = vi.hoisted(() => ({
+  resolveSession: vi.fn(),
+  closeSession: vi.fn(),
+  initializeSession: vi.fn(),
+}));
+
+vi.mock("./control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    resolveSession: managerMocks.resolveSession,
+    closeSession: managerMocks.closeSession,
+    initializeSession: managerMocks.initializeSession,
+  }),
+}));
+
 import {
   buildConfiguredAcpSessionKey,
+  ensureConfiguredAcpBindingSession,
   resolveConfiguredAcpBindingRecord,
 } from "./persistent-bindings.js";
 
@@ -11,6 +26,15 @@ const baseCfg = {
     list: [{ id: "codex" }, { id: "claude" }],
   },
 } satisfies OpenClawConfig;
+
+beforeEach(() => {
+  managerMocks.resolveSession.mockReset();
+  managerMocks.closeSession.mockReset().mockResolvedValue({
+    runtimeClosed: true,
+    metaCleared: true,
+  });
+  managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
+});
 
 describe("resolveConfiguredAcpBindingRecord", () => {
   it("resolves discord channel ACP binding from channel-local config", () => {
@@ -181,5 +205,74 @@ describe("buildConfiguredAcpSessionKey", () => {
       mode: "persistent",
     });
     expect(sessionKeyA).toBe(sessionKeyB);
+  });
+});
+
+describe("ensureConfiguredAcpBindingSession", () => {
+  it("keeps an existing ready session when configured binding omits cwd", async () => {
+    const spec = {
+      channel: "discord" as const,
+      accountId: "default",
+      conversationId: "1478836151241412759",
+      agentId: "codex",
+      mode: "persistent" as const,
+    };
+    const sessionKey = buildConfiguredAcpSessionKey(spec);
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "existing",
+        mode: "persistent",
+        runtimeOptions: { cwd: "/workspace/openclaw" },
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("reinitializes a ready session when binding config explicitly sets mismatched cwd", async () => {
+    const spec = {
+      channel: "discord" as const,
+      accountId: "default",
+      conversationId: "1478836151241412759",
+      agentId: "codex",
+      mode: "persistent" as const,
+      cwd: "/workspace/repo-a",
+    };
+    const sessionKey = buildConfiguredAcpSessionKey(spec);
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "existing",
+        mode: "persistent",
+        runtimeOptions: { cwd: "/workspace/other-repo" },
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 });

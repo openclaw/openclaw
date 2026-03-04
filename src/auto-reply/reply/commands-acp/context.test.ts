@@ -27,8 +27,29 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
+      parentConversationId: "parent-1",
     });
     expect(isAcpCommandDiscordChannel(params)).toBe(true);
+  });
+
+  it("resolves discord thread parent from ParentSessionKey when targets point at the thread", () => {
+    const params = buildCommandTestParams("/acp sessions", baseCfg, {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:thread-42",
+      AccountId: "work",
+      MessageThreadId: "thread-42",
+      ParentSessionKey: "agent:codex:discord:channel:parent-9",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "discord",
+      accountId: "work",
+      threadId: "thread-42",
+      conversationId: "thread-42",
+      parentConversationId: "parent-9",
+    });
   });
 
   it("falls back to default account and target-derived conversation id", () => {

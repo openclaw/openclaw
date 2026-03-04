@@ -378,9 +378,14 @@ function sessionMatchesConfiguredBinding(params: {
     }
   }
 
-  const desiredCwd = params.spec.cwd?.trim() || "";
-  const currentCwd = (params.meta.runtimeOptions?.cwd ?? params.meta.cwd ?? "").trim();
-  return desiredCwd === currentCwd;
+  const desiredCwd = params.spec.cwd?.trim();
+  if (desiredCwd !== undefined) {
+    const currentCwd = (params.meta.runtimeOptions?.cwd ?? params.meta.cwd ?? "").trim();
+    if (desiredCwd !== currentCwd) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function ensureConfiguredAcpBindingSession(params: {
