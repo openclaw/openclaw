@@ -78,6 +78,18 @@ function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   >;
 }
 
+function readFirstRequestHeaders(mockFetch: ReturnType<typeof installMockFetch>) {
+  const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+  const rawHeaders = request?.headers;
+  if (!rawHeaders) {
+    return {} as Record<string, string>;
+  }
+  if (rawHeaders instanceof Headers) {
+    return Object.fromEntries(rawHeaders.entries()) as Record<string, string>;
+  }
+  return rawHeaders as Record<string, string>;
+}
+
 function installPerplexitySuccessFetch() {
   return installMockFetch({
     choices: [{ message: { content: "ok" } }],
@@ -185,6 +197,18 @@ describe("web_search country and language parameters", () => {
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
     const url = await runBraveSearchAndGetUrl({ [key]: value });
     expect(url.searchParams.get(key)).toBe(value);
+  });
+
+  it("uses X-Subscription-Token for Brave API auth", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    expect(tool).not.toBeNull();
+
+    await tool?.execute?.("call-1", { query: "header-check" });
+
+    const headers = readFirstRequestHeaders(mockFetch);
+    expect(headers["X-Subscription-Token"]).toBe("test-key");
+    expect(headers.Authorization).toBeUndefined();
   });
 
   it("rejects invalid freshness values", async () => {
