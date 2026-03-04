@@ -97,12 +97,40 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect.objectContaining({ timeout: 400 }),
       );
     });
+
+    it("deduplicates pids from dual-stack listeners (IPv4+IPv6 emit same pid twice)", () => {
+      // Dual-stack listeners cause lsof to emit the same PID twice in -Fpc output
+      // (once for the IPv4 socket, once for IPv6). Without dedup, terminateStaleProcessesSync
+      // sends SIGTERM twice and returns killed=[pid, pid], corrupting the count.
+      const stalePid = process.pid + 600;
+      const stdout = `p${stalePid}\ncopenclaw-gateway\np${stalePid}\ncopenclaw-gateway\n`;
+      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      const result = findGatewayPidsOnPortSync(18789);
+      expect(result).toEqual([stalePid]); // deduped — not [pid, pid]
+    });
+
+    it("returns [] and skips lsof on win32", () => {
+      // The entire describe block is skipped on Windows (isWindows guard at top),
+      // so this test only runs on Linux/macOS. It mocks platform to win32 for the
+      // single assertion without needing to restore — the suite-level skipIf means
+      // this will never run on an actual Windows runner where the mock could leak.
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+        expect(mockSpawnSync).not.toHaveBeenCalled();
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        } else {
+          delete (process as NodeJS.Process & Record<string, unknown>)["platform"];
+        }
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
-
-  // -------------------------------------------------------------------------
-  // parsePidsFromLsofOutput — pure unit tests (no I/O)
+  // parsePidsFromLsofOutput — pure unit tests (no I/O, driven via spawnSync mock)
   // -------------------------------------------------------------------------
   describe("parsePidsFromLsofOutput (via findGatewayPidsOnPortSync stdout path)", () => {
     it("returns [] for empty lsof stdout (status 0, nothing listening)", () => {
@@ -139,43 +167,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     });
   });
 
-
-    it("deduplicates pids from dual-stack listeners (IPv4+IPv6 emit same pid twice)", () => {
-      // Dual-stack listeners cause lsof to emit the same PID twice in -Fpc output
-      // (once for the IPv4 socket, once for IPv6). Without dedup, terminateStaleProcessesSync
-      // sends SIGTERM twice and returns killed=[pid, pid], corrupting the count.
-      const stalePid = process.pid + 600;
-      const stdout = `p${stalePid}\ncopenclaw-gateway\np${stalePid}\ncopenclaw-gateway\n`;
-      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
-      const result = findGatewayPidsOnPortSync(18789);
-      expect(result).toEqual([stalePid]); // deduped — not [pid, pid]
-    });
-
-    it("lsof status 1 with non-empty openclaw stdout is treated as busy, not free (Linux container edge case)", () => {
-      // On Linux containers with restricted /proc (AppArmor, seccomp, user namespaces),
-      // lsof can exit 1 AND still emit output for processes it could read.
-      // status 1 + non-empty openclaw stdout must not be treated as port-free.
-      const stalePid = process.pid + 601;
-      let call = 0;
-      mockSpawnSync.mockImplementation(() => {
-        call++;
-        if (call === 1) {
-          // Initial scan: finds stale pid
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
-        }
-        if (call === 2) {
-          // status 1 + openclaw pid in stdout — container-restricted lsof reports partial results
-          return { error: null, status: 1, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "lsof: WARNING: can't stat() fuse" };
-        }
-        // Third poll: port is genuinely free
-        return { error: null, status: 1, stdout: "", stderr: "" };
-      });
-      vi.spyOn(process, "kill").mockReturnValue(true);
-      cleanStaleGatewayProcessesSync();
-      // Poll 2 returned busy (not free), so we must have polled at least 3 times
-      expect(call).toBeGreaterThanOrEqual(3);
-    });
-
+  // -------------------------------------------------------------------------
   // pollPortOnce (via cleanStaleGatewayProcessesSync) — Codex P1 regression
   // -------------------------------------------------------------------------
   describe("pollPortOnce — no second lsof spawn (Codex P1 regression)", () => {
@@ -257,6 +249,62 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       // be at least 4 (initial + 2 polls each doubled). With the fix, each poll
       // is exactly one spawn: initial(1) + busy-poll(1) + free-poll(1) = 3.
       expect(spawnCount).toBe(3);
+    });
+
+    it("lsof status 1 with non-empty openclaw stdout is treated as busy, not free (Linux container edge case)", () => {
+      // On Linux containers with restricted /proc (AppArmor, seccomp, user namespaces),
+      // lsof can exit 1 AND still emit output for processes it could read.
+      // status 1 + non-empty openclaw stdout must not be treated as port-free.
+      const stalePid = process.pid + 601;
+      let call = 0;
+      mockSpawnSync.mockImplementation(() => {
+        call++;
+        if (call === 1) {
+          // Initial scan: finds stale pid
+          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+        }
+        if (call === 2) {
+          // status 1 + openclaw pid in stdout — container-restricted lsof reports partial results
+          return { error: null, status: 1, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "lsof: WARNING: can't stat() fuse" };
+        }
+        // Third poll: port is genuinely free
+        return { error: null, status: 1, stdout: "", stderr: "" };
+      });
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      cleanStaleGatewayProcessesSync();
+      // Poll 2 returned busy (not free), so we must have polled at least 3 times
+      expect(call).toBeGreaterThanOrEqual(3);
+    });
+
+    it("pollPortOnce outer catch returns { free: null, permanent: false } when resolveLsofCommandSync throws", () => {
+      // If resolveLsofCommandSync throws (e.g. lsof resolution fails at runtime),
+      // pollPortOnce must catch it and return the transient-inconclusive result
+      // rather than propagating the exception.
+      const stalePid = process.pid + 402;
+      const mockedResolveLsof = vi.mocked(resolveLsofCommandSync);
+
+      mockedResolveLsof.mockImplementationOnce(() => {
+        // First call: initial findGatewayPidsOnPortSync — succeed normally
+        return "lsof";
+      });
+
+      mockSpawnSync.mockImplementationOnce(() => {
+        // Initial scan: finds stale pid
+        return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+      });
+
+      // Second call: poll — resolveLsofCommandSync throws
+      mockedResolveLsof.mockImplementationOnce(() => {
+        throw new Error("lsof binary resolution failed");
+      });
+
+      // Third call: poll — port is free
+      mockedResolveLsof.mockImplementation(() => "lsof");
+      mockSpawnSync.mockImplementation(() => ({ error: null, status: 1, stdout: "", stderr: "" }));
+
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      // Must not throw — the catch path returns transient inconclusive, loop continues
+      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
     });
   });
 
@@ -368,10 +416,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const enoentPolls = events.filter((e) => e.startsWith("enoent-poll"));
       expect(enoentPolls.length).toBe(1);
     });
+
     it("bails immediately when lsof is permanently unavailable (EPERM) — SELinux/AppArmor", () => {
       // EPERM occurs when lsof exists but a MAC policy (SELinux/AppArmor) blocks
       // execution. Like ENOENT/EACCES, this is permanent — retrying is pointless.
-      const stalePid = process.pid + 304;
+      const stalePid = process.pid + 305;
       let call = 0;
       mockSpawnSync.mockImplementation(() => {
         call++;
@@ -508,86 +557,125 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // parsePidsFromLsofOutput — branch-coverage for mid-loop && short-circuits
+  // -------------------------------------------------------------------------
+  describe("parsePidsFromLsofOutput — branch coverage (lines 67-69)", () => {
+    it("skips a mid-loop entry when the command does not include 'openclaw'", () => {
+      // Exercises the false branch of currentCmd.toLowerCase().includes("openclaw")
+      // inside the mid-loop flush: a non-openclaw cmd between two entries must not
+      // be pushed, but the following openclaw entry still must be.
+      const stalePid = process.pid + 700;
+      // Mixed output: non-openclaw entry first, then openclaw entry
+      const stdout = `p${process.pid + 699}\ncnginx\np${stalePid}\ncopenclaw-gateway\n`;
+      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      const result = findGatewayPidsOnPortSync(18789);
+      expect(result).toContain(stalePid);
+      expect(result).not.toContain(process.pid + 699);
+    });
+
+    it("skips a mid-loop entry when currentCmd is missing (two consecutive p-lines)", () => {
+      // Exercises currentCmd falsy branch mid-loop: two 'p' lines in a row
+      // (no 'c' line between them) — the first PID must be skipped, the second handled.
+      const stalePid = process.pid + 701;
+      // Two consecutive p-lines: first has no c-line before the next p-line
+      const stdout = `p${process.pid + 702}\np${stalePid}\ncopenclaw-gateway\n`;
+      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      const result = findGatewayPidsOnPortSync(18789);
+      expect(result).toContain(stalePid);
+    });
+
+    it("ignores a p-line with an invalid (non-positive) PID — ternary false branch", () => {
+      // Exercises the `Number.isFinite(parsed) && parsed > 0 ? parsed : undefined`
+      // false branch: a malformed 'p' line (e.g. 'p0' or 'pNaN') must not corrupt
+      // currentPid and must not end up in the returned pids array.
+      const stalePid = process.pid + 703;
+      // p0 is invalid (not > 0); the following valid openclaw entry must still be found.
+      const stdout = `p0\ncopenclaw-gateway\np${stalePid}\ncopenclaw-gateway\n`;
+      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      const result = findGatewayPidsOnPortSync(18789);
+      expect(result).toContain(stalePid);
+      expect(result).not.toContain(0);
+    });
+
+    it("silently skips lines that start with neither 'p' nor 'c' — else-if false branch", () => {
+      // lsof -Fpc only emits 'p' and 'c' lines, but defensive handling of
+      // unexpected output (e.g. 'f' for file descriptor in other lsof formats)
+      // must not throw or corrupt the pid list. Unknown lines are just skipped.
+      const stalePid = process.pid + 704;
+      // Intersperse an 'f' line (file descriptor marker) — not a 'p' or 'c' line
+      const stdout = `p${stalePid}\nf8\ncopenclaw-gateway\n`;
+      mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      const result = findGatewayPidsOnPortSync(18789);
+      // The 'f' line must not corrupt parsing; stalePid must still be found
+      // (the 'c' line after 'f' correctly sets currentCmd)
+      expect(result).toContain(stalePid);
+    });
+  });
 
   // -------------------------------------------------------------------------
-  // Edge case coverage (lines identified via v8 branch coverage report)
+  // pollPortOnce branch — status 1 + non-empty stdout with zero openclaw pids
   // -------------------------------------------------------------------------
-  describe("edge-case coverage — lines 45-50, 85, 151", () => {
-    it("sleepSync falls back to busy-wait when Atomics.wait throws (L45-50)", () => {
-      // Atomics.wait throws in Workers (not-main-thread) and some sandboxed
-      // environments. The catch fallback must still delay correctly.
+  describe("pollPortOnce — status 1 + non-empty non-openclaw stdout (line 145)", () => {
+    it("treats status 1 + non-openclaw stdout as port-free (not an openclaw process)", () => {
+      // status 1 + non-empty stdout where no openclaw pids are present:
+      // the port may be held by an unrelated process. From our perspective
+      // (we only kill openclaw pids) it is effectively free.
+      const stalePid = process.pid + 800;
+      let call = 0;
+      mockSpawnSync.mockImplementation(() => {
+        call++;
+        if (call === 1) {
+          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+        }
+        // status 1 + non-openclaw output — should be treated as free:true for our purposes
+        return { error: null, status: 1, stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]), stderr: "" };
+      });
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      // Should complete cleanly — no openclaw pids in status-1 output → free
+      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
+      // Completed in exactly 2 calls (initial find + 1 free poll)
+      expect(call).toBe(2);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // sleepSync — direct unit tests via __testing.callSleepSyncRaw
+  // -------------------------------------------------------------------------
+  describe("sleepSync — Atomics.wait paths", () => {
+    it("returns immediately when called with 0ms (timeoutMs <= 0 early return)", () => {
+      // sleepSync(0) must short-circuit before touching Atomics.wait.
+      // Verify it does not throw and returns synchronously.
+      __testing.setSleepSyncOverride(null); // bypass override so real path runs
+      expect(() => __testing.callSleepSyncRaw(0)).not.toThrow();
+    });
+
+    it("returns immediately when called with a negative value (Math.max(0,...) clamp)", () => {
+      __testing.setSleepSyncOverride(null);
+      expect(() => __testing.callSleepSyncRaw(-1)).not.toThrow();
+    });
+
+    it("executes the Atomics.wait path successfully when called with a positive timeout", () => {
+      // Verify the real Atomics.wait code path runs without error.
+      // Use 1ms to keep the test fast; Atomics.wait resolves immediately
+      // because the timeout expires in 1ms.
+      __testing.setSleepSyncOverride(null);
+      expect(() => __testing.callSleepSyncRaw(1)).not.toThrow();
+    });
+
+    it("falls back to busy-wait when Atomics.wait throws (Worker / sandboxed env)", () => {
+      // Atomics.wait throws in Worker threads and some sandboxed runtimes.
+      // The catch branch must handle this without propagating the exception.
       const origWait = Atomics.wait;
       Atomics.wait = () => { throw new Error("not on main thread"); };
+      __testing.setSleepSyncOverride(null);
       try {
-        // Restore override so sleep actually calls Atomics.wait (the real path)
-        __testing.setSleepSyncOverride(null);
-        // sleepSync(0) returns early; use 1ms to exercise the fallback loop
-        // without actually waiting — the busy-wait exits immediately at 1ms.
-        // We just verify it doesn't throw.
-        expect(() => {
-          // cleanStaleGatewayProcessesSync internally calls sleepSync;
-          // with no stale pids it returns before sleeping.
-          // Instead call sleepSync directly via a minimal path:
-          // set port to have no listeners so the function returns early,
-          // exercising only the fallback branch.
-          mockSpawnSync.mockReturnValue({ error: null, status: 1, stdout: "", stderr: "" });
-          cleanStaleGatewayProcessesSync();
-        }).not.toThrow();
+        // 1ms is enough to exercise the busy-wait loop without slowing CI.
+        expect(() => __testing.callSleepSyncRaw(1)).not.toThrow();
       } finally {
         Atomics.wait = origWait;
         __testing.setSleepSyncOverride(() => {});
       }
-    });
-
-    it("findGatewayPidsOnPortSync returns [] and skips lsof on win32 (L85)", () => {
-      // The entire describe block is skipped on Windows (isWindows guard at top),
-      // so this test only runs on Linux/macOS. It mocks platform to win32 for the
-      // single assertion without needing to restore — the suite-level skipIf means
-      // this will never run on an actual Windows runner where the mock could leak.
-      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      try {
-        expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
-        expect(mockSpawnSync).not.toHaveBeenCalled();
-      } finally {
-        if (origDescriptor) {
-          Object.defineProperty(process, "platform", origDescriptor);
-        } else {
-          delete (process as NodeJS.Process & Record<string, unknown>)["platform"];
-        }
-      }
-    });
-
-    it("pollPortOnce outer catch returns { free: null, permanent: false } when resolveLsofCommandSync throws (L151)", () => {
-      // If resolveLsofCommandSync throws (e.g. lsof resolution fails at runtime),
-      // pollPortOnce must catch it and return the transient-inconclusive result
-      // rather than propagating the exception.
-      const stalePid = process.pid + 400;
-      let call = 0;
-      const mockedResolveLsof = vi.mocked(resolveLsofCommandSync);
-
-      mockedResolveLsof.mockImplementationOnce(() => {
-        // First call: initial findGatewayPidsOnPortSync — succeed normally
-        return "lsof";
-      });
-
-      mockSpawnSync.mockImplementationOnce(() => {
-        // Initial scan: finds stale pid
-        return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
-      });
-
-      // Second call: poll — resolveLsofCommandSync throws
-      mockedResolveLsof.mockImplementationOnce(() => {
-        throw new Error("lsof binary resolution failed");
-      });
-
-      // Third call: poll — port is free
-      mockedResolveLsof.mockImplementation(() => "lsof");
-      mockSpawnSync.mockImplementation(() => ({ error: null, status: 1, stdout: "", stderr: "" }));
-
-      vi.spyOn(process, "kill").mockReturnValue(true);
-      // Must not throw — the catch path returns transient inconclusive, loop continues
-      expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
     });
   });
 });

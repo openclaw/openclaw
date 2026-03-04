@@ -163,12 +163,10 @@ function pollPortOnce(port: number): PollResult {
 
 /**
  * Synchronously terminate stale gateway processes.
+ * Callers must pass a non-empty pids array.
  * Sends SIGTERM, waits briefly, then SIGKILL for survivors.
  */
 function terminateStaleProcessesSync(pids: number[]): number[] {
-  if (pids.length === 0) {
-    return [];
-  }
   const killed: number[] = [];
   for (const pid of pids) {
     try {
@@ -270,4 +268,6 @@ export const __testing = {
   setDateNowOverride(fn: (() => number) | null) {
     dateNowOverride = fn;
   },
+  /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
+  callSleepSyncRaw: sleepSync,
 };
