@@ -54,7 +54,7 @@ async function mapWithConcurrency<TItem, TResult>(params: {
     return [];
   }
   const limit = Math.max(1, Math.floor(params.limit));
-  const results = Array.from({ length: params.items.length });
+  const resultsByIndex = new Map<number, TResult>();
   let nextIndex = 0;
 
   const runWorker = async () => {
@@ -64,13 +64,13 @@ async function mapWithConcurrency<TItem, TResult>(params: {
       if (index >= params.items.length) {
         return;
       }
-      results[index] = await params.worker(params.items[index], index);
+      resultsByIndex.set(index, await params.worker(params.items[index], index));
     }
   };
 
   const workers = Array.from({ length: Math.min(limit, params.items.length) }, () => runWorker());
   await Promise.all(workers);
-  return results;
+  return params.items.map((_item, index) => resultsByIndex.get(index)!);
 }
 
 function normalizeNonNegativeMs(raw: number): number {
