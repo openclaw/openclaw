@@ -1,4 +1,5 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -141,6 +142,22 @@ export async function runBeforeToolCallHook(args: {
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
+
+  // Emit tool:before internal hook event so registerHook("tool:before", ...)
+  // handlers observe native tool invocations.  Fire-and-forget: internal hooks
+  // cannot block execution — use api.on("before_tool_call") for that.  #32460
+  const sessionKey = args.ctx?.sessionKey ?? "";
+  void triggerInternalHook(
+    createInternalHookEvent("tool", "before", sessionKey, {
+      toolName,
+      params: isPlainObject(params) ? params : {},
+      toolCallId: args.toolCallId,
+      runId: args.ctx?.runId,
+      agentId: args.ctx?.agentId,
+    }),
+  ).catch((err) => {
+    log.warn(`tool:before internal hook error: ${String(err)}`);
+  });
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {

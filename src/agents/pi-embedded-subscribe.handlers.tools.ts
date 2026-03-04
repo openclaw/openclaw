@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -455,4 +456,23 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+
+  // Emit tool:after internal hook event so registerHook("tool:after", ...)
+  // handlers observe native tool completions.  Fire-and-forget.  #32460
+  const durationMsInternal =
+    startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+  void triggerInternalHook(
+    createInternalHookEvent("tool", "after", ctx.params.sessionKey ?? "", {
+      toolName,
+      params: afterToolCallArgs,
+      toolCallId,
+      runId,
+      result: sanitizedResult,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      durationMs: durationMsInternal,
+      agentId: ctx.params.agentId,
+    }),
+  ).catch((err) => {
+    ctx.log.warn(`tool:after internal hook error: ${String(err)}`);
+  });
 }
