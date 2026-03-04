@@ -3,7 +3,7 @@ import {
   parseProviderError,
   retryWithBackoff,
 } from "./provider-error.js";
-import type { RetryPolicy } from "./provider-error.js";
+import type { ProviderError, RetryPolicy } from "./provider-error.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
@@ -47,7 +47,21 @@ export async function fetchJsonWithRetry(
       const retryRes = await fetchJson(url, init, timeoutMs, fetchFn);
       if (!retryRes.ok) {
         lastFailedRes = retryRes;
-        throw await parseProviderError(provider, retryRes);
+        let retryErr: ProviderError;
+        try {
+          retryErr = await parseProviderError(provider, retryRes);
+        } catch {
+          retryErr = {
+            provider,
+            httpStatus: retryRes.status,
+            category: "unknown",
+            retryAfterMs: null,
+            message: `${provider} error (${retryRes.status}).`,
+            retryable: false,
+            raw: null,
+          };
+        }
+        throw retryErr;
       }
       return retryRes;
     },

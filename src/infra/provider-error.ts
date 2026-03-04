@@ -44,7 +44,7 @@ function parseRetryAfterMs(headerValue: string | null): number | null {
 
   const numeric = parseInt(headerValue.trim(), 10);
   if (!isNaN(numeric) && String(numeric) === headerValue.trim()) {
-    return numeric * 1000;
+    return Math.max(0, numeric * 1000);
   }
 
   const parsed = Date.parse(headerValue);
@@ -145,7 +145,7 @@ export async function retryWithBackoff<T>(
   error: ProviderError,
   onRetry?: (attempt: number, maxRetries: number, delayMs: number, error: ProviderError) => void,
 ): Promise<T> {
-  if (!error.retryable) {
+  if (!isProviderError(error) || !error.retryable) {
     throw error;
   }
 

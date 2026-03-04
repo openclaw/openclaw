@@ -51,7 +51,13 @@ describe("parseProviderError", () => {
       expect(err.message).toContain("30s");
     });
 
-    it("HTTP-date retry-after header → retryAfterMs > 0", async () => {
+    it("negative numeric retry-after → retryAfterMs = 0, not negative", async () => {
+    const res = mockResponse(429, { "retry-after": "-5" });
+    const err = await parseProviderError("anthropic", res);
+    expect(err.retryAfterMs).toBe(0);
+  });
+
+  it("HTTP-date retry-after header → retryAfterMs > 0", async () => {
       const future = new Date(Date.now() + 60000).toUTCString();
       const res = mockResponse(429, { "retry-after": future });
       const err = await parseProviderError("openai", res);
@@ -320,6 +326,15 @@ describe("retryWithBackoff", () => {
     expect(delays[0]).toBe(2000);
     // attempt 2: lastError.retryAfterMs = 8000 → delay = 8000
     expect(delays[1]).toBe(8000);
+  });
+
+  it("plain Error passed as error param → throws immediately, fn never called", async () => {
+    const plainErr = new Error("boom");
+    const fn = vi.fn<() => Promise<string>>();
+    await expect(
+      retryWithBackoff(fn, DEFAULT_RETRY_POLICY, plainErr as unknown as ProviderError),
+    ).rejects.toThrow("boom");
+    expect(fn).not.toHaveBeenCalled();
   });
 
   it("DEFAULT_RETRY_POLICY has correct values", () => {
