@@ -210,7 +210,19 @@ function relayAuthTokenForUrl(url: string): string | null {
     if (!port) {
       return null;
     }
-    return relayRuntimeByPort.get(port)?.relayAuthToken ?? null;
+    const runtimeToken = relayRuntimeByPort.get(port)?.relayAuthToken;
+    if (runtimeToken) {
+      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning runtimeToken=${runtimeToken}`);
+      return runtimeToken;
+    }
+    try {
+      const derivedToken = resolveRelayAuthTokenForPort(port);
+      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning dynamically derivedToken=${derivedToken}`);
+      return derivedToken;
+    } catch {
+      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> dynamically driving failed`);
+      return null;
+    }
   } catch {
     return null;
   }
@@ -853,6 +865,19 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const prev = connectedTargets.get(attached.sessionId);
               const nextTargetId = attached.targetInfo.targetId;
               const prevTargetId = prev?.targetId;
+
+              // De-duplicate by targetId: if another session already claims this targetId, drop it.
+              for (const [sId, t] of connectedTargets.entries()) {
+                if (t.targetId === attached.targetInfo.targetId && sId !== attached.sessionId) {
+                  connectedTargets.delete(sId);
+                  broadcastToCdpClients({
+                    method: "Target.detachedFromTarget",
+                    params: { sessionId: sId, targetId: t.targetId },
+                    sessionId: sId,
+                  });
+                }
+              }
+
               const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId);
               connectedTargets.set(attached.sessionId, {
                 sessionId: attached.sessionId,
