@@ -651,6 +651,8 @@ spec:
               value: morpho-dev,monitoring
             - name: LINEAR_LOOKUP_CMD
               value: /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh
+            - name: LINEAR_PREFLIGHT_PROJECT_NAME
+              value: "[PLATFORM] Backlog"
             - name: PROMETHEUS_URL
               value: http://prometheus-stack-kube-prom-prometheus.monitoring:9090
             - name: INCIDENT_STATE_DIR
