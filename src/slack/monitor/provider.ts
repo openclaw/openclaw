@@ -35,13 +35,24 @@ import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
-};
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-// Fix: Check if module has App property directly (Node 25.x ESM/CJS compat issue)
-const slackBolt =
-  (slackBoltModule.App ? slackBoltModule : slackBoltModule.default) ?? slackBoltModule;
+function resolveSlackBoltModule(input: unknown) {
+  const unwrap = (value: unknown) => value as { default?: unknown } & Record<string, unknown>;
+
+  let current: unknown = input;
+  for (let i = 0; i < 3; i++) {
+    const candidate = unwrap(current);
+    if (typeof candidate.App === "function" && typeof candidate.HTTPReceiver === "function") {
+      return candidate as typeof import("@slack/bolt");
+    }
+    current = candidate.default;
+  }
+
+  return input as typeof import("@slack/bolt");
+}
+
+// Bun allows named imports from CJS; Node ESM doesn't.
+// Vitest mocks sometimes nest `default.default`, so unwrap a few layers.
+const slackBolt = resolveSlackBoltModule(SlackBolt);
 const { App, HTTPReceiver } = slackBolt;
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
