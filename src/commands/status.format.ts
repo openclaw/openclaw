@@ -16,7 +16,7 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+    "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite" | "inputTokens"
   >,
 ) => {
   const used = sess.totalTokens;
@@ -34,13 +34,19 @@ export const formatTokensCompact = (
     result = `${formatKTokens(used)}/${formatKTokens(ctx)} (${pctLabel})`;
   }
 
-  // Add cache hit rate if there are cached reads
+  // Add cache hit rate if there are cached reads.
+  // The denominator must be the total *input* volume (fresh input + cache reads),
+  // not the session's net token spend.  Using totalTokens (which includes output
+  // tokens) produces rates above 100% when cache reads are large relative to
+  // fresh input — e.g. a long-running cron session that re-reads the same
+  // context repeatedly can show "199% cached".
   if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+    const inputTokens = sess.inputTokens;
+    const denominator =
+      typeof inputTokens === "number" && inputTokens > 0
+        ? inputTokens // preferred: fresh+cached input
+        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0); // fallback: cache tokens only
+    const hitRate = Math.min(100, Math.round((cacheRead / denominator) * 100));
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 
