@@ -42,9 +42,10 @@ async function migrateLegacyIfNeeded(snapshot: ConfigFileSnapshot, log: StartupC
   }
   const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
   if (!migrated) {
-    throw new Error(
-      `Legacy config entries detected but auto-migration failed. Run "${formatCliCommand("openclaw doctor")}" to migrate.`,
+    log.warn(
+      "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
     );
+    return false;
   }
   await writeConfigFile(migrated);
   if (changes.length > 0) {

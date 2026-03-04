@@ -3,6 +3,10 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
+  migrateLegacyConfig:
+    vi.fn<
+      (parsed: unknown) => { config: ConfigFileSnapshot["config"] | null; changes: string[] }
+    >(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -10,6 +14,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    migrateLegacyConfig: mocks.migrateLegacyConfig,
   };
 });
 
@@ -34,6 +39,7 @@ describe("prepareGatewayStartupConfig", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.readConfigFileSnapshot.mockReset();
+    mocks.migrateLegacyConfig.mockReset();
   });
 
   it("sanitizes validation issue path and message in startup error output", async () => {
@@ -55,5 +61,42 @@ describe("prepareGatewayStartupConfig", () => {
       expect(message).toContain("gateway.auth.token\\nx: bad value\\toops");
       expect(message).not.toContain("\u001b");
     });
+  });
+
+  it("continues validation when legacy migration yields no config and surfaces detailed issues", async () => {
+    mocks.migrateLegacyConfig.mockReturnValue({ config: null, changes: [] });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: { heartbeat: 15 },
+      resolved: {},
+      valid: false,
+      config: {},
+      issues: [
+        {
+          path: "heartbeat",
+          message: "Unknown key",
+        },
+      ],
+      warnings: [],
+      legacyIssues: [
+        {
+          path: "heartbeat",
+          message: "Legacy key",
+        },
+      ],
+    });
+
+    const warn = vi.fn();
+    await expect(
+      prepareGatewayStartupConfig({
+        info: vi.fn(),
+        warn,
+      }),
+    ).rejects.toThrow(/Invalid config at \/tmp\/openclaw\.json\.\nheartbeat: Unknown key/);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("legacy config entries detected but no auto-migration changes"),
+    );
   });
 });
