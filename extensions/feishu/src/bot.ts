@@ -456,8 +456,12 @@ function formatSubMessageContent(content: string, contentType: string): string {
           } else if (el.tag === "column_set") {
             for (const col of el.columns || []) {
               for (const inner of col.elements || []) {
-                const t = inner.text?.content || inner.content || "";
-                if (t) texts.push(t);
+                // Only extract text from markdown/div elements, skip buttons/images/actions
+                if (inner.tag === "markdown" && inner.content) {
+                  texts.push(inner.content);
+                } else if (inner.tag === "div" && inner.text?.content) {
+                  texts.push(inner.text.content);
+                }
               }
             }
           }
