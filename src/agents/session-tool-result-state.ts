@@ -75,7 +75,7 @@ export function createPendingToolCallState(): PendingToolCallState {
 
         // Check if stored ID is contained in the incoming ID (e.g., "functions.read:0" in "functionsread3")
         if (lowerId.includes(lowerStoredId) || lowerStoredId.includes(lowerId)) {
-          return storedName;
+          return storedName || extractToolNameFromId(storedId);
         }
 
         // Also check if the tool name (from stored name or extracted from stored ID) matches
@@ -87,7 +87,8 @@ export function createPendingToolCallState(): PendingToolCallState {
             extractedIdName &&
             (extractedIdName === storedToolName || lowerId.includes(storedToolName))
           ) {
-            return storedName;
+            // Return extractedIdName since storedName might be undefined
+            return extractedIdName;
           }
         }
       }

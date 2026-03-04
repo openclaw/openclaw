@@ -9,7 +9,7 @@ import {
   HARD_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
-import { createPendingToolCallState } from "./session-tool-result-state.js";
+import { createPendingToolCallState, extractToolNameFromId } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -183,7 +183,9 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
-      const toolName = id ? pendingState.getToolName(id) : undefined;
+      // Use pending state lookup first, then fall back to extracting tool name from ID
+      // This handles cases where the toolCallId format doesn't match what was stored
+      const toolName = id ? (pendingState.getToolName(id) ?? extractToolNameFromId(id)) : undefined;
       if (id) {
         pendingState.delete(id);
       }
