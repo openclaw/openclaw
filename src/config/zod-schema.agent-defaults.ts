@@ -87,6 +87,12 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        thinking: z
+          .union([z.literal("off"), z.literal("on")])
+          .optional()
+          .describe(
+            'Thinking override for compaction summarization. Defaults to "off" — compaction always runs without extended thinking regardless of the session model, preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set to "on" to inherit the session model\'s current thinking level.',
+          ),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
@@ -95,6 +101,12 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        fallbackModel: z
+          .union([z.literal("off"), z.literal("fallback")])
+          .optional()
+          .describe(
+            'Fallback model for compaction on quota or rate-limit errors. "off" (default) disables fallback. "fallback" uses the agents.defaults.model.fallbacks chain in order.',
+          ),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

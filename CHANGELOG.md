@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/Compaction: add `agents.defaults.compaction.fallbackModel` to retry compaction with a different model on quota or rate-limit errors. Set to `"fallback"` to use the `agents.defaults.model.fallbacks` chain. Defaults to `"off"` (no fallback). Auth errors and timeouts use their own retry mechanisms and are not affected.
 - Discord/allowBots mention gating: add `allowBots: "mentions"` to only accept bot-authored messages that mention the bot. Thanks @thewilloftheshadow.
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
 - Tools/Web search: switch Perplexity provider to Search API with structured results plus new language/region/time filters. (#33822) Thanks @kesku.

@@ -993,6 +993,8 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        thinking: "off", // off | on — defaults to "off"; "on" inherits the session model's current thinking level
+        fallbackModel: "fallback", // "off" (default) | "fallback" (use model.fallbacks chain)
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
@@ -1012,6 +1014,8 @@ Periodic heartbeat runs.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
+- `thinking`: thinking override for compaction summarization. Defaults to `"off"` — compaction always runs without extended thinking regardless of the session model, preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set to `"on"` to inherit the session model's current thinking level. When a compaction run times out with thinking enabled, it automatically retries once without thinking.
+- `fallbackModel`: fallback model when compaction fails due to quota or rate-limit errors. `"off"` (default) disables fallback. `"fallback"` uses the `agents.defaults.model.fallbacks` chain in order. Auth errors and timeouts are not retried via this mechanism.
 
 ### `agents.defaults.contextPruning`
 

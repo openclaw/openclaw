@@ -31,6 +31,7 @@ import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { isTimeoutError, resolveFailoverReasonFromError } from "../failover-error.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -57,6 +58,11 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  type CompactionModelCandidate,
+  resolveCompactionFallbackCandidates,
+} from "./compaction-fallback.js";
+import { resolveCompactionThinkLevel } from "./compaction-overrides.js";
 import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -283,6 +289,19 @@ export async function compactEmbeddedPiSessionDirect(
     const reason = error ?? `Unknown model: ${provider}/${modelId}`;
     return fail(reason);
   }
+  // Fallback candidates for quota/rate-limit retries. Primary is always first.
+  const allCandidates: CompactionModelCandidate[] = [
+    { provider, model: modelId },
+    ...resolveCompactionFallbackCandidates({
+      cfg: params.config,
+      currentProvider: provider,
+      currentModel: modelId,
+    }),
+  ];
+  // Mutable model state — updated when falling back to a different candidate.
+  let currentModel = model;
+  let currentAuthStorage = authStorage;
+  let currentModelRegistry = modelRegistry;
   try {
     const apiKeyInfo = await getApiKeyForModel({
       model,
@@ -545,195 +564,304 @@ export async function compactEmbeddedPiSessionDirect(
         agentDir,
         cfg: params.config,
       });
-      // Sets compaction/pruning runtime state and returns extension factories
-      // that must be passed to the resource loader for the safeguard to be active.
-      const extensionFactories = buildEmbeddedExtensionFactories({
-        cfg: params.config,
-        sessionManager,
-        provider,
-        modelId,
-        model,
-      });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
-
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const { session } = await createAgentSession({
-        cwd: resolvedWorkspace,
-        agentDir,
-        authStorage,
-        modelRegistry,
-        model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
-        tools: builtInTools,
-        customTools,
-        sessionManager,
-        settingsManager,
-        resourceLoader,
-      });
-      applySystemPromptOverrideToSession(session, systemPromptOverride());
+      // before_compaction hook fires exactly once per compaction event regardless of retries.
+      let hookFired = false;
+      // Last quota/rate-limit error — rethrown if all candidates are exhausted.
+      let lastQuotaErr: unknown;
 
-      try {
-        const prior = await sanitizeSessionHistory({
-          messages: session.messages,
-          modelApi: model.api,
-          modelId,
-          provider,
-          allowedToolNames,
-          config: params.config,
-          sessionManager,
-          sessionId: params.sessionId,
-          policy: transcriptPolicy,
-        });
-        const validatedGemini = transcriptPolicy.validateGeminiTurns
-          ? validateGeminiTurns(prior)
-          : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
-          : validatedGemini;
-        // Capture full message history BEFORE limiting — plugins need the complete conversation
-        const preCompactionMessages = [...session.messages];
-        const truncated = limitHistoryTurns(
-          validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
-        // assistant message that contained the matching tool_use.
-        const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
-          : truncated;
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
-        }
-        // Run before_compaction hooks (fire-and-forget).
-        // The session JSONL already contains all messages on disk, so plugins
-        // can read sessionFile asynchronously and process in parallel with
-        // the compaction LLM call — no need to block or wait for after_compaction.
-        const hookRunner = getGlobalHookRunner();
-        const hookCtx = {
-          agentId: params.sessionKey?.split(":")[0] ?? "main",
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-        };
-        if (hookRunner?.hasHooks("before_compaction")) {
-          hookRunner
-            .runBeforeCompaction(
-              {
-                messageCount: preCompactionMessages.length,
-                compactingCount: limited.length,
-                messages: preCompactionMessages,
-                sessionFile: params.sessionFile,
-              },
-              hookCtx,
-            )
-            .catch((hookErr: unknown) => {
-              log.warn(`before_compaction hook failed: ${String(hookErr)}`);
-            });
-        }
-
-        const diagEnabled = log.isEnabled("debug");
-        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
-        if (diagEnabled && preMetrics) {
-          log.debug(
-            `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} ` +
-              `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
-              `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
-          );
-          log.debug(
-            `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
-          );
-        }
-
-        const compactStartedAt = Date.now();
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
-        );
-        // Estimate tokens after compaction by summing token estimates for remaining messages
-        let tokensAfter: number | undefined;
-        try {
-          tokensAfter = 0;
-          for (const message of session.messages) {
-            tokensAfter += estimateTokens(message);
+      // Outer loop: model fallback on quota/rate-limit errors.
+      // Inner loop: thinking retry on timeout (at most 2 attempts per candidate).
+      for (let candidateIdx = 0; candidateIdx < allCandidates.length; candidateIdx++) {
+        if (candidateIdx > 0) {
+          // Resolve model + auth for fallback candidate.
+          const cand = allCandidates[candidateIdx];
+          const {
+            model: nextModel,
+            error: nextError,
+            authStorage: nextAuth,
+            modelRegistry: nextRegistry,
+          } = resolveModel(cand.provider, cand.model, agentDir, params.config);
+          if (!nextModel) {
+            log.warn(
+              `[compaction] fallback model ${cand.provider}/${cand.model} not found: ${nextError ?? "unknown"}; skipping`,
+            );
+            continue;
           }
-          // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
-            tokensAfter = undefined; // Don't trust the estimate
-          }
-        } catch {
-          // If estimation fails, leave tokensAfter undefined
-          tokensAfter = undefined;
-        }
-        // Run after_compaction hooks (fire-and-forget).
-        // Also includes sessionFile for plugins that only need to act after
-        // compaction completes (e.g. analytics, cleanup).
-        if (hookRunner?.hasHooks("after_compaction")) {
-          hookRunner
-            .runAfterCompaction(
-              {
-                messageCount: session.messages.length,
-                tokenCount: tokensAfter,
-                compactedCount: limited.length - session.messages.length,
-                sessionFile: params.sessionFile,
-              },
-              hookCtx,
-            )
-            .catch((hookErr) => {
-              log.warn(`after_compaction hook failed: ${hookErr}`);
+          try {
+            const nextKeyInfo = await getApiKeyForModel({
+              model: nextModel,
+              cfg: params.config,
+              agentDir,
             });
-        }
-
-        const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
-        if (diagEnabled && preMetrics && postMetrics) {
-          log.debug(
-            `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
-              `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
-              `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
-              `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
-              `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
-              `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
-              `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
-              `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
-              `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
+            if (!nextKeyInfo.apiKey && nextKeyInfo.mode !== "aws-sdk") {
+              log.warn(
+                `[compaction] no API key for fallback ${cand.provider}/${cand.model}; skipping`,
+              );
+              continue;
+            }
+            if (nextKeyInfo.apiKey) {
+              nextAuth.setRuntimeApiKey(cand.provider, nextKeyInfo.apiKey);
+            }
+          } catch {
+            log.warn(
+              `[compaction] auth failed for fallback ${cand.provider}/${cand.model}; skipping`,
+            );
+            continue;
+          }
+          currentModel = nextModel;
+          currentAuthStorage = nextAuth;
+          currentModelRegistry = nextRegistry;
+          log.warn(
+            `[compaction] quota/rate-limit on ${allCandidates[candidateIdx - 1].provider}/${allCandidates[candidateIdx - 1].model}; retrying with ${cand.provider}/${cand.model}`,
           );
         }
-        return {
-          ok: true,
-          compacted: true,
-          result: {
-            summary: result.summary,
-            firstKeptEntryId: result.firstKeptEntryId,
-            tokensBefore: result.tokensBefore,
-            tokensAfter,
-            details: result.details,
-          },
-        };
-      } finally {
-        await flushPendingToolResultsAfterIdle({
-          agent: session?.agent,
-          sessionManager,
+
+        // Sets compaction/pruning runtime state and returns extension factories
+        // that must be passed to the resource loader for the safeguard to be active.
+        const cand = allCandidates[candidateIdx];
+        // Re-resolve transcript policy per candidate so provider-specific flags
+        // (validateGeminiTurns, validateAnthropicTurns, etc.) are correct for
+        // cross-provider fallbacks. Shadows the outer transcriptPolicy used for
+        // sessionManager setup above.
+        const transcriptPolicy = resolveTranscriptPolicy({
+          modelApi: currentModel.api,
+          provider: cand.provider,
+          modelId: cand.model,
         });
-        session.dispose();
+        const extensionFactories = buildEmbeddedExtensionFactories({
+          cfg: params.config,
+          sessionManager,
+          provider: cand.provider,
+          modelId: cand.model,
+          model: currentModel,
+        });
+        // Only create an explicit resource loader when there are extension factories
+        // to register; otherwise let createAgentSession use its built-in default.
+        let resourceLoader: DefaultResourceLoader | undefined;
+        if (extensionFactories.length > 0) {
+          resourceLoader = new DefaultResourceLoader({
+            cwd: resolvedWorkspace,
+            agentDir,
+            settingsManager,
+            extensionFactories,
+          });
+          await resourceLoader.reload();
+        }
+
+        // Thinking retry loop: on timeout with thinking enabled, retry once without thinking.
+        let effectiveThinkLevel = resolveCompactionThinkLevel({
+          cfg: params.config,
+          sessionThinkLevel: params.thinkLevel,
+        });
+        for (let thinkAttempt = 0; thinkAttempt <= 1; thinkAttempt++) {
+          const { session } = await createAgentSession({
+            cwd: resolvedWorkspace,
+            agentDir,
+            authStorage: currentAuthStorage,
+            modelRegistry: currentModelRegistry,
+            model: currentModel,
+            thinkingLevel: mapThinkingLevel(effectiveThinkLevel),
+            tools: builtInTools,
+            customTools,
+            sessionManager,
+            settingsManager,
+            resourceLoader,
+          });
+          applySystemPromptOverrideToSession(session, systemPromptOverride());
+
+          try {
+            const prior = await sanitizeSessionHistory({
+              messages: session.messages,
+              modelApi: currentModel.api,
+              modelId: cand.model,
+              provider: cand.provider,
+              allowedToolNames,
+              config: params.config,
+              sessionManager,
+              sessionId: params.sessionId,
+              policy: transcriptPolicy,
+            });
+            const validatedGemini = transcriptPolicy.validateGeminiTurns
+              ? validateGeminiTurns(prior)
+              : prior;
+            const validated = transcriptPolicy.validateAnthropicTurns
+              ? validateAnthropicTurns(validatedGemini)
+              : validatedGemini;
+            // Capture full message history BEFORE limiting — plugins need the complete conversation
+            const preCompactionMessages = [...session.messages];
+            const truncated = limitHistoryTurns(
+              validated,
+              getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            );
+            // Re-run tool_use/tool_result pairing repair after truncation, since
+            // limitHistoryTurns can orphan tool_result blocks by removing the
+            // assistant message that contained the matching tool_use.
+            const limited = transcriptPolicy.repairToolUseResultPairing
+              ? sanitizeToolUseResultPairing(truncated)
+              : truncated;
+            if (limited.length > 0) {
+              session.agent.replaceMessages(limited);
+            }
+            // Run before_compaction hooks (fire-and-forget).
+            // The session JSONL already contains all messages on disk, so plugins
+            // can read sessionFile asynchronously and process in parallel with
+            // the compaction LLM call — no need to block or wait for after_compaction.
+            const hookRunner = getGlobalHookRunner();
+            const hookCtx = {
+              agentId: params.sessionKey?.split(":")[0] ?? "main",
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageChannel ?? params.messageProvider,
+            };
+            if (!hookFired && hookRunner?.hasHooks("before_compaction")) {
+              hookFired = true;
+              hookRunner
+                .runBeforeCompaction(
+                  {
+                    messageCount: preCompactionMessages.length,
+                    compactingCount: limited.length,
+                    messages: preCompactionMessages,
+                    sessionFile: params.sessionFile,
+                  },
+                  hookCtx,
+                )
+                .catch((hookErr: unknown) => {
+                  log.warn(`before_compaction hook failed: ${String(hookErr)}`);
+                });
+            }
+
+            const diagEnabled = log.isEnabled("debug");
+            const preMetrics = diagEnabled
+              ? summarizeCompactionMessages(session.messages)
+              : undefined;
+            if (diagEnabled && preMetrics) {
+              log.debug(
+                `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `diagId=${diagId} trigger=${trigger} provider=${cand.provider}/${cand.model} ` +
+                  `attempt=${attempt} maxAttempts=${maxAttempts} ` +
+                  `thinking=${effectiveThinkLevel} thinkAttempt=${thinkAttempt} ` +
+                  `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
+                  `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
+              );
+              log.debug(
+                `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
+              );
+            }
+
+            const compactStartedAt = Date.now();
+            const result = await compactWithSafetyTimeout(() =>
+              session.compact(params.customInstructions),
+            );
+            // Estimate tokens after compaction by summing token estimates for remaining messages
+            let tokensAfter: number | undefined;
+            try {
+              tokensAfter = 0;
+              for (const message of session.messages) {
+                tokensAfter += estimateTokens(message);
+              }
+              // Sanity check: tokensAfter should be less than tokensBefore
+              if (tokensAfter > result.tokensBefore) {
+                tokensAfter = undefined; // Don't trust the estimate
+              }
+            } catch {
+              // If estimation fails, leave tokensAfter undefined
+              tokensAfter = undefined;
+            }
+            // Run after_compaction hooks (fire-and-forget).
+            // Also includes sessionFile for plugins that only need to act after
+            // compaction completes (e.g. analytics, cleanup).
+            if (hookRunner?.hasHooks("after_compaction")) {
+              hookRunner
+                .runAfterCompaction(
+                  {
+                    messageCount: session.messages.length,
+                    tokenCount: tokensAfter,
+                    compactedCount: limited.length - session.messages.length,
+                    sessionFile: params.sessionFile,
+                  },
+                  hookCtx,
+                )
+                .catch((hookErr) => {
+                  log.warn(`after_compaction hook failed: ${hookErr}`);
+                });
+            }
+
+            const postMetrics = diagEnabled
+              ? summarizeCompactionMessages(session.messages)
+              : undefined;
+            if (diagEnabled && preMetrics && postMetrics) {
+              log.debug(
+                `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `diagId=${diagId} trigger=${trigger} provider=${cand.provider}/${cand.model} ` +
+                  `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+                  `thinking=${effectiveThinkLevel} thinkAttempt=${thinkAttempt} ` +
+                  `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
+                  `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
+                  `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
+                  `delta.messages=${postMetrics.messages - preMetrics.messages} ` +
+                  `delta.historyTextChars=${postMetrics.historyTextChars - preMetrics.historyTextChars} ` +
+                  `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
+                  `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
+              );
+            }
+            return {
+              ok: true,
+              compacted: true,
+              result: {
+                summary: result.summary,
+                firstKeptEntryId: result.firstKeptEntryId,
+                tokensBefore: result.tokensBefore,
+                tokensAfter,
+                details: result.details,
+              },
+            };
+          } catch (compactionErr) {
+            // On timeout with thinking enabled: retry once without thinking.
+            if (
+              thinkAttempt === 0 &&
+              effectiveThinkLevel !== "off" &&
+              isTimeoutError(compactionErr)
+            ) {
+              log.warn(
+                `[compaction] timed out with thinking=${effectiveThinkLevel}; retrying without thinking`,
+              );
+              effectiveThinkLevel = "off";
+              // Fall through to finally (dispose session), then inner loop continues.
+            } else {
+              // On quota/rate-limit: if a fallback candidate is available, break inner
+              // loop and let the outer loop retry with the next model.
+              const failReason = resolveFailoverReasonFromError(compactionErr);
+              if (
+                (failReason === "rate_limit" || failReason === "billing") &&
+                candidateIdx < allCandidates.length - 1
+              ) {
+                lastQuotaErr = compactionErr;
+                break; // break thinking loop; outer loop continues to next candidate
+              }
+              throw compactionErr;
+            }
+          } finally {
+            await flushPendingToolResultsAfterIdle({
+              agent: session?.agent,
+              sessionManager,
+            });
+            session.dispose();
+          }
+        } // end thinking retry loop
+      } // end model fallback loop
+
+      // All candidates exhausted due to quota/rate-limit errors.
+      if (lastQuotaErr) {
+        throw lastQuotaErr;
       }
+      // Unreachable: loop either returns on success or throws.
+      return fail("unexpected exit from compaction retry loop");
     } finally {
       await sessionLock.release();
     }
