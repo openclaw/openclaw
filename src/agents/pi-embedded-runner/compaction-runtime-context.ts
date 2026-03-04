@@ -18,6 +18,7 @@ export type EmbeddedCompactionRuntimeContext = {
   skillsSnapshot?: SkillSnapshot;
   senderIsOwner?: boolean;
   senderId?: string;
+  senderName?: string;
   provider?: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -42,6 +43,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   skillsSnapshot?: SkillSnapshot;
   senderIsOwner?: boolean;
   senderId?: string | null;
+  senderName?: string | null;
   provider?: string | null;
   modelId?: string | null;
   thinkLevel?: ThinkLevel;
@@ -65,6 +67,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
+    senderName: params.senderName ?? undefined,
     provider: params.provider ?? undefined,
     model: params.modelId ?? undefined,
     thinkLevel: params.thinkLevel,
