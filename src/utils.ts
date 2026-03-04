@@ -125,7 +125,7 @@ export function isSelfChatMode(
  * WhatsApp JIDs for Brazil omit the extra "9" used in many mobile E.164 numbers.
  * Converts 55 + DD + 9 + XXXXXXXX (13 digits) into 55 + DD + XXXXXXXX (12 digits).
  */
-function normalizeBrazilianMobile(digits: string): string {
+export function normalizeBrazilianMobile(digits: string): string {
   if (digits.length !== 13 || !digits.startsWith("55")) {
     return digits;
   }

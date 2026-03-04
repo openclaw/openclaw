@@ -17,6 +17,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { registerIrisBuiltinHooks } from "./iris-builtin-hooks.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -394,6 +395,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
+  registerIrisBuiltinHooks(registry);
 
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,

@@ -57,6 +57,10 @@
       "openaiApiKey": {
         "type": "string",
         "description": "OpenAI API key para embeddings (text-embedding-3-small). Opcional se OPENAI_API_KEY estiver no env."
+      },
+      "minHandoverIntervalMinutes": {
+        "type": "number",
+        "description": "Cooldown mínimo entre handovers em minutos. Default: 30. Use 0 para desabilitar o cooldown."
       }
     },
     "uiHints": {
@@ -111,6 +115,10 @@
       "openaiApiKey": {
         "label": "OpenAI API Key (embeddings)",
         "sensitive": true
+      },
+      "minHandoverIntervalMinutes": {
+        "label": "Cooldown entre Handovers (min)",
+        "placeholder": "30"
       }
     }
   }
