@@ -370,6 +370,10 @@ final class NodePairingApprovalPrompter {
     }
 
     private func notify(resolution: PairingResolution, request: PendingRequest, via: String) async {
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            return
+        }
+
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized ||

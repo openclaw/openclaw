@@ -7,6 +7,10 @@ import UserNotifications
 struct NotificationManager {
     private let logger = Logger(subsystem: "ai.openclaw", category: "notifications")
 
+    private static var canUseUserNotifications: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
+    }
+
     private static let hasTimeSensitiveEntitlement: Bool = {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         let key = "com.apple.developer.usernotifications.time-sensitive" as CFString
@@ -15,6 +19,11 @@ struct NotificationManager {
     }()
 
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
+        guard Self.canUseUserNotifications else {
+            self.logger.debug("notifications unavailable outside .app bundle runtime")
+            return false
+        }
+
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
