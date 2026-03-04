@@ -329,7 +329,7 @@ export async function runAgentTurnWithFallback(params: {
                     endedAt: Date.now(),
                   },
                 });
-                defaultRuntime.warn(
+                defaultRuntime.error(
                   `Codex CLI failed, falling back to embedded runner WITHOUT tool support. ` +
                     `User will receive text-only output. Error: ${String(err)}`,
                 );
