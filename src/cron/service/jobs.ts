@@ -202,6 +202,17 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   }
   if (job.schedule.kind === "every") {
     const everyMs = Math.max(1, Math.floor(job.schedule.everyMs));
+    // Prefer anchor-based scheduling so manual runs don't shift the cadence (#33940).
+    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
+    const anchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs,
+    });
+    const anchorNext = computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
+    if (isFiniteTimestamp(anchorNext)) {
+      return anchorNext;
+    }
+    // Fallback when anchor computation fails.
     const lastRunAtMs = job.state.lastRunAtMs;
     if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
@@ -209,13 +220,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
         return nextFromLastRun;
       }
     }
-    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
-    const anchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs,
-    });
-    const next = computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
-    return isFiniteTimestamp(next) ? next : undefined;
+    return undefined;
   }
   if (job.schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
