@@ -1047,7 +1047,7 @@ export async function executeJob(
   state: CronServiceState,
   job: CronJob,
   _nowMs: number,
-  _opts: { forced: boolean },
+  opts: { forced: boolean },
 ) {
   if (!job.state) {
     job.state = {};
@@ -1075,6 +1075,7 @@ export async function executeJob(
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
+    forced: opts.forced,
   });
 
   emitJobFinished(state, job, coreResult, startedAt);
