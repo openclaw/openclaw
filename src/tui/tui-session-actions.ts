@@ -1,4 +1,5 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -37,6 +38,38 @@ type SessionInfoEntry = SessionInfo & {
   modelOverride?: string;
   providerOverride?: string;
 };
+
+function isHeartbeatPollHistoryText(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return (
+    lower.includes("<relevant-memories>") ||
+    lower.includes("read heartbeat.md if it exists (workspace context). follow it strictly.") ||
+    lower.includes("heartbeat poll:")
+  );
+}
+
+function isHeartbeatAckOnlyHistoryText(text: string): boolean {
+  const stripped = stripHeartbeatToken(text, { mode: "heartbeat" });
+  return stripped.didStrip && stripped.shouldSkip;
+}
+
+function shouldSuppressHistoryMessage(message: Record<string, unknown>): boolean {
+  const role = message.role;
+  if (role !== "user" && role !== "assistant") {
+    return false;
+  }
+  const text = extractTextFromMessage(message);
+  if (!text) {
+    return false;
+  }
+  if (isHeartbeatPollHistoryText(text)) {
+    return true;
+  }
+  return role === "assistant" && isHeartbeatAckOnlyHistoryText(text);
+}
 
 export function createSessionActions(context: SessionActionContext) {
   const {
@@ -304,6 +337,9 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         const message = entry as Record<string, unknown>;
+        if (shouldSuppressHistoryMessage(message)) {
+          continue;
+        }
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
