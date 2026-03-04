@@ -2,6 +2,7 @@ import { resolveFetch } from "../infra/fetch.js";
 import { resolveRetryConfig, retryAsync, type RetryConfig } from "../infra/retry.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_USER_AGENT = "DiscordBot (https://github.com/openclaw/openclaw, 1.0)";
 const DISCORD_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 500,
@@ -108,7 +109,10 @@ export async function fetchDiscord<T>(
   return retryAsync(
     async () => {
       const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-        headers: { Authorization: `Bot ${token}` },
+        headers: {
+          Authorization: `Bot ${token}`,
+          "User-Agent": DISCORD_USER_AGENT,
+        },
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
