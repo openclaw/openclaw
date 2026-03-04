@@ -22,7 +22,9 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayServiceEnv } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { withSystemdSystemScopeEnv } from "../daemon/systemd-scope.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -63,8 +65,16 @@ export async function finalizeOnboardingWizard(
     }
   };
 
+  const useSystemScope = process.platform === "linux" && Boolean(opts.daemonSystem);
+  const serviceEnv = withSystemdSystemScopeEnv(process.env as GatewayServiceEnv, {
+    system: useSystemScope,
+  });
   const systemdAvailable =
-    process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
+    process.platform === "linux"
+      ? useSystemScope
+        ? true
+        : await isSystemdUserServiceAvailable(serviceEnv)
+      : true;
   if (process.platform === "linux" && !systemdAvailable) {
     await prompter.note(
       "Systemd user services are unavailable. Skipping lingering checks and service install.",
@@ -72,7 +82,7 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  if (process.platform === "linux" && systemdAvailable) {
+  if (process.platform === "linux" && systemdAvailable && !useSystemScope) {
     const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,
@@ -125,8 +135,14 @@ export async function finalizeOnboardingWizard(
         "Gateway service runtime",
       );
     }
+    if (useSystemScope) {
+      await prompter.note(
+        "Using system-level systemd scope for Gateway service install.",
+        "Systemd",
+      );
+    }
     const service = resolveGatewayService();
-    const loaded = await service.isLoaded({ env: process.env });
+    const loaded = await service.isLoaded({ env: serviceEnv });
     if (loaded) {
       const action = await prompter.select({
         message: "Gateway service already installed",
@@ -143,7 +159,7 @@ export async function finalizeOnboardingWizard(
           async (progress) => {
             progress.update("Restarting Gateway service…");
             await service.restart({
-              env: process.env,
+              env: serviceEnv,
               stdout: process.stdout,
             });
           },
@@ -154,19 +170,19 @@ export async function finalizeOnboardingWizard(
           { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
             progress.update("Uninstalling Gateway service…");
-            await service.uninstall({ env: process.env, stdout: process.stdout });
+            await service.uninstall({ env: serviceEnv, stdout: process.stdout });
           },
         );
       }
     }
 
-    if (!loaded || (loaded && !(await service.isLoaded({ env: process.env })))) {
+    if (!loaded || (loaded && !(await service.isLoaded({ env: serviceEnv })))) {
       const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
         progress.update("Preparing Gateway service…");
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
+          env: serviceEnv,
           port: settings.port,
           token: settings.gatewayToken,
           runtime: daemonRuntime,
@@ -176,7 +192,7 @@ export async function finalizeOnboardingWizard(
 
         progress.update("Installing Gateway service…");
         await service.install({
-          env: process.env,
+          env: serviceEnv,
           stdout: process.stdout,
           programArguments,
           workingDirectory,
