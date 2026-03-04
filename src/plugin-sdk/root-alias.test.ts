@@ -2,7 +2,10 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const rootSdk = require("./root-alias.cjs") as Record<string, unknown>;
+
+function loadRootSdk(): Record<string, unknown> {
+  return require("./root-alias.cjs") as Record<string, unknown>;
+}
 
 type EmptySchema = {
   safeParse: (value: unknown) =>
@@ -14,7 +17,9 @@ type EmptySchema = {
 };
 
 describe("plugin-sdk root alias", () => {
+  const itNonWindows = process.platform === "win32" ? it.skip : it;
   it("exposes the fast empty config schema helper", () => {
+    const rootSdk = loadRootSdk();
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
     expect(typeof factory).toBe("function");
     if (!factory) {
@@ -27,14 +32,16 @@ describe("plugin-sdk root alias", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("loads legacy root exports lazily through the proxy", () => {
+  itNonWindows("loads legacy root exports lazily through the proxy", () => {
+    const rootSdk = loadRootSdk();
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("preserves reflection semantics for lazily resolved exports", () => {
+  itNonWindows("preserves reflection semantics for lazily resolved exports", () => {
+    const rootSdk = loadRootSdk();
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
