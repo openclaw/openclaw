@@ -113,7 +113,20 @@ async function promptSearchProviderOnboarding(
             ...(key ? { apiKey: key } : {}),
           },
         }
-      : config.tools?.web?.fetch;
+      : (() => {
+          const existing = config.tools?.web?.fetch;
+          // Disable Parallel extract when switching away from Parallel.
+          if ((existing as Record<string, unknown> | undefined)?.parallel) {
+            return {
+              ...existing,
+              parallel: {
+                ...(existing as Record<string, Record<string, unknown>>).parallel,
+                enabled: false,
+              },
+            };
+          }
+          return existing;
+        })();
 
   return {
     ...config,
