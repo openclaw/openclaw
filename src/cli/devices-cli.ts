@@ -234,7 +234,7 @@ export function registerDevicesCli(program: Command) {
               columns: [
                 { key: "Request", header: "Request", minWidth: 10 },
                 { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "Device ID", minWidth: 16, flex: true },
+                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
                 { key: "IP", header: "IP", minWidth: 12 },
                 { key: "Age", header: "Age", minWidth: 8 },
@@ -262,7 +262,7 @@ export function registerDevicesCli(program: Command) {
               width: tableWidth,
               columns: [
                 { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "Device ID", minWidth: 16, flex: true },
+                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
