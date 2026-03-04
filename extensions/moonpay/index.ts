@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/moonpay";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/moonpay";
 
 function runMp(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
