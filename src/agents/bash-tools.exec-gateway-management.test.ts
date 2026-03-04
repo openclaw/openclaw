@@ -1141,6 +1141,30 @@ describe("exec gateway management interception", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
+  it("intercepts gateway restart in elevated full mode without allowlist fallback", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+      sessionKey: "agent:main:telegram:123:thread:9",
+    });
+
+    const result = await tool.execute("call1-elevated-full", {
+      command: "openclaw gateway restart",
+      elevated: true,
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    expect(text).toContain("Gateway restart scheduled safely");
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledOnce();
+    expect(processGatewayAllowlistMock).not.toHaveBeenCalled();
+  });
+
   it("does not intercept when request env retargets gateway profile identity", async () => {
     processGatewayAllowlistMock.mockResolvedValueOnce({
       pendingResult: {

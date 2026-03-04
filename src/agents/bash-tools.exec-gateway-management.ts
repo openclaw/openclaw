@@ -1347,6 +1347,7 @@ export async function maybeInterceptGatewayManagementExec(params: {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassApprovalChecks?: boolean;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   trustedSafeBinDirs?: ReadonlySet<string>;
@@ -1374,40 +1375,43 @@ export async function maybeInterceptGatewayManagementExec(params: {
     throw new Error(buildBlockedMessage(commandMatch));
   }
 
-  // Enforce gateway exec approval policy (deny/allowlist/ask) before we schedule a
-  // restart and return a completed tool result. If approval is required, we fall
-  // through so the normal allowlist/approval flow can handle it.
-  const { approvals, hostSecurity, hostAsk } = resolveExecHostApprovalContext({
-    agentId: params.agentId,
-    security: params.security,
-    ask: params.ask,
-    host: "gateway",
-  });
-  const allowlistEval = evaluateShellAllowlist({
-    command: params.command,
-    allowlist: approvals.allowlist,
-    safeBins: params.safeBins,
-    safeBinProfiles: params.safeBinProfiles,
-    cwd: params.cwd,
-    env: params.env,
-    platform: process.platform,
-    trustedSafeBinDirs: params.trustedSafeBinDirs,
-  });
-  const analysisOk = allowlistEval.analysisOk;
-  const allowlistSatisfied =
-    hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-  if (
-    requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-    })
-  ) {
-    return null;
-  }
-  if (hostSecurity === "allowlist" && (!analysisOk || !allowlistEval.allowlistSatisfied)) {
-    throw new Error("exec denied: allowlist miss");
+  if (!params.bypassApprovalChecks) {
+    // Enforce gateway exec approval policy (deny/allowlist/ask) before we
+    // schedule a restart and return a completed tool result. If approval is
+    // required, we fall through so the normal allowlist/approval flow can
+    // handle it.
+    const { approvals, hostSecurity, hostAsk } = resolveExecHostApprovalContext({
+      agentId: params.agentId,
+      security: params.security,
+      ask: params.ask,
+      host: "gateway",
+    });
+    const allowlistEval = evaluateShellAllowlist({
+      command: params.command,
+      allowlist: approvals.allowlist,
+      safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
+    });
+    const analysisOk = allowlistEval.analysisOk;
+    const allowlistSatisfied =
+      hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+    if (
+      requiresExecApproval({
+        ask: hostAsk,
+        security: hostSecurity,
+        analysisOk,
+        allowlistSatisfied,
+      })
+    ) {
+      return null;
+    }
+    if (hostSecurity === "allowlist" && (!analysisOk || !allowlistEval.allowlistSatisfied)) {
+      throw new Error("exec denied: allowlist miss");
+    }
   }
 
   const cfg = loadConfig();

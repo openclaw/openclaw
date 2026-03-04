@@ -436,6 +436,7 @@ export function createExecTool(
         agentId,
         security,
         ask,
+        bypassApprovalChecks: bypassApprovals,
         safeBins,
         safeBinProfiles,
         trustedSafeBinDirs,
