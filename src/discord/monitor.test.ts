@@ -641,6 +641,13 @@ describe("discord groupPolicy gating", () => {
     ).toBe(false);
   });
 
+  it("ignores allow keys with undefined values", () => {
+    const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured({
+      coder: { allow: undefined } as unknown as { allow?: boolean },
+    });
+    expect(channelAllowlistConfigured).toBe(false);
+  });
+
   it("does not deny fallback channels when access groups are enabled without explicit allow flags", () => {
     expect(
       shouldDenyDiscordChannelByAllowFlag({
@@ -659,6 +666,17 @@ describe("discord groupPolicy gating", () => {
         channelAllowed: false,
         useAccessGroups: true,
         channelAllowlistConfigured: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("denies channel when access groups are disabled and channel is not allowed", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowFlag({
+        isGuildMessage: true,
+        channelAllowed: false,
+        useAccessGroups: false,
+        channelAllowlistConfigured: false,
       }),
     ).toBe(true);
   });

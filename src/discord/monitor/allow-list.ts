@@ -387,7 +387,9 @@ function hasConfiguredDiscordChannels(
 }
 
 function hasExplicitAllowFlag(entry: DiscordChannelEntry | undefined): boolean {
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allow"));
+  return Boolean(
+    entry && Object.prototype.hasOwnProperty.call(entry, "allow") && entry.allow !== undefined,
+  );
 }
 
 export function isDiscordChannelAllowlistConfigured(
