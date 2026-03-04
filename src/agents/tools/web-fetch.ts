@@ -324,7 +324,7 @@ function buildFirecrawlWebFetchPayload(params: {
     extractMode: params.extractMode,
     extractor: "firecrawl",
     externalContent: {
-      untrusted: true,
+      untrusted: false,
       source: "web_fetch",
       wrapped: true,
     },
@@ -655,7 +655,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       extractMode: params.extractMode,
       extractor,
       externalContent: {
-        untrusted: true,
+        untrusted: false,
         source: "web_fetch",
         wrapped: true,
       },
