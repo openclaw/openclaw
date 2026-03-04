@@ -196,17 +196,26 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  opts?: { ignoreLastRun?: boolean },
+): number | undefined {
   if (!job.enabled) {
     return undefined;
   }
   if (job.schedule.kind === "every") {
     const everyMs = Math.max(1, Math.floor(job.schedule.everyMs));
-    const lastRunAtMs = job.state.lastRunAtMs;
-    if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
-      const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
-      if (nextFromLastRun > nowMs) {
-        return nextFromLastRun;
+    // When ignoreLastRun is set (manual/forced runs), skip the lastRunAtMs
+    // cadence shortcut so the schedule stays anchored to its original time
+    // instead of drifting to the manual execution time (#33940).
+    if (!opts?.ignoreLastRun) {
+      const lastRunAtMs = job.state.lastRunAtMs;
+      if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
+        const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
+        if (nextFromLastRun > nowMs) {
+          return nextFromLastRun;
+        }
       }
     }
     const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;

@@ -285,6 +285,7 @@ export function applyJobResult(
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
+    forced?: boolean;
   },
 ): boolean {
   job.state.runningAtMs = undefined;
@@ -382,9 +383,10 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const nextRunOpts = result.forced ? { ignoreLastRun: true } : undefined;
       let normalNext: number | undefined;
       try {
-        normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        normalNext = computeJobNextRunAtMs(job, result.endedAt, nextRunOpts);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -405,9 +407,10 @@ export function applyJobResult(
         "cron: applying error backoff",
       );
     } else if (job.enabled) {
+      const nextRunOpts = result.forced ? { ignoreLastRun: true } : undefined;
       let naturalNext: number | undefined;
       try {
-        naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+        naturalNext = computeJobNextRunAtMs(job, result.endedAt, nextRunOpts);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)

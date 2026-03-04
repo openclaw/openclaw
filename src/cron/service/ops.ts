@@ -404,6 +404,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       delivered: coreResult.delivered,
       startedAt,
       endedAt,
+      forced: mode === "force",
     });
 
     emit(state, {
