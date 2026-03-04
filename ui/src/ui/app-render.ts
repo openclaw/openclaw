@@ -726,21 +726,19 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
+                  const slot = resolveAgentConfigSlot(configValue, agentId);
+                  if (!slot) {
+                    return;
+                  }
+                  if (slot.seedPath) {
+                    updateConfigFormValue(state, slot.seedPath, slot.seedValue);
+                  }
+                  const index = slot.index;
                   const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const entry = list[index] as { skills?: unknown };
+                  const entry =
+                    Array.isArray(list) && index < list.length
+                      ? (list[index] as { skills?: unknown })
+                      : undefined;
                   const normalizedSkill = skillName.trim();
                   if (!normalizedSkill) {
                     return;
@@ -764,40 +762,28 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const slot = resolveAgentConfigSlot(configValue, agentId);
+                  if (!slot) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
+                  if (slot.seedPath) {
+                    updateConfigFormValue(state, slot.seedPath, slot.seedValue);
                   }
+                  const index = slot.index;
                   removeConfigFormValue(state, ["agents", "list", index, "skills"]);
                 },
                 onAgentSkillsDisableAll: (agentId) => {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const slot = resolveAgentConfigSlot(configValue, agentId);
+                  if (!slot) {
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
+                  if (slot.seedPath) {
+                    updateConfigFormValue(state, slot.seedPath, slot.seedValue);
                   }
+                  const index = slot.index;
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
