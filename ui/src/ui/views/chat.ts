@@ -184,12 +184,10 @@ function addAttachments(files: File[], props: ChatProps) {
     return;
   }
 
-  Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then(
-    (newAttachments) => {
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, ...newAttachments]);
-    },
-  );
+  Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then((newAttachments) => {
+    const current = props.attachments ?? [];
+    props.onAttachmentsChange?.([...current, ...newAttachments]);
+  });
 }
 
 function handleFileSelect(e: Event, props: ChatProps) {
@@ -510,8 +508,9 @@ export function renderChat(props: ChatProps) {
             ?disabled=${!props.connected}
             @click=${(e: Event) => {
               const btn = e.currentTarget as HTMLElement;
-              const fileInput = btn.parentElement
-                ?.querySelector<HTMLInputElement>(".chat-compose__file-input");
+              const fileInput = btn.parentElement?.querySelector<HTMLInputElement>(
+                ".chat-compose__file-input",
+              );
               fileInput?.click();
             }}
           >
