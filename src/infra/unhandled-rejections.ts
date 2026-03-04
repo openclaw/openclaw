@@ -60,6 +60,27 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "temporary failure in name resolution",
 ];
 
+/**
+ * Checks if an error is a proxy configuration error.
+ * TypeError "Invalid URL" from EnvHttpProxyAgent when proxy env vars are invalid/empty.
+ * This is non-fatal - the user just won't have proxy support.
+ */
+function isProxyConfigError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = "name" in err ? String(err.name) : "";
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+
+  // TypeError with "Invalid URL" message typically happens when EnvHttpProxyAgent
+  // tries to parse invalid proxy env vars (empty string, malformed URL, etc.)
+  if (name === "TypeError" && message === "Invalid URL") {
+    return true;
+  }
+
+  return false;
+}
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -213,6 +234,16 @@ export function installUnhandledRejectionHandler(): void {
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
       console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+      return;
+    }
+
+    // Proxy configuration errors (invalid proxy env vars) are non-fatal
+    // The user just won't have proxy support
+    if (isProxyConfigError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal proxy config error (continuing):",
+        formatUncaughtError(reason),
+      );
       return;
     }
 
