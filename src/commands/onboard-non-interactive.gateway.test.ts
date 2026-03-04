@@ -257,6 +257,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           bind?: string;
           port?: number;
           auth?: { mode?: string; token?: string };
+          controlUi?: { allowedOrigins?: string[] };
         };
       }>(configPath);
 
@@ -264,6 +265,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
       expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
+      expect(cfg.gateway?.controlUi?.allowedOrigins).toContain(`http://localhost:${port}`);
+      expect(cfg.gateway?.controlUi?.allowedOrigins).toContain(`http://127.0.0.1:${port}`);
     });
   }, 60_000);
 });

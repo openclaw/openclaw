@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../../../config/gateway-control-ui-origins.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
@@ -104,6 +105,10 @@ export function applyNonInteractiveGatewayConfig(params: {
       },
     },
   };
+
+  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+    requireControlUiEnabled: true,
+  }).config;
 
   return {
     nextConfig,
