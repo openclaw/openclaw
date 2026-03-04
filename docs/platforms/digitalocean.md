@@ -11,8 +11,7 @@ title: "DigitalOcean"
 ## Goal
 
 Run a persistent OpenClaw Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
-
-If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
+DigitalOcean offers three deployment options: manual Droplet setup, 1-Click Marketplace app, or App Platform. Each has different tradeoffs for control, security, and scalability.
 
 ## Cost Comparison (2026)
 
@@ -32,13 +31,27 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 
 ---
 
-## Prerequisites
+## Deployment Options
+
+**Which option to choose:**
+
+- **Manual Droplet (Option 1):** Full control, manual security setup. Best for custom configurations.
+- **1-Click Marketplace (Option 2):** Pre-configured with enhanced security (authenticated gateway, hardened firewall, Docker isolation, non-root user). Best for fast, secure setup with minimal decisions.
+- **App Platform (Option 3):** Managed infrastructure with auto-scaling, zero-downtime deploys, automatic restarts. Best for production teams needing operational maturity.
+
+The 1-Click and App Platform deployments include additional security hardening out-of-the-box.
+
+---
+
+## Option 1: Manual Droplet Setup
+
+### Prerequisites
 
 - DigitalOcean account ([signup with $200 free credit](https://m.do.co/c/signup))
 - SSH key pair (or willingness to use password auth)
 - ~20 minutes
 
-## 1) Create a Droplet
+### 1) Create a Droplet
 
 <Warning>
 Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click images unless you have reviewed their startup scripts and firewall defaults.
@@ -54,13 +67,13 @@ Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click
 4. Click **Create Droplet**
 5. Note the IP address
 
-## 2) Connect via SSH
+### 2) Connect via SSH
 
 ```bash
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install OpenClaw
+### 3) Install OpenClaw
 
 ```bash
 # Update system
@@ -77,7 +90,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Run Onboarding
+### 4) Run Onboarding
 
 ```bash
 openclaw onboard --install-daemon
@@ -90,7 +103,7 @@ The wizard will walk you through:
 - Gateway token (auto-generated)
 - Daemon installation (systemd)
 
-## 5) Verify the Gateway
+### 5) Verify the Gateway
 
 ```bash
 # Check status
@@ -103,7 +116,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Access the Dashboard
+### 6) Access the Dashboard
 
 The gateway binds to loopback by default. To access the Control UI:
 
@@ -144,7 +157,7 @@ openclaw gateway restart
 
 Open: `http://<tailscale-ip>:18789` (token required).
 
-## 7) Connect Your Channels
+### 7) Connect Your Channels
 
 ### Telegram
 
@@ -162,13 +175,11 @@ openclaw channels login whatsapp
 
 See [Channels](/channels) for other providers.
 
----
-
-## Optimizations for 1GB RAM
+### Optimizations for 1GB RAM
 
 The $6 droplet only has 1GB RAM. To keep things running smoothly:
 
-### Add swap (recommended)
+#### Add swap (recommended)
 
 ```bash
 fallocate -l 2G /swapfile
@@ -178,23 +189,21 @@ swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ```
 
-### Use a lighter model
+#### Use a lighter model
 
 If you're hitting OOMs, consider:
 
 - Using API-based models (Claude, GPT) instead of local models
 - Setting `agents.defaults.model.primary` to a smaller model
 
-### Monitor memory
+#### Monitor memory
 
 ```bash
 free -h
 htop
 ```
 
----
-
-## Persistence
+### Persistence
 
 All state lives in:
 
@@ -209,23 +218,109 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 ---
 
-## Oracle Cloud Free Alternative
+## Option 2: 1-Click Marketplace App
 
-Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful than any paid option here — for $0/month.
+The 1-Click app includes OpenClaw pre-installed with enhanced security features:
 
-| What you get      | Specs                  |
-| ----------------- | ---------------------- |
-| **4 OCPUs**       | ARM Ampere A1          |
-| **24GB RAM**      | More than enough       |
-| **200GB storage** | Block volume           |
-| **Forever free**  | No credit card charges |
+- **Authenticated gateway token:** Prevents unauthorized access
+- **Hardened firewall rules:** Rate-limits gateway ports
+- **Docker container isolation:** Sandboxed execution environment
+- **Non-root user execution:** Limited attack surface
+- **DM pairing enabled:** Private communication by default
 
-**Caveats:**
+### 1) Create the Droplet
 
-- Signup can be finicky (retry if it fails)
-- ARM architecture — most things work, but some binaries need ARM builds
+1. Log into [DigitalOcean](https://cloud.digitalocean.com/)
+2. Click **Create → Droplets**
+3. Under **Choose an Image**, select the **Marketplace** tab
+4. Search for `OpenClaw` and select it
+5. Choose plan: **Basic → $24/mo** (2 vCPU, 4GB RAM, 80GB SSD)
+6. Add SSH key under **Authentication**
+7. Click **Create Droplet**
 
-For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips and troubleshooting the enrollment process, see this [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
+### 2) SSH and Complete Setup
+
+```bash
+ssh root@YOUR_DROPLET_IP
+```
+
+Follow the onboarding wizard:
+
+1. Select AI provider (Anthropic, Gradient, etc.)
+2. Enter API key
+3. Choose to run pairing automation (for web UI access)
+4. Note the Dashboard URL displayed in the welcome message
+
+### 3) Access the UI
+
+The onboarding provides a gateway-token-authenticated URL. Open it in your browser to access the Control UI. Or use the Text UI:
+
+```bash
+/opt/openclaw-tui.sh
+```
+
+### 4) Install Skills
+
+From the web UI:
+
+1. Navigate to **Skills** section
+2. Search for desired skill (e.g., "calendar")
+3. Click **Install**
+
+---
+
+## Option 3: App Platform
+
+App Platform provides managed infrastructure with automatic scaling, zero-downtime deploys, and operational consistency. Best for teams and production deployments.
+
+### 1) Deploy from GitHub
+
+1. Go to the [OpenClaw App Platform repo](https://github.com/digitalocean-labs/openclaw-appplatform)
+2. Click **Deploy to DigitalOcean** button
+3. Sign in to your DigitalOcean account
+4. Under **Environment Variables**, click **Edit**
+5. Add your model API key (e.g., `GRADIENT_API_KEY`)
+6. Click **Create App**
+
+The build takes ~5 minutes.
+
+### 2) Connect Channels
+
+Once built, go to the **Console** tab:
+
+Switch to the `openclaw` user and navigate to the home directory:
+
+```bash
+su openclaw
+cd
+```
+
+Connect WhatsApp (or other channels):
+
+```bash
+openclaw channels login --channel whatsapp
+# Scan QR code
+```
+
+### 3) Install Skills
+
+```bash
+# Browse available skills
+openclaw skills
+
+# Install a skill
+npx clawhub install <skill_name>
+```
+
+### Remote Access
+
+To connect remotely, [install doctl](https://docs.digitalocean.com/reference/doctl/how-to/install/) and use:
+
+```bash
+doctl apps console <APP_ID>
+```
+
+Alternatively, use the Console tab in the DigitalOcean control panel.
 
 ---
 
