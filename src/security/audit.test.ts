@@ -2034,6 +2034,44 @@ description: test skill
     });
   });
 
+  it("does not treat prototype properties as explicit channel account config", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const protoAccountPlugin = stubChannelPlugin({
+        id: "discord",
+        label: "Discord",
+        listAccountIds: () => ["constructor"],
+        resolveAccount: () => ({
+          config: {
+            dangerouslyAllowNameMatching: true,
+          },
+        }),
+      });
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {},
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [protoAccountPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.title).not.toContain("(account: constructor)");
+    });
+  });
+
   it("does not warn when Discord allowlists use ID-style entries only", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
