@@ -47,6 +47,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Config JSON endpoint ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/config",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherFinanceConfigData(gatherDeps));
@@ -55,6 +56,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Finance Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/finance",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/dashboard/overview" });
@@ -64,6 +66,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Exchange Health ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchange-health",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, { exchanges: healthStore.listAll() });
@@ -73,6 +76,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
   // ── Test Exchange Connection ──
   // Validates exchange credentials by attempting to fetch balance via CCXT.
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/exchanges/test",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -92,7 +96,11 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
         const supportedExchanges = ["binance", "okx", "bybit", "hyperliquid"];
         if (!supportedExchanges.includes(exchange)) {
-          errorResponse(res, 400, `Unsupported exchange: ${exchange}. Supported: ${supportedExchanges.join(", ")}`);
+          errorResponse(
+            res,
+            400,
+            `Unsupported exchange: ${exchange}. Supported: ${supportedExchanges.join(", ")}`,
+          );
           return;
         }
 
@@ -104,7 +112,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           return;
         }
 
-        const instance = new (ExchangeClass as new (opts: Record<string, unknown>) => Record<string, unknown>)({
+        const instance = new (ExchangeClass as new (
+          opts: Record<string, unknown>,
+        ) => Record<string, unknown>)({
           apiKey,
           secret,
           password: passphrase,
@@ -118,7 +128,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
         }
 
         try {
-          const balance = await (instance as { fetchBalance: () => Promise<Record<string, unknown>> }).fetchBalance();
+          const balance = await (
+            instance as { fetchBalance: () => Promise<Record<string, unknown>> }
+          ).fetchBalance();
 
           // Extract non-zero balances for display (hide full API key from response)
           const total = (balance.total ?? {}) as Record<string, number>;
@@ -141,7 +153,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
             message.includes("permission");
           jsonResponse(res, 200, {
             ok: false,
-            error: isAuth ? "Authentication failed: check API key and secret" : "Connection failed: " + message,
+            error: isAuth
+              ? "Authentication failed: check API key and secret"
+              : "Connection failed: " + message,
           });
         } finally {
           // Best-effort cleanup
@@ -161,6 +175,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading JSON endpoint ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/trading",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherTradingData(gatherDeps));
@@ -169,6 +184,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading Dashboard → redirect to unified trading desk ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/trading",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/dashboard/trading-desk" });
@@ -178,6 +194,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Place Order ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/orders",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -324,6 +341,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Cancel Order ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/orders/cancel",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -351,6 +369,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Close Position ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/positions/close",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -446,6 +465,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Emergency Stop ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/emergency-stop",
     handler: async (_req: unknown, res: HttpRes) => {
       try {
@@ -485,6 +505,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Events List ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/events",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, {
@@ -496,6 +517,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Approval Flow ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/events/approve",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -536,6 +558,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Risk Evaluation ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/risk/evaluate",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -561,6 +584,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherCommandCenterData(gatherDeps));
@@ -569,6 +593,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center Dashboard → redirect to unified trading desk ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/dashboard/trading-desk" });
@@ -578,6 +603,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherMissionControlData(gatherDeps));
@@ -586,6 +612,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
       res.writeHead(302, { Location: "/dashboard/overview" });
@@ -595,6 +622,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Overview ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/overview",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherOverviewData(gatherDeps);
@@ -610,6 +638,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Trading Desk ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/trading-desk",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherCommandCenterData(gatherDeps);
@@ -625,6 +654,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Strategy Arena ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/strategy-arena",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherStrategyArenaData(gatherDeps);
@@ -640,6 +670,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Strategy Arena JSON endpoint ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/strategy-arena",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherStrategyArenaData(gatherDeps));
@@ -648,6 +679,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Strategy Lab ──
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/dashboard/strategy-lab",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherStrategyLabData(gatherDeps);
@@ -669,6 +701,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     ["/dashboard/arena", "/dashboard/strategy-arena"],
   ] as const) {
     api.registerHttpRoute({
+      auth: "gateway",
       path: from,
       handler: async (_req: unknown, res: HttpRes) => {
         res.writeHead(302, { Location: to });

@@ -1,9 +1,9 @@
 {
-  "name": "openclaw",
+  "name": "openfinclaw",
   "version": "2026.3.3",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
   "bugs": {
     "url": "https://github.com/cryptoSUN2049/openFinclaw/issues"
   },

@@ -41,6 +41,7 @@ export function createPluginRuntime(): PluginRuntime {
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    services: new Map(),
   } satisfies PluginRuntime;
 
   return runtime;

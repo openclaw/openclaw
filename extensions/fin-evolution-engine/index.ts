@@ -387,6 +387,7 @@ const plugin = {
     // ── REST: GET /api/v1/finance/evolution/stats ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/stats",
       handler: async (_req: HttpReq, res: HttpRes) => {
         jsonResponse(res, 200, gatherStats());
@@ -396,6 +397,7 @@ const plugin = {
     // ── REST: GET /api/v1/finance/evolution/tree ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/tree",
       handler: async (_req: HttpReq, res: HttpRes) => {
         const nodes = store.getAllNodes();
@@ -408,6 +410,7 @@ const plugin = {
     // ── REST: GET /api/v1/finance/evolution/strategy (query ?id=) ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/strategy",
       handler: async (req: HttpReq, res: HttpRes) => {
         const url = new URL(req.url ?? "", "http://localhost");
@@ -441,6 +444,7 @@ const plugin = {
     // ── REST: GET /api/v1/finance/evolution/audit ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/audit",
       handler: async (req: HttpReq, res: HttpRes) => {
         const url = new URL(req.url ?? "", "http://localhost");
@@ -462,6 +466,7 @@ const plugin = {
     // ── REST: POST /api/v1/finance/evolution/mutate ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/mutate",
       handler: async (req: HttpReq, res: HttpRes) => {
         try {
@@ -494,6 +499,7 @@ const plugin = {
     // ── REST: POST /api/v1/finance/evolution/promote ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/promote",
       handler: async (req: HttpReq, res: HttpRes) => {
         try {
@@ -548,6 +554,7 @@ const plugin = {
     // ── REST: POST /api/v1/finance/evolution/kill ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/kill",
       handler: async (req: HttpReq, res: HttpRes) => {
         try {
@@ -588,6 +595,7 @@ const plugin = {
     // ── REST: POST /api/v1/finance/evolution/trigger ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/trigger",
       handler: async (req: HttpReq, res: HttpRes) => {
         try {
@@ -617,7 +625,11 @@ const plugin = {
             const strategyIds = [...new Set(activeNodes.map((n) => n.strategyId))];
 
             if (strategyIds.length === 0) {
-              jsonResponse(res, 200, { triggered: true, count: 0, message: "No active strategies to evolve" });
+              jsonResponse(res, 200, {
+                triggered: true,
+                count: 0,
+                message: "No active strategies to evolve",
+              });
               return;
             }
 
@@ -642,6 +654,7 @@ const plugin = {
     // ── SSE: GET /api/v1/finance/evolution/stream ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/evolution/stream",
       handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
         res.writeHead(200, {
@@ -660,6 +673,7 @@ const plugin = {
     // ── Dashboard: GET /dashboard/evolution ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/dashboard/evolution",
       handler: async (_req: HttpReq, res: HttpRes) => {
         const data = gatherDashboardData();
