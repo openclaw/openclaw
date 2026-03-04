@@ -6,7 +6,7 @@ const runtimeMocks = vi.hoisted(() => ({
   fetchRemoteMedia: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/compat", () => ({
   getChatChannelMeta: () => ({ id: "googlechat", label: "Google Chat" }),
   missingTargetError: (provider: string, hint: string) =>
     new Error(`Delivering to ${provider} requires target ${hint}`),
@@ -72,7 +72,7 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace: vi.fn(),
 }));
 
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/compat";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage, uploadGoogleChatAttachment } from "./api.js";
 import { googlechatPlugin } from "./channel.js";
