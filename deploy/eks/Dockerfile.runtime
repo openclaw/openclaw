@@ -7,6 +7,7 @@ ARG HELM_VERSION=v3.17.1
 ARG OPENCLAW_VERSION=2026.2.24
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
 ARG VAULT_VERSION=v1.21.2
+ARG BOUNDARY_VERSION=v0.20.1
 ARG ARGOCD_VERSION=v3.3.2
 ARG TARGETARCH
 
@@ -50,17 +51,23 @@ RUN set -eux; \
   curl -fsSL -o /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_${hashicorp_arch}.zip"; \
   unzip -p /tmp/vault.zip vault >/usr/local/bin/vault; \
   chmod +x /usr/local/bin/vault; \
+  boundary_version="${BOUNDARY_VERSION#v}"; \
+  curl -fsSL -o /tmp/boundary.zip "https://releases.hashicorp.com/boundary/${boundary_version}/boundary_${boundary_version}_linux_${hashicorp_arch}.zip"; \
+  unzip -p /tmp/boundary.zip boundary >/usr/local/bin/boundary; \
+  chmod +x /usr/local/bin/boundary; \
   curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-${argocd_arch}"; \
   chmod +x /usr/local/bin/argocd; \
   kubectl version --client=true --output=yaml >/dev/null; \
   helm version --short >/dev/null; \
   vault --version >/dev/null; \
+  boundary version >/dev/null; \
   gh --version >/dev/null; \
   argocd version --client >/dev/null; \
   rm -rf \
     /tmp/helm.tar.gz \
     "/tmp/linux-${helm_arch}" \
-    /tmp/vault.zip
+    /tmp/vault.zip \
+    /tmp/boundary.zip
 
 RUN mkdir -p /Users/florian/morpho \
   && chown -R node:node /Users/florian
