@@ -155,7 +155,10 @@ function isSystemctlMissing(detail: string): boolean {
     normalized.includes("not found") ||
     normalized.includes("no such file or directory") ||
     normalized.includes("spawn systemctl enoent") ||
-    normalized.includes("spawn systemctl eacces")
+    normalized.includes("spawn systemctl eacces") ||
+    // On some Linux environments (e.g. Ubuntu in containers/WSL), systemctl --user
+    // may fail with a generic "command failed" error when user services are unavailable.
+    normalized.includes("command failed: systemctl")
   );
 }
 

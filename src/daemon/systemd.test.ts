@@ -79,6 +79,21 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(false);
   });
 
+  it("returns false when systemctl command fails generically (e.g. containers/WSL)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & {
+        code?: number;
+      };
+      err.code = 1;
+      cb(err, "", "Command failed: systemctl --user is-enabled openclaw-gateway.service");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
