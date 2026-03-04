@@ -37,12 +37,15 @@ import { loadDashboardTemplates } from "./src/core/template-renderer.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
 import { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
+import { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
 import { FundManager } from "./src/fund/fund-manager.js";
 import { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
+import { registerPackRoutes } from "./src/fund/routes-packs.js";
 import { registerFundRoutes } from "./src/fund/routes.js";
 import { registerFundTools } from "./src/fund/tools.js";
 import type { FundConfig } from "./src/fund/types.js";
 import { PaperEngine } from "./src/paper/paper-engine.js";
+import { PaperHealthMonitor } from "./src/paper/paper-health-monitor.js";
 import { PaperScheduler } from "./src/paper/paper-scheduler.js";
 import { PaperStore } from "./src/paper/paper-store.js";
 import { registerPaperTools } from "./src/paper/tools.js";
@@ -72,6 +75,7 @@ export { buildFinancialContext } from "./src/core/prompt-context.js";
 export type { PromptContextDeps } from "./src/core/prompt-context.js";
 export { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 export { PaperScheduler } from "./src/paper/paper-scheduler.js";
+export { PaperHealthMonitor } from "./src/paper/paper-health-monitor.js";
 export { BacktestProgressStore } from "./src/strategy/backtest-progress-store.js";
 export { FundManager } from "./src/fund/fund-manager.js";
 export { CapitalAllocator } from "./src/fund/capital-allocator.js";
@@ -81,6 +85,8 @@ export { Leaderboard } from "./src/fund/leaderboard.js";
 export { CorrelationMonitor } from "./src/fund/correlation-monitor.js";
 export { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 export { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
+export { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
+export { STRATEGY_PACKS, getStrategyPack } from "./src/fund/strategy-packs.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -365,11 +371,19 @@ const findooTraderPlugin = {
 
     registerFundRoutes(api, fundDeps);
 
+    // ── Paper Health Monitor (rules layer: detect conditions → emit events → LLM decides) ──
+
+    const healthMonitor = new PaperHealthMonitor({
+      eventStore,
+      paperEngine,
+    });
+
     // ── Paper Scheduler (auto-tick L2_PAPER strategies) ──
 
     const paperScheduler = new PaperScheduler({
       paperEngine,
       strategyRegistry,
+      healthMonitor,
       tickIntervalMs: 60_000,
       snapshotIntervalMs: 3_600_000,
       serviceResolver: () => {
@@ -393,6 +407,30 @@ const findooTraderPlugin = {
       intervalMs: 86_400_000, // 24 hours
     });
     briefScheduler.start();
+
+    // ── Cold-Start Seeder (seeds 5 classic strategies on first launch) ──
+    // Creates seed strategies at L0 and promotes to L1. The LLM agent handles
+    // all further lifecycle decisions (backtests, promotions, demotions) via
+    // HEARTBEAT.md checklist + fin_* AI tools.
+
+    const coldStartSeeder = new ColdStartSeeder({
+      strategyRegistry,
+      backtestEngine,
+      eventStore,
+      dataProviderResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-data-provider");
+          return svc as import("./src/types-http.js").DataProviderLike | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    });
+    setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
+
+    // ── Strategy Pack HTTP Routes ──
+
+    registerPackRoutes(api, { strategyRegistry, eventStore });
 
     // ── Daily Brief HTTP endpoint ──
 

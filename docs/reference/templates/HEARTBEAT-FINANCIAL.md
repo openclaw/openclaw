@@ -34,6 +34,7 @@
 - [ ] **Fund status** (quant): Call `fin_fund_status` — total equity, risk level, active strategies
 - [ ] **Regime check** (quant): Call `fin_data_regime` for each active market — detect regime changes
 - [ ] **Decay scan** (quant): Check paper/live strategies for degrading or critical decay levels
+- [ ] **Strategy lifecycle** (quant): Call `fin_list_promotions_ready` — promote L0→L1 strategies, run `fin_backtest_run` for L1 strategies missing backtest results, check L1→L2 eligibility
 
 ## Daily at 17:00 — End of Day Review
 

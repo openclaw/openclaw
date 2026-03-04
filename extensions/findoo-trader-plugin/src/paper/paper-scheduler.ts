@@ -1,6 +1,7 @@
 import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import type { OHLCV, StrategyContext, StrategyDefinition, Signal } from "../shared/types.js";
 import { buildIndicatorLib } from "../strategy/backtest-engine.js";
+import type { PaperHealthMonitor } from "./paper-health-monitor.js";
 
 type DataProviderLike = {
   getOHLCV: (
@@ -40,6 +41,8 @@ export type PaperSchedulerConfig = {
   strategyRegistry: StrategyRegistryLike;
   dataProvider?: DataProviderLike;
   perfStore?: PerformanceSnapshotStore;
+  /** Optional health monitor — runs condition checks after each snapshot cycle. */
+  healthMonitor?: PaperHealthMonitor;
   /** Lazy resolver for dataProvider — called on each tick if dataProvider is still unset. */
   serviceResolver?: () => DataProviderLike | undefined;
   tickIntervalMs?: number; // default 60_000 (1 min)
@@ -120,11 +123,13 @@ export class PaperScheduler {
         const timeframe = record.definition.timeframes[0] ?? "1h";
         const market = record.definition.markets[0] ?? "crypto";
 
-        const getOHLCV = dataProvider.getOHLCV;
-        const ohlcv =
-          getOHLCV.length <= 1
-            ? await getOHLCV({ symbol, market, timeframe, limit: 200 })
-            : await getOHLCV(symbol, timeframe, 200);
+        // Runtime provider (datahub) uses object-style params
+        const ohlcv = await (dataProvider as any).getOHLCV({
+          symbol,
+          market,
+          timeframe,
+          limit: 200,
+        });
 
         if (!ohlcv || ohlcv.length === 0) continue;
 
@@ -194,6 +199,15 @@ export class PaperScheduler {
       try {
         this.writeDailyPerfSnapshot();
         this.lastPerfSnapshotDate = new Date();
+      } catch {
+        this.errorCount++;
+      }
+    }
+
+    // Run health condition checks after snapshot (rules layer → event emission)
+    if (this._deps.healthMonitor) {
+      try {
+        this._deps.healthMonitor.check();
       } catch {
         this.errorCount++;
       }
