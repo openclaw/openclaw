@@ -1,73 +1,62 @@
 """
-Section 06: Soul System & Memory Integration with Gateway Framework
-"Give each agent a soul, let it remember"
+Section 06 — Soul & Memory
+"Give it a soul, let it remember"
 
-【核心特性】
-OpenClaw 最具辨识度的两个特性已经在 s05_gateway.py 的基础上完美整合:
+本文件在 s05_gateway 的网关 + 路由框架之上, 加入 OpenClaw 最具辨识度的两层:
 
-1. Soul System -- SOUL.md 人格注入
-   - 每个 Agent 拥有独立的 SOUL.md
-   - 在 AgentConfig 中定义，影响该 Agent 的性格和语言风格
+  1. Soul System
+     - 每个 Agent 拥有独立的 workspace, 内含 SOUL.md
+     - SOUL.md 作为 "project context file" 注入 system prompt
+     - 【参考】src/agents/workspace.ts  loadWorkspaceBootstrapFiles()
+     - 【参考】src/agents/system-prompt.ts  buildAgentSystemPrompt()
 
-2. Memory System -- 双层记忆架构
-   - Agent 级别 MEMORY.md: 该 Agent 的常驻记忆（长期事实）
-   - Agent 级别 memory/*.md: 按日期组织的每日记忆日志
-   - Session 隔离: 不同会话的记忆相互独立
-   - 搜索: TF-IDF + 余弦相似度的语义搜索
+  2. Memory System
+     - 双层 Markdown 记忆: MEMORY.md (长期) + memory/YYYY-MM-DD.md (每日)
+     - 工具: memory_search (语义搜索) + memory_get (精确行读取)
+     - 搜索: TF-IDF + BM25 keyword 的混合检索 (教学简化, 对标 hybrid search)
+     - 刷新: 简化版 memory flush — session 过长时自动提醒写入记忆
+     - 【参考】src/memory/manager.ts
+     - 【参考】src/agents/tools/memory-tool.ts
+     - 【参考】docs/concepts/memory.md
 
-【与 s05_gateway.py 的完整集成】
-  本文件在 s05 的多 Agent 框架基础上：
-  ✓ 继承 AgentConfig, MessageRouter, SessionStore 等核心组件
-  ✓ 为每个 Agent 扩展 Soul 和 Memory 功能
-  ✓ 使用 deepseek_chat_with_tools（与 s05 一致）
-  ✓ 保留 s04 的完整工具链
-  ✓ Session 通过 s04 SessionStore 持久化
-  ✓ 多 Agent 路由由 MessageRouter 管理
+  ── 架构图 ──────────────────────────────────────
 
-【架构图】
+  Message 入站
+      │
+      v
+  MessageRouter.resolve()           ← s05_gateway
+      ├─ AgentConfig  ──┐
+      └─ session_key    │
+                        v
+  Agent workspace/              ← 本文件新增
+      ├─ SOUL.md                  人格
+      ├─ MEMORY.md                长期记忆
+      └─ memory/YYYY-MM-DD.md    每日记忆
 
-  ┌── Message 入站 ──┐
-  │                  │
-  v                  v
-  MessageRouter ──────┐  (s05 核心)
-  resolve(...)        │
-  │                   │
-  ├─ Agent ID ────────┤
-  │                   ├─ AgentConfig (扩展含 Soul & Memory)
-  └─ Session Key      │  ├─ soul_path: SOUL.md
-                      │  ├─ memory_dir: Agent's memory/
-                      │  └─ tools: [memory_write, memory_search, ...]
-                      │
-  ┌─ Build System Prompt ────────────────┐
-  │ [SOUL.md 内容]                       │
-  │ [Base system prompt]                │
-  │ [MEMORY.md 常驻记忆]                 │
-  │ [Recent memory 近期摘要]             │
-  └─────────────────────────────────────┘
-                      │
-                      v
-  ┌─ Agent Loop (deepseek_chat_with_tools) ─┐
-  │ Tools:                                   │
-  │  - memory_write (写入日记)               │
-  │  - memory_search (搜索历史记忆)          │
-  │  - [其他工具来自 s04 TOOLS_OPENAI]      │
-  └──────────────────────────────────────┘
-                      │
-                      v
-  Session 持久化 (SessionStore)
+  buildAgentSystemPrompt()
+      │  ┌──────────────────────────────────────────┐
+      │  │ 1. Base system prompt (identity+tools)   │
+      │  │ 2. ## Memory Recall (mandatory step)     │
+      │  │ 3. ## Time / Workspace                   │
+      │  │ 4. ## Project Context Files              │
+      │  │    ├ SOUL.md  (embody its persona)       │
+      │  │    └ MEMORY.md (long-term reference)     │
+      │  └──────────────────────────────────────────┘
+      v
+  run_agent_with_soul_and_memory()
+      Tools = s04 tools + memory_search + memory_get
+      │
+      v
+  SessionStore.save_turn()          ← s04
 
-【运行方式】
+  ── 运行方式 ──────────────────────────────────────
 
-  1. 启动网关服务器（支持 Memory & Soul）:
-     python agents/s06_mem.py --server
+  python agents/s06_mem.py           # 默认 REPL
+  python agents/s06_mem.py --repl    # 交互式本地测试
+  python agents/s06_mem.py --chat    # (规划中) 多 Agent 路由
+  python agents/s06_mem.py --server  # (规划中) WebSocket 网关
 
-  2. 交互式对话（自动测试路由和记忆）:
-     python agents/s06_mem.py --chat
-
-  3. REPL（本地测试，无需网关）:
-     python agents/s06_mem.py --repl
-
-【依赖】
+  ── 依赖 ──────────────────────────────────────────
   pip install python-dotenv websockets
 """
 
@@ -76,14 +65,11 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # 导入
 # ---------------------------------------------------------------------------
-import asyncio
 import json
 import math
 import os
 import re
 import sys
-import time
-import uuid
 import logging
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -91,8 +77,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import websockets
-from websockets.asyncio.server import ServerConnection
 from dotenv import load_dotenv
 
 # 导入 s05_gateway.py 的核心组件
@@ -108,17 +92,13 @@ from llm_client import (
     LLMValidationError,
 )
 
-# 从 s05 导入路由和网关框架
+# 从 s05 导入路由框架 (gateway/session 机制不变)
 from s05_gateway import (
     AgentConfig,
     Binding,
     MessageRouter,
     build_session_key,
-    RoutingGateway,
     load_routing_config,
-    make_result,
-    make_error,
-    make_event,
 )
 
 # 从 s04 导入工具和 session 管理
@@ -190,338 +170,515 @@ def print_agent(agent_id: str) -> None:
     print(f"{BLUE}[Agent: {agent_id}]{RESET}")
 
 
-# ---------------------------------------------------------------------------
-# Part 1: Extended AgentConfig with Soul & Memory
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Part 1: Agent Workspace — 每个 Agent 拥有独立的 workspace
+# ============================================================================
+#
+# 【参考】OpenClaw src/agents/agent-scope.ts  resolveAgentWorkspaceDir()
+#
+# 原始 OpenClaw 的做法:
+#   默认 Agent  → ~/.openclaw/workspace/
+#   其他 Agent  → ~/.openclaw/state/workspace-{agentId}/
+#
+# 每个 workspace 的文件布局:
+#   SOUL.md              人格 (bootstrap file)
+#   MEMORY.md            长期记忆 (bootstrap file, 也被 memory_search 索引)
+#   memory/              每日记忆目录
+#     YYYY-MM-DD.md      每日追加日志
+#
+# 教学版: workspace/{agentId}/  作为每个 Agent 的独立根.
+# ============================================================================
+
 
 @dataclass
 class AgentWithSoulMemory(AgentConfig):
-    """
-    扩展 s05 的 AgentConfig，增加 Soul 和 Memory 功能。
+    """扩展 s05 AgentConfig, 为每个 Agent 加入独立 workspace.
 
-    每个 Agent 可以有独立的：
-    - SOUL.md: 定义该 Agent 的人格、价值观、说话风格
-    - memory/: 该 Agent 的记忆目录
-    - MEMORY.md: 该 Agent 的常驻记忆
+    workspace_dir 是该 Agent 的文件根, 里面放 SOUL.md / MEMORY.md / memory/ .
     """
-    soul_path: Path | None = None          # SOUL.md 路径
-    memory_root: Path | None = None        # memory/ 目录路径
+    workspace_dir: Path | None = None
 
     def __post_init__(self) -> None:
-        """初始化 Soul 和 Memory 路径"""
-        if self.soul_path is None:
-            self.soul_path = WORKSPACE_DIR / f"{self.id}_SOUL.md"
-        if self.memory_root is None:
-            self.memory_root = WORKSPACE_DIR / f"{self.id}_memory"
+        if self.workspace_dir is None:
+            self.workspace_dir = WORKSPACE_DIR / self.id
+        # 确保目录存在
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        (self.workspace_dir / "memory").mkdir(exist_ok=True)
+
+    # 便捷属性 — 与原始 OpenClaw workspace 一致的路径
+    @property
+    def soul_path(self) -> Path:
+        return self.workspace_dir / "SOUL.md"
+
+    @property
+    def memory_md_path(self) -> Path:
+        return self.workspace_dir / "MEMORY.md"
+
+    @property
+    def memory_dir(self) -> Path:
+        return self.workspace_dir / "memory"
 
 
-# ---------------------------------------------------------------------------
-# Part 2: Soul System -- 人格注入
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Part 2: Workspace Bootstrap — 加载 project context files
+# ============================================================================
+#
+# 【参考】OpenClaw src/agents/workspace.ts  loadWorkspaceBootstrapFiles()
+# 【参考】OpenClaw src/agents/system-prompt.ts  lines 562-571
+#
+# 原始 OpenClaw 的 bootstrap file 加载顺序:
+#   AGENTS.md → SOUL.md → TOOLS.md → IDENTITY.md → USER.md
+#   → HEARTBEAT.md → BOOTSTRAP.md → MEMORY.md
+#
+# 注入规则:
+#   - 每个文件最大 bootstrapMaxChars (默认 20000)
+#   - 超出时截断: 保留 70% head + 20% tail
+#   - 总注入量不超过 bootstrapTotalMaxChars (默认 24000)
+#   - Sub-agent 只拿 AGENTS.md + TOOLS.md (SOUL.md 被过滤)
+#
+# 教学版只处理 SOUL.md 和 MEMORY.md 两个核心文件.
+# ============================================================================
 
-class SoulSystem:
-    """Agent 人格加载器，支持每个 Agent 独立的 SOUL.md。
+# 默认限制, 与原始 OpenClaw 一致
+BOOTSTRAP_MAX_CHARS = 20_000       # 单文件最大字符数
+BOOTSTRAP_TOTAL_MAX_CHARS = 24_000 # 所有文件总字符数
 
-    OpenClaw 的做法:
-      1. 每个 Agent 有独立的 SOUL.md (如 alice_SOUL.md)
-      2. 加载后作为该 Agent system prompt 的最前面部分注入
-      3. 影响该 Agent 的说话风格、价值观、思维方式
-      4. 多个 Agent 可以有完全不同的人格
+
+def _truncate_bootstrap(content: str, max_chars: int = BOOTSTRAP_MAX_CHARS) -> str:
+    """截断 bootstrap file: 保留 70% head + 20% tail.
+
+    【参考】OpenClaw src/agents/pi-embedded-helpers/bootstrap.ts
     """
-
-    def __init__(self, soul_path: Path):
-        self.soul_path = soul_path
-
-    def load_soul(self) -> str:
-        """加载 SOUL.md 内容。文件不存在则返回空字符串。"""
-        if self.soul_path.exists():
-            try:
-                content = self.soul_path.read_text(encoding="utf-8").strip()
-                return content
-            except Exception as e:
-                log.warning(f"Failed to load soul from {self.soul_path}: {e}")
-                return ""
-        return ""
-
-    def build_system_prompt(self, base_prompt: str) -> str:
-        """组合 soul + base system prompt。
-
-        最终结构:
-          [SOUL.md 内容]
-          ---
-          [Base system prompt]
-
-        人格定义在最前面，优先级最高，影响整个对话的 context.
-        """
-        soul = self.load_soul()
-        if soul:
-            return f"{soul}\n\n---\n\n{base_prompt}"
-        return base_prompt
+    if len(content) <= max_chars:
+        return content
+    head_budget = int(max_chars * 0.70)
+    tail_budget = int(max_chars * 0.20)
+    head = content[:head_budget]
+    tail = content[-tail_budget:] if tail_budget > 0 else ""
+    return f"{head}\n\n[...truncated...]\n\n{tail}"
 
 
-# ---------------------------------------------------------------------------
-# Part 3: Memory System -- 双层记忆
-# ---------------------------------------------------------------------------
+def load_workspace_bootstrap_files(workspace_dir: Path) -> list[dict[str, str]]:
+    """加载 workspace 中的 bootstrap files.
+
+    返回 [{name, content}] 列表, 按原始 OpenClaw 的加载顺序.
+    只处理 SOUL.md 和 MEMORY.md — 教学版的核心两个文件.
+    """
+    files: list[dict[str, str]] = []
+    total_chars = 0
+
+    for name in ("SOUL.md", "MEMORY.md"):
+        path = workspace_dir / name
+        if not path.exists():
+            continue
+        if path.is_symlink():
+            # 【参考】原始 OpenClaw 拒绝 symlink
+            log.warning("Skipping symlink: %s", path)
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            log.warning("Failed to read %s: %s", path, e)
+            continue
+        if not raw:
+            continue
+
+        content = _truncate_bootstrap(raw)
+        if total_chars + len(content) > BOOTSTRAP_TOTAL_MAX_CHARS:
+            budget = max(0, BOOTSTRAP_TOTAL_MAX_CHARS - total_chars)
+            if budget <= 0:
+                break
+            content = _truncate_bootstrap(raw, budget)
+        files.append({"name": name, "content": content})
+        total_chars += len(content)
+
+    return files
+
+
+# ============================================================================
+# Part 3: Memory Index Manager — 双层记忆 + 混合搜索
+# ============================================================================
+#
+# 【参考】OpenClaw src/memory/manager.ts
+# 【参考】OpenClaw src/memory/internal.ts (MemoryChunk)
+# 【参考】docs/concepts/memory.md  "Hybrid search"
+#
+# 原始 OpenClaw 的搜索架构:
+#   1. 分块: ~400 tokens, 80 token overlap
+#   2. 向量搜索: embedding + cosine similarity (权重 0.7)
+#   3. 关键词搜索: FTS5 BM25 ranking (权重 0.3)
+#   4. 混合: finalScore = 0.7 * vectorScore + 0.3 * textScore
+#   5. 默认: maxResults=6, minScore=0.35, maxSnippetChars=700
+#
+# 教学简化:
+#   - TF-IDF cosine 代替 embedding (向量搜索)
+#   - BM25-like keyword match 代替 FTS5 (关键词搜索)
+#   - 混合权重相同: 0.7 / 0.3
+#   - 分块: 按 markdown heading 拆分 (简化, 但逻辑等效)
+# ============================================================================
+
+# --- 混合搜索配置 (对标 OpenClaw defaults) ---
+SEARCH_MAX_RESULTS = 6
+SEARCH_MIN_SCORE = 0.35
+SEARCH_MAX_SNIPPET_CHARS = 700
+HYBRID_VECTOR_WEIGHT = 0.7
+HYBRID_TEXT_WEIGHT = 0.3
+HYBRID_CANDIDATE_MULTIPLIER = 4
+
 
 def _tokenize(text: str) -> list[str]:
-    """简单分词：转小写，按非字母数字拆分，去掉短词。"""
-    tokens = re.findall(r"[a-z0-9\u4e00-\u9fff]+", text.lower())
-    return [t for t in tokens if len(t) > 1]
+    """分词: 小写 + 按非字母数字拆分. 保留中文单字和英文 2+ 字符."""
+    return [t for t in re.findall(r"[a-z0-9\u4e00-\u9fff]+", text.lower())
+            if len(t) > 1 or "\u4e00" <= t <= "\u9fff"]
 
 
-def _cosine_similarity(vec_a: dict[str, float], vec_b: dict[str, float]) -> float:
-    """计算两个稀疏向量的余弦相似度。"""
-    common_keys = set(vec_a.keys()) & set(vec_b.keys())
-    if not common_keys:
+def _cosine_sim(a: dict[str, float], b: dict[str, float]) -> float:
+    """稀疏向量余弦相似度."""
+    common = set(a) & set(b)
+    if not common:
         return 0.0
-    dot = sum(vec_a[k] * vec_b[k] for k in common_keys)
-    norm_a = math.sqrt(sum(v * v for v in vec_a.values()))
-    norm_b = math.sqrt(sum(v * v for v in vec_b.values()))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+    dot = sum(a[k] * b[k] for k in common)
+    na = math.sqrt(sum(v * v for v in a.values()))
+    nb = math.sqrt(sum(v * v for v in b.values()))
+    return dot / (na * nb) if na and nb else 0.0
 
 
-class MemoryStore:
-    """Agent 级别的双层记忆存储。
+def _bm25_score(query_tokens: list[str], doc_tokens: list[str],
+                doc_freq: Counter, n_docs: int,
+                k1: float = 1.2, b: float = 0.75, avgdl: float = 100.0) -> float:
+    """单文档 BM25 分数 (Okapi BM25).
 
-    架构:
-      workspace/
-        {agent_id}_MEMORY.md        <-- Agent 的常驻记忆
-        {agent_id}_memory/
-          2026-02-24.md             <-- 该 Agent 的每日记忆
-          2026-02-23.md
-          ...
+    【参考】OpenClaw 用 SQLite FTS5 内置的 BM25; 这里手写等效公式.
+    """
+    dl = len(doc_tokens)
+    tf_doc = Counter(doc_tokens)
+    score = 0.0
+    for term in set(query_tokens):
+        tf = tf_doc.get(term, 0)
+        if tf == 0:
+            continue
+        df = doc_freq.get(term, 0)
+        idf = math.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
+        tf_norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl / max(avgdl, 1)))
+        score += idf * tf_norm
+    return score
 
-    每个 Agent 有独立的记忆空间，不会互相污染。
+
+class MemoryIndexManager:
+    """Agent 的记忆索引管理器.
+
+    对标 OpenClaw MemoryIndexManager (src/memory/manager.ts).
+
+    目录结构 (agent workspace 内):
+      MEMORY.md          长期记忆 (curated, 可选)
+      memory/
+        2026-03-04.md    每日追加日志
+        2026-03-03.md
+        ...
+
+    搜索流程:
+      1. 收集所有 .md 文件 → 拆分为 chunk
+      2. TF-IDF 向量搜索 (代替 embedding)
+      3. BM25 关键词搜索 (代替 FTS5)
+      4. 混合: 0.7 * vectorScore + 0.3 * textScore
+      5. 过滤 minScore, 截取 maxResults
     """
 
-    def __init__(self, memory_root: Path):
-        self.memory_root = memory_root
-        self.evergreen_path = memory_root / "MEMORY.md"
-        self.daily_dir = memory_root / "memory"
-        # 确保目录存在
-        self.daily_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, workspace_dir: Path):
+        self.workspace_dir = workspace_dir
+        self.memory_md = workspace_dir / "MEMORY.md"
+        self.memory_dir = workspace_dir / "memory"
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
 
-    # -- 写入 --
+    # ------------------------------------------------------------------ 写入
 
-    def write_memory(self, content: str, category: str = "general") -> str:
-        """写入当天的记忆文件。
+    def write_daily(self, content: str, category: str = "general") -> str:
+        """追加到今天的 memory/YYYY-MM-DD.md.
 
-        Agent 通过 memory_write 工具调用此方法。
-        每条记忆带时间戳和分类标签，追加到当天的日志文件。
-
-        返回写入路径，方便 agent 告知用户。
+        【参考】docs/concepts/memory.md — "When to write memory"
+        每日日志是 append-only 的.
         """
         today = date.today().isoformat()
-        path = self.daily_dir / f"{today}.md"
+        path = self.memory_dir / f"{today}.md"
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        entry = f"\n## [{timestamp}] {category}\n\n{content}\n"
+        ts = datetime.now().strftime("%H:%M:%S")
+        entry = f"\n## [{ts}] {category}\n\n{content}\n"
 
-        # 如果文件不存在，写入日期标题
         if not path.exists():
-            header = f"# Memory Log: {today}\n"
-            path.write_text(header, encoding="utf-8")
-
-        # 追加记忆条目
+            path.write_text(f"# Memory Log: {today}\n", encoding="utf-8")
         with open(path, "a", encoding="utf-8") as f:
             f.write(entry)
 
-        # 返回相对路径，可用于日志记录
-        rel_path = path.relative_to(WORKSPACE_DIR)
-        return str(rel_path)
+        return f"memory/{today}.md"
 
-    # -- 读取 --
+    # ------------------------------------------------------------------ 读取
+
+    def read_file(self, rel_path: str,
+                  from_line: int | None = None,
+                  n_lines: int | None = None) -> dict:
+        """安全读取 workspace 内的记忆文件.
+
+        【参考】OpenClaw src/agents/tools/memory-tool.ts  createMemoryGetTool()
+        """
+        # 安全校验: 只允许 MEMORY.md / memory.md 或 memory/ 下的 .md
+        normalized = rel_path.replace("\\", "/")
+        allowed = (
+            normalized in ("MEMORY.md", "memory.md")
+            or normalized.startswith("memory/")
+        )
+        if not allowed or ".." in normalized:
+            return {"path": rel_path, "text": "", "error": "Access denied"}
+
+        full = self.workspace_dir / normalized
+        if not full.exists():
+            return {"path": rel_path, "text": "", "error": f"Not found: {rel_path}"}
+        if full.is_symlink():
+            return {"path": rel_path, "text": "", "error": "Symlinks rejected"}
+
+        try:
+            text = full.read_text(encoding="utf-8")
+        except Exception as e:
+            return {"path": rel_path, "text": "", "error": str(e)}
+
+        lines = text.split("\n")
+        if from_line is not None:
+            start = max(0, from_line - 1)
+            end = (start + n_lines) if n_lines else len(lines)
+            lines = lines[start:end]
+
+        return {"path": rel_path, "text": "\n".join(lines), "totalLines": len(lines)}
 
     def load_evergreen(self) -> str:
-        """加载 MEMORY.md 常驻记忆。"""
-        if self.evergreen_path.exists():
-            try:
-                return self.evergreen_path.read_text(encoding="utf-8").strip()
-            except Exception as e:
-                log.warning(f"Failed to load evergreen memory: {e}")
-                return ""
+        """读取 MEMORY.md (长期记忆)."""
+        for name in ("MEMORY.md", "memory.md"):
+            p = self.workspace_dir / name
+            if p.exists() and not p.is_symlink():
+                try:
+                    return p.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
         return ""
 
-    def get_recent_memories(self, days: int = 7) -> list[dict]:
-        """获取最近 N 天的记忆。
-
-        返回 [{path, date, content}] 列表，按日期倒序。
-        """
+    def get_recent_daily(self, days: int = 3) -> list[dict]:
+        """获取最近 N 天的每日日志."""
         results = []
         today = date.today()
         for i in range(days):
             d = today - timedelta(days=i)
-            path = self.daily_dir / f"{d.isoformat()}.md"
+            path = self.memory_dir / f"{d.isoformat()}.md"
             if path.exists():
                 try:
                     content = path.read_text(encoding="utf-8").strip()
-                    rel_path = path.relative_to(WORKSPACE_DIR)
                     results.append({
-                        "path": str(rel_path),
+                        "path": f"memory/{d.isoformat()}.md",
                         "date": d.isoformat(),
                         "content": content,
                     })
-                except Exception as e:
-                    log.warning(f"Failed to read memory file {path}: {e}")
+                except Exception:
+                    pass
         return results
 
-    # -- 搜索 --
+    # ------------------------------------------------------------------ 索引
 
-    def _load_all_chunks(self) -> list[dict]:
-        """加载所有记忆文件，拆分成段落 (chunk)。
+    def _collect_memory_files(self) -> list[Path]:
+        """收集 workspace 中所有可索引的 .md 文件.
 
-        每个 chunk 是一个 {path, text, line_start, line_end} 字典。
-        使用按 markdown heading 拆分的策略，保持逻辑清晰。
+        【参考】OpenClaw src/memory/sync-memory-files.ts
         """
-        chunks = []
+        files: list[Path] = []
+        # MEMORY.md / memory.md
+        for name in ("MEMORY.md", "memory.md"):
+            p = self.workspace_dir / name
+            if p.exists() and not p.is_symlink():
+                files.append(p)
+                break  # 只取一个, 与原始 OpenClaw dedup 一致
+        # memory/**/*.md
+        if self.memory_dir.exists():
+            for md in sorted(self.memory_dir.glob("**/*.md"), reverse=True):
+                if not md.is_symlink():
+                    files.append(md)
+        return files
 
-        # 加载 MEMORY.md（常驻记忆）
-        if self.evergreen_path.exists():
-            try:
-                content = self.evergreen_path.read_text(encoding="utf-8")
-                rel_path = self.evergreen_path.relative_to(WORKSPACE_DIR)
-                for chunk in self._split_by_heading(content, str(rel_path)):
-                    chunks.append(chunk)
-            except Exception as e:
-                log.warning(f"Failed to load evergreen memory chunks: {e}")
+    def _chunk_file(self, path: Path) -> list[dict]:
+        """将文件拆分为 chunk.
 
-        # 加载所有每日记忆文件
-        if self.daily_dir.exists():
-            for md_file in sorted(self.daily_dir.glob("*.md"), reverse=True):
-                try:
-                    content = md_file.read_text(encoding="utf-8")
-                    rel_path = md_file.relative_to(WORKSPACE_DIR)
-                    for chunk in self._split_by_heading(content, str(rel_path)):
-                        chunks.append(chunk)
-                except Exception as e:
-                    log.warning(f"Failed to load memory file {md_file}: {e}")
+        【参考】OpenClaw src/memory/internal.ts  chunkMarkdown()
+        原始使用 ~400 token / 80 token overlap 的滑动窗口;
+        教学版按 markdown heading 拆分 (逻辑等效, 实现更简单).
+        每个 chunk 包含 path / startLine / endLine / text.
+        """
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            return []
 
-        return chunks
-
-    @staticmethod
-    def _split_by_heading(content: str, path: str) -> list[dict]:
-        """按 markdown heading 拆分文本为 chunk。"""
+        rel = str(path.relative_to(self.workspace_dir))
         lines = content.split("\n")
-        chunks = []
-        current_lines: list[str] = []
-        current_start = 1
+        chunks: list[dict] = []
+        buf: list[str] = []
+        buf_start = 1
 
         for i, line in enumerate(lines):
-            # 遇到 heading 开始新 chunk
-            if line.startswith("#") and current_lines:
-                text = "\n".join(current_lines).strip()
+            if line.startswith("#") and buf:
+                text = "\n".join(buf).strip()
                 if text:
                     chunks.append({
-                        "path": path,
-                        "text": text,
-                        "line_start": current_start,
-                        "line_end": current_start + len(current_lines) - 1,
+                        "path": rel, "text": text,
+                        "startLine": buf_start,
+                        "endLine": buf_start + len(buf) - 1,
+                        "source": "memory",
                     })
-                current_lines = [line]
-                current_start = i + 1
+                buf = [line]
+                buf_start = i + 1
             else:
-                current_lines.append(line)
+                buf.append(line)
 
-        # 最后一个 chunk
-        if current_lines:
-            text = "\n".join(current_lines).strip()
+        if buf:
+            text = "\n".join(buf).strip()
             if text:
                 chunks.append({
-                    "path": path,
-                    "text": text,
-                    "line_start": current_start,
-                    "line_end": current_start + len(current_lines) - 1,
+                    "path": rel, "text": text,
+                    "startLine": buf_start,
+                    "endLine": buf_start + len(buf) - 1,
+                    "source": "memory",
                 })
-
         return chunks
 
-    def search_memory(self, query: str, top_k: int = 5) -> list[dict]:
-        """搜索记忆，返回最相关的 top_k 个结果。
+    def _build_index(self) -> list[dict]:
+        """构建全量 chunk 索引."""
+        chunks: list[dict] = []
+        for f in self._collect_memory_files():
+            chunks.extend(self._chunk_file(f))
+        return chunks
 
-        使用 TF-IDF + 余弦相似度:
-          1. 对所有记忆 chunk 建立词频统计
-          2. 计算 IDF (逆文档频率)
-          3. 对 query 和每个 chunk 计算 TF-IDF 向量
-          4. 用余弦相似度排序
+    # ------------------------------------------------------------------ 搜索
 
-        OpenClaw 生产版用 embedding model (如 text-embedding-3-small)
-        把文本映射到高维向量，再用 sqlite-vec 做近似最近邻搜索。
-        TF-IDF 是一个合理的教学替代：原理相同 (文本 -> 向量 -> 相似度)，
-        只是向量质量不如 embedding。
+    def search(self, query: str, *,
+               max_results: int = SEARCH_MAX_RESULTS,
+               min_score: float = SEARCH_MIN_SCORE) -> list[dict]:
+        """混合搜索: TF-IDF vector + BM25 keyword.
+
+        【参考】OpenClaw src/memory/hybrid.ts  mergeHybridResults()
+
+        流程:
+          1. 构建全量 chunk 索引
+          2. TF-IDF 余弦相似度 (向量搜索, 权重 0.7)
+          3. BM25 (关键词搜索, 权重 0.3)
+          4. finalScore = 0.7 * vectorScore + 0.3 * textScore
+          5. 过滤 minScore → 取 maxResults
         """
-        chunks = self._load_all_chunks()
+        chunks = self._build_index()
         if not chunks:
             return []
 
-        # 建立文档集合的词频
+        # --- 分词与统计 ---
+        query_tokens = _tokenize(query)
+        if not query_tokens:
+            return []
+
         doc_freq: Counter = Counter()
-        chunk_tokens_list = []
-        for chunk in chunks:
-            tokens = _tokenize(chunk["text"])
-            unique_tokens = set(tokens)
-            for t in unique_tokens:
+        all_tokens: list[list[str]] = []
+        total_len = 0
+        for c in chunks:
+            toks = _tokenize(c["text"])
+            all_tokens.append(toks)
+            for t in set(toks):
                 doc_freq[t] += 1
-            chunk_tokens_list.append(tokens)
-
+            total_len += len(toks)
         n_docs = len(chunks)
+        avgdl = total_len / max(n_docs, 1)
 
-        # 计算 IDF
+        # --- TF-IDF 向量搜索 ---
         def _idf(term: str) -> float:
             df = doc_freq.get(term, 0)
-            if df == 0:
-                return 0.0
-            return math.log(n_docs / df)
+            return math.log(n_docs / df) if df else 0.0
 
-        # query 的 TF-IDF 向量
-        query_tokens = _tokenize(query)
-        query_tf = Counter(query_tokens)
-        query_vec = {t: (count / max(len(query_tokens), 1)) * _idf(t)
-                     for t, count in query_tf.items()}
+        q_tf = Counter(query_tokens)
+        q_vec = {t: (cnt / len(query_tokens)) * _idf(t)
+                 for t, cnt in q_tf.items()}
 
-        # 对每个 chunk 计算相似度
-        scored = []
-        for i, chunk in enumerate(chunks):
-            tokens = chunk_tokens_list[i]
-            if not tokens:
+        vector_scores: list[float] = []
+        for toks in all_tokens:
+            if not toks:
+                vector_scores.append(0.0)
                 continue
-            tf = Counter(tokens)
-            chunk_vec = {t: (count / len(tokens)) * _idf(t)
-                         for t, count in tf.items()}
-            score = _cosine_similarity(query_vec, chunk_vec)
-            if score > 0.01:  # 过滤掉几乎不相关的结果
-                scored.append({
-                    "path": chunk["path"],
-                    "line_start": chunk["line_start"],
-                    "line_end": chunk["line_end"],
-                    "score": round(score, 4),
-                    "snippet": chunk["text"][:300],
-                })
+            tf = Counter(toks)
+            c_vec = {t: (cnt / len(toks)) * _idf(t) for t, cnt in tf.items()}
+            vector_scores.append(_cosine_sim(q_vec, c_vec))
 
-        # 按相似度排序，取 top_k
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:top_k]
+        # --- BM25 关键词搜索 ---
+        bm25_raw: list[float] = []
+        for toks in all_tokens:
+            bm25_raw.append(_bm25_score(query_tokens, toks, doc_freq, n_docs,
+                                        avgdl=avgdl))
+
+        # 归一化 BM25 到 0..1  (与 OpenClaw textScore = 1/(1+rank) 类似)
+        max_bm25 = max(bm25_raw) if bm25_raw else 1.0
+        text_scores = [(s / max_bm25 if max_bm25 > 0 else 0.0) for s in bm25_raw]
+
+        # --- 混合 ---
+        results: list[dict] = []
+        for i, chunk in enumerate(chunks):
+            score = (HYBRID_VECTOR_WEIGHT * vector_scores[i]
+                     + HYBRID_TEXT_WEIGHT * text_scores[i])
+            if score < min_score:
+                continue
+            snippet = chunk["text"][:SEARCH_MAX_SNIPPET_CHARS]
+            citation = (f"{chunk['path']}#L{chunk['startLine']}"
+                        if chunk["startLine"] == chunk["endLine"]
+                        else f"{chunk['path']}#L{chunk['startLine']}-L{chunk['endLine']}")
+            results.append({
+                "path": chunk["path"],
+                "startLine": chunk["startLine"],
+                "endLine": chunk["endLine"],
+                "score": round(score, 4),
+                "snippet": snippet,
+                "source": chunk["source"],
+                "citation": citation,
+            })
+
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return results[:max_results]
 
 
-# ---------------------------------------------------------------------------
-# Part 4: 扩展工具 -- Memory tools for agents
-# ---------------------------------------------------------------------------
+# --- 全局 manager 缓存 ---
+_managers: dict[str, MemoryIndexManager] = {}
+
+
+def get_memory_manager(agent: AgentWithSoulMemory) -> MemoryIndexManager:
+    if agent.id not in _managers:
+        _managers[agent.id] = MemoryIndexManager(agent.workspace_dir)
+    return _managers[agent.id]
+
+
+# ============================================================================
+# Part 4: Memory Tools — memory_search + memory_get
+# ============================================================================
+#
+# 【参考】OpenClaw src/agents/tools/memory-tool.ts
+#         createMemorySearchTool() + createMemoryGetTool()
+#
+# 原始 OpenClaw 没有 memory_write 工具 — agent 通过 bash 工具编辑文件.
+# 教学版保留 memory_write 作为便捷入口, 标注差异.
+# ============================================================================
+
+MEMORY_TOOL_NAMES = {"memory_search", "memory_get", "memory_write"}
+
 
 def build_memory_tools() -> list[dict]:
-    """构建 memory 工具定义（OpenAI/DeepSeek 格式：type + function.name/description/parameters）。
+    """构建 memory 工具定义 (OpenAI/DeepSeek function-calling 格式).
 
     【参考】OpenClaw src/agents/tools/memory-tool.ts
-    格式需与 s04 TOOLS_OPENAI 一致，否则 API 会返回 400 deserialize 错误。
+    格式需与 s04 TOOLS_OPENAI 一致: {type: "function", function: {name, description, parameters}}
     """
     raw = [
         {
             "name": "memory_search",
             "description": (
-                "Mandatory recall step: semantically search MEMORY.md + memory/*.md before "
-                "answering questions about prior work, decisions, dates, people, preferences, "
-                "or todos. Returns relevant snippets with source paths and relevance scores. "
-                "Use memory_get after to read the full context from specific lines if needed."
+                "Mandatory recall step: semantically search MEMORY.md + memory/*.md "
+                "before answering questions about prior work, decisions, dates, people, "
+                "preferences, or todos; returns top snippets with path + lines. "
+                "Use memory_get after to pull only the needed lines and keep context small."
             ),
             "input_schema": {
                 "type": "object",
@@ -530,9 +687,13 @@ def build_memory_tools() -> list[dict]:
                         "type": "string",
                         "description": "The search query.",
                     },
-                    "top_k": {
+                    "maxResults": {
                         "type": "integer",
-                        "description": "Max number of results to return. Default 5.",
+                        "description": f"Max results (default {SEARCH_MAX_RESULTS}).",
+                    },
+                    "minScore": {
+                        "type": "number",
+                        "description": f"Min relevance 0-1 (default {SEARCH_MIN_SCORE}).",
                     },
                 },
                 "required": ["query"],
@@ -541,24 +702,23 @@ def build_memory_tools() -> list[dict]:
         {
             "name": "memory_get",
             "description": (
-                "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines. "
-                "Use after memory_search to pull only the needed lines and keep context small. "
-                "Paths must be workspace-relative (e.g., 'MEMORY.md', 'memory/2026-02-28.md')."
+                "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; "
+                "use after memory_search to pull only the needed lines and keep context small."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative path to memory file.",
+                        "description": "Workspace-relative path (e.g. 'MEMORY.md', 'memory/2026-03-04.md').",
                     },
                     "from": {
                         "type": "integer",
-                        "description": "Starting line number (1-indexed). Optional.",
+                        "description": "Start line (1-indexed). Omit to read whole file.",
                     },
                     "lines": {
                         "type": "integer",
-                        "description": "Number of lines to read. Optional.",
+                        "description": "Number of lines to read.",
                     },
                 },
                 "required": ["path"],
@@ -567,10 +727,9 @@ def build_memory_tools() -> list[dict]:
         {
             "name": "memory_write",
             "description": (
-                "Write a memory entry to persistent storage (for learning purposes). "
-                "Use this to remember important information the user shares: preferences, "
-                "facts, decisions, names, dates. Each entry is timestamped and categorized. "
-                "Note: In production OpenClaw, memory is written via bash/file tools directly."
+                "Append a timestamped entry to today's memory/YYYY-MM-DD.md. "
+                "Use for preferences, facts, decisions. "
+                "(Teaching shortcut — production OpenClaw writes via bash tools.)"
             ),
             "input_schema": {
                 "type": "object",
@@ -581,10 +740,7 @@ def build_memory_tools() -> list[dict]:
                     },
                     "category": {
                         "type": "string",
-                        "description": (
-                            "Category tag for the memory. Examples: "
-                            "preference, fact, decision, todo, person."
-                        ),
+                        "description": "Tag: preference / fact / decision / todo / person.",
                     },
                 },
                 "required": ["content"],
@@ -604,180 +760,144 @@ def build_memory_tools() -> list[dict]:
     ]
 
 
-# 全局 memory store 缓存（按 agent_id 索引）
-_memory_stores: dict[str, MemoryStore] = {}
+def handle_memory_tool(tool_name: str, params: dict,
+                       agent: AgentWithSoulMemory) -> str:
+    """分发 memory 工具调用.
 
-
-def get_memory_store(agent_id: str, memory_root: Path) -> MemoryStore:
-    """获取或创建 Agent 的 MemoryStore。"""
-    if agent_id not in _memory_stores:
-        _memory_stores[agent_id] = MemoryStore(memory_root)
-    return _memory_stores[agent_id]
-
-
-def handle_memory_tool(
-    tool_name: str,
-    params: dict,
-    agent_id: str,
-    memory_root: Path,
-) -> str:
-    """处理 memory 工具调用。
-
-    参数:
-        tool_name: 工具名称 ("memory_write", "memory_search", "memory_get")
-        params: 工具参数
-        agent_id: 调用该工具的 Agent ID
-        memory_root: 该 Agent 的 memory 根目录
-
-    返回:
-        JSON 格式的工具执行结果
+    返回 JSON 字符串, 与 process_tool_call 签名一致.
     """
-    store = get_memory_store(agent_id, memory_root)
+    mgr = get_memory_manager(agent)
 
     if tool_name == "memory_search":
         query = params.get("query", "")
-        top_k = params.get("top_k", 5)
         if not query.strip():
             return json.dumps({"results": [], "error": "Empty query"})
-        results = store.search_memory(query, top_k=top_k)
+        max_r = params.get("maxResults", SEARCH_MAX_RESULTS)
+        min_s = params.get("minScore", SEARCH_MIN_SCORE)
+        results = mgr.search(query, max_results=max_r, min_score=min_s)
         return json.dumps({
             "results": results,
-            "total_found": len(results),
+            "provider": "tfidf+bm25",
+            "model": "hybrid-local",
         })
 
-    elif tool_name == "memory_get":
+    if tool_name == "memory_get":
         path = params.get("path", "")
-        from_line = params.get("from")
-        lines = params.get("lines")
-
         if not path.strip():
-            return json.dumps({"error": "Path required", "path": path, "text": ""})
+            return json.dumps({"path": "", "text": "", "error": "Path required"})
+        result = mgr.read_file(
+            path,
+            from_line=params.get("from"),
+            n_lines=params.get("lines"),
+        )
+        return json.dumps(result)
 
-        # 安全检查：只允许读取 MEMORY.md 和 memory/ 目录下的文件
-        if not (path == "MEMORY.md" or path.startswith("memory/")):
-            return json.dumps({
-                "error": f"Access denied: path must be MEMORY.md or under memory/",
-                "path": path,
-                "text": ""
-            })
-
-        # 构建完整路径
-        full_path = memory_root / path
-
-        if not full_path.exists():
-            return json.dumps({
-                "error": f"File not found: {path}",
-                "path": path,
-                "text": ""
-            })
-
-        try:
-            content = full_path.read_text(encoding="utf-8")
-            lines_list = content.split("\n")
-
-            # 处理行范围
-            if from_line is not None:
-                # 1-indexed to 0-indexed
-                start_idx = max(0, from_line - 1)
-                if lines is not None:
-                    end_idx = start_idx + lines
-                else:
-                    end_idx = len(lines_list)
-                selected_lines = lines_list[start_idx:end_idx]
-                selected_text = "\n".join(selected_lines)
-            else:
-                selected_text = content
-
-            return json.dumps({
-                "path": path,
-                "text": selected_text,
-                "lines": len(selected_lines) if from_line is not None else len(lines_list),
-            })
-        except Exception as e:
-            return json.dumps({
-                "error": f"Failed to read file: {str(e)}",
-                "path": path,
-                "text": ""
-            })
-
-    elif tool_name == "memory_write":
+    if tool_name == "memory_write":
         content = params.get("content", "")
-        category = params.get("category", "general")
         if not content.strip():
             return json.dumps({"error": "Empty content"})
-        path = store.write_memory(content, category)
-        return json.dumps({
-            "status": "saved",
-            "path": path,
-            "category": category,
-        })
+        cat = params.get("category", "general")
+        rel = mgr.write_daily(content, cat)
+        return json.dumps({"status": "saved", "path": rel, "category": cat})
 
-    else:
-        return json.dumps({"error": f"Unknown memory tool: {tool_name}"})
+    return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
 
-# ---------------------------------------------------------------------------
-# Part 5: System Prompt 构建（融合 Soul + Memory）
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Part 5: System Prompt 构建 — 对标 OpenClaw buildAgentSystemPrompt()
+# ============================================================================
+#
+# 【参考】OpenClaw src/agents/system-prompt.ts (lines 380-612)
+#
+# 原始 OpenClaw 的 system prompt 构建顺序:
+#   1. Identity line
+#   2. Tooling section
+#   3. Safety section
+#   4. Memory Recall section (if memory tools available)
+#   5. Time / Workspace section
+#   6. "Project context files" header
+#      → "If SOUL.md is present, embody its persona..."
+#      → SOUL.md content
+#      → MEMORY.md content
+#   7. Silent replies / Heartbeats
+#
+# 关键: SOUL.md 不是 prepend 到最前面, 而是作为 "project context file"
+#       注入到 system prompt 的后半部分. 前面是功能性指令.
+# ============================================================================
+
+# Memory flush 默认提示
+# 【参考】docs/concepts/memory.md  "Automatic memory flush"
+MEMORY_FLUSH_PROMPT = (
+    "Pre-compaction memory flush. Store durable memories now "
+    "(use memory/YYYY-MM-DD.md; create memory/ if needed). "
+    "IMPORTANT: If the file already exists, APPEND new content only "
+    "and do not overwrite existing entries."
+)
+
 
 def build_agent_system_prompt(agent: AgentWithSoulMemory, base_prompt: str) -> str:
-    """构建完整的 Agent system prompt，融合 soul + base + memory。
+    """构建完整 system prompt, 对标 OpenClaw buildAgentSystemPrompt().
 
-    【参考】OpenClaw src/agents/system-prompt.ts
-
-    分层结构:
-      [SOUL.md 内容]                    <-- 人格定义（最高优先级）
-      ---
-      [Base system prompt]              <-- 功能说明
-      ## Memory Recall                  <-- 强制性回忆步骤说明
-      Before answering about prior...
-      use memory_search + memory_get
-      ---
-      ## Evergreen Memory               <-- 常驻记忆（供参考）
-      [MEMORY.md 内容]
-      ---
-      ## Recent Memory Context          <-- 近期记忆摘要
-      [最近 3 天的记忆片段]
-
-    参数:
-        agent: 扩展的 AgentWithSoulMemory
-        base_prompt: 基础 system prompt（来自 s04）
-
-    返回:
-        完整的 system prompt
+    分层结构 (严格遵循原始 OpenClaw 的顺序):
+      ┌──────────────────────────────────────────────┐
+      │ 1. Base system prompt (identity + tools)     │
+      │ 2. Personality line                          │
+      │ 3. ## Memory Recall (mandatory step)         │
+      │ 4. ## Time / Workspace                       │
+      │ 5. ## Project Context Files                  │
+      │    → SOUL.md content                         │
+      │    → MEMORY.md content (bootstrap excerpt)   │
+      └──────────────────────────────────────────────┘
     """
-    # 加载该 Agent 的 Soul
-    soul_system = SoulSystem(agent.soul_path)
-    prompt = soul_system.build_system_prompt(base_prompt)
+    parts: list[str] = []
 
-    # 添加内存回忆指示（强制性步骤）
-    prompt += (
-        "\n\n---\n\n"
-        "## Memory Recall (Mandatory Step)\n"
-        "Before answering anything about prior work, decisions, dates, people, preferences, "
-        "or todos:\n"
-        "1. Call memory_search to semantically query MEMORY.md + memory/*.md\n"
-        "2. Use memory_get to read specific lines if you need more context\n"
-        "3. If low confidence after search, tell the user you checked memory\n"
-        "4. To update permanent facts, edit MEMORY.md via bash tool\n"
-        "5. To log today's context, use memory_write or bash to append to memory/YYYY-MM-DD.md\n"
+    # --- 1. Base system prompt ---
+    parts.append(base_prompt)
+
+    # --- 2. Personality ---
+    if agent.system_prompt:
+        parts.append(f"\nPersonality: {agent.system_prompt}")
+
+    # --- 3. Memory Recall ---
+    parts.append(
+        "\n## Memory Recall\n"
+        "Before answering anything about prior work, decisions, dates, people, "
+        "preferences, or todos: run memory_search on MEMORY.md + memory/*.md; "
+        "then use memory_get to pull only the needed lines. "
+        "If low confidence after search, say you checked.\n"
+        "Citations: include Source: <path#Lstart-Lend> when it helps the user "
+        "verify memory snippets."
     )
 
-    # 加载该 Agent 的常驻记忆
-    memory_store = get_memory_store(agent.id, agent.memory_root)
-    evergreen = memory_store.load_evergreen()
-    if evergreen:
-        prompt += f"\n\n---\n\n## Evergreen Memory (Reference)\n\n{evergreen}"
+    # --- 4. Time / Workspace ---
+    parts.append(
+        f"\n## Time\nCurrent date: {date.today().isoformat()}\n"
+        f"\n## Workspace\nWorking directory: {agent.workspace_dir}\n"
+        "Treat this directory as the single global workspace for memory files."
+    )
 
-    # 加载近期记忆摘要 (最近 3 天)
-    recent = memory_store.get_recent_memories(days=3)
+    # --- 5. Project context files ---
+    bootstrap_files = load_workspace_bootstrap_files(agent.workspace_dir)
+    if bootstrap_files:
+        header = "\n## Project Context Files\n"
+        header += ("The following project context files have been loaded from the workspace.\n"
+                    "If SOUL.md is present, embody its persona — speak, think, and "
+                    "respond in the style it defines.\n")
+        parts.append(header)
+        for bf in bootstrap_files:
+            parts.append(f"\n### {bf['name']}\n\n{bf['content']}")
+
+    # --- 6. Recent memory context (今日+昨日 headline awareness) ---
+    mgr = get_memory_manager(agent)
+    recent = mgr.get_recent_daily(days=2)
     if recent:
-        prompt += "\n\n---\n\n## Recent Memory Context (Awareness Only)\n"
+        lines = ["\n## Recent Memory (Awareness Only)"]
         for entry in recent:
             snippet = entry["content"][:500]
-            prompt += f"\n### {entry['date']}\n{snippet}\n"
+            lines.append(f"\n### {entry['date']}\n{snippet}")
+        parts.append("\n".join(lines))
 
-    return prompt
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -807,18 +927,13 @@ def run_agent_with_soul_and_memory(
     返回:
         助手的最终文本回复
     """
-    # 确保 Agent 的 memory 目录存在
-    agent.memory_root.mkdir(parents=True, exist_ok=True)
-
     # 加载会话历史
     session_data = session_store.load_session(session_key)
     messages = session_data["history"]
     messages.append({"role": "user", "content": user_text})
 
     # 构建融合 Soul + Memory 的 system prompt
-    # 基础提示包括当前日期和工具说明
-    base_prompt = f"{S04_SYSTEM_PROMPT}\nCurrent date: {date.today().isoformat()}\nPersonality: {agent.system_prompt}"
-    system_prompt = build_agent_system_prompt(agent, base_prompt)
+    system_prompt = build_agent_system_prompt(agent, S04_SYSTEM_PROMPT)
 
     # 组合工具：s04 的工具 + memory 工具
     all_tools = TOOLS_OPENAI + build_memory_tools()
@@ -875,13 +990,8 @@ def run_agent_with_soul_and_memory(
                 log.info("  [tool] %s(%s)", tc["name"], json.dumps(args, ensure_ascii=False)[:80])
 
                 # 特殊处理 memory 工具
-                if tc["name"] in ("memory_write", "memory_search", "memory_get"):
-                    result = handle_memory_tool(
-                        tc["name"],
-                        args,
-                        agent_id=agent.id,
-                        memory_root=agent.memory_root,
-                    )
+                if tc["name"] in MEMORY_TOOL_NAMES:
+                    result = handle_memory_tool(tc["name"], args, agent)
                 else:
                     # 委派给 s04 的工具处理器
                     result = process_tool_call(tc["name"], args)
@@ -918,30 +1028,23 @@ def run_agent_with_soul_and_memory(
 def create_agents_with_soul_memory(
     config_path: str | None = None,
 ) -> dict[str, AgentWithSoulMemory]:
-    """
-    从配置加载 Agent，并扩展为 AgentWithSoulMemory。
+    """从配置加载 Agent, 扩展为 AgentWithSoulMemory.
 
-    参数:
-        config_path: 配置文件路径（可选）
-
-    返回:
-        {agent_id: AgentWithSoulMemory} 字典
+    每个 Agent 获得独立的 workspace 目录: WORKSPACE_DIR/{agent_id}/
     """
     agents, _, _, _ = load_routing_config(config_path)
 
-    # 转换为 AgentWithSoulMemory
-    agents_with_memory: dict[str, AgentWithSoulMemory] = {}
-    for agent_id, agent in agents.items():
-        agent_mem = AgentWithSoulMemory(
-            id=agent.id,
-            model=agent.model,
-            system_prompt=agent.system_prompt,
-            tools=agent.tools,
+    result: dict[str, AgentWithSoulMemory] = {}
+    for aid, acfg in agents.items():
+        a = AgentWithSoulMemory(
+            id=acfg.id,
+            model=acfg.model,
+            system_prompt=acfg.system_prompt,
+            tools=acfg.tools,
         )
-        agents_with_memory[agent_id] = agent_mem
-        log.info(f"Created agent {agent_id} with soul and memory")
-
-    return agents_with_memory
+        result[aid] = a
+        log.info("agent %s  workspace=%s", aid, a.workspace_dir)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -960,7 +1063,7 @@ def run_repl(agent: AgentWithSoulMemory, session_store: S04SessionStore) -> None
     print_info(f"  Mini-Claw REPL  |  Section 06: Soul & Memory")
     print_info(f"  Agent: {agent.id}")
     print_info(f"  Model: {agent.model}")
-    print_info(f"  Workspace: {WORKSPACE_DIR}")
+    print_info(f"  Workspace: {agent.workspace_dir}")
     print_info("")
     print_info("  Commands:")
     print_info("    /quit or /exit     - Leave REPL")
@@ -970,14 +1073,14 @@ def run_repl(agent: AgentWithSoulMemory, session_store: S04SessionStore) -> None
     print()
 
     # 显示 Soul 状态
-    soul_system = SoulSystem(agent.soul_path)
-    soul_content = soul_system.load_soul()
-    if soul_content:
-        print_info(f"Soul loaded from {agent.soul_path}")
+    soul_path = agent.soul_path
+    if soul_path.exists():
+        soul_content = soul_path.read_text(encoding="utf-8").strip()
+        print_info(f"Soul loaded from {soul_path}")
         first_line = soul_content.split("\n")[0].strip()
         print_info(f"Preview: {first_line}\n")
     else:
-        print_info(f"No soul found at {agent.soul_path}")
+        print_info(f"No soul found at {soul_path}")
         print_info("Create one to give this agent personality!\n")
 
     while True:
@@ -996,28 +1099,29 @@ def run_repl(agent: AgentWithSoulMemory, session_store: S04SessionStore) -> None
 
         # 内置命令
         if user_input == "/soul":
-            soul = soul_system.load_soul()
-            if soul:
+            sp = agent.soul_path
+            if sp.exists():
                 print(f"\n{MAGENTA}--- {agent.id.upper()} SOUL ---{RESET}")
-                print(soul)
+                print(sp.read_text(encoding="utf-8").strip())
                 print(f"{MAGENTA}--- end ---{RESET}\n")
             else:
-                print_info(f"No soul file at {agent.soul_path}\n")
+                print_info(f"No soul file at {sp}\n")
             continue
 
         if user_input == "/memory":
-            memory_store = get_memory_store(agent.id, agent.memory_root)
-            evergreen = memory_store.load_evergreen()
-            recent = memory_store.get_recent_memories(days=7)
+            mgr = get_memory_manager(agent)
+            evergreen = mgr.load_evergreen()
+            recent = mgr.get_recent_daily(days=7)
             print(f"\n{MAGENTA}--- Memory Status ({agent.id}) ---{RESET}")
+            print(f"Workspace: {agent.workspace_dir}")
             if evergreen:
                 print(f"MEMORY.md: {len(evergreen)} chars")
             else:
                 print("MEMORY.md: (not found)")
             print(f"Recent daily logs: {len(recent)} files")
             for entry in recent:
-                lines = entry["content"].count("\n") + 1
-                print(f"  {entry['date']}: {lines} lines")
+                lines_cnt = entry["content"].count("\n") + 1
+                print(f"  {entry['date']}: {lines_cnt} lines")
             print(f"{MAGENTA}--- end ---{RESET}\n")
             continue
 
@@ -1064,26 +1168,42 @@ def main() -> None:
     # 默认使用第一个 Agent
     default_agent = next(iter(agents.values()))
 
-    # 创建示例 SOUL 文件（如果不存在）
+    # 创建示例 SOUL 文件 (使用原始 OpenClaw 的模板)
+    # 【参考】docs/reference/templates/SOUL.md
     if not default_agent.soul_path.exists():
-        sample_soul = (
-            "# Soul\n\n"
-            "You are Koda, a thoughtful AI assistant.\n\n"
-            "## Personality\n"
-            "- Warm but not overly enthusiastic\n"
-            "- Prefer concise, clear explanations\n"
-            "- Use analogies from nature and engineering\n\n"
-            "## Values\n"
-            "- Honesty over comfort\n"
-            "- Depth over breadth\n"
-            "- Action over speculation\n\n"
-            "## Language Style\n"
-            "- Direct and clear\n"
-            "- No filler phrases\n"
-            "- End complex explanations with a one-line summary\n"
-        )
+        sample_soul = """\
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" \
+and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing \
+or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the \
+context. Search for it. _Then_ ask if you're stuck.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough \
+when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. \
+Update them. They're how you persist.
+"""
         default_agent.soul_path.write_text(sample_soul, encoding="utf-8")
-        print_info(f"Created sample SOUL file for {default_agent.id}")
+        print_info(f"Created sample SOUL.md at {default_agent.soul_path}")
 
     # 解析命令行参数
     if len(sys.argv) > 1:
