@@ -178,7 +178,7 @@ async function loadTiktokenTokenizer(): Promise<TiktokenEncoding> {
 
 // Tiktoken 同步版本
 // 注意：必须先调用 warmupTokenizer() 或 loadTiktokenTokenizer() 预加载
-function estimateTokensByTiktokenSync(text: string): number {
+function estimateTokensByTiktokenSync(text: string): number | null {
   if (!text || text.length === 0) {
     return 0;
   }
@@ -189,12 +189,9 @@ function estimateTokensByTiktokenSync(text: string): number {
     return tokens.length;
   }
 
-  // 如果没有预加载，回退到字符估算并异步加载
-  // 这样不会阻塞，但第一次调用可能不准确
-  loadTiktokenTokenizer().catch(() => {
-    // 忽略错误，已经回退到字符估算
-  });
-  return estimateTokensByChars(text);
+  // 如果没有预加载，返回 null 表示无法计算
+  // 调用方应该根据 null 返回值决定是否缓存
+  return null;
 }
 
 // ================================
@@ -312,16 +309,27 @@ export function estimateTokensWithTokenizer(message: Message): number {
   } else {
     try {
       if (config.provider === "tiktoken") {
-        tokenCount = estimateTokensByTiktokenSync(content);
+        const tiktokenResult = estimateTokensByTiktokenSync(content);
+        if (tiktokenResult !== null) {
+          // tiktoken 已就绪，使用精确值并缓存
+          tokenCount = tiktokenResult;
+        } else {
+          // tiktoken 还在加载，使用字符估算但不缓存
+          // 异步加载以便下次使用
+          loadTiktokenTokenizer().catch(() => {
+            // 忽略错误
+          });
+          return estimateTokensByChars(content);
+        }
       } else {
-        // HuggingFace 需要异步处理，这里同步返回字符估算
+        // HuggingFace 需要异步处理，使用字符估算但不缓存
         // 并触发异步加载以便下次使用
         loadHuggingfaceTokenizer().catch(() => {});
-        tokenCount = estimateTokensByChars(content);
+        return estimateTokensByChars(content);
       }
     } catch (error) {
       console.warn("[tokenizer] Estimation failed, falling back to char estimation:", error);
-      tokenCount = estimateTokensByChars(content);
+      return estimateTokensByChars(content);
     }
   }
 
