@@ -32,7 +32,16 @@ function formatConversationTimestamp(value: unknown): string | undefined {
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
-  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  // When the message originates from a webchat/control-ui surface, report the
+  // channel as "webchat" so the agent routes its response back to the web
+  // dashboard — not to an unrelated deliverable channel (e.g. Slack) that the
+  // session may be scoped to.  See: #34647
+  const surface = safeTrim(ctx.Surface);
+  if (surface === "webchat") {
+    return "webchat";
+  }
+
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? surface;
   if (!channelValue) {
     const provider = safeTrim(ctx.Provider);
     if (provider !== "webchat" && ctx.Surface !== "webchat") {
