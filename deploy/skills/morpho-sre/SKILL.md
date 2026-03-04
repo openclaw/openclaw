@@ -93,6 +93,9 @@ kubectl --context "$K8S_CONTEXT" get ns | sed -n '1,20p'
 
 # Add comment
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue add-comment PLA-318 --file /tmp/pla-318-comment.md
+
+# Ensure tracking label on ticket
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue ensure-label PLA-318 openclaw-sre
 ```
 
 - If asked to “verify Linear write access”, run:
@@ -332,6 +335,8 @@ PR convention requirement:
 
 - Always keep the same Linear/PR rule for tracking: branch/title must carry the Linear ticket key.
 - Always add label `openclaw-sre`.
+- Always add same label on linked Linear ticket:
+  - `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue ensure-label <TICKET> openclaw-sre`
 
 If gate fails, report blocked reason and fallback manual next step.
 

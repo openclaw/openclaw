@@ -61,13 +61,24 @@ case "$query" in
       jq -nc '{data:{teams:{nodes:[]}}}'
     fi
     ;;
-  *"issue(id:\$id){ id identifier title description }"*)
+  *"issueLabels(filter:{name:{eq:\$name}})"*)
+    name="$(printf '%s\n' "$vars" | jq -r '.name // ""')"
+    if [[ "$name" == "openclaw-sre" ]]; then
+      jq -nc '{data:{issueLabels:{nodes:[]}}}'
+    else
+      jq -nc '{data:{issueLabels:{nodes:[{id:"label-generic",name:"generic"}]}}}'
+    fi
+    ;;
+  *"issue(id:\$id){ id identifier title description labels { nodes { id name } } }"*)
     issue_ref="$(printf '%s\n' "$vars" | jq -r '.id // ""')"
     if [[ "$issue_ref" == "PLA-318" ]]; then
-      jq -nc '{data:{issue:{id:"issue-uuid-1",identifier:"PLA-318",title:"Old title",description:"Old description"}}}'
+      jq -nc '{data:{issue:{id:"issue-uuid-1",identifier:"PLA-318",title:"Old title",description:"Old description",labels:{nodes:[{id:"label-bug",name:"Bug"}]}}}}'
     else
       jq -nc '{data:{issue:null}}'
     fi
+    ;;
+  *"issueLabelCreate(input:{name:\$name,color:\$color})"*)
+    jq -nc '{data:{issueLabelCreate:{success:true,issueLabel:{id:"label-openclaw-sre",name:"openclaw-sre"}}}}'
     ;;
   *"issueUpdate(id:\$id,input:{description:\$description})"*)
     jq -nc '{data:{issueUpdate:{success:true,issue:{identifier:"PLA-318"}}}}'
@@ -77,6 +88,9 @@ case "$query" in
     ;;
   *"issueUpdate(id:\$id,input:{title:\$title})"*)
     jq -nc '{data:{issueUpdate:{success:true,issue:{identifier:"PLA-318"}}}}'
+    ;;
+  *"issueUpdate(id:\$id,input:{labelIds:\$labelIds})"*)
+    jq -nc '{data:{issueUpdate:{success:true,issue:{identifier:"PLA-318",labels:{nodes:[{id:"label-bug",name:"Bug"},{id:"label-openclaw-sre",name:"openclaw-sre"}]}}}}}'
     ;;
   *)
     jq -nc '{errors:[{message:"unexpected query"}]}'
@@ -104,6 +118,10 @@ pass "issue update-description"
 COMMENT_OUT="$(bash "$API_SCRIPT" issue add-comment PLA-318 --text "follow-up comment")"
 assert_eq $'commented\tPLA-318\tcomment-1' "$COMMENT_OUT" "issue add-comment output"
 pass "issue add-comment"
+
+LABEL_OUT="$(bash "$API_SCRIPT" issue ensure-label PLA-318 openclaw-sre)"
+assert_eq $'labeled\tPLA-318\topenclaw-sre' "$LABEL_OUT" "issue ensure-label output"
+pass "issue ensure-label"
 
 PROBE_OUT="$(bash "$API_SCRIPT" probe-write PLA-318)"
 assert_eq $'probe_ok\tPLA-318' "$PROBE_OUT" "probe-write output"
