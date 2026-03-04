@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Agents/Compaction: compaction now runs with `thinking: off` by default, regardless of the session model's thinking level — preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Add `agents.defaults.compaction.thinking` to opt in (e.g. `"low"`). When a compaction run times out with thinking enabled, it retries once without thinking automatically.
+- Agents/Compaction: compaction now runs with `thinking: off` by default, regardless of the session model's thinking level — preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set `agents.defaults.compaction.thinking: "on"` to inherit the session model's current thinking level. When a compaction run times out with thinking enabled, it retries once without thinking automatically.
 - CLI/Config validation: add `openclaw config validate` (with `--json`) to validate config files before gateway startup, and include detailed invalid-key paths in startup invalid-config errors. (#31220) thanks @Sid-Qin.
 - Sessions/Attachments: add inline file attachment support for `sessions_spawn` (subagent runtime only) with base64/utf8 encoding, transcript content redaction, lifecycle cleanup, and configurable limits via `tools.sessions_spawn.attachments`. (#16761) Thanks @napetrov.
 - Agents/Thinking defaults: set `adaptive` as the default thinking level for Anthropic Claude 4.6 models (including Bedrock Claude 4.6 refs) while keeping other reasoning-capable models at `low` unless explicitly configured.
