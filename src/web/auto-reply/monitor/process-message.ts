@@ -302,9 +302,13 @@ export async function processMessage(params: {
     params.msg.chatType !== "group"
       ? (() => {
           const rawName = params.msg.fromMe
-            ? (params.msg.senderName || params.msg.selfE164 || "Me")
-            : (params.msg.senderName || params.msg.from || "Unknown");
-          const safeName = rawName.replace(/[\[\]\r\n]/g, "").replace(/\s+/g, " ").trim() || "Unknown";
+            ? params.msg.senderName || params.msg.selfE164 || "Me"
+            : params.msg.senderName || params.msg.from || "Unknown";
+          const safeName =
+            rawName
+              .replace(/[[\]\r\n]/g, "")
+              .replace(/\s+/g, " ")
+              .trim() || "Unknown";
           return `[${safeName}]: `;
         })()
       : "";
