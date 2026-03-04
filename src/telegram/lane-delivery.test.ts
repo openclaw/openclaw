@@ -164,6 +164,27 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("treats 'message is not modified' preview edit errors as delivered", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.editPreview.mockRejectedValue(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to normal delivery when stop-created preview has no message id", async () => {
     const harness = createHarness();
 
