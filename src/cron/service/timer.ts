@@ -70,7 +70,6 @@ function resolveMainSessionHeartbeatTarget(job: CronJob): {
   return { target: "last" };
 }
 
-
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
