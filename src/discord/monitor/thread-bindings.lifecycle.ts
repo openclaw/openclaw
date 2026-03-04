@@ -278,9 +278,6 @@ function resolveStoredAcpBindingHealth(params: {
   if (!params.session.acp) {
     return "stale";
   }
-  if (params.session.acp.state === "error") {
-    return "stale";
-  }
   return "healthy";
 }
 

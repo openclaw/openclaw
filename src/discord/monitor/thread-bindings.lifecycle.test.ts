@@ -954,6 +954,49 @@ describe("thread binding lifecycle", () => {
     expect(manager.getByThreadId("thread-acp-running-uncertain")).toBeDefined();
   });
 
+  it("keeps ACP bindings in stored error state when no explicit stale probe verdict exists", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    await manager.bindTarget({
+      threadId: "thread-acp-error",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:error",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+
+    hoisted.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex:acp:error",
+      storeSessionKey: "agent:codex:acp:error",
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:error",
+        mode: "persistent",
+        state: "error",
+        lastActivityAt: Date.now(),
+      },
+    });
+
+    const result = await reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(result.checked).toBe(1);
+    expect(result.removed).toBe(0);
+    expect(result.staleSessionKeys).toEqual([]);
+    expect(manager.getByThreadId("thread-acp-error")).toBeDefined();
+  });
+
   it("starts ACP health probes in parallel during startup reconciliation", async () => {
     const manager = createThreadBindingManager({
       accountId: "default",

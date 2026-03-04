@@ -232,7 +232,9 @@ async function probeDiscordAcpBindingHealth(params: {
       : { status: "uncertain", reason: "status-error" };
   }
   if (result.status.state === "error") {
-    return { status: "stale", reason: "status-error-state" };
+    // ACP error state is recoverable (next turn can clear it), so keep the
+    // binding unless stronger stale signals exist.
+    return { status: "uncertain", reason: "status-error-state" };
   }
   return { status: "healthy" };
 }

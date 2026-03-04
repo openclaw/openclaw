@@ -25,6 +25,7 @@ const {
   createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
+  getAcpSessionStatusMock,
   getPluginCommandSpecsMock,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
@@ -63,6 +64,7 @@ const {
       staleSessionKeys: [],
     })),
     createdBindingManagers,
+    getAcpSessionStatusMock: vi.fn(async () => ({ state: "idle" })),
     getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
     listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
       { name: "cmd", description: "built-in", acceptsArgs: false },
@@ -125,6 +127,12 @@ vi.mock("@buape/carbon/voice", () => ({
 
 vi.mock("../../auto-reply/chunk.js", () => ({
   resolveTextChunkLimit: () => 2000,
+}));
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    getSessionStatus: getAcpSessionStatusMock,
+  }),
 }));
 
 vi.mock("../../auto-reply/commands-registry.js", () => ({
@@ -318,6 +326,7 @@ describe("monitorDiscordProvider", () => {
       removed: 0,
       staleSessionKeys: [],
     });
+    getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
     createdBindingManagers.length = 0;
     getPluginCommandSpecsMock.mockClear().mockReturnValue([]);
     listNativeCommandSpecsForConfigMock
@@ -366,6 +375,48 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats ACP error status as uncertain during startup thread-binding probes", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getAcpSessionStatusMock.mockResolvedValue({ state: "error" });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const reconcileParams = reconcileAcpThreadBindingsOnStartupMock.mock.calls[0]?.[0] as
+      | {
+          cfg: OpenClawConfig;
+          healthProbe?: (params: {
+            cfg: OpenClawConfig;
+            accountId: string;
+            sessionKey: string;
+            binding: unknown;
+            session: unknown;
+          }) => Promise<{ status: string; reason?: string }>;
+        }
+      | undefined;
+    expect(typeof reconcileParams?.healthProbe).toBe("function");
+
+    const probeResult = await reconcileParams!.healthProbe!({
+      cfg: baseConfig(),
+      accountId: "default",
+      sessionKey: "agent:codex:acp:error",
+      binding: {} as never,
+      session: {
+        acp: {
+          state: "error",
+          lastActivityAt: Date.now(),
+        },
+      } as never,
+    });
+
+    expect(probeResult).toEqual({
+      status: "uncertain",
+      reason: "status-error-state",
+    });
   });
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {
