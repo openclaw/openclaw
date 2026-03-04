@@ -38,6 +38,7 @@ const WORKSPACE_STATE_VERSION = 1;
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
 const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
+const WORKSPACE_BOOTSTRAP_DIR_BASENAME_PATTERN = /^workspace(?:-.+)?$/;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -49,6 +50,21 @@ type WorkspaceGuardedReadResult =
   | { ok: true; content: string }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
+function resolveWorkspaceBootstrapBoundaryRoot(workspaceDir: string): string {
+  const workspacePath = path.resolve(workspaceDir);
+  if (WORKSPACE_BOOTSTRAP_DIR_BASENAME_PATTERN.test(path.basename(workspacePath))) {
+    const parent = path.dirname(workspacePath);
+    if (path.basename(parent) === ".openclaw") {
+      try {
+        return syncFs.realpathSync(parent);
+      } catch {
+        return parent;
+      }
+    }
+  }
+  return workspacePath;
+}
+
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
@@ -57,9 +73,11 @@ async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
+  const boundaryRoot = resolveWorkspaceBootstrapBoundaryRoot(params.workspaceDir);
   const opened = await openBoundaryFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
+    rootRealPath: boundaryRoot,
     boundaryLabel: "workspace root",
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });

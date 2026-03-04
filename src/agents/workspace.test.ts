@@ -221,6 +221,62 @@ describe("loadWorkspaceBootstrapFiles", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "allows bootstrap symlinks to sibling workspaces under .openclaw",
+    async () => {
+      const rootDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-workspace-bootstrap-alias-"),
+      );
+      try {
+        const openclawRoot = path.join(rootDir, ".openclaw");
+        const sourceWorkspace = path.join(openclawRoot, "workspace");
+        const sharedWorkspace = path.join(openclawRoot, "workspace-shared");
+        await fs.mkdir(sourceWorkspace, { recursive: true });
+        await fs.mkdir(sharedWorkspace, { recursive: true });
+
+        const sourceAgents = path.join(sourceWorkspace, DEFAULT_AGENTS_FILENAME);
+        const sharedAgents = path.join(sharedWorkspace, DEFAULT_AGENTS_FILENAME);
+        await fs.writeFile(sourceAgents, "# source agents", "utf-8");
+        await fs.symlink(sourceAgents, sharedAgents);
+
+        const files = await loadWorkspaceBootstrapFiles(sharedWorkspace);
+        const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+        expect(agents?.missing).toBe(false);
+        expect(agents?.content).toBe("# source agents");
+      } finally {
+        await fs.rm(rootDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps bootstrap symlinks outside .openclaw as missing",
+    async () => {
+      const rootDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-workspace-bootstrap-alias-"),
+      );
+      try {
+        const openclawRoot = path.join(rootDir, ".openclaw");
+        const workspaceDir = path.join(openclawRoot, "workspace");
+        const outsideDir = path.join(rootDir, "outside");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+
+        const outsideAgents = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
+        const linkedAgents = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+        await fs.writeFile(outsideAgents, "# outside agents", "utf-8");
+        await fs.symlink(outsideAgents, linkedAgents);
+
+        const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+        const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+        expect(agents?.missing).toBe(true);
+        expect(agents?.content).toBeUndefined();
+      } finally {
+        await fs.rm(rootDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("filterBootstrapFilesForSession", () => {
