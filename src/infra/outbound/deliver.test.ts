@@ -971,6 +971,44 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-2" }]);
   });
 
+  it("continues after media-only fallback failure when bestEffort is enabled", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-4" });
+    const onError = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      bestEffort: true,
+      onError,
+      payloads: [
+        { text: "   ", mediaUrl: "https://example.com/file.png" },
+        { text: "follow-up text" },
+      ],
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(String(onError.mock.calls[0]?.[0])).toContain(
+      "does not implement sendMedia and no text fallback",
+    );
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "follow-up text" }));
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-4" }]);
+  });
+
   it("fails media-only payloads when plugin outbound omits sendMedia", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-3" });
