@@ -1183,6 +1183,7 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
