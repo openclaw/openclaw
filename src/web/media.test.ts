@@ -480,7 +480,7 @@ describe("local media root guard", () => {
 
   it("rejects workspace-* paths outside the OpenClaw state dir by default", async () => {
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
-    const outsideDir = await fs.mkdtemp(path.join(tmpDir, "workspace-outside-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-outside-"));
 
     await expect(
       loadWebMedia(path.join(outsideDir, "tmp", "render.bin"), {
