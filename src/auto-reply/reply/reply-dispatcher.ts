@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { buildOutboundDedupeKey } from "../../infra/outbound/outbound-dedupe.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -113,6 +114,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
+  // Layer 3: per-dispatch-lifecycle dedup set.
+  // Catches duplicates within a single dispatch cycle (e.g. multi-tool sequence
+  // emitting the same text block multiple times).
+  const deliveredPayloadKeys = new Set<string>();
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
@@ -137,6 +142,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     if (!normalized) {
       return false;
     }
+
+    // Layer 3: per-dispatch-lifecycle dedup — skip if this exact payload
+    // was already enqueued during this dispatcher's lifetime.
+    const dedupeKey = buildOutboundDedupeKey({
+      channel: "dispatch",
+      to: "dispatch",
+      payload: normalized,
+    });
+    if (dedupeKey) {
+      if (deliveredPayloadKeys.has(dedupeKey)) {
+        return false;
+      }
+      deliveredPayloadKeys.add(dedupeKey);
+    }
+
     queuedCounts[kind] += 1;
     pending += 1;
 

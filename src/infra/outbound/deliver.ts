@@ -38,9 +38,11 @@ import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
+import { isOutboundDuplicate, registerOutboundDelivered } from "./outbound-dedupe.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import { deduplicateText } from "./self-dedup.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -296,6 +298,13 @@ function normalizePayloadsForChannelDelivery(
       // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
       if (!(channel === "telegram" && payload.channelData)) {
         sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
+      }
+    }
+    // Layer 2: fix self-duplicated text (e.g. BlueBubbles streaming concatenation bug).
+    if (sanitizedPayload.text) {
+      const deduplicated = deduplicateText(sanitizedPayload.text);
+      if (deduplicated != null) {
+        sanitizedPayload = { ...sanitizedPayload, text: deduplicated };
       }
     }
     const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
@@ -675,6 +684,25 @@ async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
+      // Layer 1: cross-turn TTL dedup — skip if an identical payload was
+      // recently delivered to the same recipient.
+      const dedupeParams = {
+        channel,
+        to,
+        accountId,
+        threadId: params.threadId,
+        resolvedReplyToId: params.replyToId,
+        payload,
+      };
+      if (isOutboundDuplicate(dedupeParams)) {
+        log.info("outbound dedup: skipping duplicate payload", {
+          channel,
+          to,
+          text: payloadSummary.text.slice(0, 80),
+        });
+        continue;
+      }
+
       // Run message_sending plugin hook (may modify content or cancel)
       const hookResult = await applyMessageSendingHook({
         hookRunner,
@@ -699,6 +727,7 @@ async function deliverOutboundPayloadsCore(
       if (handler.sendPayload && effectivePayload.channelData) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
+        registerOutboundDelivered(dedupeParams);
         emitMessageSent({
           success: true,
           content: payloadSummary.text,
@@ -714,6 +743,7 @@ async function deliverOutboundPayloadsCore(
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
         const messageId = results.at(-1)?.messageId;
+        registerOutboundDelivered(dedupeParams);
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.text,
@@ -738,6 +768,7 @@ async function deliverOutboundPayloadsCore(
           lastMessageId = delivery.messageId;
         }
       }
+      registerOutboundDelivered(dedupeParams);
       emitMessageSent({
         success: true,
         content: payloadSummary.text,

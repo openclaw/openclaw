@@ -12,6 +12,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { resetOutboundDedupe } from "./outbound-dedupe.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -207,6 +208,7 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    resetOutboundDedupe();
   });
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
@@ -888,6 +890,100 @@ describe("deliverOutboundPayloads", () => {
       }),
     );
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
+  });
+
+  it("skips duplicate payload on second delivery (cross-turn dedup)", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    const first = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+    const second = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+  });
+
+  it("allows delivery to different recipients", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid1" })
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid2" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1666",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not register failed delivery (allows retry)", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" });
+
+    // First attempt fails.
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "retry me" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("network error");
+
+    // Retry succeeds because the failed send was not registered.
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "retry me" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(results).toHaveLength(1);
+  });
+
+  it("fixes self-duplicated text before delivery", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const paragraph = "This is a paragraph that is long enough to trigger dedup detection.";
+    const duplicated = `${paragraph}\n\n${paragraph}`;
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: duplicated }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith("+1555", paragraph, expect.anything());
   });
 
   it("emits message_sent failure when delivery errors", async () => {
