@@ -12,6 +12,7 @@ import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 export type ChannelsListOptions = {
   json?: boolean;
   usage?: boolean;
+  verbose?: boolean;
 };
 
 const colorValue = (value: string) => {
@@ -53,8 +54,9 @@ function shouldShowConfigured(channel: ChannelPlugin): boolean {
 function formatAccountLine(params: {
   channel: ChannelPlugin;
   snapshot: ChannelAccountSnapshot;
+  verbose?: boolean;
 }): string {
-  const { channel, snapshot } = params;
+  const { channel, snapshot, verbose } = params;
   const label = formatChannelAccountLabel({
     channel: channel.id,
     accountId: snapshot.accountId,
@@ -80,6 +82,29 @@ function formatAccountLine(params: {
   }
   if (snapshot.baseUrl) {
     bits.push(`base=${theme.muted(snapshot.baseUrl)}`);
+  }
+  if (verbose) {
+    if (snapshot.credentialSource) {
+      bits.push(formatSource("credential", snapshot.credentialSource));
+    }
+    if (snapshot.secretSource) {
+      bits.push(formatSource("secret", snapshot.secretSource));
+    }
+    if (snapshot.webhookPath) {
+      bits.push(`webhookPath=${theme.muted(snapshot.webhookPath)}`);
+    }
+    if (snapshot.webhookUrl) {
+      bits.push(`webhookUrl=${theme.muted(snapshot.webhookUrl)}`);
+    }
+    if (snapshot.cliPath) {
+      bits.push(`cliPath=${theme.muted(snapshot.cliPath)}`);
+    }
+    if (snapshot.dbPath) {
+      bits.push(`dbPath=${theme.muted(snapshot.dbPath)}`);
+    }
+    if (typeof snapshot.port === "number" && Number.isFinite(snapshot.port)) {
+      bits.push(`port=${snapshot.port}`);
+    }
   }
   if (typeof snapshot.enabled === "boolean") {
     bits.push(formatEnabled(snapshot.enabled));
@@ -148,6 +173,7 @@ export async function channelsListCommand(
         formatAccountLine({
           channel: plugin,
           snapshot,
+          verbose: Boolean(opts.verbose),
         }),
       );
     }

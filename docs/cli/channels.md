@@ -19,7 +19,9 @@ Related docs:
 
 ```bash
 openclaw channels list
+openclaw channels list --verbose
 openclaw channels status
+openclaw channels status --verbose
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
@@ -44,7 +46,8 @@ openclaw channels logout --channel whatsapp
 
 ## Troubleshooting
 
-- Run `openclaw status --deep` for a broad probe.
+- Run `openclaw channels status --probe` for channel-focused credential/runtime probes.
+- Run `openclaw status --deep` for a broader system probe (gateway + channels + local runtime checks).
 - Use `openclaw doctor` for guided fixes.
 - `openclaw channels list` prints `Claude: HTTP 403 ... user:profile` → usage snapshot needs the `user:profile` scope. Use `--no-usage`, or provide a claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), or re-auth via Claude Code CLI.
 

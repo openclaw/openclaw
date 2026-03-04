@@ -449,6 +449,33 @@ describe("channels command", () => {
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
   });
 
+  it("adds extra runtime fields when channels status uses verbose output", () => {
+    const lines = formatGatewayChannelsStatusLines(
+      {
+        channelAccounts: {
+          signal: [
+            {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              connected: false,
+              reconnectAttempts: 3,
+              credentialSource: "env",
+              cliPath: "/usr/bin/signal-cli",
+              port: 8080,
+            },
+          ],
+        },
+      },
+      { verbose: true },
+    );
+    const joined = lines.join("\n");
+    expect(joined).toMatch(/reconnect:3/);
+    expect(joined).toMatch(/credential:env/);
+    expect(joined).toMatch(/cliPath:\/usr\/bin\/signal-cli/);
+    expect(joined).toMatch(/port:8080/);
+  });
+
   it("cleans up telegram update offset when deleting a telegram account", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
