@@ -157,8 +157,9 @@ export async function ensureSkillSnapshot(params: {
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const sessionSkillVersion = nextEntry?.skillsSnapshot?.version ?? 0;
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    snapshotVersion > 0 ? sessionSkillVersion < snapshotVersion : sessionSkillVersion > 0;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??

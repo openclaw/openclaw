@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -46,6 +47,10 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  // Seed the skill snapshot version so sessions from previous runs refresh
+  // their cached skill prompts on the first message after restart.
+  bumpSkillsSnapshotVersion({ reason: "manual" });
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
