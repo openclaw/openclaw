@@ -387,6 +387,69 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("downloads media from quoted image message and includes in dispatch context", async () => {
+    const imageContent = JSON.stringify({ image_key: "img_v3_quoted" });
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_quoted_img",
+      chatId: "oc-dm",
+      content: "[image message]",
+      contentType: "image",
+      rawContent: imageContent,
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image-data"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_to_img",
+        parent_id: "om_quoted_img",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "what is in this image?" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // Verify the quoted image was fetched
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "om_quoted_img" }),
+    );
+
+    // Verify media download was attempted for the quoted image
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_quoted_img",
+        fileKey: "img_v3_quoted",
+      }),
+    );
+
+    // Verify the dispatch includes media from the quoted message
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToBody: "[image message]",
+      }),
+    );
+  });
+
   it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {
     const cfg: ClawdbotConfig = {
       channels: {

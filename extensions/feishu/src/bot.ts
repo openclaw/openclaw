@@ -1225,10 +1225,9 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
-
-    // Fetch quoted/replied message content if parentId exists
+    // Fetch quoted/replied message content and media if parentId exists
     let quotedContent: string | undefined;
+    let quotedMediaList: FeishuMediaInfo[] = [];
     if (ctx.parentId) {
       try {
         const quotedMsg = await getMessageFeishu({
@@ -1241,11 +1240,33 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
           );
+
+          // Download media from quoted message (images, files, etc.)
+          if (quotedMsg.rawContent) {
+            quotedMediaList = await resolveFeishuMediaList({
+              cfg,
+              messageId: quotedMsg.messageId,
+              messageType: quotedMsg.contentType,
+              content: quotedMsg.rawContent,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (quotedMediaList.length > 0) {
+              log(
+                `feishu[${account.accountId}]: downloaded ${quotedMediaList.length} media item(s) from quoted message`,
+              );
+            }
+          }
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    // Combine current message media with quoted message media
+    const combinedMediaList = [...mediaList, ...quotedMediaList];
+    const mediaPayload = buildAgentMediaPayload(combinedMediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({

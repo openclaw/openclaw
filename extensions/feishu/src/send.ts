@@ -27,6 +27,8 @@ export type FeishuMessageInfo = {
   senderType?: string;
   content: string;
   contentType: string;
+  /** Raw JSON body.content from Feishu API — needed to extract image_key/file_key for media download. */
+  rawContent?: string;
   createTime?: number;
 };
 
@@ -178,6 +180,7 @@ export async function getMessageFeishu(params: {
       senderType: item.sender?.sender_type,
       content,
       contentType: msgType,
+      rawContent: rawContent || undefined,
       createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
     };
   } catch {
