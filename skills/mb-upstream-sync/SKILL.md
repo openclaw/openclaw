@@ -1,6 +1,6 @@
 ---
 name: mb-upstream-sync
-description: "Sync MaxBot with the latest upstream OpenClaw release. Pulls OC updates, auto-resolves conflicts, preserves MB security layer. Use when Dave says 'new OC update', 'sync upstream', or 'update MaxBot'."
+description: "Sync MaxBot with the latest upstream OpenClaw release using fail-closed staging. Pulls OC updates, preserves MB custom layer, and stops on unprotected conflicts. Use when Dave says 'new OC update', 'sync upstream', or 'update MaxBot'."
 metadata: { "openclaw": { "emoji": "🔄", "requires": { "bins": ["git", "pnpm", "python3"] } } }
 ---
 
@@ -48,12 +48,11 @@ bash scripts/mb-sync-upstream.sh --deploy 2>&1
 2. Fetches upstream OC `main`
 3. Merges with `--no-commit` so it can validate first
 4. Auto-resolves conflicts:
-   - MB-protected files → always keeps MB version
-   - Other conflicts → union strategy (keeps both sides' additions)
-   - Unresolvable → aborts and reports clearly
-5. Fixes lint errors automatically (unused imports, duplicates)
-6. Commits with standard message
-7. Reports result
+   - MB-protected files/patterns → always keeps MB version
+   - Other conflicts → hard stop (no union strategy)
+5. Runs `pnpm check` (unless `--skip-lint`)
+6. Commits staged merge and promotes by fast-forward only
+7. Reports result and rollback anchor
 
 ## If the script needs a manual fix
 

@@ -1,0 +1,34 @@
+# MaxBot custom layer preservation list for upstream sync.
+# Supports bash glob patterns. Lines starting with # are comments.
+
+# Core security/sentinel customizations
+src/agents/security-sentinel.ts
+src/agents/pi-tools.before-tool-call.ts
+src/gateway/control-plane-rate-limit.ts
+src/gateway/control-ui-csp.ts
+src/browser/config.ts
+
+# Gateway/runtime custom safety behavior
+src/gateway/control-ui.ts
+src/agents/pi-embedded-runner/run.ts
+src/agents/pi-embedded-runner/model.ts
+src/agents/pi-embedded-helpers.ts
+src/agents/pi-embedded-helpers/errors.ts
+src/agents/models-config.providers.ts
+src/agents/tools/apprenticeship-hunter-tool.ts
+
+# UI customizations
+ui/src/ui/app-settings.ts
+ui/src/ui/storage.ts
+ui/src/ui/views/chat.ts
+ui/src/styles/components.css
+ui/src/styles/mission-control.css
+
+# Local recovery and sync tooling
+scripts/mb-master-key.sh
+scripts/mb-master-key-restore.sh
+scripts/mb-sync-upstream.sh
+skills/mb-upstream-sync/SKILL.md
+
+# Voicebox runtime patch
+docker/voicebox/patch_voicebox_runtime.py
