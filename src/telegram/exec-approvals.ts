@@ -89,137 +89,48 @@ function formatCommandPreview(command: string, maxChars = 200): string {
   return command;
 }
 
-function describeCommand(command: string): string {
-  const trimmed = command.trim();
-  const binary = trimmed.split(/\s+/)[0] ?? trimmed;
-  const base = binary.split("/").pop() ?? binary;
-
-  // Provide human-readable descriptions for common commands
-  if (base === "rm" || base === "rmdir") {
-    return "Delete files or directories";
-  }
-  if (base === "mv") {
-    return "Move or rename files";
-  }
-  if (base === "cp") {
-    return "Copy files";
-  }
-  if (base === "chmod") {
-    return "Change file permissions";
-  }
-  if (base === "chown") {
-    return "Change file ownership";
-  }
-  if (base === "curl" || base === "wget") {
-    return "Download from the internet";
-  }
-  if (base === "pip" || base === "pip3") {
-    return "Install Python packages";
-  }
-  if (
-    base === "npm" ||
-    base === "npx" ||
-    base === "pnpm" ||
-    base === "yarn" ||
-    base === "bun" ||
-    base === "bunx"
-  ) {
-    return "Run a Node.js package manager command";
-  }
-  if (base === "git") {
-    return "Run a git version control command";
-  }
-  if (base === "docker" || base === "podman") {
-    return "Run a container command";
-  }
-  if (base === "ssh" || base === "scp") {
-    return "Connect to or transfer files with a remote host";
-  }
-  if (base === "sudo") {
-    return "Run a command with elevated privileges";
-  }
-  if (
-    base === "apt" ||
-    base === "apt-get" ||
-    base === "brew" ||
-    base === "dnf" ||
-    base === "yum" ||
-    base === "pacman"
-  ) {
-    return "Install or manage system packages";
-  }
-  if (base === "kill" || base === "pkill" || base === "killall") {
-    return "Terminate a running process";
-  }
-  if (base === "cat" || base === "less" || base === "head" || base === "tail") {
-    return "Read file contents";
-  }
-  if (base === "sed" || base === "awk") {
-    return "Transform text or file contents";
-  }
-  if (
-    base === "python" ||
-    base === "python3" ||
-    base === "node" ||
-    base === "ruby" ||
-    base === "perl"
-  ) {
-    return `Execute a ${base} script`;
-  }
-  if (base === "bash" || base === "sh" || base === "zsh") {
-    return "Run a shell script";
-  }
-  return `Run "${base}"`;
+/** Extract the short binary name from a command string (e.g. "python3" from "/usr/bin/python3 foo.py"). */
+function binaryName(command: string): string {
+  const first = command.trim().split(/\s+/)[0] ?? command;
+  return first.split("/").pop() ?? first;
 }
 
+/** Resolve the full path that "Always allow" would add to the permanent allowlist. */
 function resolveAllowlistBinary(request: ExecApprovalRequest): string | null {
   const resolvedPath = request.request.resolvedPath;
   if (resolvedPath) {
     return resolvedPath;
   }
-  // Fall back to first token of the command
   const first = request.request.command.trim().split(/\s+/)[0];
   return first?.startsWith("/") ? first : null;
 }
 
 function buildRequestMessageText(request: ExecApprovalRequest, nowMs: number): string {
   const command = request.request.command;
-  const description = describeCommand(command);
+  const name = binaryName(command);
   const preview = formatCommandPreview(command, 300);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
-  const allowlistBinary = resolveAllowlistBinary(request);
+  const allowlistPath = resolveAllowlistBinary(request);
+
+  // Plain-language description of what "Always allow" will do
+  const alwaysDesc = allowlistPath
+    ? `Let <code>${escapeHtml(name)}</code> run <b>any</b> command, <b>anywhere</b>, without asking again`
+    : `Let this program run without asking again`;
 
   const lines: string[] = [
-    `\u{1F512} <b>Exec Approval Required</b>`,
+    `<b>Allow ${escapeHtml(name)} to run?</b>`,
     "",
-    `<b>What:</b> ${description}`,
-    `<b>Command:</b> <code>${escapeHtml(preview)}</code>`,
+    `<code>${escapeHtml(preview)}</code>`,
   ];
   if (request.request.cwd) {
-    lines.push(`<b>Directory:</b> <code>${escapeHtml(request.request.cwd)}</code>`);
-  }
-  if (request.request.host) {
-    lines.push(`<b>Host:</b> ${escapeHtml(request.request.host)}`);
-  }
-  if (request.request.agentId) {
-    lines.push(`<b>Agent:</b> ${escapeHtml(request.request.agentId)}`);
-  }
-  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
-    lines.push(`<b>Env overrides:</b> ${escapeHtml(request.request.envKeys.join(", "))}`);
+    lines.push(`in <code>${escapeHtml(request.request.cwd)}</code>`);
   }
   lines.push("");
-  lines.push(`<b>Allow once</b> = run this command only.`);
-  if (allowlistBinary) {
-    lines.push(
-      `<b>Always allow</b> = permanently allow <b>all</b> future ` +
-        `<code>${escapeHtml(allowlistBinary)}</code> commands without asking.`,
-    );
-  } else {
-    lines.push(`<b>Always allow</b> = permanently allow this binary for all future commands.`);
-  }
-  lines.push(`<b>Deny</b> = block execution.`);
+  lines.push(`\u2705 <b>Allow once</b> — run this specific command`);
+  lines.push(`\u{1F504} <b>Always allow</b> — ${alwaysDesc}`);
+  lines.push(`\u274C <b>Deny</b> — block it`);
   lines.push("");
-  lines.push(`\u23F3 Expires in ${expiresIn}s \u2022 ID: ${request.id}`);
+  lines.push(`\u23F3 ${expiresIn}s`);
   return lines.join("\n");
 }
 
