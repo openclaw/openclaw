@@ -12,6 +12,14 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+// Hoist mock so summarizeInStages can be stubbed per-test without affecting
+// the other exports (computeAdaptiveChunkRatio, etc.) used by __testing.
+vi.mock("../compaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../compaction.js")>();
+  return { ...actual, summarizeInStages: vi.fn().mockImplementation(actual.summarizeInStages) };
+});
+import { summarizeInStages } from "../compaction.js";
+
 const {
   collectToolFailures,
   formatToolFailuresSection,
@@ -809,6 +817,37 @@ describe("compaction-safeguard cancel reasons", () => {
     // Other fields must be untouched
     expect(runtime?.maxHistoryShare).toBe(0.6);
     expect(runtime?.model).toEqual(model);
+  });
+
+  it("sets lastCancelReason when summarization throws", async () => {
+    vi.mocked(summarizeInStages).mockRejectedValueOnce(new Error("Rate limit exceeded"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    // recentTurnsPreserve: 0 keeps all messages in the summarizable bucket so
+    // summarizeInStages is actually invoked (otherwise the single message would
+    // be moved to preservedMessages and summarization would be skipped).
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    // Include settings.reserveTokens so execution reaches summarizeInStages.
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "hello", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        settings: { reserveTokens: 1024 },
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    await runCompactionScenario({ sessionManager, event: mockEvent, apiKey: "sk-test" });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.lastCancelReason).toBe("Summarization failed: Rate limit exceeded");
   });
 });
 
