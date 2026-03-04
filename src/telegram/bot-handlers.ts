@@ -152,7 +152,7 @@ export const registerTelegramHandlers = ({
   type DocumentBatchEntry = {
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext }>;
-    timer: ReturnType<typeof setTimeout>;
+    timer: ReturnType<typeof setTimeout> | null;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
   };
@@ -454,7 +454,9 @@ export const registerTelegramHandlers = ({
   };
 
   const scheduleDocumentBatchFlush = (entry: DocumentBatchEntry) => {
-    clearTimeout(entry.timer);
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
     entry.timer = setTimeout(async () => {
       documentBatchBuffer.delete(entry.key);
       documentBatchProcessing = documentBatchProcessing
@@ -1058,7 +1060,8 @@ export const registerTelegramHandlers = ({
     // merging unrelated documents under a shared "unknown" key.
     const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
     if (!mediaGroupId && msg.document && documentBatchWindowMs > 0 && docSenderId) {
-      const docBatchKey = `doc:${chatId}:${docSenderId}`;
+      const docThreadId = resolvedThreadId ?? dmThreadId ?? 0;
+      const docBatchKey = `doc:${chatId}:${docSenderId}:${docThreadId}`;
       const existing = documentBatchBuffer.get(docBatchKey);
       if (existing) {
         existing.messages.push({ msg, ctx });
@@ -1067,7 +1070,7 @@ export const registerTelegramHandlers = ({
         const entry: DocumentBatchEntry = {
           key: docBatchKey,
           messages: [{ msg, ctx }],
-          timer: setTimeout(() => {}, documentBatchWindowMs),
+          timer: null,
           sendOversizeWarning,
           oversizeLogMessage,
         };
