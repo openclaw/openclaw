@@ -28,7 +28,7 @@ export async function deriveRelayToken(gatewayToken, port) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function buildRelayWsUrl(port) {
+export function buildRelayWsUrl(port) {
   return `ws://127.0.0.1:${port}/extension`;
 }
 
