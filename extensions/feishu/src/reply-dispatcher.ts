@@ -156,9 +156,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamText = nextText;
       return;
     }
+    // Detect cumulative payloads even when leading whitespace/directives cause
+    // a prefix mismatch.  If nextText contains the current streamText as a
+    // substring, it is almost certainly the full cumulative output and should
+    // replace rather than append (fixes #34108 / #33883).
+    if (nextText.includes(streamText)) {
+      streamText = nextText;
+      return;
+    }
     if (streamText.endsWith(nextText)) {
       return;
     }
+    // True delta — append only the new portion.
     streamText += nextText;
   };
 
