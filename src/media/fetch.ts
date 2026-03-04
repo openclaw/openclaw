@@ -151,6 +151,19 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
             ),
         })
       : Buffer.from(await res.arrayBuffer());
+
+    // Guard: reject empty responses and CDN "null" placeholders (e.g. expired
+    // Discord CDN URLs return HTTP 200 with the 4-byte JSON literal `null`).
+    if (buffer.byteLength === 0) {
+      throw new MediaFetchError("http_error", `Failed to fetch media from ${url}: empty response body`);
+    }
+    if (buffer.byteLength <= 4 && buffer.toString("utf8") === "null") {
+      throw new MediaFetchError(
+        "http_error",
+        `Failed to fetch media from ${url}: response body is literal "null" (likely expired or invalid URL)`,
+      );
+    }
+
     let fileNameFromUrl: string | undefined;
     try {
       const parsed = new URL(finalUrl);
