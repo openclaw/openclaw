@@ -134,27 +134,7 @@ const meta: ChannelMeta = {
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 const capabilities: ChannelCapabilities = {
-  text: true,
-  media: false, // SMS is text-only (MMS would be a separate channel)
-  reactions: false,
-  threads: false,
-  groups: false,
-  mentions: false,
-  buttons: false,
-  audio: false,
-  video: false,
-  files: false,
-  location: false,
-  contacts: false,
-  stickers: false,
-  polls: false,
-  editing: false,
-  deleting: false,
-  forwarding: false,
-  quoting: false,
-  typing: false,
-  readReceipts: false,
-  presenceStatus: false,
+  chatTypes: ["direct"],
 };
 
 // ─── Outbound Adapter ────────────────────────────────────────────────────────
