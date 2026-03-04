@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/img2img-aly",
+  "version": "2026.3.3",
+  "description": "img2img tool for aly",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/img2img-aly",
+      "localPath": "extensions/img2img-aly",
+      "defaultChoice": "local"
+    }
+  }
+}
