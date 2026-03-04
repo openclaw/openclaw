@@ -162,6 +162,31 @@ source ~/.bashrc
 openclaw models list
 ```
 
+## Cross-Region Inference
+
+When using AWS Bedrock, model IDs may require a **region prefix** (`us.`, `eu.`, `ap.`) to access models in different regions from your default. This is required for **cross-region inference**.
+
+### When to Use Prefixes
+
+- If your default region (e.g., `us-east-1`) doesn't host the model you want
+- To explicitly use a model in a specific region (e.g., `eu.` for Europe, `ap.` for Asia)
+
+### Prefix Examples
+
+| Model ID | Region | Use Case |
+|----------|--------|----------|
+| `anthropic.claude-opus-4-5-20251101-v1:0` | Local (us-east-1) | Default, no prefix needed |
+| `us.anthropic.claude-opus-4-5-20251101-v1:0` | US (explicit) | Force US region |
+| `eu.anthropic.claude-opus-4-5-20251101-v1:0` | Europe | Access EU-hosted models |
+| `ap.anthropic.claude-opus-4-5-20251101-v1:0` | Asia Pacific | Access APAC-hosted models |
+
+### Troubleshooting
+
+If you get a "model not found" error:
+1. Check that model access is enabled in your AWS account for that region
+2. Add the appropriate prefix (`us.`, `eu.`, or `ap.`) to your model ID
+3. Ensure your `AWS_REGION` matches or is set to allow cross-region access
+
 ## Notes
 
 - Bedrock requires **model access** enabled in your AWS account/region.
