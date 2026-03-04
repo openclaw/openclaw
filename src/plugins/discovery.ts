@@ -33,6 +33,56 @@ export type PluginDiscoveryResult = {
   diagnostics: PluginDiagnostic[];
 };
 
+const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscoveryResult }>();
+
+// Keep a short cache window to collapse bursty reloads during startup flows.
+const DEFAULT_DISCOVERY_CACHE_MS = 1000;
+
+export function clearPluginDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
+function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  return Math.max(0, parsed);
+}
+
+function shouldUseDiscoveryCache(env: NodeJS.ProcessEnv): boolean {
+  const disabled = env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim();
+  if (disabled) {
+    return false;
+  }
+  return resolveDiscoveryCacheMs(env) > 0;
+}
+
+function buildDiscoveryCacheKey(params: {
+  workspaceDir?: string;
+  extraPaths?: string[];
+  ownershipUid?: number | null;
+}): string {
+  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
+  const configExtensionsRoot = path.join(resolveConfigDir(), "extensions");
+  const bundledRoot = resolveBundledPluginsDir() ?? "";
+  const normalizedExtraPaths = (params.extraPaths ?? [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolveUserPath(entry))
+    .toSorted();
+  const ownershipUid = params.ownershipUid ?? currentUid();
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
+}
+
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
     return overrideUid;
@@ -569,7 +619,23 @@ export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  cache?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
+  const env = params.env ?? process.env;
+  const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
+  const cacheKey = buildDiscoveryCacheKey({
+    workspaceDir: params.workspaceDir,
+    extraPaths: params.extraPaths,
+    ownershipUid: params.ownershipUid,
+  });
+  if (cacheEnabled) {
+    const cached = discoveryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+  }
+
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
@@ -634,5 +700,12 @@ export function discoverOpenClawPlugins(params: {
     seen,
   });
 
-  return { candidates, diagnostics };
+  const result = { candidates, diagnostics };
+  if (cacheEnabled) {
+    const ttl = resolveDiscoveryCacheMs(env);
+    if (ttl > 0) {
+      discoveryCache.set(cacheKey, { expiresAt: Date.now() + ttl, result });
+    }
+  }
+  return result;
 }

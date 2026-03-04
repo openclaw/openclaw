@@ -211,14 +211,19 @@ function createEscapingEntryFixture(params: { id: string; sourceBody: string }) 
   return { pluginDir, outsideEntry, linkedEntry };
 }
 
-function createPluginSdkAliasFixture() {
+function createPluginSdkAliasFixture(params?: {
+  srcFile?: string;
+  distFile?: string;
+  srcBody?: string;
+  distBody?: string;
+}) {
   const root = makeTempDir();
-  const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
-  const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+  const srcFile = path.join(root, "src", "plugin-sdk", params?.srcFile ?? "index.ts");
+  const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
   fs.mkdirSync(path.dirname(srcFile), { recursive: true });
   fs.mkdirSync(path.dirname(distFile), { recursive: true });
-  fs.writeFileSync(srcFile, "export {};\n", "utf-8");
-  fs.writeFileSync(distFile, "export {};\n", "utf-8");
+  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
 }
 
@@ -707,6 +712,73 @@ describe("loadOpenClawPlugins", () => {
     expect(a?.status).toBe("disabled");
   });
 
+  it("skips importing bundled memory plugins that are disabled by memory slot", () => {
+    const bundledDir = makeTempDir();
+    const memoryADir = path.join(bundledDir, "memory-a");
+    const memoryBDir = path.join(bundledDir, "memory-b");
+    fs.mkdirSync(memoryADir, { recursive: true });
+    fs.mkdirSync(memoryBDir, { recursive: true });
+    writePlugin({
+      id: "memory-a",
+      dir: memoryADir,
+      filename: "index.cjs",
+      body: `throw new Error("memory-a should not be imported when slot selects memory-b");`,
+    });
+    writePlugin({
+      id: "memory-b",
+      dir: memoryBDir,
+      filename: "index.cjs",
+      body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
+    });
+    fs.writeFileSync(
+      path.join(memoryADir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-a",
+          kind: "memory",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(memoryBDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-b",
+          kind: "memory",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["memory-a", "memory-b"],
+          slots: { memory: "memory-b" },
+          entries: {
+            "memory-a": { enabled: true },
+            "memory-b": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const a = registry.plugins.find((entry) => entry.id === "memory-a");
+    const b = registry.plugins.find((entry) => entry.id === "memory-b");
+    expect(a?.status).toBe("disabled");
+    expect(String(a?.error ?? "")).toContain('memory slot set to "memory-b"');
+    expect(b?.status).toBe("loaded");
+  });
+
   it("disables memory plugins when slot is none", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const memory = writePlugin({
@@ -1046,6 +1118,40 @@ describe("loadOpenClawPlugins", () => {
       __testing.resolvePluginSdkAliasFile({
         srcFile: "index.ts",
         distFile: "index.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
+  });
+
+  it("prefers dist root-alias shim when loader runs from dist", () => {
+    const { root, distFile } = createPluginSdkAliasFixture({
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      srcBody: "module.exports = {};\n",
+      distBody: "module.exports = {};\n",
+    });
+
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
+  it("prefers src root-alias shim when loader runs from src in non-production", () => {
+    const { root, srcFile } = createPluginSdkAliasFixture({
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      srcBody: "module.exports = {};\n",
+      distBody: "module.exports = {};\n",
+    });
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "root-alias.cjs",
+        distFile: "root-alias.cjs",
         modulePath: path.join(root, "src", "plugins", "loader.ts"),
       }),
     );

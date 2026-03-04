@@ -22,6 +22,10 @@ export default defineConfig({
         replacement: path.join(repoRoot, "src", "plugin-sdk", "core.ts"),
       },
       {
+        find: "openclaw/plugin-sdk/compat",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "compat.ts"),
+      },
+      {
         find: "openclaw/plugin-sdk/telegram",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "telegram.ts"),
       },
