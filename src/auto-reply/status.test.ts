@@ -120,6 +120,27 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("channel override");
   });
 
+  it("notes session model overrides in status output", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "ollama/huihui_ai/qwen3.5-abliterated:2B",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        providerOverride: "zai",
+        modelOverride: "glm-4.7",
+      },
+      sessionKey: "agent:main:telegram:direct:6890541329",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: zai/glm-4.7");
+    expect(normalized).toContain("session override");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {

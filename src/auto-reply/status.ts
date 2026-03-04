@@ -569,11 +569,20 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
+  const sessionModelNote = (() => {
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+      return "session override";
+    }
+    return undefined;
+  })();
   const channelModelNote = (() => {
     if (!args.config || !entry) {
       return undefined;
     }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+    if (sessionModelNote) {
       return undefined;
     }
     const channelOverride = resolveChannelModelOverride({
@@ -607,7 +616,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
     return "channel override";
   })();
-  const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
+  const modelNote = sessionModelNote
+    ? ` · ${sessionModelNote}`
+    : channelModelNote
+      ? ` · ${channelModelNote}`
+      : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
