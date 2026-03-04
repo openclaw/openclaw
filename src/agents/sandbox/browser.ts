@@ -87,6 +87,9 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    // Sandbox browser containers are network-isolated by Docker, so allowing
+    // loopback access inside the container does not compromise host security.
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
