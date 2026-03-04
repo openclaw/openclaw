@@ -121,7 +121,7 @@ export const es: TranslationMap = {
     zhCN: "Chino simplificado (简体中文)",
     zhTW: "Chino tradicional (繁體中文)",
     ptBR: "Portugués brasileño (Português)",
-    de: "Deutsch (Aleman)",
+    de: "Deutsch (Alemán)",
     es: "Español",
     },
   cron: {
