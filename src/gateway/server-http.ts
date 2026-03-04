@@ -20,13 +20,18 @@ import {
   normalizeRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { type GatewayAuthResult, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeGatewayConnect,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { getBearerToken } from "./http-utils.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -60,6 +65,7 @@ import {
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleTasksHttpRequest } from "./tasks-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -589,6 +595,36 @@ export function createGatewayHttpServer(opts: {
         {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
+        },
+        {
+          name: "tasks",
+          run: async () => {
+            const base = controlUiBasePath?.trim()
+              ? controlUiBasePath.trim().replace(/\/+$/, "")
+              : "";
+            const prefix = base ? `${base}/api/tasks` : "/api/tasks";
+            if (requestPath !== prefix && !requestPath.startsWith(`${prefix}/`)) {
+              return false;
+            }
+
+            const token = getBearerToken(req);
+            const authResult = await authorizeGatewayConnect({
+              auth: resolvedAuth,
+              connectAuth: token ? { token, password: token } : null,
+              req,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            });
+            if (!authResult.ok) {
+              sendGatewayAuthFailure(res, authResult);
+              return true;
+            }
+            return handleTasksHttpRequest(req, res, {
+              cfg: configSnapshot,
+              basePath: controlUiBasePath,
+            });
+          },
         },
       ];
       if (openResponsesEnabled) {
