@@ -38,32 +38,40 @@ export async function fetchJsonWithRetry(
 
   let lastFailedRes: Response = res;
 
-  return retryWithBackoff(async () => {
-    const retryRes = await fetchJson(url, init, timeoutMs, fetchFn);
-    if (!retryRes.ok) {
-      lastFailedRes = retryRes;
-      let retryErr: ProviderError;
-      try {
-        retryErr = await parseProviderError(provider, retryRes);
-      } catch {
-        retryErr = {
-          provider,
-          httpStatus: retryRes.status,
-          category: "unknown",
-          retryAfterMs: null,
-          message: `${provider} error (${retryRes.status}).`,
-          retryable: false,
-          raw: null,
-        };
+  return retryWithBackoff(
+    async () => {
+      const retryRes = await fetchJson(url, init, timeoutMs, fetchFn);
+      if (!retryRes.ok) {
+        lastFailedRes = retryRes;
+        let retryErr: ProviderError;
+        try {
+          retryErr = await parseProviderError(provider, retryRes);
+        } catch {
+          retryErr = {
+            provider,
+            httpStatus: retryRes.status,
+            category: "unknown",
+            retryAfterMs: null,
+            message: `${provider} error (${retryRes.status}).`,
+            retryable: false,
+            raw: null,
+          };
+        }
+        throw retryErr;
       }
-      throw retryErr;
+      return retryRes;
+    },
+    policy,
+    providerErr,
+    onRetry ? (attempt, max, delayMs) => onRetry(attempt, max, delayMs) : undefined,
+  ).catch((err: unknown) => {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "httpStatus" in err
+    ) {
+      return lastFailedRes;
     }
-    const provErr = err as { httpStatus: number; raw: unknown; message?: string };
-    const body =
-      provErr.raw !== null
-        ? JSON.stringify(provErr.raw)
-        : JSON.stringify({ error: provErr.message });
-    return new Response(body, { status: provErr.httpStatus });
     throw err;
   });
 }
