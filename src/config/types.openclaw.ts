@@ -1,3 +1,4 @@
+import type { TokenBudgetConfig } from "../agents/token-budget.types.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -95,6 +96,8 @@ export type OpenClawConfig = {
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
   models?: ModelsConfig;
+  /** Token budget routing: exhaust free-tier model allowances before falling back to the primary model. */
+  tokenBudget?: TokenBudgetConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;

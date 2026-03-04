@@ -408,6 +408,22 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     models: ModelsConfigSchema,
+    tokenBudget: z
+      .object({
+        enabled: z.boolean().optional(),
+        tiers: z.array(
+          z
+            .object({
+              provider: z.string().min(1),
+              model: z.string().min(1),
+              dailyTokenLimit: z.number().int().positive(),
+            })
+            .strict(),
+        ),
+        resetTime: z.union([z.literal("midnight-local"), z.literal("midnight-utc")]).optional(),
+      })
+      .strict()
+      .optional(),
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
