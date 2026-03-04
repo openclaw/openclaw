@@ -173,15 +173,24 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   // Display gateway version (from RPC if available, otherwise CLI version)
-  const gatewayVersion = rpc?.version ?? VERSION;
+  // Only show gateway version if we actually got one from the probe
+  const gatewayVersion: string | undefined = rpc?.ok ? rpc.version : undefined;
   const cliVersion = VERSION;
-  if (gatewayVersion === cliVersion) {
-    defaultRuntime.log(`${label("Version:")} ${infoText(gatewayVersion)}`);
-  } else {
-    defaultRuntime.log(
-      `${label("Version:")} gateway=${infoText(gatewayVersion)} | cli=${infoText(cliVersion)}`,
-    );
+  
+  if (gatewayVersion !== undefined) {
+    if (gatewayVersion !== cliVersion) {
+      defaultRuntime.log(
+        `${label("Version:")} gateway=${infoText(gatewayVersion)} | cli=${infoText(cliVersion)}`,
+      );
+    } else {
+      defaultRuntime.log(`${label("Version:")} ${infoText(gatewayVersion)}`);
+    }
+  } else if (rpc === undefined || !rpc.ok) {
+    // No probe or probe failed - show CLI version only
+    defaultRuntime.log(`${label("Version (CLI):")} ${infoText(cliVersion)}`);
   }
+  // If probe succeeded but no version field, don't show version line
+  // (transitional state - older gateway without version support)
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
     defaultRuntime.log(

@@ -314,8 +314,7 @@ export async function gatherDaemonStatus(
     probeResult && probeResult.ok
       ? {
           ok: true,
-          version:
-            (probeResult.data as { version?: string } | undefined)?.version ?? undefined,
+          version: (probeResult.data as { version?: string })?.version,
         }
       : probeResult
         ? { ok: false, error: probeResult.error }
