@@ -384,6 +384,33 @@ describe("sanitizeSessionMessagesImages", () => {
       expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe("AQID");
     });
   });
+
+  it("preserves latest assistant thinking message verbatim when requested", async () => {
+    const protectedAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "chain of thought",
+          thought_signature: "msg_immutable",
+        },
+        { type: "text", text: "" },
+      ],
+      stopReason: "error",
+      timestamp: nextTimestamp(),
+    };
+    const input = castAgentMessages([
+      { role: "user", content: "hello", timestamp: nextTimestamp() },
+      protectedAssistant,
+      { role: "user", content: "retry this", timestamp: nextTimestamp() },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      preserveLatestAssistantThinking: true,
+    });
+
+    expect(out[1]).toEqual(protectedAssistant);
+  });
 });
 
 describe("sanitizeGoogleTurnOrdering", () => {

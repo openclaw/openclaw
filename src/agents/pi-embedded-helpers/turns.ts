@@ -1,12 +1,41 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type?: string;
   text?: string;
   id?: string;
   name?: string;
   toolUseId?: string;
 };
+
+function hasThinkingOrRedactedThinkingBlocks(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "thinking" || type === "redacted_thinking";
+  });
+}
+
+function resolveLatestAssistantThinkingIndex(messages: AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (hasThinkingOrRedactedThinkingBlocks(messages[i])) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 /**
  * Strips dangling tool_use blocks from assistant messages when the immediately
@@ -15,6 +44,7 @@ type AnthropicContentBlock = {
  */
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
   const result: AgentMessage[] = [];
+  const latestAssistantThinkingIndex = resolveLatestAssistantThinkingIndex(messages);
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -25,6 +55,14 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
 
     const msgRole = (msg as { role?: unknown }).role as string | undefined;
     if (msgRole !== "assistant") {
+      result.push(msg);
+      continue;
+    }
+
+    // Anthropic rejects retries when the latest assistant message contains
+    // thinking/redacted_thinking blocks that were modified in any way.
+    // Preserve that message exactly as-is.
+    if (i === latestAssistantThinkingIndex) {
       result.push(msg);
       continue;
     }

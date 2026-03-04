@@ -790,6 +790,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  if (leadingStatus?.code === 429 || leadingStatus?.code === 529) {
+    return "rate_limit";
+  }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.
     return "timeout";

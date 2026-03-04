@@ -29,6 +29,35 @@ export function isEmptyAssistantMessageContent(
   });
 }
 
+function hasThinkingOrRedactedThinkingBlock(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "thinking" || type === "redacted_thinking";
+  });
+}
+
+function resolveLatestAssistantThinkingIndex(messages: AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (hasThinkingOrRedactedThinkingBlock(messages[i])) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -46,6 +75,7 @@ export async function sanitizeSessionMessagesImages(
       allowBase64Only?: boolean;
       includeCamelCase?: boolean;
     };
+    preserveLatestAssistantThinking?: boolean;
   } & ImageSanitizationLimits,
 ): Promise<AgentMessage[]> {
   const sanitizeMode = options?.sanitizeMode ?? "full";
@@ -60,8 +90,12 @@ export async function sanitizeSessionMessagesImages(
   const sanitizedIds = shouldSanitizeToolCallIds
     ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
     : messages;
+  const protectedLatestAssistantThinkingIndex = options?.preserveLatestAssistantThinking
+    ? resolveLatestAssistantThinkingIndex(sanitizedIds)
+    : -1;
   const out: AgentMessage[] = [];
-  for (const msg of sanitizedIds) {
+  for (let index = 0; index < sanitizedIds.length; index += 1) {
+    const msg = sanitizedIds[index];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -96,6 +130,10 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (index === protectedLatestAssistantThinkingIndex) {
+        out.push(assistantMsg);
+        continue;
+      }
       if (assistantMsg.stopReason === "error") {
         const content = assistantMsg.content;
         if (Array.isArray(content)) {

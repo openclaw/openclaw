@@ -485,6 +485,29 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
   });
 
+  it("preserves latest assistant message with thinking blocks exactly", () => {
+    const latestAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "need to call a tool",
+          thinkingSignature: "sig_123",
+        },
+        { type: "toolUse", id: "tool-1", name: "test", input: {} },
+      ],
+    };
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use a tool" }] },
+      latestAssistant,
+      { role: "user", content: [{ type: "text", text: "retry" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual(latestAssistant.content);
+  });
+
   it("is replay-safe across repeated validation passes", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tools" }] },

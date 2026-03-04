@@ -436,6 +436,7 @@ export async function sanitizeSessionHistory(params: {
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      preserveLatestAssistantThinking: policy.validateAnthropicTurns,
       ...resolveImageSanitizationLimits(params.config),
     },
   );

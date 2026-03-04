@@ -71,5 +71,19 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     settingsManager,
     cfg: params.cfg,
   });
+
+  // Disable pi-coding-agent internal auto-retry for embedded OpenClaw runs.
+  // OpenClaw handles retries/failover at a higher layer (auth-profile cooldown
+  // + model fallback). Internal retries can hide 529 overloaded errors behind
+  // timeout aborts and mutate Anthropic thinking blocks during replay.
+  const baseGetRetrySettings = settingsManager.getRetrySettings.bind(settingsManager);
+  settingsManager.getRetrySettings = () => {
+    const current = baseGetRetrySettings();
+    return {
+      ...current,
+      enabled: false,
+    };
+  };
+
   return settingsManager;
 }

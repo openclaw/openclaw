@@ -53,6 +53,27 @@ describe("sanitizeSessionHistory e2e smoke", () => {
     );
   });
 
+  it("passes preserveLatestAssistantThinking for anthropic transcripts", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({
+        preserveLatestAssistantThinking: true,
+      }),
+    );
+  });
+
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,

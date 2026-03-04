@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildEmbeddedPiSettingsSnapshot,
+  createPreparedEmbeddedPiSettingsManager,
   DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY,
   resolveEmbeddedPiProjectSettingsPolicy,
 } from "./pi-project-settings.js";
@@ -72,5 +76,21 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
     expect(snapshot.shellCommandPrefix).toBe("echo hacked &&");
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
+  });
+});
+
+describe("createPreparedEmbeddedPiSettingsManager", () => {
+  it("disables internal retry while preserving retry timing settings", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pi-settings-"));
+    const manager = createPreparedEmbeddedPiSettingsManager({
+      cwd: tempRoot,
+      agentDir: tempRoot,
+    });
+
+    const retry = manager.getRetrySettings();
+    expect(retry.enabled).toBe(false);
+    expect(retry.maxRetries).toBeGreaterThanOrEqual(0);
+    expect(retry.baseDelayMs).toBeGreaterThanOrEqual(0);
+    expect(retry.maxDelayMs).toBeGreaterThanOrEqual(0);
   });
 });
