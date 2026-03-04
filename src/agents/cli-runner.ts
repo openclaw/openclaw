@@ -17,6 +17,7 @@ import {
   buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
+  createStreamJsonProcessor,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
@@ -53,6 +54,8 @@ export async function runCliAgent(params: {
   ownerNumbers?: string[];
   cliSessionId?: string;
   images?: ImageContent[];
+  onAssistantTurn?: (text: string) => void;
+  onToolUse?: (toolName: string) => void;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -274,6 +277,17 @@ export async function runCliAgent(params: {
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
 
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+
+        // Stream-json mode: process NDJSON lines as they arrive via onStdout
+        const streamProcessor =
+          outputMode === "stream-json"
+            ? createStreamJsonProcessor(backend, {
+                onAssistantTurn: params.onAssistantTurn,
+                onToolUse: params.onToolUse,
+              })
+            : undefined;
+
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: backendResolved.id,
@@ -286,6 +300,7 @@ export async function runCliAgent(params: {
           cwd: workspaceDir,
           env,
           input: stdinPayload,
+          ...(streamProcessor ? { onStdout: streamProcessor.feed } : {}),
         });
         const result = await managedRun.wait();
 
@@ -341,7 +356,9 @@ export async function runCliAgent(params: {
           });
         }
 
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        if (streamProcessor) {
+          return streamProcessor.finish();
+        }
 
         if (outputMode === "text") {
           return { text: stdout, sessionId: undefined };
@@ -445,6 +462,8 @@ export async function runClaudeCliAgent(params: {
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
+  onAssistantTurn?: (text: string) => void;
+  onToolUse?: (toolName: string) => void;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -463,5 +482,7 @@ export async function runClaudeCliAgent(params: {
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,
+    onAssistantTurn: params.onAssistantTurn,
+    onToolUse: params.onToolUse,
   });
 }

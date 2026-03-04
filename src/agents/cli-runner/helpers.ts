@@ -7,9 +7,12 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+
+const log = createSubsystemLogger("agent/claude-cli/stream");
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -242,6 +245,129 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     return null;
   }
   return { text, sessionId, usage };
+}
+
+export type StreamJsonCallbacks = {
+  onAssistantTurn?: (text: string) => void;
+  onToolUse?: (toolName: string) => void;
+};
+
+function extractToolUseNames(message: unknown): string[] {
+  if (!isRecord(message)) {
+    return [];
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const block of content) {
+    if (isRecord(block) && block.type === "tool_use" && typeof block.name === "string") {
+      names.push(block.name);
+    }
+  }
+  return names;
+}
+
+export function createStreamJsonProcessor(
+  backend: CliBackendConfig,
+  callbacks?: StreamJsonCallbacks,
+): {
+  feed: (chunk: string) => void;
+  finish: () => CliOutput;
+} {
+  let buffer = "";
+  let lastAssistantText = "";
+  let resultText: string | undefined;
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    if (!isRecord(parsed)) {
+      return;
+    }
+
+    const type = typeof parsed.type === "string" ? parsed.type : "";
+
+    if (!sessionId) {
+      sessionId = pickSessionId(parsed, backend);
+    }
+
+    if (type === "assistant") {
+      const msg = isRecord(parsed.message) ? parsed.message : parsed;
+      const contentBlocks = Array.isArray(isRecord(msg) ? msg.content : undefined)
+        ? (msg.content as unknown[])
+        : [];
+      const blockTypes = contentBlocks
+        .map((b) => (isRecord(b) && typeof b.type === "string" ? b.type : "?"))
+        .join(",");
+
+      const text = collectText(parsed.message);
+      const toolNames = extractToolUseNames(msg);
+
+      log.debug(
+        `stream-json assistant: blocks=[${blockTypes}] text=${text.length} chars tools=[${toolNames.join(",")}]${text ? ` content=${text.slice(0, 200)}` : ""}`,
+      );
+
+      if (text) {
+        lastAssistantText = text;
+        callbacks?.onAssistantTurn?.(lastAssistantText);
+      }
+      if (callbacks?.onToolUse) {
+        for (const name of toolNames) {
+          callbacks.onToolUse(name);
+        }
+      }
+    } else if (type === "result") {
+      resultText =
+        (typeof parsed.result === "string" ? parsed.result : undefined) ?? collectText(parsed);
+      if (isRecord(parsed.usage)) {
+        usage = toUsage(parsed.usage);
+      }
+      log.debug(
+        `stream-json result: ${resultText?.length ?? 0} chars, sessionId=${sessionId ?? "none"}`,
+      );
+    } else if (type === "system") {
+      const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
+      log.debug(`stream-json system: subtype=${subtype} sessionId=${sessionId ?? "none"}`);
+    }
+  };
+
+  const feed = (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split("\n");
+    // Keep the last (possibly incomplete) segment in buffer
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      try {
+        processLine(line);
+      } catch (err) {
+        log.warn(`stream-json processLine error: ${String(err)}`);
+      }
+    }
+  };
+
+  const finish = (): CliOutput => {
+    // Process any remaining data in buffer
+    if (buffer.trim()) {
+      processLine(buffer);
+      buffer = "";
+    }
+    const text = resultText ?? lastAssistantText;
+    return { text: text.trim(), sessionId, usage };
+  };
+
+  return { feed, finish };
 }
 
 export function resolveSystemPromptUsage(params: {

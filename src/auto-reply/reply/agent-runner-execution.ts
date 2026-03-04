@@ -205,6 +205,12 @@ export async function runAgentTurnWithFallback(params: {
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              // Serialized chain for streaming card updates.  Each onAssistantTurn
+              // appends an async step that mirrors the embedded path: first await
+              // signalTextDelta (which triggers startStreaming on first call), then
+              // forward to onPartialReply.  Awaiting this chain after the CLI run
+              // ensures markRunComplete() isn't called before streaming initialises.
+              let streamingChain: Promise<void> = Promise.resolve();
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -223,11 +229,48 @@ export async function runAgentTurnWithFallback(params: {
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
                   images: params.opts?.images,
+                  onAssistantTurn: (text) => {
+                    emitAgentEvent({
+                      runId,
+                      stream: "assistant",
+                      data: { text },
+                    });
+                    // Mirror the embedded path's onPartialReply flow:
+                    // 1. handlePartialForTyping awaits signalTextDelta (starts
+                    //    streaming card on first call via typing → onReplyStart)
+                    // 2. then onPartialReply queues the card content update
+                    // Chained (not fire-and-forget) so signalTextDelta completes
+                    // before onPartialReply, and markRunComplete waits for all.
+                    streamingChain = streamingChain
+                      .then(async () => {
+                        const normalizedText = await handlePartialForTyping({ text });
+                        if (normalizedText !== undefined && params.opts?.onPartialReply) {
+                          await params.opts.onPartialReply({ text: normalizedText });
+                        }
+                      })
+                      .catch((err) => {
+                        defaultRuntime.error(
+                          `cli streaming chain error: ${err instanceof Error ? err.message : String(err)}`,
+                        );
+                      });
+                  },
+                  onToolUse: (toolName) => {
+                    emitAgentEvent({
+                      runId,
+                      stream: "tool",
+                      data: { phase: "start", name: toolName },
+                    });
+                  },
                 });
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
+                // Drain all pending streaming card updates before returning.
+                // This must happen before the caller's markRunComplete() so the
+                // typing controller's startGuard doesn't block startStreaming().
+                await streamingChain;
+
+                // Emit the final/authoritative assistant text so server-chat can
+                // populate its buffer. For stream-json backends this supplements
+                // the intermediate onAssistantTurn events with the definitive result.
                 const cliText = result.payloads?.[0]?.text?.trim();
                 if (cliText) {
                   emitAgentEvent({

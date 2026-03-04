@@ -387,6 +387,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text) {
               return;
             }
+            // Ensure streaming card is started when partial text arrives.
+            // In embedded mode with block streaming, the card is started by the
+            // deliver handler on the first block reply. CLI mode has no block
+            // streaming — text arrives as complete chunks via onPartialReply —
+            // so the card must be started here. startStreaming() is idempotent
+            // (guarded by streamingStartPromise), so calling it here is safe
+            // even when the card was already started by onReplyStart or deliver.
+            startStreaming();
             queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
           }
         : undefined,
