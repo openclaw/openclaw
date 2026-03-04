@@ -40,6 +40,37 @@ const MIN_REFIRE_GAP_MS = 2_000;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
+/**
+ * Resolve heartbeat delivery target for main-session cron jobs with wakeMode: "now".
+ * If the job has explicit delivery.channel/to/accountId, use those instead of "last".
+ * This enables cron callbacks to specify where the woken session should respond.
+ * See: https://github.com/openclaw/openclaw/issues/34572
+ */
+function resolveMainSessionHeartbeatTarget(job: CronJob): {
+  target: "last" | "none" | CronMessageChannel;
+  to?: string;
+  accountId?: string;
+} {
+  const delivery = job.delivery;
+  // If delivery has an explicit channel (not undefined and not "last" default),
+  // use that as the heartbeat target.
+  if (delivery?.channel && delivery.channel !== "last") {
+    return {
+      target: delivery.channel,
+      to: delivery.to,
+      accountId: delivery.accountId,
+    };
+  }
+  // If delivery has explicit "to" but channel is "last" or undefined,
+  // still use the "to" with "last" target (for backwards compatibility).
+  if (delivery?.to) {
+    return { target: "last", to: delivery.to, accountId: delivery.accountId };
+  }
+  // Default: deliver to last active channel (original behavior).
+  return { target: "last" };
+}
+
+
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
@@ -916,11 +947,9 @@ export async function executeJobCore(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
-          // Cron-triggered heartbeats should deliver to the last active channel.
-          // Without this override, heartbeat target defaults to "none" (since
-          // e2362d35) and cron main-session responses are silently swallowed.
-          // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
+          // Resolve delivery target from job.delivery if explicit, otherwise fall back to "last".
+          // See: https://github.com/openclaw/openclaw/issues/28508 (original), #34572 (explicit delivery)
+          heartbeat: resolveMainSessionHeartbeatTarget(job),
         });
         if (
           heartbeatResult.status !== "skipped" ||
