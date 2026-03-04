@@ -195,6 +195,30 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("authorizes webchat even when ownerAllowFrom is set to channel-specific IDs (#34200)", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789"] },
+      channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SenderId: "openclaw-control-ui",
+      ChatType: "direct",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   describe("commands.allowFrom", () => {
     const commandsAllowFromConfig = {
       commands: {

@@ -355,7 +355,13 @@ export function resolveCommandAuthorization(params: {
   // If commands.allowFrom is configured, use it for command authorization
   // Otherwise, fall back to existing behavior (channel allowFrom + owner checks)
   let isAuthorizedSender: boolean;
-  if (commandsAllowFromList !== null) {
+  if (commandAuthorized && !providerId) {
+    // Internal surface (Gateway UI / webchat) with explicit authorization from
+    // the surface handler.  The gateway has already authenticated the connection,
+    // so owner-allowlist checks (which rely on channel-specific sender IDs) must
+    // not block commands here (#34200).
+    isAuthorizedSender = true;
+  } else if (commandsAllowFromList !== null) {
     // commands.allowFrom is configured - use it for authorization
     const commandsAllowAll = commandsAllowFromList.some((entry) => entry.trim() === "*");
     const matchedCommandsAllowFrom = commandsAllowFromList.length
