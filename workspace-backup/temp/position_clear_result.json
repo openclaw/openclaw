@@ -1,0 +1,35 @@
+{
+  "status": "simulated",
+  "total_positions": 3,
+  "clearable": 3,
+  "total_recovery": 7.5,
+  "orders": [
+    {
+      "status": "simulated",
+      "market": "0x05dc77859c312946e0ffcab8f9750c5b784471a0354c7165a5e76c523657802d",
+      "outcome": "Yes",
+      "size": 5,
+      "price": 0.5,
+      "expected_value": 2.5,
+      "note": "实际交易需要 Polygon 链上操作，请访问 https://polymarket.com/portfolio"
+    },
+    {
+      "status": "simulated",
+      "market": "0x9504d0074cc8dccb98f6c1e8ae836591cf2e649528c8df564eae428c0cc7e69b",
+      "outcome": "No",
+      "size": 5,
+      "price": 0.5,
+      "expected_value": 2.5,
+      "note": "实际交易需要 Polygon 链上操作，请访问 https://polymarket.com/portfolio"
+    },
+    {
+      "status": "simulated",
+      "market": "0x5ed6999ab4f78c560c819c4ce2e4c6c88d8e1dc2dd0f96dae9de06af8daf86e6",
+      "outcome": "Yes",
+      "size": 5,
+      "price": 0.5,
+      "expected_value": 2.5,
+      "note": "实际交易需要 Polygon 链上操作，请访问 https://polymarket.com/portfolio"
+    }
+  ]
+}

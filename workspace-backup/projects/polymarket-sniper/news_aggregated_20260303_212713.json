@@ -1,0 +1,1706 @@
+[
+  {
+    "title": "Simple screw counter",
+    "description": "",
+    "link": "https://mitxela.com/projects/screwcounter",
+    "pub_date": "2026-03-01T06:41:33",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "We Built a Video Rendering Engine by Lying to the Browser About What Time It Is",
+    "description": "",
+    "link": "https://blog.replit.com/browsers-dont-want-to-be-cameras",
+    "pub_date": "2026-03-01T12:50:02",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Mullvad VPN: Banned TV Ad in the Streets of London [video]",
+    "description": "",
+    "link": "https://www.youtube.com/watch?v=rwhznrpgl7k",
+    "pub_date": "2026-03-03T20:09:59",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Ars Technica fires reporter after AI controversy involving fabricated quotes",
+    "description": "",
+    "link": "https://futurism.com/artificial-intelligence/ars-technica-fires-reporter-ai-quotes",
+    "pub_date": "2026-03-03T09:12:30",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "British Columbia is permanently adopting daylight time",
+    "description": "",
+    "link": "https://www.cbc.ca/news/canada/british-columbia/b-c-adopting-year-round-daylight-time-9.7111657",
+    "pub_date": "2026-03-03T04:30:52",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Arm's Cortex X925: Reaching Desktop Performance",
+    "description": "",
+    "link": "https://chipsandcheese.com/p/arms-cortex-x925-reaching-desktop",
+    "pub_date": "2026-03-03T15:34:47",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Meta’s AI smart glasses and data privacy concerns",
+    "description": "",
+    "link": "https://www.svd.se/a/K8nrV4/metas-ai-smart-glasses-and-data-privacy-concerns-workers-say-we-see-everything",
+    "pub_date": "2026-03-03T06:32:35",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "The Xkcd thing, now interactive",
+    "description": "",
+    "link": "https://editor.p5js.org/isohedral/full/vJa5RiZWs",
+    "pub_date": "2026-03-03T18:56:52",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Stolen Gemini API key racks up $82,000 in 48 hours",
+    "description": "",
+    "link": "https://llmhorrors.com/all/gemini-stolen-api-key-82k/",
+    "pub_date": "2026-03-03T20:41:17",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "India's top court angry after junior judge cites fake AI-generated orders",
+    "description": "",
+    "link": "https://www.bbc.com/news/articles/c178zzw780xo",
+    "pub_date": "2026-03-03T20:13:40",
+    "source": "Hacker News (JSON)",
+    "category": "tech"
+  },
+  {
+    "title": "Europe buys the dip as US funds keep bleeding – who is buying Bitcoin right now?",
+    "description": "<p>Five straight weeks of net redemptions from crypto investment products are enough to raise the alarm, as they point to a choice that keeps getting made, with the same logic, on the same cadence, by the same kinds of committees. CoinShares' Feb. 23 weekly report showed digital asset investment products saw $288 million in outflows [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/europe-buys-the-dip-as-us-funds-keep-bleeding-who-is-buying-bitcoin-right-now/\">Europe buys the dip as US funds keep bleeding &#8211; who is buying Bitcoin right now?</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/europe-buys-the-dip-as-us-funds-keep-bleeding-who-is-buying-bitcoin-right-now/",
+    "pub_date": "Mon, 02 Mar 2026 10:32:20 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "M2 money supply is surging again – so why isn’t this bullish for Bitcoin anymore?",
+    "description": "<p>U.S. M2 hit a record $22.4T in January, why Bitcoin hasn’t followed, and what could change next U.S. broad money supply (M2) reached a record $22.442 trillion in January 2026. That put M2 up $922.4 billion (+4.29%) from January 2025, setting a new high for a metric that often anchors “liquidity up, risk up” narratives. [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/m2-money-supply-is-surging-again-so-why-isnt-this-bullish-for-bitcoin-anymore/\">M2 money supply is surging again &#8211; so why isn&#8217;t this bullish for Bitcoin anymore?</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/m2-money-supply-is-surging-again-so-why-isnt-this-bullish-for-bitcoin-anymore/",
+    "pub_date": "Mon, 02 Mar 2026 12:04:15 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin ETF custody concentrates power in one place, and now a single operational failure causes dangerous ripples",
+    "description": "<p>When markets are closed and Bitcoin is moving, the custody agreement decides who can act. A spot Bitcoin ETF fixed an awkward problem for finance. Bitcoin used to arrive as software, keys, and operational responsibility. The ETF repackaged it as a ticker that sits next to every other ticker. That convenience came with a structural [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/bitcoin-etf-custody-concentrates-power-in-one-place-and-now-a-single-operational-failure-can-ripple-outward/\">Bitcoin ETF custody concentrates power in one place, and now a single operational failure causes dangerous ripples</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/bitcoin-etf-custody-concentrates-power-in-one-place-and-now-a-single-operational-failure-can-ripple-outward/",
+    "pub_date": "Mon, 02 Mar 2026 14:05:17 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Revolut’s digital pound trial shifts the UK payments debate from crypto hype to consumer protections and clarity",
+    "description": "<p>Revolut is preparing to trial a pound-backed stablecoin inside a regulated stablecoin sandbox in the UK, with testing expected within the current quarter. While this might look like another fintech pilot in the long history of crypto payment tests, the more interesting part sits upstream of the token itself. Revolut has what most stablecoin projects [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/revolut-pound-stablecoin-uk-sandbox-trial/\">Revolut’s digital pound trial shifts the UK payments debate from crypto hype to consumer protections and clarity</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/revolut-pound-stablecoin-uk-sandbox-trial/",
+    "pub_date": "Mon, 02 Mar 2026 16:15:20 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin price surges to $70k today while stocks fall at the US market opened",
+    "description": "<p>Bitcoin rises over 6% on the U.S. open as CME premium spikes, and liquidations don’t explain it Bitcoin jumped over 6% to threaten $70,000 during Monday’s U.S. market open even as the broader macro environment appears risk-off. Oil ripped higher on Middle East escalation risk, equities opened sharply lower, and the dollar held firm. The [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/why-bitcoin-surged-toward-70k-at-the-us-market-open-while-oil-and-natural-gas-rocket/\">Bitcoin price surges to $70k today while stocks fall at the US market opened</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/why-bitcoin-surged-toward-70k-at-the-us-market-open-while-oil-and-natural-gas-rocket/",
+    "pub_date": "Mon, 02 Mar 2026 16:36:21 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Did Bitcoin fail its safe haven test after US strikes on Iran? BlackRock’s 60 day data hints at what comes next",
+    "description": "<p>Bitcoin price opened US trading session strongly with a 3% surge above $68,000, according to CryptoSlate's data. This marked a significant difference to its first response, which looked nothing like a clean safe-haven trade following the latest Middle East tensions. When headlines hit over the weekend about US strikes on Iran, the flagship digital asset [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/bitcoins-drop-in-this-us-iran-war-is-obscuring-its-long-term-potential/\">Did Bitcoin fail its safe haven test after US strikes on Iran? BlackRock’s 60 day data hints at what comes next</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/bitcoins-drop-in-this-us-iran-war-is-obscuring-its-long-term-potential/",
+    "pub_date": "Mon, 02 Mar 2026 17:10:49 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "XRP faces a brutal 2026 paradox as XRPL adoption surges and the token captures little value",
+    "description": "<p>The XRP Ledger (XRPL) is starting to look like a financial back end that traditional finance can adopt without changing itself too much. This is because tokenized funds can sit on the ledger, and stablecoins can move across it. At the same time, protocol upgrades keep landing, including features designed for institutions that want on-chain [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/xrp-faces-a-brutal-2026-paradox-as-xrpl-adoption-surges-and-the-token-captures-little-value/\">XRP faces a brutal 2026 paradox as XRPL adoption surges and the token captures little value</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/xrp-faces-a-brutal-2026-paradox-as-xrpl-adoption-surges-and-the-token-captures-little-value/",
+    "pub_date": "Mon, 02 Mar 2026 19:25:29 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Ethereum usage is at record highs yet ETH nears its longest monthly losing streak since 2018",
+    "description": "<p>Ethereum is approaching a milestone that few investors would welcome: its longest run of consecutive monthly losses since the 2018 crypto winter. Since September 2025, ETH has posted six straight monthly declines, a stretch that has cut its price by roughly 60% from its August 2025 record high of $4,953 to below $2,000. A losing [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/ethereum-battles-longest-monthly-loss-streak-since-2018/\">Ethereum usage is at record highs yet ETH nears its longest monthly losing streak since 2018</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/ethereum-battles-longest-monthly-loss-streak-since-2018/",
+    "pub_date": "Mon, 02 Mar 2026 21:30:50 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "XRPL wants a Hyperliquid-like sidechain for the $40B options trading market, but one design choice could decide everything",
+    "description": "<p>A proposal circulating in the XRP Ledger (XRPL) community is aiming at one of crypto’s most entrenched trading businesses: options. The idea is to build a purpose-built XRPL sidechain that feels “Hyperliquid-like,” a venue designed for exchange-grade execution, then connect that activity back to the XRPL base layer through bridging. In the proposal’s document, Hyperliquid [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/xrpl-wants-a-hyperliquid-like-sidechain-for-the-40b-options-trading-market-but-one-design-choice-could-decide-everything/\">XRPL wants a Hyperliquid-like sidechain for the $40B options trading market, but one design choice could decide everything</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/xrpl-wants-a-hyperliquid-like-sidechain-for-the-40b-options-trading-market-but-one-design-choice-could-decide-everything/",
+    "pub_date": "Tue, 03 Mar 2026 10:32:30 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Cardano’s Project Catalyst is changing hands and the pause is forcing builders to face a brutal funding gap",
+    "description": "<p>Cardano's community funding pipeline just stopped mid-cycle. Project Catalyst, the on-chain grants mechanism that has distributed over $150 million across 2,200 projects since launch, recently announced that stewardship is moving from Input Output Global to the Cardano Foundation. Additionally, Fund15 and Fund16 won't proceed in their proposed form until the transition completes. The Catalyst team [&#8230;]</p>\n<p>The post <a href=\"https://cryptoslate.com/cardanos-project-catalyst-is-changing-hands-and-the-pause-is-forcing-builders-to-face-a-brutal-funding-gap/\">Cardano’s Project Catalyst is changing hands and the pause is forcing builders to face a brutal funding gap</a> appeared first on <a href=\"https://cryptoslate.com\">CryptoSlate</a>.</p>",
+    "link": "https://cryptoslate.com/cardanos-project-catalyst-is-changing-hands-and-the-pause-is-forcing-builders-to-face-a-brutal-funding-gap/",
+    "pub_date": "Tue, 03 Mar 2026 12:03:31 +0000",
+    "source": "CryptoSlate",
+    "category": "crypto"
+  },
+  {
+    "title": "Tom Lee's Bitmine boosts ether holdings to 4.47 million tokens with  $98 million ETH purchase",
+    "description": "The ether treasury firm now has nearly $10 billion in assets and more than $6 billion of ETH staked.",
+    "link": "https://www.coindesk.com/business/2026/03/02/bitmine-boosts-ether-holdings-to-4-47m-tokens-after-usd98m-eth-purchase",
+    "pub_date": "Mon, 02 Mar 2026 15:10:25 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin surges above $68,000 amid muted stock market reaction to Iran war",
+    "description": "At their worst levels, U.S. stock index futures had been down more than 2%, but equity markets are barely lower one hour into Monday's trading session.",
+    "link": "https://www.coindesk.com/markets/2026/03/02/bitcoin-surges-above-usd68-000-amid-muted-stock-market-reaction-to-iran-war",
+    "pub_date": "Mon, 02 Mar 2026 15:32:22 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Nasdaq follows Cboe joining world of 'binary bets' as prediction market craze hits Wall Street",
+    "description": "The exchange has filed a proposal with the SEC to list yes-or-no bets on the Nasdaq-100 amid continued demand for prediction markets.",
+    "link": "https://www.coindesk.com/markets/2026/03/02/nasdaq-follows-cboe-joining-world-of-binary-bets-as-prediction-market-craze-hits-wall-street",
+    "pub_date": "Mon, 02 Mar 2026 16:28:16 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Crypto world faces growing pressure to relent on stablecoin rewards to win bigger prize",
+    "description": "As much as crypto negotiators paint bank lobbyists' campaign against stablecoin yield as unfair, it landed a blow that one dramatic move could end.",
+    "link": "https://www.coindesk.com/news-analysis/2026/03/02/crypto-world-faces-growing-pressure-to-relent-on-stablecoin-rewards-to-win-bigger-prize",
+    "pub_date": "Mon, 02 Mar 2026 16:45:11 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Weekend warriors: How HyperLiquid became retail’s bear market playground",
+    "description": "While bitcoin and ether remain in bear markets, HYPE has climbed alongside gold as HyperLiquid’s derivatives volume expands, weekend equity trading gains traction.",
+    "link": "https://www.coindesk.com/business/2026/03/02/weekend-warriors-how-hyperliquid-became-retail-s-bear-market-playground",
+    "pub_date": "Mon, 02 Mar 2026 17:04:42 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Battle for Bitcoin's soul opens as first block supporting 'clean-up' proposal is mined",
+    "description": "A Bitcoin block signaling the BIP-110 proposal has appeared onchain while critics push back by inscribing a large image in protest.",
+    "link": "https://www.coindesk.com/tech/2026/03/02/battle-for-bitcoin-s-soul-opens-as-first-block-supporting-clean-up-proposal-is-mined",
+    "pub_date": "Mon, 02 Mar 2026 17:15:44 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Vitalik Buterin unveils plan to curb Ethereum block builder centralization",
+    "description": "Another focus of his post is so-called “toxic MEV,” where traders exploit visibility into pending transactions to front-run or “sandwich” users’ trades.",
+    "link": "https://www.coindesk.com/tech/2026/03/02/vitalik-buterin-unveils-plan-to-curb-ethereum-block-builder-centralization",
+    "pub_date": "Mon, 02 Mar 2026 18:45:17 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin’s 5% spike higher Monday driven by short-covering, not fresh buying, says analyst",
+    "description": "Market data show rising open interest and large liquidation clusters around $65,000 and above $70,000, underscoring that the rally may be fragile without stronger spot demand",
+    "link": "https://www.coindesk.com/markets/2026/03/02/bitcoin-s-5-spike-higher-monday-driven-by-short-covering-not-fresh-buying-says-analyst",
+    "pub_date": "Mon, 02 Mar 2026 19:35:01 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Australia could unlock A$24 billion in digital finance gains, is on track for just A$1 billion",
+    "description": "An OKX-backed report estimates tokenization and digital finance could generate A$24 billion annually, with productivity gains hinging on reforms to licensing, sandboxes and financial market rules.",
+    "link": "https://www.coindesk.com/policy/2026/03/02/australia-could-unlock-ausd24-billion-in-digital-finance-gains-is-on-track-for-just-ausd1-billion",
+    "pub_date": "Mon, 02 Mar 2026 20:00:00 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Core Scientific turns lower after Q4 results disappoint",
+    "description": "Riot Platforms topped revenue estimates as it reported earnings for the final three months of 2025.",
+    "link": "https://www.coindesk.com/markets/2026/03/02/core-scientific-turns-lower-after-q4-results-disappoint",
+    "pub_date": "Mon, 02 Mar 2026 21:38:56 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "PayPay, 40% owner of Binance Japan, seeks up to $1.1 billion in Nasdaq IPO",
+    "description": "The Nasdaq-bound payments firm backed by SoftBank targets a valuation above $10 billion.",
+    "link": "https://www.coindesk.com/business/2026/03/02/paypay-40-owner-of-binance-japan-seeks-up-to-usd1-1-billion-in-nasdaq-ipo",
+    "pub_date": "Mon, 02 Mar 2026 22:27:39 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "U.S. Senate housing bill includes CBDC ban",
+    "description": "The Senate Banking Committee's bipartisan \"ROAD to Housing Act\" includes a provision banning the Fed from issuing a CBDC before 2031.",
+    "link": "https://www.coindesk.com/policy/2026/03/02/u-s-senate-housing-bill-includes-cbdc-ban",
+    "pub_date": "Tue, 03 Mar 2026 00:04:04 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "NEAR token jumps 17% after ‘Confidential Intents’ launch, outpaces privacy tokens sector",
+    "description": "Private execution layer aims to curb MEV and front-running as the token extends 40% weekly rally despite modest onchain earnings.",
+    "link": "https://www.coindesk.com/markets/2026/03/02/near-token-jumps-17-after-confidential-intents-launch-outpaces-privacy-tokens-sector",
+    "pub_date": "Tue, 03 Mar 2026 04:59:10 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin climbs as BTC ETFs post one of the quarter’s biggest inflow days amid Iran volatility",
+    "description": "U.S. BTC ETFs added $458 million, suggesting institutional buyers are absorbing the weekend shock that briefly sent BTC to $63,000.",
+    "link": "https://www.coindesk.com/markets/2026/03/03/bitcoin-climbs-as-btc-etfs-post-one-of-the-quarter-s-biggest-inflow-days-amid-iran-volatility",
+    "pub_date": "Tue, 03 Mar 2026 06:00:55 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin supply approaching 20 million: The final million will take another 114 years to mine",
+    "description": "Out of a fixed maximum supply of 21 million coins, more than 95% of all bitcoin that will ever exist is now in circulation.",
+    "link": "https://www.coindesk.com/markets/2026/01/23/bitcoin-supply-approaching-20-million-the-final-million-will-take-another-114-years-to-mine",
+    "pub_date": "Tue, 03 Mar 2026 08:25:48 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Core Scientific sells $175 million in bitcoin as AI pivot accelerates",
+    "description": "CORZ still holds under 1,000 BTC but look to \"remain opportunistic\" moving forward.",
+    "link": "https://www.coindesk.com/markets/2026/03/03/core-scientific-sells-usd175-million-in-bitcoin-as-ai-pivot-accelerates",
+    "pub_date": "Tue, 03 Mar 2026 08:53:03 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "OKX jumps into AI agent race with new OnchainOS toolkit",
+    "description": "Developer layer aims to stitch together wallets, swaps and data feeds for autonomous bots.",
+    "link": "https://www.coindesk.com/tech/2026/03/03/okx-jumps-into-ai-agent-race-with-new-onchainos-toolkit",
+    "pub_date": "Tue, 03 Mar 2026 09:00:00 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin falls below $67,000 as U.S. equities slide and oil pushes higher",
+    "description": "Risk off sentiment builds ahead of Tuesday’s open, with investors moving into the dollar and watching energy markets amid ongoing Middle East tensions.",
+    "link": "https://www.coindesk.com/markets/2026/03/03/bitcoin-falls-below-usd67-000-as-u-s-equities-slide-and-oil-pushes-higher",
+    "pub_date": "Tue, 03 Mar 2026 09:11:55 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Tether taps Deloitte for first USAT reserve report",
+    "description": "The report is a third-party attestation, which provides a snapshot of reserves at a specific point in time, rather than a full audit of the company's finances.",
+    "link": "https://www.coindesk.com/business/2026/03/03/tether-taps-deloitte-for-first-usat-reserve-report",
+    "pub_date": "Tue, 03 Mar 2026 09:33:52 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Japan prime minister Sanae Takaichi disavows Solana meme coin after it crashes by 75%",
+    "description": "Japan’s prime minister says she has no knowledge of or involvement in a Solana-based meme token that briefly reached a $27.7 million market cap before tumbling.",
+    "link": "https://www.coindesk.com/business/2026/03/03/japan-prime-minister-sanae-takaichi-disavows-solana-meme-coin-after-it-crashes-by-75",
+    "pub_date": "Tue, 03 Mar 2026 10:24:15 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "‘Scam token’ case against Uniswap dismissed by U.S. district judge in NYC",
+    "description": "District Judge says that due to the protocol’s decentralized nature, the identities of the scam token issuers are basically unknown, leaving plaintiffs with no identifiable defendant.",
+    "link": "https://www.coindesk.com/policy/2026/03/03/scam-token-case-against-uniswap-dismissed-with-prejudice-by-u-s-district-judge-in-nyc",
+    "pub_date": "Tue, 03 Mar 2026 11:17:05 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Dollar surge pressures crypto markets after escalation in Iran conflict",
+    "description": "Risk assets fell across the board Tuesday as the U.S. dollar strengthened to a near two-month high following renewed military escalation in Iran, pressuring the crypto market.",
+    "link": "https://www.coindesk.com/markets/2026/03/03/dollar-surge-pressures-crypto-and-gold-after-escalation-in-iran-conflict",
+    "pub_date": "Tue, 03 Mar 2026 11:30:00 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Oil shock and inflation fears drag down bitcoin",
+    "description": "Your day-ahead look for March 3, 2026",
+    "link": "https://www.coindesk.com/daybook-us/2026/03/03/oil-shock-and-inflation-fears-drag-down-bitcoin",
+    "pub_date": "Tue, 03 Mar 2026 12:15:00 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Bitcoin could slide further on liquidity squeeze, but long-term bull case intact: Sygnum CIO",
+    "description": "Fabian Dori says a short-term liquidity squeeze is driving crypto’s slump, with further downside possible, though improving macro data and fundamentals could speed a recovery.",
+    "link": "https://www.coindesk.com/markets/2026/03/02/bitcoin-could-slide-further-on-liquidity-squeeze-but-long-term-bull-case-intact-sygnum-cio",
+    "pub_date": "Tue, 03 Mar 2026 12:55:03 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Visa and Bridge plan stablecoin-linked card expansion to over 100 countries",
+    "description": "Bridge has partnered with Lead Bank, a participant in Visa’s stablecoin settlement pilot, to help businesses and fintechs offer stablecoin-backed Visa cards.",
+    "link": "https://www.coindesk.com/business/2026/03/03/visa-and-bridge-plan-stablecoin-linked-card-expansion-to-over-100-countries",
+    "pub_date": "Tue, 03 Mar 2026 13:19:20 +0000",
+    "source": "CoinDesk",
+    "category": "crypto"
+  },
+  {
+    "title": "Turn Your Rising Home Equity Into Cash You Can Use",
+    "description": "",
+    "link": "https://www.lendingtree.com/?splitterid=home-equity&cproduct=he&cchannel=content&csource=cnn&cmethod=heform&ccreative=risingequitycash_housemoneystack&placement_name=sectionfronts&ad_headline=risingequitycash&ad_image_name=housemoneystack&ctype=sectionfronts&bdst=revshare&mtaid=AC53E&esourceid=6348616",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Dream Big with a Home Equity Loan",
+    "description": "",
+    "link": "https://www.lendingtree.com/?splitterid=home-equity&cproduct=he&cchannel=content&csource=cnn&cmethod=heform&ccreative=dreambighomeequity_housemoneystack&placement_name=sectionfronts&ad_headline=dreambighomeequity&ad_image_name=housemoneystack&ctype=sectionfronts&bdst=revshare&mtaid=AC53E&esourceid=6348616",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Want Cash Out of Your Home? Here Are Your Best Options",
+    "description": "",
+    "link": "https://www.lendingtree.com/?splitterid=home-equity&cproduct=he&cchannel=content&csource=cnn&cmethod=heform&ccreative=cashoutoptions_housemoneystack&placement_name=sectionfronts&ad_headline=cashoutoptions&ad_image_name=housemoneystack&ctype=sectionfronts&bdst=revshare&mtaid=AC53E&esourceid=6348616",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Experts: this is the best cash back card of 2022",
+    "description": "",
+    "link": "https://www.fool.com/the-ascent/credit-cards/landing/wells-fargo-active-cash-card-review/?utm_site=theascent&utm_campaign=ta-cc-co-cnn-welac2-ron-5-hp-sfpb&utm_medium=cpc&utm_source=cnn",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "It's official: now avoid credit card interest into 2024",
+    "description": "",
+    "link": "https://www.fool.com/the-ascent/credit-cards/landing/citi-simplicity-review/?utm_site=theascent&utm_campaign=ta-cc-co-cnn-citisimp2-ron-5-hp-sfpb&utm_medium=cpc&utm_source=cnn",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "0% intro APR until 2024 is 100% insane",
+    "description": "",
+    "link": "https://www.fool.com/the-ascent/credit-cards/landing/wells-fargo-reflect-review/?utm_site=theascent&utm_campaign=ta-cc-co-cnn-welref2-ron-5-hp-sfpb&utm_medium=cpc&utm_source=cnn",
+    "pub_date": "",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Mexican drug lord 'El Mencho' buried in golden coffin",
+    "description": "Nemesio Oseguera Cervantes led the feared Jalisco New Generation Cartel until his death during a firefight in February.",
+    "link": "https://www.bbc.com/news/articles/c0j5v6e2py6o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 13:21:24 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "US nationals urged to leave Middle East as conflict spreads",
+    "description": "The US State Department says Americans should \"depart now via commercial means\" as strikes continue.",
+    "link": "https://www.bbc.com/news/articles/c2lrgwl8n7go?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 13:12:53 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Tech: Guthrie readies kids’ package for markup - Punchbowl News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiZ0FVX3lxTE9jWVFoRTFtVXpjSHJfVzk3bkNXaE5DcDBrZHJ1cGVYUm5LVmZ5T0FUQmNXRTU0Ql9Td2hoVlFtWXh1ZDNvNEFUaW5aZDYyX2VZNkdCdUYtWjNscmpOdk9oSHZsN2VRaU0?oc=5\" target=\"_blank\">Tech: Guthrie readies kids’ package for markup</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Punchbowl News</font>",
+    "link": "https://news.google.com/rss/articles/CBMiZ0FVX3lxTE9jWVFoRTFtVXpjSHJfVzk3bkNXaE5DcDBrZHJ1cGVYUm5LVmZ5T0FUQmNXRTU0Ql9Td2hoVlFtWXh1ZDNvNEFUaW5aZDYyX2VZNkdCdUYtWjNscmpOdk9oSHZsN2VRaU0?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 13:01:21 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Everyday Hero: Racine tech ed teacher inspires young girls with new book - Spectrum News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiygFBVV95cUxQblpSNmUwb29VOHVNalNIRGVhWFV4UU93U05SdkFoUE5FU2JBQjM4TEtnWG5uNGFzRUlvY3lGMWdmb19iZ3hUWTh2MGh3WjNZZ2w3amRnNl9LT3lOcHdJanQ4TUhBTVpzcnd3RWU5aExqRkNWd21VWFRlYTRCWllvaWpaakFwbkh6Q0ZLamgtNzBxVkFZS2UwUF81YzRpaER2U2FkQ0FhbnRmRWVPV3lqb3lKQWpVNHhBalY1UmY5VjFuYjR5amc0YWd3?oc=5\" target=\"_blank\">Everyday Hero: Racine tech ed teacher inspires young girls with new book</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Spectrum News</font>",
+    "link": "https://news.google.com/rss/articles/CBMiygFBVV95cUxQblpSNmUwb29VOHVNalNIRGVhWFV4UU93U05SdkFoUE5FU2JBQjM4TEtnWG5uNGFzRUlvY3lGMWdmb19iZ3hUWTh2MGh3WjNZZ2w3amRnNl9LT3lOcHdJanQ4TUhBTVpzcnd3RWU5aExqRkNWd21VWFRlYTRCWllvaWpaakFwbkh6Q0ZLamgtNzBxVkFZS2UwUF81YzRpaER2U2FkQ0FhbnRmRWVPV3lqb3lKQWpVNHhBalY1UmY5VjFuYjR5amc0YWd3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 13:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Death toll in 'surprise' attack in South Sudan rises to 178, local official says",
+    "description": "Medical aid groups have described the scale of casualties as alarming as people seek treatment.",
+    "link": "https://www.bbc.com/news/articles/c0mgkvy4wr8o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 12:59:50 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Moodle welcomes Edu Tech as the first Certified Partner in Sri Lanka - moodle.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiYEFVX3lxTE1ZNC10R3Vta1pkeGdyOGhQSTR4aUZMNGwyUGJEcW4yUXZtdHV2ZFRXQ2FQazVGRnpBNGpnVVh3SnVtZ3p6aGpKaHh5RDlzb3otQ2hiRmF6a0VmUEY0QXc3Zg?oc=5\" target=\"_blank\">Moodle welcomes Edu Tech as the first Certified Partner in Sri Lanka</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">moodle.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMiYEFVX3lxTE1ZNC10R3Vta1pkeGdyOGhQSTR4aUZMNGwyUGJEcW4yUXZtdHV2ZFRXQ2FQazVGRnpBNGpnVVh3SnVtZ3p6aGpKaHh5RDlzb3otQ2hiRmF6a0VmUEY0QXc3Zg?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:57:44 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Euro Tech Approves $0.35 Mln Share Buyback Program - Nasdaq",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwFBVV95cUxPQTgzc3BjbEFRWEZRcktTSHF2XzlLell1VHh3WnpPMUFWLXRsY2wxRHFlbWhTLUlYYnFUSU8yMC1yT2NHTVJ6OUtaemtKMWdMSERMRDROV3hEbU1IUkZJOUthb1VHaFJPR2dYRGlSb2tLMERycE1VUWM4TGFyaGtTVDRhaklfaXM?oc=5\" target=\"_blank\">Euro Tech Approves $0.35 Mln Share Buyback Program</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Nasdaq</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwFBVV95cUxPQTgzc3BjbEFRWEZRcktTSHF2XzlLell1VHh3WnpPMUFWLXRsY2wxRHFlbWhTLUlYYnFUSU8yMC1yT2NHTVJ6OUtaemtKMWdMSERMRDROV3hEbU1IUkZJOUthb1VHaFJPR2dYRGlSb2tLMERycE1VUWM4TGFyaGtTVDRhaklfaXM?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:45:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech Weekly: Amazon data centers hit by drones, AI takes over MWC - Yahoo Finance",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihAFBVV95cUxOMlVBWE1FZG1vdEhYSkRRVHVtV0FnblVEOTZhanZ6ZFp6WUdBUG9nVm5Wekljc3lyZHJHdjltX2dsTDFOSzlXTkZtd2FxQkVScG9xMFRhVXRvS3ZIQ1paZHRwdmprckZVOGQ1SUFZNnMwdDViaTN3VW1fVGx2V1Y3ZVFsOWI?oc=5\" target=\"_blank\">Tech Weekly: Amazon data centers hit by drones, AI takes over MWC</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Yahoo Finance</font>",
+    "link": "https://news.google.com/rss/articles/CBMihAFBVV95cUxOMlVBWE1FZG1vdEhYSkRRVHVtV0FnblVEOTZhanZ6ZFp6WUdBUG9nVm5Wekljc3lyZHJHdjltX2dsTDFOSzlXTkZtd2FxQkVScG9xMFRhVXRvS3ZIQ1paZHRwdmprckZVOGQ1SUFZNnMwdDViaTN3VW1fVGx2V1Y3ZVFsOWI?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:31:02 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "S&P 500 Futures Drop in Premarket Trading; MongoDB, Credo Tech Group Lag - Barron's",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMitwNBVV95cUxPYk1ySFRKQkMwMGs0VUJ2Q09SenRWbUdRMHFKQlNEcVFXZUFCejBpV01PWURsT2kxWjNGeVlJM0pHOUZ0TW1KbV80eEVQUGx0NG9yS2l2QnhVT0V1SWlRTXJMRW93RUp4blExbzBRWElzdEN4VlFxSU5Lc3VRQjlGNFhYN01xb3FWd1JzWmowTTBIWFpib1M4a1VLYWM0UkEtNjdLX0ZCWHVobGpOTzdLMW15WWJrSW8wUnNOdW90eXpLajZsYmNrY0M5NU1mdkVQc0xCN2I1WXR2cXRRQmh0UXJJOTN5Y0U5SW9VNW1zS01QLVdUeVA0bWxyS0tlRzNaZVQ1MnZSeGg3VEN2anBKUkJ4dTdhcWxGcFBDWFVkZTgwdU04OTI0aG1fUWZmbzBsMjBybmpzVTFlSW9HcnhnbXp6dmtwVkUwRTZkeDJxQmQ1MEFWNVNKUVI1cXozYUtOWXdpY19PWFBFN1VPZmstS2JUQm5Gem8tbmp2aGg4ZUlWNjBpVlYtUFpaNVlNaXA5OFlYTnNNOUtOZmRKQk9qbE5ock9EOHNkM3RpcVpMSkZmSU04UDNJ?oc=5\" target=\"_blank\">S&P 500 Futures Drop in Premarket Trading; MongoDB, Credo Tech Group Lag</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Barron's</font>",
+    "link": "https://news.google.com/rss/articles/CBMitwNBVV95cUxPYk1ySFRKQkMwMGs0VUJ2Q09SenRWbUdRMHFKQlNEcVFXZUFCejBpV01PWURsT2kxWjNGeVlJM0pHOUZ0TW1KbV80eEVQUGx0NG9yS2l2QnhVT0V1SWlRTXJMRW93RUp4blExbzBRWElzdEN4VlFxSU5Lc3VRQjlGNFhYN01xb3FWd1JzWmowTTBIWFpib1M4a1VLYWM0UkEtNjdLX0ZCWHVobGpOTzdLMW15WWJrSW8wUnNOdW90eXpLajZsYmNrY0M5NU1mdkVQc0xCN2I1WXR2cXRRQmh0UXJJOTN5Y0U5SW9VNW1zS01QLVdUeVA0bWxyS0tlRzNaZVQ1MnZSeGg3VEN2anBKUkJ4dTdhcWxGcFBDWFVkZTgwdU04OTI0aG1fUWZmbzBsMjBybmpzVTFlSW9HcnhnbXp6dmtwVkUwRTZkeDJxQmQ1MEFWNVNKUVI1cXozYUtOWXdpY19PWFBFN1VPZmstS2JUQm5Gem8tbmp2aGg4ZUlWNjBpVlYtUFpaNVlNaXA5OFlYTnNNOUtOZmRKQk9qbE5ock9EOHNkM3RpcVpMSkZmSU04UDNJ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:31:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "The Hidden Thirst of AI: Water as a Tech Infrastructure Pillar - Mexico Business News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMingFBVV95cUxNZENxWXlIQXJCakdjOFZVWUFEWGZucnJoMzdJMFI2dVFRX3FtLVNaVXk1eHJ3LWZpb1RVOGU1eGtxQmFBVmpXdXYyT1RFa3JDbGg2YXhnN2hSYzlQYVk0RGpSWDFyb0FYLUNLc3NQcjl5VE9YR0EtakRBZU9OaUNsYURTZ1VWMUEwX2J6M0tjU01PTkRKT3k4VDZScDRiQQ?oc=5\" target=\"_blank\">The Hidden Thirst of AI: Water as a Tech Infrastructure Pillar</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Mexico Business News</font>",
+    "link": "https://news.google.com/rss/articles/CBMingFBVV95cUxNZENxWXlIQXJCakdjOFZVWUFEWGZucnJoMzdJMFI2dVFRX3FtLVNaVXk1eHJ3LWZpb1RVOGU1eGtxQmFBVmpXdXYyT1RFa3JDbGg2YXhnN2hSYzlQYVk0RGpSWDFyb0FYLUNLc3NQcjl5VE9YR0EtakRBZU9OaUNsYURTZ1VWMUEwX2J6M0tjU01PTkRKT3k4VDZScDRiQQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:30:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Viettel Showcases Next-Generation Tech Ecosystem at MWC Barcelona 2026 - Yahoo Finance Australia",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikAFBVV95cUxOWE5EbVRGQlNPQzlHX25vTUNOMnVyOHcxMGJqbWV6Z3Y2T0NIVkFVa1dGcHRKN3h4WnNhajV1X1htSzFWNGpwZUg0c3pSQlJFUklpQ2NYU1hQYXhpeTNnOVc0NHBUbTcyVUNKSk9Kd2dYQ2JIYWlFYi1LeDFOaGU4cWpSVUgxUzV3cU1vRjIwNVY?oc=5\" target=\"_blank\">Viettel Showcases Next-Generation Tech Ecosystem at MWC Barcelona 2026</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Yahoo Finance Australia</font>",
+    "link": "https://news.google.com/rss/articles/CBMikAFBVV95cUxOWE5EbVRGQlNPQzlHX25vTUNOMnVyOHcxMGJqbWV6Z3Y2T0NIVkFVa1dGcHRKN3h4WnNhajV1X1htSzFWNGpwZUg0c3pSQlJFUklpQ2NYU1hQYXhpeTNnOVc0NHBUbTcyVUNKSk9Kd2dYQ2JIYWlFYi1LeDFOaGU4cWpSVUgxUzV3cU1vRjIwNVY?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:16:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Amazon Data Centers Hit by Drones. How Tech Is Exposed to the War. - Barron's",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMioANBVV95cUxPVHhTZkgtcjlTM1ZkX3lLTHN3Y0k4Yjl6a1FMYWZuNU9sdDUxcktGY1UtXzZ2Q0hzcm5nLVFHNlE4bjZXMmVHdFBYWG4tMEdLRnFqQWNQZGdZN01XdGFobFY0YVBGNWhhN0tpYkpwUWg4ZHF4RmhOTTI2d1Jyckg0a0hNam0tSDhISXFWdE1mUVdaOUhNU040R1NESjROQXdscGtVaGcxcDRVZU0zTVA4QXBndE1yWUZsVzBqVVpMRWtna2FYLXNIUl9SSk94d1RDLWFaVXV0VmRwbFVEdlBldEI0a3p1UmJ4RTQ0UEVxVkhuUndPTmNYdnhnZHJqcktzdHVwM3VCa2V2SkZvVnNCR3FmS08yY3ZiaEkxNXBuWktfaktmSDNpODVINF90cU9CODM2Z0MtSnJsOFNhcnVXMGJWbjBTUFptd0x5WXBkanlFNGxteEw0Z28xS3lLcU0xbTdrcm9xbEJVa0pEZ0R0bXp6amdzbGZtbHBvNHNhV00weHBkVFZTWmdubjRUVlprYTZtam1aSTBKRDB6bktKNg?oc=5\" target=\"_blank\">Amazon Data Centers Hit by Drones. How Tech Is Exposed to the War.</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Barron's</font>",
+    "link": "https://news.google.com/rss/articles/CBMioANBVV95cUxPVHhTZkgtcjlTM1ZkX3lLTHN3Y0k4Yjl6a1FMYWZuNU9sdDUxcktGY1UtXzZ2Q0hzcm5nLVFHNlE4bjZXMmVHdFBYWG4tMEdLRnFqQWNQZGdZN01XdGFobFY0YVBGNWhhN0tpYkpwUWg4ZHF4RmhOTTI2d1Jyckg0a0hNam0tSDhISXFWdE1mUVdaOUhNU040R1NESjROQXdscGtVaGcxcDRVZU0zTVA4QXBndE1yWUZsVzBqVVpMRWtna2FYLXNIUl9SSk94d1RDLWFaVXV0VmRwbFVEdlBldEI0a3p1UmJ4RTQ0UEVxVkhuUndPTmNYdnhnZHJqcktzdHVwM3VCa2V2SkZvVnNCR3FmS08yY3ZiaEkxNXBuWktfaktmSDNpODVINF90cU9CODM2Z0MtSnJsOFNhcnVXMGJWbjBTUFptd0x5WXBkanlFNGxteEw0Z28xS3lLcU0xbTdrcm9xbEJVa0pEZ0R0bXp6amdzbGZtbHBvNHNhV00weHBkVFZTWmdubjRUVlprYTZtam1aSTBKRDB6bktKNg?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:15:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Exclusive: Tech entrepreneur challenges Ro Khanna as billionaire tax fight heats up - San Francisco Chronicle",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiiAFBVV95cUxPblhPakFBLUxBQ3JqWWtvaE5RQzEzcUFQajlhSnpwdGxZVG9qZmhNdk9IN1NhaUNBN0thT2NQWk9RZ0IyU2V2TC1sRkJZdW1yZTlINmJxcGZldzFnQVNOR3Z5Y044U1JwQzQ3NGY1MzRoekdOX2QtT3Q1QlNsWmxLN19JRkZ2Yi02?oc=5\" target=\"_blank\">Exclusive: Tech entrepreneur challenges Ro Khanna as billionaire tax fight heats up</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">San Francisco Chronicle</font>",
+    "link": "https://news.google.com/rss/articles/CBMiiAFBVV95cUxPblhPakFBLUxBQ3JqWWtvaE5RQzEzcUFQajlhSnpwdGxZVG9qZmhNdk9IN1NhaUNBN0thT2NQWk9RZ0IyU2V2TC1sRkJZdW1yZTlINmJxcGZldzFnQVNOR3Z5Y044U1JwQzQ3NGY1MzRoekdOX2QtT3Q1QlNsWmxLN19JRkZ2Yi02?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:08:01 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Euro Tech clears new 250,000-share buyback after 301,966 repurchased - Stock Titan",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMitwFBVV95cUxOcmdNbkhna29fUy1OUkNXd0dPdlp2eGtIcEk5aGxyTnlnNkxaczBMMlNPWVJ2ZVdjdkgxSFEtYlZtZGhES1Jlb245ZElONUdObHh3d3h3VnptcXlmTWtad05yZEl0Z0YtaklQNVpOT1VZdWlGb1R6blpjOENkeVUwYXJrdWhrUUpZc0xRM0Y5SXAzMXFCT181RFJQcUVqU2gwS19pUV9XQUFvR2xGUDdGMVFvUWYyQ2s?oc=5\" target=\"_blank\">Euro Tech clears new 250,000-share buyback after 301,966 repurchased</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Stock Titan</font>",
+    "link": "https://news.google.com/rss/articles/CBMitwFBVV95cUxOcmdNbkhna29fUy1OUkNXd0dPdlp2eGtIcEk5aGxyTnlnNkxaczBMMlNPWVJ2ZVdjdkgxSFEtYlZtZGhES1Jlb245ZElONUdObHh3d3h3VnptcXlmTWtad05yZEl0Z0YtaklQNVpOT1VZdWlGb1R6blpjOENkeVUwYXJrdWhrUUpZc0xRM0Y5SXAzMXFCT181RFJQcUVqU2gwS19pUV9XQUFvR2xGUDdGMVFvUWYyQ2s?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Going for Gold in Winter Olympic Curling - Tech Briefs",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMioAFBVV95cUxNWXZGMlVMU1ZoQThlN3ZsU2JhMmo2M2tYNDNSNGp2OEF1YlpVZ1N4d3B1Zm5Yc1ktV0hRemItbDJTYUtYR3FVWG81azlTcURaMnFfclM3OTdJcDJqWHpzT2FQQlZXX1dTSF9rcnZDT0tFRVozTXZ3c084RzFvQW81MUlvVXI5NmtIN1hzSHJUQjlBSEtaUWs5Q25iTGRQbEZ3?oc=5\" target=\"_blank\">Going for Gold in Winter Olympic Curling</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Tech Briefs</font>",
+    "link": "https://news.google.com/rss/articles/CBMioAFBVV95cUxNWXZGMlVMU1ZoQThlN3ZsU2JhMmo2M2tYNDNSNGp2OEF1YlpVZ1N4d3B1Zm5Yc1ktV0hRemItbDJTYUtYR3FVWG81azlTcURaMnFfclM3OTdJcDJqWHpzT2FQQlZXX1dTSF9rcnZDT0tFRVozTXZ3c084RzFvQW81MUlvVXI5NmtIN1hzSHJUQjlBSEtaUWs5Q25iTGRQbEZ3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 12:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech, Media & Telecom Roundup: Market Talk - WSJ",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiggNBVV95cUxQZUZycGRGZlBqbGRYUzNoU2s0WUI5QlVQZVloalFYRWw0azlpMWRTZElfZC1melFmYTJZNjJlaUpMODdJR1R2dU0wUy1kUXV1ZFh3cTludDVRYnNnSHp3WVk4d2NIMV9USkFiX2tuM3ptd1dUSTNVVEdXdGxrWjJHZjdDbTBJRXI0aWZBeEpNVWYxSVBOTkxodkluYWJKV29LMGhHMnNrNjZKNERHTUVXUHk4VFc3amc1SjUxTnhLblp5MWh1YVZnRkRaX3JDQlVHcG9ud0ptbHZuenNFM3ljWlhwdTN3WTUwRFpTVk1jSHhjTFhrdUZWNXNBWGR6R1hRNm91MkVfZDVjRWN5VndTZUdLMXB3SDdLQ0FLQkJBUFNpTFMydUhFZWlpQk1nbVdrbGVFSmo0MHhXanF1eVpodFBILVFES1FSMHYwZ1NKaW1MVUJkZWVfeE1TV0F4cGJIeTFnNllPdGxrQmtYY3lpSS1IdlY5cHF6ajNrc1NReUFsdw?oc=5\" target=\"_blank\">Tech, Media & Telecom Roundup: Market Talk</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WSJ</font>",
+    "link": "https://news.google.com/rss/articles/CBMiggNBVV95cUxQZUZycGRGZlBqbGRYUzNoU2s0WUI5QlVQZVloalFYRWw0azlpMWRTZElfZC1melFmYTJZNjJlaUpMODdJR1R2dU0wUy1kUXV1ZFh3cTludDVRYnNnSHp3WVk4d2NIMV9USkFiX2tuM3ptd1dUSTNVVEdXdGxrWjJHZjdDbTBJRXI0aWZBeEpNVWYxSVBOTkxodkluYWJKV29LMGhHMnNrNjZKNERHTUVXUHk4VFc3amc1SjUxTnhLblp5MWh1YVZnRkRaX3JDQlVHcG9ud0ptbHZuenNFM3ljWlhwdTN3WTUwRFpTVk1jSHhjTFhrdUZWNXNBWGR6R1hRNm91MkVfZDVjRWN5VndTZUdLMXB3SDdLQ0FLQkJBUFNpTFMydUhFZWlpQk1nbVdrbGVFSmo0MHhXanF1eVpodFBILVFES1FSMHYwZ1NKaW1MVUJkZWVfeE1TV0F4cGJIeTFnNllPdGxrQmtYY3lpSS1IdlY5cHF6ajNrc1NReUFsdw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 11:56:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "How to buy Virginia vs. Virginia Tech men's college basketball tickets - USA Today",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi1gFBVV95cUxOeDUyWWdqU0NfQkhsMTZDcV80SjBiOE9pWUZHWkEzX0F6eEFhd1FaX2RxVlJ4YmVxdzNKb0l1MWpiZVRQZUFLVHI0aHR3NEphTlhpdkV2bW5OZzNUX1RQdFBBOG9uQzFkQU80a0JScllWTmxWWFpWQ3AxUVF4eGhmWFpWLVNpSjhrR210U3NkeEVWcnl1RllhSWQ4MjRhd3hoUzdtWU1SMlJsejVuS0MweFN2SGFKN1Z1aHJ6bHJqbFZRbXRJdW9MVW1vNl8zMDFBUTUyTnB3?oc=5\" target=\"_blank\">How to buy Virginia vs. Virginia Tech men's college basketball tickets</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">USA Today</font>",
+    "link": "https://news.google.com/rss/articles/CBMi1gFBVV95cUxOeDUyWWdqU0NfQkhsMTZDcV80SjBiOE9pWUZHWkEzX0F6eEFhd1FaX2RxVlJ4YmVxdzNKb0l1MWpiZVRQZUFLVHI0aHR3NEphTlhpdkV2bW5OZzNUX1RQdFBBOG9uQzFkQU80a0JScllWTmxWWFpWQ3AxUVF4eGhmWFpWLVNpSjhrR210U3NkeEVWcnl1RllhSWQ4MjRhd3hoUzdtWU1SMlJsejVuS0MweFN2SGFKN1Z1aHJ6bHJqbFZRbXRJdW9MVW1vNl8zMDFBUTUyTnB3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 11:53:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Gas and oil prices soar and shares tumble as crucial shipping lane threatened",
+    "description": "Iranian official threatens to \"set fire\" to any ships passing through the Strait of Hormuz.",
+    "link": "https://www.bbc.com/news/articles/cr5lz0vgy52o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 11:52:54 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "OpenAI changes deal with US military after backlash",
+    "description": "Chief Executive Sam Altman said the group would prohibit the use of its systems to spy on Americans.",
+    "link": "https://www.bbc.com/news/articles/c3rz1nd0egro?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 11:51:31 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Giving opportunity, gaining innovation: Women driving the future of Med-Tech - News-Medical",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMivwFBVV95cUxQTHE3SUxjLXVOc2w2TlpjMzhwY3JhemxnUmNabDVIbEdIeTJkWUwzRE5MRnN4R3R3OTRiT1JqQWVIWHpjQ3FCaEhaLWRORmFSMS0wZnVrTmZ1NHVsZmNWOTFIRXZPQTRycHkyWXlYa1RVdWZIMDVWTEZlQy1wR1dITlVWMTBVV0laX0ZseGdCekxJbUl6RjZJR09GcFozTUxUNTRONW5rTVlmWFhhTFI5VGxUZkRzcU1MRjNhMUhfVQ?oc=5\" target=\"_blank\">Giving opportunity, gaining innovation: Women driving the future of Med-Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">News-Medical</font>",
+    "link": "https://news.google.com/rss/articles/CBMivwFBVV95cUxQTHE3SUxjLXVOc2w2TlpjMzhwY3JhemxnUmNabDVIbEdIeTJkWUwzRE5MRnN4R3R3OTRiT1JqQWVIWHpjQ3FCaEhaLWRORmFSMS0wZnVrTmZ1NHVsZmNWOTFIRXZPQTRycHkyWXlYa1RVdWZIMDVWTEZlQy1wR1dITlVWMTBVV0laX0ZseGdCekxJbUl6RjZJR09GcFozTUxUNTRONW5rTVlmWFhhTFI5VGxUZkRzcU1MRjNhMUhfVQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 11:46:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "India's top court angry after junior judge cites fake AI-generated orders",
+    "description": "In several recent instances, AI has disrupted court proceedings in India and elsewhere.",
+    "link": "https://www.bbc.com/news/articles/c178zzw780xo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 11:34:01 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "How Big Tech Is Powering Trump’s Immigration Crackdown - WIRED",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiigFBVV95cUxPM3I4VkVUNmJWZERsckxKRF9ja1dIRTZldWpJSkxoeXgzdjFmbU9GZzh2ZnZUSGxTRGJPV0xhRzh0aTI0WUhkZXFzTjNQZTg5MFpXX05DWFBvSVJHSjZ0NzBzUl80bUcxUHVxZjE5WE1icDhLblBFaVFhNmpQXzAtWF9uNllXT0FCSFE?oc=5\" target=\"_blank\">How Big Tech Is Powering Trump’s Immigration Crackdown</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WIRED</font>",
+    "link": "https://news.google.com/rss/articles/CBMiigFBVV95cUxPM3I4VkVUNmJWZERsckxKRF9ja1dIRTZldWpJSkxoeXgzdjFmbU9GZzh2ZnZUSGxTRGJPV0xhRzh0aTI0WUhkZXFzTjNQZTg5MFpXX05DWFBvSVJHSjZ0NzBzUl80bUcxUHVxZjE5WE1icDhLblBFaVFhNmpQXzAtWF9uNllXT0FCSFE?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 11:30:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Europe doesn’t lack tech talent. Its leaders lack execution - Fortune",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiqwFBVV95cUxPbVFYdll6eUJyM2g4N1JDSUpJZDFRRDFZZWlMcjZpNnIyaExpb0dMWVRnWXd2c0ZUMlZ1aE1waDlGZUd5aEZsOFJxcW1pUFg1eTJJZWVjS1JKYU9aZjZBMDRyWDl2cTAwQWlGUXdOc1J5NUFoRGZHMXpBVDJwLXNwQ0R2NnBUQUItUHF2OG5JczNXNmRxRzVIYXNhV0c0MVVTa0ZJNzMweHU2QTg?oc=5\" target=\"_blank\">Europe doesn’t lack tech talent. Its leaders lack execution</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Fortune</font>",
+    "link": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxPbVFYdll6eUJyM2g4N1JDSUpJZDFRRDFZZWlMcjZpNnIyaExpb0dMWVRnWXd2c0ZUMlZ1aE1waDlGZUd5aEZsOFJxcW1pUFg1eTJJZWVjS1JKYU9aZjZBMDRyWDl2cTAwQWlGUXdOc1J5NUFoRGZHMXpBVDJwLXNwQ0R2NnBUQUItUHF2OG5JczNXNmRxRzVIYXNhV0c0MVVTa0ZJNzMweHU2QTg?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 11:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "After Pentagon contract, OpenAI shifts to damage control mode - Fortune",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiiwFBVV95cUxOaTZsUFdlRnVhTjB2dDhTUGJNWWRJa09HMFp5OThHRG9PWmU0bWRyWGVfaHlvLWtURGN6MDk5cXN2a1N2QkI0eVNkMEcxYmlyVWhQaGV2dnRTbWdTR2RrOTlyc2w0Tnh3d3pRN2lUYXp4cGc3SWdpZ2xwRGtaYXhPRDE3TWQxcEIyN2tR?oc=5\" target=\"_blank\">After Pentagon contract, OpenAI shifts to damage control mode</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Fortune</font>",
+    "link": "https://news.google.com/rss/articles/CBMiiwFBVV95cUxOaTZsUFdlRnVhTjB2dDhTUGJNWWRJa09HMFp5OThHRG9PWmU0bWRyWGVfaHlvLWtURGN6MDk5cXN2a1N2QkI0eVNkMEcxYmlyVWhQaGV2dnRTbWdTR2RrOTlyc2w0Tnh3d3pRN2lUYXp4cGc3SWdpZ2xwRGtaYXhPRDE3TWQxcEIyN2tR?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:48:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech firms and AI farming tools ‘playing with the food system’, warns thinktank - The Guardian",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiqwFBVV95cUxNaUZPb2lRcDVMX2hSU1h1RHB4a3NlWWtaNkQzWXJURU9vU2JtU1pWd3V4M1ZPNHhwNi0wTVE1N3BpdVJsS3BteUZLdVVYNVdQbC1JeHBnX3YySDlXNHFHSG41MEtnYzljOWhjYkY5cGswTDVKbFZNUWJTZ2FQZENIY05Ic0JvaXpDYUlXMm5STW56MHhpdVVEQll4cjRuM2dmNldSamFGWU9MRDQ?oc=5\" target=\"_blank\">Tech firms and AI farming tools ‘playing with the food system’, warns thinktank</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The Guardian</font>",
+    "link": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxNaUZPb2lRcDVMX2hSU1h1RHB4a3NlWWtaNkQzWXJURU9vU2JtU1pWd3V4M1ZPNHhwNi0wTVE1N3BpdVJsS3BteUZLdVVYNVdQbC1JeHBnX3YySDlXNHFHSG41MEtnYzljOWhjYkY5cGswTDVKbFZNUWJTZ2FQZENIY05Ic0JvaXpDYUlXMm5STW56MHhpdVVEQll4cjRuM2dmNldSamFGWU9MRDQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:33:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "US sanctions Rwanda's military and top commanders over fighting in DR Congo",
+    "description": "Rwanda accused Washington's move as “one sided” and politically motivated.",
+    "link": "https://www.bbc.com/news/articles/cr5l7zdnjgpo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 10:30:12 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "US-Israel war with Iran widens as strikes continue",
+    "description": "The crisis in the Middle East has widened after Israel and the US attacked Iran on Saturday with major strikes.",
+    "link": "https://www.bbc.com/news/videos/cgml4ldzyxyo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 10:20:26 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines - Virginia Mercury",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMizAFBVV95cUxPc1Q4WWF6U2QwYTFmNHZrSXlGTHl0MVpfNUxSckFyY29yNk5pNFYzZFhyMmFKVkhfbXF1VUZ2TU9QbE96MnBCMHJmbTk3eGdEd1IyTndkeTJGLXdBYnRNSXVPYXVjMzktR2RmckZQVlYxM3dmMElqdHdNb0IyMFV0emFJVkJYazhmV2wzTFBfWThraUNuQjlERW4xellNaG1GNE1LdFBzck4tZUN4SzM1VVRxcnpGendjT0FnMUQ5N1Y0TS1vdXo5WVNJbDE?oc=5\" target=\"_blank\">Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Virginia Mercury</font>",
+    "link": "https://news.google.com/rss/articles/CBMizAFBVV95cUxPc1Q4WWF6U2QwYTFmNHZrSXlGTHl0MVpfNUxSckFyY29yNk5pNFYzZFhyMmFKVkhfbXF1VUZ2TU9QbE96MnBCMHJmbTk3eGdEd1IyTndkeTJGLXdBYnRNSXVPYXVjMzktR2RmckZQVlYxM3dmMElqdHdNb0IyMFV0emFJVkJYazhmV2wzTFBfWThraUNuQjlERW4xellNaG1GNE1LdFBzck4tZUN4SzM1VVRxcnpGendjT0FnMUQ5N1Y0TS1vdXo5WVNJbDE?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:09:47 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Orange Beach Council To Review High-Tech Police Tools - Orange Beach News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwFBVV95cUxPaFcwM0IzeldRczFqYlBhdTJKY3FqQmRzVVhYbzUyM1pWbmlYRzRZM0s1ajIwUXlvUTFGd0N0SXhSV2tEOE9hNnNnMWN2VVpEcTU2dUdfMExQZ2NYcllxWVRfbmdTdk9PLUt4U1E5TGdaX0ljUl9hUkxseDNEcGVERUJETDd5Wjg?oc=5\" target=\"_blank\">Orange Beach Council To Review High-Tech Police Tools</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Orange Beach News</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwFBVV95cUxPaFcwM0IzeldRczFqYlBhdTJKY3FqQmRzVVhYbzUyM1pWbmlYRzRZM0s1ajIwUXlvUTFGd0N0SXhSV2tEOE9hNnNnMWN2VVpEcTU2dUdfMExQZ2NYcllxWVRfbmdTdk9PLUt4U1E5TGdaX0ljUl9hUkxseDNEcGVERUJETDd5Wjg?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:07:25 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Ford and G.M. Face a Dilemma as China Excels in Electric Vehicles - The New York Times",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiiwFBVV95cUxOUWtKVUlIalRFa0hBT2VNdndwc3lmdXBiUkFoR1NHNDBTTUtJTEZaM1hveGxpYlZ1bUU2dGYwYlNjcFBfaDNpWUY2RmhaOTVMclVKTUNRN2NyUTRDa2E3LWFfbzF1NVc0dVR5aFE1dm84T2hGYlpta1FpM0hmZlhGWU9Ia1RuTFItRmxV?oc=5\" target=\"_blank\">Ford and G.M. Face a Dilemma as China Excels in Electric Vehicles</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The New York Times</font>",
+    "link": "https://news.google.com/rss/articles/CBMiiwFBVV95cUxOUWtKVUlIalRFa0hBT2VNdndwc3lmdXBiUkFoR1NHNDBTTUtJTEZaM1hveGxpYlZ1bUU2dGYwYlNjcFBfaDNpWUY2RmhaOTVMclVKTUNRN2NyUTRDa2E3LWFfbzF1NVc0dVR5aFE1dm84T2hGYlpta1FpM0hmZlhGWU9Ia1RuTFItRmxV?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:06:58 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines - News From The States",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiwwFBVV95cUxOZUZxUE4zcmRVQ2VBUjJ5S1NTRmI2aVd1NVVHSFR0eS0tNE5MU3hFTExsbnJJTU1IRXNIRmt2SVBpcDRLUHhfR013eGpTaERXc3kyS24xaU5zc0k1Xzhoa3ZYSktJWmNqQ0g5VUVKYThHeUZiZlFwV25Uczh3WGUxZm9WUUNZcXp0TXFOMVYtd041TF96ZENRWER1MmlpS25vUkhfdHVJVjhydzVsRHlZVTVfMVBCTzhILW5WUG90eEc1Nk0?oc=5\" target=\"_blank\">Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">News From The States</font>",
+    "link": "https://news.google.com/rss/articles/CBMiwwFBVV95cUxOZUZxUE4zcmRVQ2VBUjJ5S1NTRmI2aVd1NVVHSFR0eS0tNE5MU3hFTExsbnJJTU1IRXNIRmt2SVBpcDRLUHhfR013eGpTaERXc3kyS24xaU5zc0k1Xzhoa3ZYSktJWmNqQ0g5VUVKYThHeUZiZlFwV25Uczh3WGUxZm9WUUNZcXp0TXFOMVYtd041TF96ZENRWER1MmlpS25vUkhfdHVJVjhydzVsRHlZVTVfMVBCTzhILW5WUG90eEc1Nk0?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:05:59 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines - cbs19news.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikAJBVV95cUxOaFdkUGcyMXBmRnY4ZlNxaFc2LTR2VW9OdmVLYUpUTHRsLWdYYUF3RXBfQURjUkkxLTdDeDl5QmktRjZ0NkVSTHF3Tm5EOHdXNUU1ZlM5cDdaYUdhVDJ6NThESTdnbEM3clZtLU5hZERDVjFsQ3JjVVB2LTdJVjBMbmVPdVF1OE9Ddl9hZ3U0MTBIbklKQWNzdE9uTktNV2Zpbnk3NDdXZmlrZlhEdzVMWU1sX1k1WEJvRDFjMEphNHgxOE5xZHpRMi1ZVU5BaWFQQ1dVemR2RXo2dzZ2c3B2a3VfSzB4bTMxRkgzSW4xX2g5WHBhMTNEZlpGTVVyY2VMUmI3eHgwV2FzdG9uZUhQLQ?oc=5\" target=\"_blank\">Virginia Tech professor offers insight into possible impacts of war with Iran and more headlines</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">cbs19news.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMikAJBVV95cUxOaFdkUGcyMXBmRnY4ZlNxaFc2LTR2VW9OdmVLYUpUTHRsLWdYYUF3RXBfQURjUkkxLTdDeDl5QmktRjZ0NkVSTHF3Tm5EOHdXNUU1ZlM5cDdaYUdhVDJ6NThESTdnbEM3clZtLU5hZERDVjFsQ3JjVVB2LTdJVjBMbmVPdVF1OE9Ddl9hZ3U0MTBIbklKQWNzdE9uTktNV2Zpbnk3NDdXZmlrZlhEdzVMWU1sX1k1WEJvRDFjMEphNHgxOE5xZHpRMi1ZVU5BaWFQQ1dVemR2RXo2dzZ2c3B2a3VfSzB4bTMxRkgzSW4xX2g5WHBhMTNEZlpGTVVyY2VMUmI3eHgwV2FzdG9uZUhQLQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:05:59 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "States weigh limits, outright bans on ed tech in schools - K-12 Dive",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilwFBVV95cUxNd1lDSjRwOWpwbUNBbFppMFJLai1RajdSRmV0Xy0wUWpZZ0I5WXRpUDE1c242cUNmZXV1QlBVT3VpX0psT2R1cVZoc2tZcHZtRk9KTnlOZnJmM2tPbEd5N0RyZUVvNkN3V05zNEtwcVVRREF4NmVpSnVPN2gzSTVtZHV6cFJnWjdlNGVha3VHUUc3OHZuZGtv?oc=5\" target=\"_blank\">States weigh limits, outright bans on ed tech in schools</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">K-12 Dive</font>",
+    "link": "https://news.google.com/rss/articles/CBMilwFBVV95cUxNd1lDSjRwOWpwbUNBbFppMFJLai1RajdSRmV0Xy0wUWpZZ0I5WXRpUDE1c242cUNmZXV1QlBVT3VpX0psT2R1cVZoc2tZcHZtRk9KTnlOZnJmM2tPbEd5N0RyZUVvNkN3V05zNEtwcVVRREF4NmVpSnVPN2gzSTVtZHV6cFJnWjdlNGVha3VHUUc3OHZuZGtv?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:04:41 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Where to watch Texas Tech basketball vs TCU, TV channel, streaming - Lubbock Avalanche-Journal",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi7AFBVV95cUxNWi0zUEhkRkYtcTVmU0N5NFh5a2hybGJSY1V6M1ZwR29CY2ozRy1tRXNLc0ptMXZxQmN0VjQyMFU4WkxSb0ljYUU3emwwVndzS3Z5Z05na09mRjM3djNVNzdGU0hDUXB2Z1R4SWZvYTlsYTNlTE9JeXgtdDVZTldST092Smx4a3VwNXJRTVU4RHVyWldUcVUyVHQzT2JNUzBISXFLM2I3b0otay1nYVNWd3JVUVZYanhiZWh1enBfRWlCTXV3UkFIVDhUbmhqQmFLajdOQVRZcXR1TERHaUJIcDlDMElockFBNmlfXw?oc=5\" target=\"_blank\">Where to watch Texas Tech basketball vs TCU, TV channel, streaming</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Lubbock Avalanche-Journal</font>",
+    "link": "https://news.google.com/rss/articles/CBMi7AFBVV95cUxNWi0zUEhkRkYtcTVmU0N5NFh5a2hybGJSY1V6M1ZwR29CY2ozRy1tRXNLc0ptMXZxQmN0VjQyMFU4WkxSb0ljYUU3emwwVndzS3Z5Z05na09mRjM3djNVNzdGU0hDUXB2Z1R4SWZvYTlsYTNlTE9JeXgtdDVZTldST092Smx4a3VwNXJRTVU4RHVyWldUcVUyVHQzT2JNUzBISXFLM2I3b0otay1nYVNWd3JVUVZYanhiZWh1enBfRWlCTXV3UkFIVDhUbmhqQmFLajdOQVRZcXR1TERHaUJIcDlDMElockFBNmlfXw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:01:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Examining Texas Tech basketball's NCAA Tournament, Big 12 outlook - Lubbock Avalanche-Journal",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwJBVV95cUxNelZKMFBqVGxjdE1waC1ib3BoZl9Oa0cyYjFFQjB3NFNEQTY2M2w3elY1Z2xfYkc1c05yMEE2UXBsRS1kRmFJdWFPX1ZyTDlWM3k2a1RIMnZQcTlzLXRSalBpUUxuSkZnVFV5TnhUQ2tUOVdaWFBDUXd4bXl0YXhLQTY5Ty1TeGZvT3YzSkVaVlBKcUpuTWJLMkxSTkp0Y2VwX1ZJS1BuZVB6TnNQbjh5aFMzMUlEbUN1UVdfSXNpMHBOUlZYU1lyWEJGMng3OHdFTTMxbFU2dXNQR2w4Unc1Q3J1eHVfeFFEQTFMREdCS2t4YldFZWEzQ1hUajlyLTBCWnNQb0paNA?oc=5\" target=\"_blank\">Examining Texas Tech basketball's NCAA Tournament, Big 12 outlook</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Lubbock Avalanche-Journal</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwJBVV95cUxNelZKMFBqVGxjdE1waC1ib3BoZl9Oa0cyYjFFQjB3NFNEQTY2M2w3elY1Z2xfYkc1c05yMEE2UXBsRS1kRmFJdWFPX1ZyTDlWM3k2a1RIMnZQcTlzLXRSalBpUUxuSkZnVFV5TnhUQ2tUOVdaWFBDUXd4bXl0YXhLQTY5Ty1TeGZvT3YzSkVaVlBKcUpuTWJLMkxSTkp0Y2VwX1ZJS1BuZVB6TnNQbjh5aFMzMUlEbUN1UVdfSXNpMHBOUlZYU1lyWEJGMng3OHdFTTMxbFU2dXNQR2w4Unc1Q3J1eHVfeFFEQTFMREdCS2t4YldFZWEzQ1hUajlyLTBCWnNQb0paNA?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:01:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech Tuesday: Melting snow leads to concerns over local air quality - WOSU Public Media",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiswFBVV95cUxQbTRna0M1cTBUdmVEYkNxcnYtLXFrVzlnNFhpR1VYUFlPQTZvRzU5bEItd2NHZWFZallGUFZIZk4xNXBzUlpLNjBNQUZZX1NVV0RTTTlRaUNHTEdzMG51WW54QlBCb1VNTDFiYzFlaG1kdFpYV2lDQjlkMUZ2TWdadlFSUFcyT3kxQkMxU0xsRUxoaTBySDVJelYtcDh4amZNYnRWVnZHLW11OGtGdXdOTXVnVQ?oc=5\" target=\"_blank\">Tech Tuesday: Melting snow leads to concerns over local air quality</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WOSU Public Media</font>",
+    "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxQbTRna0M1cTBUdmVEYkNxcnYtLXFrVzlnNFhpR1VYUFlPQTZvRzU5bEItd2NHZWFZallGUFZIZk4xNXBzUlpLNjBNQUZZX1NVV0RTTTlRaUNHTEdzMG51WW54QlBCb1VNTDFiYzFlaG1kdFpYV2lDQjlkMUZ2TWdadlFSUFcyT3kxQkMxU0xsRUxoaTBySDVJelYtcDh4amZNYnRWVnZHLW11OGtGdXdOTXVnVQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:01:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "CT Comptroller Projects $77.3M Budget Surplus, Touts Quantum Tech As Key To State's Future Economy - CT News Junkie",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMizAFBVV95cUxOcl9PWjBodElpLUNkOXlBT1VYOUhNQUstNkU4ajNNSHFvVWRTdWNVUVBsTFdhQXBMcFNyZEN5OTBDNndiR0R4d2FrWjZOc2ItNmlJTjhTWW1WQjBVd1oyem5iaEZMSHlZd3dCbm5QbkJ6eWVpTUcwVDctT29wRnktZ3NiVHZrbVl2eU1BYjk3RVZRSng5ZUdxa3VMZHJtVEVQMzNHbnlEZE9GSEVyTXFuN1Fmdlp3cGtQSW5FSnpETG1YUTJicV9SUF9IV2Q?oc=5\" target=\"_blank\">CT Comptroller Projects $77.3M Budget Surplus, Touts Quantum Tech As Key To State's Future Economy</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">CT News Junkie</font>",
+    "link": "https://news.google.com/rss/articles/CBMizAFBVV95cUxOcl9PWjBodElpLUNkOXlBT1VYOUhNQUstNkU4ajNNSHFvVWRTdWNVUVBsTFdhQXBMcFNyZEN5OTBDNndiR0R4d2FrWjZOc2ItNmlJTjhTWW1WQjBVd1oyem5iaEZMSHlZd3dCbm5QbkJ6eWVpTUcwVDctT29wRnktZ3NiVHZrbVl2eU1BYjk3RVZRSng5ZUdxa3VMZHJtVEVQMzNHbnlEZE9GSEVyTXFuN1Fmdlp3cGtQSW5FSnpETG1YUTJicV9SUF9IV2Q?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Pittsburgh's new mayor has cold-called dozens of tech CEOs to get them to relocate their startups to his city - Business Insider",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilwFBVV95cUxOeldDbktkSW1DRGdHQmFwX2dPd18xQVBVZ28wUlRoOVpKUEdmcTdZTU9CcnZYamZxbWIwV2pfZ2YzM25QOEdiWHFLekVDQWtlRGh6dm5md2kyZkdpelpTQ2hDX0lJUWwweEdISnA0MkpvZVBPbUFnWnpaZGNDRFdibDZMUjJVaElrUnd5UHkyWTFsWk9HbXQ4?oc=5\" target=\"_blank\">Pittsburgh's new mayor has cold-called dozens of tech CEOs to get them to relocate their startups to his city</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Business Insider</font>",
+    "link": "https://news.google.com/rss/articles/CBMilwFBVV95cUxOeldDbktkSW1DRGdHQmFwX2dPd18xQVBVZ28wUlRoOVpKUEdmcTdZTU9CcnZYamZxbWIwV2pfZ2YzM25QOEdiWHFLekVDQWtlRGh6dm5md2kyZkdpelpTQ2hDX0lJUWwweEdISnA0MkpvZVBPbUFnWnpaZGNDRFdibDZMUjJVaElrUnd5UHkyWTFsWk9HbXQ4?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 10:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Six US soldiers killed in Iranian strike on Kuwait base",
+    "description": "The US defence secretary confirms a US military base was hit by an Iranian missile on Sunday.",
+    "link": "https://www.bbc.com/news/articles/c4gq33ynl07o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 09:57:59 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Texas Republicans back Trump over Iran - but some wary of 'a quagmire'",
+    "description": "The president's supporters in one town hail his actions in the Middle East - though some comments suggest seeds of trouble.",
+    "link": "https://www.bbc.com/news/articles/cvg35401nrqo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 09:57:15 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Georgia Tech Launches Pilot Program to Support Rural Arts Organizations | Newswise - Newswise",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiqAFBVV95cUxQVktQd0w1eFpwcGhKU1RKWTJmZ2R6WnpvM3k5R0JzLWM4a1N1bDNxYUR5ZUVCX19oMjZxZ2JDaG9tbmNNdFVjeTlubnp5UlJBdllFMmpyQXg4Tk5xSlJneWEzeVFmcElnSFd2aWtMYVA1anEwdWNYQ2dlcTZfS291WHF1aGRGekZ4VURUY1pNLTc0bDI1MnRoNEd3YWpHOV9Yb1U1bmVQZzfSAagBQVVfeXFMUFZLUHdMNXhacHBoSlNUSlkyZmdkelp6bzN5OUdCcy1jOGtTdWwzcWFEeWVFQl9faDI2cWdiQ2hvbW5jTXRVY3k5bm56eVJSQXZZRTJqckF4OE5OcUpSZ3lhM3lRZnBJZ0hXdmlrTGFQNWpxMHVjWENnZXE2X0tvdVhxdWhkRnpGeFVEVGNaTS03NGwyNTJ0aDRHd2FqRzlfWG9VNW5lUGc3?oc=5\" target=\"_blank\">Georgia Tech Launches Pilot Program to Support Rural Arts Organizations | Newswise</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Newswise</font>",
+    "link": "https://news.google.com/rss/articles/CBMiqAFBVV95cUxQVktQd0w1eFpwcGhKU1RKWTJmZ2R6WnpvM3k5R0JzLWM4a1N1bDNxYUR5ZUVCX19oMjZxZ2JDaG9tbmNNdFVjeTlubnp5UlJBdllFMmpyQXg4Tk5xSlJneWEzeVFmcElnSFd2aWtMYVA1anEwdWNYQ2dlcTZfS291WHF1aGRGekZ4VURUY1pNLTc0bDI1MnRoNEd3YWpHOV9Yb1U1bmVQZzfSAagBQVVfeXFMUFZLUHdMNXhacHBoSlNUSlkyZmdkelp6bzN5OUdCcy1jOGtTdWwzcWFEeWVFQl9faDI2cWdiQ2hvbW5jTXRVY3k5bm56eVJSQXZZRTJqckF4OE5OcUpSZ3lhM3lRZnBJZ0hXdmlrTGFQNWpxMHVjWENnZXE2X0tvdVhxdWhkRnpGeFVEVGNaTS03NGwyNTJ0aDRHd2FqRzlfWG9VNW5lUGc3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:55:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "What the Tech?! Digital Innovation for Migratory Species and Protected Area Conservation - IUCN",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiswFBVV95cUxPX1h5V0xQTDNsLXRaZm1KTHdLbFhrMS1xTVZsYXQtTHdvcUJPUWZaeHNkQXlYWWVyUEMxU2RUZDhyN0hzdVRGUTFwNVZkZDc0aVNrZUxSUS1fQ2hEeGRFd1RBZmxuY2xoX1hXZGlVUzljWnd3N0dzRFloQWxfNDlZdDVsM2hfeDUzWHExTzZkXy11Z0I3S2t2TEdiRVlBcFRpQVFGLWx1QmtHMFp2Nm5JVEtiZw?oc=5\" target=\"_blank\">What the Tech?! Digital Innovation for Migratory Species and Protected Area Conservation</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">IUCN</font>",
+    "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxPX1h5V0xQTDNsLXRaZm1KTHdLbFhrMS1xTVZsYXQtTHdvcUJPUWZaeHNkQXlYWWVyUEMxU2RUZDhyN0hzdVRGUTFwNVZkZDc0aVNrZUxSUS1fQ2hEeGRFd1RBZmxuY2xoX1hXZGlVUzljWnd3N0dzRFloQWxfNDlZdDVsM2hfeDUzWHExTzZkXy11Z0I3S2t2TEdiRVlBcFRpQVFGLWx1QmtHMFp2Nm5JVEtiZw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:54:43 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Ivy Tech seeks presenters for free early childhood conference - The Herald-Times",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi0AFBVV95cUxOalEweW9JMFdCLXdNRE9ra2h1OEdiaUpQelZjYktwNzlXN0luaXJDZzRkOEdEQjZIR05wVnZuRlpVdFEtY2FGR1BXNXI1cDctVzRPNGkzdmRSQl9wdlBtRDFqM2F2Tk1BZklHU0k4VHI2LXV0WjZjb0h0MGRvcUxlSjlxUTZabUNnLVRTZDMyU1Y3anNvUVJqMFdyXzc4V0NvMmVvaVFmdXhpc3loUUFLYUFicHptaW9lWXNkVnRvbF8tVmx5dDNaT0tkMjE5WUd2?oc=5\" target=\"_blank\">Ivy Tech seeks presenters for free early childhood conference</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The Herald-Times</font>",
+    "link": "https://news.google.com/rss/articles/CBMi0AFBVV95cUxOalEweW9JMFdCLXdNRE9ra2h1OEdiaUpQelZjYktwNzlXN0luaXJDZzRkOEdEQjZIR05wVnZuRlpVdFEtY2FGR1BXNXI1cDctVzRPNGkzdmRSQl9wdlBtRDFqM2F2Tk1BZklHU0k4VHI2LXV0WjZjb0h0MGRvcUxlSjlxUTZabUNnLVRTZDMyU1Y3anNvUVJqMFdyXzc4V0NvMmVvaVFmdXhpc3loUUFLYUFicHptaW9lWXNkVnRvbF8tVmx5dDNaT0tkMjE5WUd2?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:45:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "India Budget Paved Way for Tech Investment with Tax Certainty - news.bloombergtax.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMirAFBVV95cUxOR0dqY004WnVPczNIbmdwRlc2NFhSaUNuQUVjbU1kYUxrMkczZ1RxRThZTFJ6SFZPS2hqS0xWWmRFM2xveGZNcThPOVFnNFNnSG5lcEgzMU5HVFJOaGYwdjdZR0VkeFM2bVNmNzRndDUyaVRTdWRjdFQ2bEw3WmFpaVVoS0cyRk8wOVFNSGVJeHhjbjFsWXcwU3JlLWtVVUdyUUd4Rm5JMmdmdnRl?oc=5\" target=\"_blank\">India Budget Paved Way for Tech Investment with Tax Certainty</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">news.bloombergtax.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMirAFBVV95cUxOR0dqY004WnVPczNIbmdwRlc2NFhSaUNuQUVjbU1kYUxrMkczZ1RxRThZTFJ6SFZPS2hqS0xWWmRFM2xveGZNcThPOVFnNFNnSG5lcEgzMU5HVFJOaGYwdjdZR0VkeFM2bVNmNzRndDUyaVRTdWRjdFQ2bEw3WmFpaVVoS0cyRk8wOVFNSGVJeHhjbjFsWXcwU3JlLWtVVUdyUUd4Rm5JMmdmdnRl?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:30:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Taiwan Tech Update: March 3, 2026 - dominotheory.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiaEFVX3lxTE9yTFV0MTlFN1ZXZGczeWdERk0zeHY4VWZLLVJ5WUx6cnI1T0ZLYnJZcFVORy1vaHNPd3AwNkVTWk81bWRPZmpZLWNvX05WMTZVRjUwa0FmOGtibWszUnpmYVlEWXducGQ3?oc=5\" target=\"_blank\">Taiwan Tech Update: March 3, 2026</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">dominotheory.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMiaEFVX3lxTE9yTFV0MTlFN1ZXZGczeWdERk0zeHY4VWZLLVJ5WUx6cnI1T0ZLYnJZcFVORy1vaHNPd3AwNkVTWk81bWRPZmpZLWNvX05WMTZVRjUwa0FmOGtibWszUnpmYVlEWXducGQ3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:24:16 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Safe Artificial Intelligence Isn’t Enough, According to New Georgia Tech Research | Newswise - Newswise",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMitAFBVV95cUxNQ1daSWZqUjh3RU9oUkJSUUNMRHVGR0FUeXlvQmpQNGcyVF9YUGFoMGlqcTZlMG5oUTZQdy1ncmZMZnJLMjdwaHVQcFJ0RzVTakpPTTNoWC12VnZuRlhtcUNTeFBMUXdkWE1GX2I3M29qTlJ3MXllN1dBcFpUMkZNejNYOUswX3NybWRPQUxRYW1paHBWUVZzN2gwVzIyTHhRaWkzSjFVSHl4Q1RDSU1BZ2p5RC3SAbQBQVVfeXFMTUNXWklmalI4d0VPaFJCUlFDTER1RkdBVHl5b0JqUDRnMlRfWFBhaDBpanE2ZTBuaFE2UHctZ3JmTGZySzI3cGh1UHBSdEc1U2pKT00zaFgtdlZ2bkZYbXFDU3hQTFF3ZFhNRl9iNzNvak5SdzF5ZTdXQXBaVDJGTXozWDlLMF9zcm1kT0FMUWFtaWhwVlFWczdoMFcyMkx4UWlpM0oxVUh5eENUQ0lNQWdqeUQt?oc=5\" target=\"_blank\">Safe Artificial Intelligence Isn’t Enough, According to New Georgia Tech Research | Newswise</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Newswise</font>",
+    "link": "https://news.google.com/rss/articles/CBMitAFBVV95cUxNQ1daSWZqUjh3RU9oUkJSUUNMRHVGR0FUeXlvQmpQNGcyVF9YUGFoMGlqcTZlMG5oUTZQdy1ncmZMZnJLMjdwaHVQcFJ0RzVTakpPTTNoWC12VnZuRlhtcUNTeFBMUXdkWE1GX2I3M29qTlJ3MXllN1dBcFpUMkZNejNYOUswX3NybWRPQUxRYW1paHBWUVZzN2gwVzIyTHhRaWkzSjFVSHl4Q1RDSU1BZ2p5RC3SAbQBQVVfeXFMTUNXWklmalI4d0VPaFJCUlFDTER1RkdBVHl5b0JqUDRnMlRfWFBhaDBpanE2ZTBuaFE2UHctZ3JmTGZySzI3cGh1UHBSdEc1U2pKT00zaFgtdlZ2bkZYbXFDU3hQTFF3ZFhNRl9iNzNvak5SdzF5ZTdXQXBaVDJGTXozWDlLMF9zcm1kT0FMUWFtaWhwVlFWczdoMFcyMkx4UWlpM0oxVUh5eENUQ0lNQWdqeUQt?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:20:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "The New Rules of CX Tech: CMP Research and Datamark’s Blueprint for Tomorrow - CX Today",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMitAFBVV95cUxQdFlTeHNDYU4xVGdOblZJNjZTUkVJTnpRSGV3cmlZbDFRSUZrYm5YTEJVMFNORExuYVJUMy1rZnEySlpiR3JKakRyWTQ4TFJoLTdFaGxCeWxGTlQ0STQyMTBSZmt4UEI4NEg0YUNNVjBscm1qdFlySFR6cUFpdk5yX29SdzJOYXlrSHlCODU0dkFNRkpXbEJyM0dSeFJPQzA4RmhMYTNkMHRWbVRkSzJUM2JiZFM?oc=5\" target=\"_blank\">The New Rules of CX Tech: CMP Research and Datamark’s Blueprint for Tomorrow</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">CX Today</font>",
+    "link": "https://news.google.com/rss/articles/CBMitAFBVV95cUxQdFlTeHNDYU4xVGdOblZJNjZTUkVJTnpRSGV3cmlZbDFRSUZrYm5YTEJVMFNORExuYVJUMy1rZnEySlpiR3JKakRyWTQ4TFJoLTdFaGxCeWxGTlQ0STQyMTBSZmt4UEI4NEg0YUNNVjBscm1qdFlySFR6cUFpdk5yX29SdzJOYXlrSHlCODU0dkFNRkpXbEJyM0dSeFJPQzA4RmhMYTNkMHRWbVRkSzJUM2JiZFM?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:15:33 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "eCommerce Tech Debt Inflates Project Costs by 20%, Curbing Growth - DesignRush",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwFBVV95cUxPai05Uzl1QXhxczR0WUduX29RZkFOQ0IzMDhRZk9qWmtieGttcTJZR3R4LW94NWltckNFY3VWdHdEd2tYdEU2ck50M2tfUEhfTVd1M0Z4Mld4VVp0eWhaaVk1MnRSbktwNnNlMjN0WDU4UDVnUDFlNlN2bmJZSWRHYlJuNTNza3M?oc=5\" target=\"_blank\">eCommerce Tech Debt Inflates Project Costs by 20%, Curbing Growth</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">DesignRush</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwFBVV95cUxPai05Uzl1QXhxczR0WUduX29RZkFOQ0IzMDhRZk9qWmtieGttcTJZR3R4LW94NWltckNFY3VWdHdEd2tYdEU2ck50M2tfUEhfTVd1M0Z4Mld4VVp0eWhaaVk1MnRSbktwNnNlMjN0WDU4UDVnUDFlNlN2bmJZSWRHYlJuNTNza3M?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 09:07:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "How uCloudlink uses pet wearables and RV Wi‑Fi to build new networks - Stock Titan",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMivgFBVV95cUxNR3ZWMHE2QkJFUWVrOFJyU2lTUjlMbkthV3YzWmNvQWgxSkpqSUNnaGNoOTFTUXpuek5WYTVPYTlPZ28teEdZS1hKVUlnQXlGTlQ5b0RSTmY4TFhZMk16eGwzcWt3bmQwZWR0aUJ5SmljbV94a1ZqRDhoaEI2T2lwTE5wTlE1RUw0bm9sQ081R2pRSEZqR3AxdlZpS0w0RlV1dlRWeHk0aDBEYUVDMHVIemlJcnZJWHREd0JCdHBR?oc=5\" target=\"_blank\">How uCloudlink uses pet wearables and RV Wi‑Fi to build new networks</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Stock Titan</font>",
+    "link": "https://news.google.com/rss/articles/CBMivgFBVV95cUxNR3ZWMHE2QkJFUWVrOFJyU2lTUjlMbkthV3YzWmNvQWgxSkpqSUNnaGNoOTFTUXpuek5WYTVPYTlPZ28teEdZS1hKVUlnQXlGTlQ5b0RSTmY4TFhZMk16eGwzcWt3bmQwZWR0aUJ5SmljbV94a1ZqRDhoaEI2T2lwTE5wTlE1RUw0bm9sQ081R2pRSEZqR3AxdlZpS0w0RlV1dlRWeHk0aDBEYUVDMHVIemlJcnZJWHREd0JCdHBR?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 08:58:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "SusHi Tech Tokyo 2026: Ready to Push Startups Past Pitches - JAPAN Forward",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMijAFBVV95cUxPMnEyeTVUNnJwTF8tTV9kUG4xaHJEZE96ekR4YXBwQkZ1NEdobl93UkhzNGZxdWp0RTB5ZzdqWE5ST3R1RU1takZVSUFVaUtLOTFTU0VwYlBINDA4MzBlUlI4alhvN1U5SEFjLUdsZXJNNXBOOGhRZmhzelpoQXBDYUx0WHUzN0lmTzNFLQ?oc=5\" target=\"_blank\">SusHi Tech Tokyo 2026: Ready to Push Startups Past Pitches</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">JAPAN Forward</font>",
+    "link": "https://news.google.com/rss/articles/CBMijAFBVV95cUxPMnEyeTVUNnJwTF8tTV9kUG4xaHJEZE96ekR4YXBwQkZ1NEdobl93UkhzNGZxdWp0RTB5ZzdqWE5ST3R1RU1takZVSUFVaUtLOTFTU0VwYlBINDA4MzBlUlI4alhvN1U5SEFjLUdsZXJNNXBOOGhRZmhzelpoQXBDYUx0WHUzN0lmTzNFLQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 07:50:02 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Why did US and Israel attack Iran and how long could the war last?",
+    "description": "Iran has carried out strikes against Israel, across the Gulf and against a British base in Cyprus in retaliation.",
+    "link": "https://www.bbc.com/news/articles/cx2dyz6p3weo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 07:49:48 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Nebraska physicist, global team put new spin on energy-saving tech - Nebraska Today",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMimgFBVV95cUxOdkJyTG8yU3pMVGdmNFBlZmEzbW1RN18yTE55SXBXSTFHNHFDREQ1MS1SbEFNSEJBc2RZdEtiZUFKT1NzbDZWa1lMek5vaGNoVEQ0RGlnY1A2WHRMRWwtTkNoOFRGTm5tVnZRdGUzaFNHY0xIQVJ3RDFfeGlhMUFjOFFYSlM3OGl5UHhkZk92ZGpjN256dnluanF3?oc=5\" target=\"_blank\">Nebraska physicist, global team put new spin on energy-saving tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Nebraska Today</font>",
+    "link": "https://news.google.com/rss/articles/CBMimgFBVV95cUxOdkJyTG8yU3pMVGdmNFBlZmEzbW1RN18yTE55SXBXSTFHNHFDREQ1MS1SbEFNSEJBc2RZdEtiZUFKT1NzbDZWa1lMek5vaGNoVEQ0RGlnY1A2WHRMRWwtTkNoOFRGTm5tVnZRdGUzaFNHY0xIQVJ3RDFfeGlhMUFjOFFYSlM3OGl5UHhkZk92ZGpjN256dnluanF3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 06:33:21 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Frontier women: Montana Tech roars past Dakota State for 1st Frontier title since 1983 - MontanaSports.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi0AFBVV95cUxNXzlWdzdWcGl6RGgwZlZRanFyeGdRNl9oTjVVOHZmWW5ad0k0REZScTRDbk1HQ3lfRUc2aUNLbS0zX3JJR01HQnJMOVFzeVZPd19jeWJJanhTUlF2LVJZOXQwYUZ6SXBXbklGeUhrSkdlM0VEUGw0TWozMEZRLTZGSGVJblg5SVZVQnJCdWRSZVhJeThrRWVTYWlfeXRtZjRiV0pkU3lnSHZneGM5Q2p5Uy1fbV9sdm5ueDlwcVR0anhPenBleDBOWmxwRU9tNDNa?oc=5\" target=\"_blank\">Frontier women: Montana Tech roars past Dakota State for 1st Frontier title since 1983</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">MontanaSports.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMi0AFBVV95cUxNXzlWdzdWcGl6RGgwZlZRanFyeGdRNl9oTjVVOHZmWW5ad0k0REZScTRDbk1HQ3lfRUc2aUNLbS0zX3JJR01HQnJMOVFzeVZPd19jeWJJanhTUlF2LVJZOXQwYUZ6SXBXbklGeUhrSkdlM0VEUGw0TWozMEZRLTZGSGVJblg5SVZVQnJCdWRSZVhJeThrRWVTYWlfeXRtZjRiV0pkU3lnSHZneGM5Q2p5Uy1fbV9sdm5ueDlwcVR0anhPenBleDBOWmxwRU9tNDNa?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 06:32:21 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Know when to fold them: the tech inspired by origami - BBC",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiWkFVX3lxTE1oRkd3UmdRdHhZQ19KY3kxQVhORWZNYk01VGJISGsyRFEwVkh4NUF4cGxCcjByNHgwRFJad2xZRXlkN2lOeUJLakxkMkFzZ0FZS3QzZFVjR3ZLdw?oc=5\" target=\"_blank\">Know when to fold them: the tech inspired by origami</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">BBC</font>",
+    "link": "https://news.google.com/rss/articles/CBMiWkFVX3lxTE1oRkd3UmdRdHhZQ19KY3kxQVhORWZNYk01VGJISGsyRFEwVkh4NUF4cGxCcjByNHgwRFJad2xZRXlkN2lOeUJLakxkMkFzZ0FZS3QzZFVjR3ZLdw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:45:46 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Mack unveils new Granite with industry-first tech - Automotive World",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikAFBVV95cUxPbU1aNFRpOExnTWRvSkNtR1hQaG5VQXllSXdDMFFVWHcwMGRRRzdVX3U5TnowRVhqek81LTVxdEFab1QwcXNldERKYllWSlM2RE5YaVBHbVNvQWZSSGJqNnNDTjFxdzVtUlowNUYyeDZDWFViQllITjZZOC1UaGQ5eHJseGYxT21FV28xUU1ISzQ?oc=5\" target=\"_blank\">Mack unveils new Granite with industry-first tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Automotive World</font>",
+    "link": "https://news.google.com/rss/articles/CBMikAFBVV95cUxPbU1aNFRpOExnTWRvSkNtR1hQaG5VQXllSXdDMFFVWHcwMGRRRzdVX3U5TnowRVhqek81LTVxdEFab1QwcXNldERKYllWSlM2RE5YaVBHbVNvQWZSSGJqNnNDTjFxdzVtUlowNUYyeDZDWFViQllITjZZOC1UaGQ5eHJseGYxT21FV28xUU1ISzQ?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:35:29 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Baseball: Greenspan calls for improved execution after losing every game in No. 5 Georgia Tech series - The Daily Northwestern",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi4gFBVV95cUxOU0VScEhvaGV2RGU5cl8ycnRteTBmQV9NeDVvQnRMNDI4UTZ1eVg1OWcyM29hNVNENjVTRnVIbERuSHdWNFRVR0FWZW5ISG1hTjR6ckF3Q3daanFhUGJZNXVwNDZmNDRsRHptU0pJMlBzZTFsOUFBeVNJV3V1ajRHNHA1V0JFWERGemVzMkM3d01HOGx5R1dZLXNHcU1NN3lEVVhXSWxvemtrQWFzTWx5eHMyRlFWeGNDUVplcHJCWUtJOVpHQmc0YS1PT0pQcDIyWFNvaU9WVG1qZW54NEllemt3?oc=5\" target=\"_blank\">Baseball: Greenspan calls for improved execution after losing every game in No. 5 Georgia Tech series</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The Daily Northwestern</font>",
+    "link": "https://news.google.com/rss/articles/CBMi4gFBVV95cUxOU0VScEhvaGV2RGU5cl8ycnRteTBmQV9NeDVvQnRMNDI4UTZ1eVg1OWcyM29hNVNENjVTRnVIbERuSHdWNFRVR0FWZW5ISG1hTjR6ckF3Q3daanFhUGJZNXVwNDZmNDRsRHptU0pJMlBzZTFsOUFBeVNJV3V1ajRHNHA1V0JFWERGemVzMkM3d01HOGx5R1dZLXNHcU1NN3lEVVhXSWxvemtrQWFzTWx5eHMyRlFWeGNDUVplcHJCWUtJOVpHQmc0YS1PT0pQcDIyWFNvaU9WVG1qZW54NEllemt3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:31:07 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "The little town making nearly all of China's lanterns",
+    "description": "A remarkable 80% of the country's lanterns are still made by hand in one small town in Hebei Province.",
+    "link": "https://www.bbc.com/news/articles/c15x38x7z8xo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 05:28:03 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Rowan-Cabarrus breaks ground on tech ed complex - Salisbury Post",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikwFBVV95cUxQUTA3VGZCOWZzckVocDZzM0NScThWTlk5MGtteEZobS1JUnFibVhwS09DRzJpUjJPQjhiOG1wZEl2VTNXbDVXV1huaGpJZ1dwampoaWVac1pyLWpVQ25MZlhQZ2pWaE1QeFpUVk1XQmNSdFpQdGl3eW1YS2RqOHNEQlgxSl9ELWtMemx5V3hib1dMYkU?oc=5\" target=\"_blank\">Rowan-Cabarrus breaks ground on tech ed complex</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Salisbury Post</font>",
+    "link": "https://news.google.com/rss/articles/CBMikwFBVV95cUxQUTA3VGZCOWZzckVocDZzM0NScThWTlk5MGtteEZobS1JUnFibVhwS09DRzJpUjJPQjhiOG1wZEl2VTNXbDVXV1huaGpJZ1dwampoaWVac1pyLWpVQ25MZlhQZ2pWaE1QeFpUVk1XQmNSdFpQdGl3eW1YS2RqOHNEQlgxSl9ELWtMemx5V3hib1dMYkU?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:26:15 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "How to properly do a technology detox - ndsmcobserver.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiiwFBVV95cUxPdXFqNUZpTFk3dEl4YkRIYkJBWTU4bXJheEhtY2NfWlpMM3pHci1ydXAxWk03amdOWFBpSXNRd09mckZ6eWJsT0JBNzNpN3J1Y3c1V2lMNFBXTW9kOGk1d2I1cnBWWFZXaFc1VTRwQXMxM0hsajN3Z0Q3dnczSW1RU3puU2d3UHVBb0p3?oc=5\" target=\"_blank\">How to properly do a technology detox</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">ndsmcobserver.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMiiwFBVV95cUxPdXFqNUZpTFk3dEl4YkRIYkJBWTU4bXJheEhtY2NfWlpMM3pHci1ydXAxWk03amdOWFBpSXNRd09mckZ6eWJsT0JBNzNpN3J1Y3c1V2lMNFBXTW9kOGk1d2I1cnBWWFZXaFc1VTRwQXMxM0hsajN3Z0Q3dnczSW1RU3puU2d3UHVBb0p3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:09:19 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Dakota State Women fall in Frontier Conference title game to Montana Tech - Dakota News Now",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMirgFBVV95cUxQTWJIeWhreFR1RE82c2JaelZyTXQyRVljT2pJdU05OUtlTFViLThXV3h4V2swS0FfSHJkVkRSWFJpdURmRkx1Y2xBLUxQdnZsRXNxNjY4Uzc4Nm8tME9PRlZ6ZkpuZEJOU2JnUi1KdnlzcmhmcE1JaFh2V3hWN3FvOXJYVmhxMDhKdVpfaTZZV3JQLUJWOXpOYzBlaUFPVjNGZ3dtUnNkaVBKd2l0SlHSAcIBQVVfeXFMTVU4bTlNckpVbUxtOFR6dHR1TUE2YWU5azQ0LWhEVXRFeTlReWNTZ1FzTF9KbWFacnFEbFF4a1dJR1JZc2ZNb0JvREhaYnJya2JRckxTdG9fSlBjTmRONHB0TUVPT0RJMkZKTW5qQ0pYa2Izb3dEOXljc0ZFMjRkSThlX1BJRnh3OUpaMFpSZEEtSF9zRjZONDFlWkd5elhNZDF2Nlhsd2pMRnZrZUpGazZLbDVmVjBRb1QzOTVRYUNJanc?oc=5\" target=\"_blank\">Dakota State Women fall in Frontier Conference title game to Montana Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Dakota News Now</font>",
+    "link": "https://news.google.com/rss/articles/CBMirgFBVV95cUxQTWJIeWhreFR1RE82c2JaelZyTXQyRVljT2pJdU05OUtlTFViLThXV3h4V2swS0FfSHJkVkRSWFJpdURmRkx1Y2xBLUxQdnZsRXNxNjY4Uzc4Nm8tME9PRlZ6ZkpuZEJOU2JnUi1KdnlzcmhmcE1JaFh2V3hWN3FvOXJYVmhxMDhKdVpfaTZZV3JQLUJWOXpOYzBlaUFPVjNGZ3dtUnNkaVBKd2l0SlHSAcIBQVVfeXFMTVU4bTlNckpVbUxtOFR6dHR1TUE2YWU5azQ0LWhEVXRFeTlReWNTZ1FzTF9KbWFacnFEbFF4a1dJR1JZc2ZNb0JvREhaYnJya2JRckxTdG9fSlBjTmRONHB0TUVPT0RJMkZKTW5qQ0pYa2Izb3dEOXljc0ZFMjRkSThlX1BJRnh3OUpaMFpSZEEtSF9zRjZONDFlWkd5elhNZDF2Nlhsd2pMRnZrZUpGazZLbDVmVjBRb1QzOTVRYUNJanc?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:07:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Ad Tech Briefing: Criteo named first ad tech partner to OpenAI’s ChatGPT ad pilot - Digiday",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiswFBVV95cUxOMWZWUTdYNVFXdzRaaGJaSHN4VzMwUlV6ZmF6djFhX1plQTIxMVJlcHdiX2IyOHdZNm9vQjdUMFZZTE9BcWFDZkdUWlZKallTMXZTTW5ZbDN0Z1ZaWTVkeTZaNWRSS19JUXg5TGVHZTNrQzRmbEJTYk51VkdiRXVfVzB0QmJhdFVaZnJrY0JGTDVwNVNzQUtfVWJralUtU29TNHZvdXN4eTlFekd1SlQ1RnVmaw?oc=5\" target=\"_blank\">Ad Tech Briefing: Criteo named first ad tech partner to OpenAI’s ChatGPT ad pilot</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Digiday</font>",
+    "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxOMWZWUTdYNVFXdzRaaGJaSHN4VzMwUlV6ZmF6djFhX1plQTIxMVJlcHdiX2IyOHdZNm9vQjdUMFZZTE9BcWFDZkdUWlZKallTMXZTTW5ZbDN0Z1ZaWTVkeTZaNWRSS19JUXg5TGVHZTNrQzRmbEJTYk51VkdiRXVfVzB0QmJhdFVaZnJrY0JGTDVwNVNzQUtfVWJralUtU29TNHZvdXN4eTlFekd1SlQ1RnVmaw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:06:10 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "DSU Women fall in Frontier Championship to Montana Tech - WDBJ7",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikwFBVV95cUxOVkFwX1RSQ2lfcDVCWkVQV1B1eU42Y1Jublpvbklobi05aU9QbS1rRjJ2LVMyOHFHV05oZ1NuX2daNVlSSGR0VHZ6M3hzRTZ2c0lwSHRiWXpSazFwdEZHbmpUSnpUY0x0RUt2MHZONUFyWFJMMWtJSjFYYmpLWlp4bDBqaHducTdhNUJjbVJNRkg5TTA?oc=5\" target=\"_blank\">DSU Women fall in Frontier Championship to Montana Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WDBJ7</font>",
+    "link": "https://news.google.com/rss/articles/CBMikwFBVV95cUxOVkFwX1RSQ2lfcDVCWkVQV1B1eU42Y1Jublpvbklobi05aU9QbS1rRjJ2LVMyOHFHV05oZ1NuX2daNVlSSGR0VHZ6M3hzRTZ2c0lwSHRiWXpSazFwdEZHbmpUSnpUY0x0RUt2MHZONUFyWFJMMWtJSjFYYmpLWlp4bDBqaHducTdhNUJjbVJNRkg5TTA?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:01:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Relevance of Sun Tzu’s Strategic Thought in the USA-China Tech Rivalry - Modern Diplomacy",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiS0FVX3lxTE5EOU5RcDU3THo5WXNVNV81SUY0SjFzaDhsZ0N6eTQ0SWxhaERMQXhmVVZRSUJaenpQeF9RcjU5bGp1OWtVVmdXUnR4Zw?oc=5\" target=\"_blank\">Relevance of Sun Tzu’s Strategic Thought in the USA-China Tech Rivalry</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Modern Diplomacy</font>",
+    "link": "https://news.google.com/rss/articles/CBMiS0FVX3lxTE5EOU5RcDU3THo5WXNVNV81SUY0SjFzaDhsZ0N6eTQ0SWxhaERMQXhmVVZRSUJaenpQeF9RcjU5bGp1OWtVVmdXUnR4Zw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 05:00:21 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Zaretsky leads Tech after opening day in Las Vegas - Texas Tech Red Raiders",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMinwFBVV95cUxNM183U2VHLWJQLXRUdFFjX2s5Y0RZLXQxNzY2Q0xkNVY1aWpBTXVkT2Q1Y1p1Ni1ZX2tSX2JYRTNmRGlLV19iT3hUY1NzOERwYXo3VC1jR2pCZVIybnRxcEVUaWM0WUdnVnJtNVY1ODVtSXdwcDg4TVhQbmdGUG9IYVZEakJhb01jbUZlS3RudUZGZ01HQW1pcGlwZjhpMm8?oc=5\" target=\"_blank\">Zaretsky leads Tech after opening day in Las Vegas</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech Red Raiders</font>",
+    "link": "https://news.google.com/rss/articles/CBMinwFBVV95cUxNM183U2VHLWJQLXRUdFFjX2s5Y0RZLXQxNzY2Q0xkNVY1aWpBTXVkT2Q1Y1p1Ni1ZX2tSX2JYRTNmRGlLV19iT3hUY1NzOERwYXo3VC1jR2pCZVIybnRxcEVUaWM0WUdnVnJtNVY1ODVtSXdwcDg4TVhQbmdGUG9IYVZEakJhb01jbUZlS3RudUZGZ01HQW1pcGlwZjhpMm8?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:49:45 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Homewood Public Library offering Teen Tech Hub - CBS 42",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwFBVV95cUxNakRBVUFSUTZaakRHREJtdF9MQ3VLc3RfMkVqUk9TWExqcnpkRFg1TVVOMTU5S1k5UG9tNG5RR21qT2U2Tk9OaFR0Uk5sSDcyN2F3QW5KcjI2MHFxanczbjFGeFlRSkpNQzRueUxhblA1cTRnemRlOXl5MVRyemE0V1pUY2I3SzTSAYwBQVVfeXFMUEhKRlRQX3VvRUJGRXV0cjlPYm5FSU1SSUd0WGVCbE9pT3RjUnE2aE5TZWtjaTdWMjg2c01zcm40dGQyNnpVYkJIS3ByTkozRHl6ajF5YjZOV3hubU1IZmtRUHJiT05MN0lIbTJyVGxIWnFHNF9DRERCMnphV0M1RmFfbFBxUEF5LUVwT3k?oc=5\" target=\"_blank\">Homewood Public Library offering Teen Tech Hub</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">CBS 42</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwFBVV95cUxNakRBVUFSUTZaakRHREJtdF9MQ3VLc3RfMkVqUk9TWExqcnpkRFg1TVVOMTU5S1k5UG9tNG5RR21qT2U2Tk9OaFR0Uk5sSDcyN2F3QW5KcjI2MHFxanczbjFGeFlRSkpNQzRueUxhblA1cTRnemRlOXl5MVRyemE0V1pUY2I3SzTSAYwBQVVfeXFMUEhKRlRQX3VvRUJGRXV0cjlPYm5FSU1SSUd0WGVCbE9pT3RjUnE2aE5TZWtjaTdWMjg2c01zcm40dGQyNnpVYkJIS3ByTkozRHl6ajF5YjZOV3hubU1IZmtRUHJiT05MN0lIbTJyVGxIWnFHNF9DRERCMnphV0M1RmFfbFBxUEF5LUVwT3k?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:44:51 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Big 12 unveils high-tech glass court - KCTV",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiggFBVV95cUxPM2RpdGRjWGdFOS1NMWhwbG5zMmdjdDlmbDhCLTBFYzkyWTQ5SUFWMGlXYXdENnhyY1JWc3VVS2hqcVd2bjNxRUJ3RkRXMmo3dEphQWluTmtDczhXQWZIVnA1VXRJVFhmVml6em1PS3g3TTBCSXBtV2Q2b1F1cWM1UmxB?oc=5\" target=\"_blank\">Big 12 unveils high-tech glass court</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCTV</font>",
+    "link": "https://news.google.com/rss/articles/CBMiggFBVV95cUxPM2RpdGRjWGdFOS1NMWhwbG5zMmdjdDlmbDhCLTBFYzkyWTQ5SUFWMGlXYXdENnhyY1JWc3VVS2hqcVd2bjNxRUJ3RkRXMmo3dEphQWluTmtDczhXQWZIVnA1VXRJVFhmVml6em1PS3g3TTBCSXBtV2Q2b1F1cWM1UmxB?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:40:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Man accused of using spyware, tech to target women in serial rape case - Cincinnati Enquirer",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi0AFBVV95cUxQSEI5eWZmaHVxbDJEUUYxVHozcVlQajdXaDR5YjY0SnIzcXhQMmVFNC1kVVh3bXFHLVhOUXBPQkdRNUpMc1ZOOUlPM0o3TWpXcUFCc29BcjZzdEVNbTdpclMzdU00bm1JNkxhZW5ITGxFVVlPWmFYandtcTY2MFM2ZW1MZ3pKcFZid0RENDhXQjZRVkpqbGtSSXhVaDlSVGZEcDk2Wk9ydkZhUXU4SWZERU5ocEtaM2F0bERHeklhZFlLYUczZ3pJVFJ5ekpGb3FL?oc=5\" target=\"_blank\">Man accused of using spyware, tech to target women in serial rape case</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Cincinnati Enquirer</font>",
+    "link": "https://news.google.com/rss/articles/CBMi0AFBVV95cUxQSEI5eWZmaHVxbDJEUUYxVHozcVlQajdXaDR5YjY0SnIzcXhQMmVFNC1kVVh3bXFHLVhOUXBPQkdRNUpMc1ZOOUlPM0o3TWpXcUFCc29BcjZzdEVNbTdpclMzdU00bm1JNkxhZW5ITGxFVVlPWmFYandtcTY2MFM2ZW1MZ3pKcFZid0RENDhXQjZRVkpqbGtSSXhVaDlSVGZEcDk2Wk9ydkZhUXU4SWZERU5ocEtaM2F0bERHeklhZFlLYUczZ3pJVFJ5ekpGb3FL?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:36:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Family, friends remember former Texas Tech student killed in Austin bar shooting - Cleveland 19 News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMivwFBVV95cUxOY29xdjVwVkxzcVB1bGptSFdGSWhvWUROZkxTa1kwOVJvTDhaUDYwRHpmd3JQSUJSdmVjOGFEZm1uaUlDcURKZm5oTHcwLVVXYlVud1poQ2VzMzNPVW5HV1duXy00SGdHLWNZeXpNb2tCUWVaUDkxX09Tdlg5dDZsVWMxQnNLMmhISy1zS2ZPV2o5dDdlZ2JlMklwM2RKa0xpZHZYNFcwOWFmbmtIdTZTcWFpTXVkTWN5OHU0Mm5Fcw?oc=5\" target=\"_blank\">Family, friends remember former Texas Tech student killed in Austin bar shooting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Cleveland 19 News</font>",
+    "link": "https://news.google.com/rss/articles/CBMivwFBVV95cUxOY29xdjVwVkxzcVB1bGptSFdGSWhvWUROZkxTa1kwOVJvTDhaUDYwRHpmd3JQSUJSdmVjOGFEZm1uaUlDcURKZm5oTHcwLVVXYlVud1poQ2VzMzNPVW5HV1duXy00SGdHLWNZeXpNb2tCUWVaUDkxX09Tdlg5dDZsVWMxQnNLMmhISy1zS2ZPV2o5dDdlZ2JlMklwM2RKa0xpZHZYNFcwOWFmbmtIdTZTcWFpTXVkTWN5OHU0Mm5Fcw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:24:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Family, friends remember former Texas Tech student killed in Austin bar shooting - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMirgFBVV95cUxOMVFMZG1NVEliV3QzZGoxcXg1RnpYemxjZ3UwUjR2RE5GaWxqNThuc0hEbzdzYThaUUM0c1BwZlh6WTBxd3ZtTGZBekpyV0JWQ2pZenIwOWw5ejhFYjdNVnFubjMtNUlMdklmRTI5N1N1UVo4QXpJVFc2NHBEaEphbDJaVnMzLUZacVNtU1RSUVNQbWVLXzVUcmNqNHZEQlJfUzNHODRxMm9vcUlGRkHSAcIBQVVfeXFMT0lndS1LVTRjaWZmcldhTnphNDNWbnVnU1RRSmJTdEUyd0hWOFlNbUhyUmhidy11aEc0S0NON0w2bHVlSEdCWTUxd3F4S0p4TGJDcmNlbDVBLXdVbHhmMTltSTBoX2ZZODhQMDNtYkx1TXF5NmtHUGJ6cEF3bXU0MWx2Z2w1QW5yZlEyQUdKZHZiZktwNmxyR3MxVFM2ZGtsWEdwZWZqbmRUVGtqR3c4SGppSDZCSU1rdUVWMHNjODR2d3c?oc=5\" target=\"_blank\">Family, friends remember former Texas Tech student killed in Austin bar shooting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMirgFBVV95cUxOMVFMZG1NVEliV3QzZGoxcXg1RnpYemxjZ3UwUjR2RE5GaWxqNThuc0hEbzdzYThaUUM0c1BwZlh6WTBxd3ZtTGZBekpyV0JWQ2pZenIwOWw5ejhFYjdNVnFubjMtNUlMdklmRTI5N1N1UVo4QXpJVFc2NHBEaEphbDJaVnMzLUZacVNtU1RSUVNQbWVLXzVUcmNqNHZEQlJfUzNHODRxMm9vcUlGRkHSAcIBQVVfeXFMT0lndS1LVTRjaWZmcldhTnphNDNWbnVnU1RRSmJTdEUyd0hWOFlNbUhyUmhidy11aEc0S0NON0w2bHVlSEdCWTUxd3F4S0p4TGJDcmNlbDVBLXdVbHhmMTltSTBoX2ZZODhQMDNtYkx1TXF5NmtHUGJ6cEF3bXU0MWx2Z2w1QW5yZlEyQUdKZHZiZktwNmxyR3MxVFM2ZGtsWEdwZWZqbmRUVGtqR3c4SGppSDZCSU1rdUVWMHNjODR2d3c?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:22:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Indiana Tech women win WHAC conference tournament 76-48 over Rochester Christian - WPTA | 21Alive | Fort Wayne, IN",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMivAFBVV95cUxQVHIxZjZUSTNUYmJCd0lxSG1Od3NVeko3TWpfaWVrZmM3b3ZhUm5vYy1GOG5YT3ZWcDRFb2pIVWg5d3RTTC01UVRVMTJWRUtINWpOZ0toNmhZZl9TZFQ4WWU0TEhvbTRSakZyNmJRcGNoLUFtOVhCSXZjR2lJblNyQm80WkxnQU92Ul9pakhrQnBsN3BhVnE3VXVXREd5YlZReWhmMnJkdmZybXh3TFpmNWRRLXRhSE5kSnlOZtIB0AFBVV95cUxQdHVHOXk5V1hHOVVFQUV6Qy1nOF8tQW1vOGFNN3g2LVhGWHY0eVRQbzd6V3U4UmVQMXBqZEV3eHJ5VWE3bjVUcWh6RnFJQ1JPcGVPWkZCM2dOc3FjVXB4eFNJbnRHb19YTVVLSVlrYXdVMEplQVJHb1M5dE9XeVBRVk54dUs5Zk9lR0hOOW5nVHNCS3Zab085ZWVPZWRUMENidnY3RVk0MlRWUE4xSkNIYzBxMzNwMmMyY2Vnbi1WUmJKTnBBN1lpaGsxREY1QjQw?oc=5\" target=\"_blank\">Indiana Tech women win WHAC conference tournament 76-48 over Rochester Christian</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WPTA | 21Alive | Fort Wayne, IN</font>",
+    "link": "https://news.google.com/rss/articles/CBMivAFBVV95cUxQVHIxZjZUSTNUYmJCd0lxSG1Od3NVeko3TWpfaWVrZmM3b3ZhUm5vYy1GOG5YT3ZWcDRFb2pIVWg5d3RTTC01UVRVMTJWRUtINWpOZ0toNmhZZl9TZFQ4WWU0TEhvbTRSakZyNmJRcGNoLUFtOVhCSXZjR2lJblNyQm80WkxnQU92Ul9pakhrQnBsN3BhVnE3VXVXREd5YlZReWhmMnJkdmZybXh3TFpmNWRRLXRhSE5kSnlOZtIB0AFBVV95cUxQdHVHOXk5V1hHOVVFQUV6Qy1nOF8tQW1vOGFNN3g2LVhGWHY0eVRQbzd6V3U4UmVQMXBqZEV3eHJ5VWE3bjVUcWh6RnFJQ1JPcGVPWkZCM2dOc3FjVXB4eFNJbnRHb19YTVVLSVlrYXdVMEplQVJHb1M5dE9XeVBRVk54dUs5Zk9lR0hOOW5nVHNCS3Zab085ZWVPZWRUMENidnY3RVk0MlRWUE4xSkNIYzBxMzNwMmMyY2Vnbi1WUmJKTnBBN1lpaGsxREY1QjQw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:08:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Baldwin County Council on Aging offers free tech help for seniors - fox10tv.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiogFBVV95cUxONUhreUkyV1Bpa0lXdXIza0lTV2ZkV2x2OWxxcTdJMWlKWXNla1hLXzRFS3MydU1wSW8xTjRMUjJYeW1UVGNoNHdxN01OcE5zbGw4Q1l0OWJPRVVGM2J6ckdjQW1rTkpEcmd6QWZtQkx3UU04Y1VjUkN1WkNSNEhwZzBmak91bU1FYU1pYnNucmVESnJBQjBKSlVuRjdQbU0wM2c?oc=5\" target=\"_blank\">Baldwin County Council on Aging offers free tech help for seniors</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">fox10tv.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMiogFBVV95cUxONUhreUkyV1Bpa0lXdXIza0lTV2ZkV2x2OWxxcTdJMWlKWXNla1hLXzRFS3MydU1wSW8xTjRMUjJYeW1UVGNoNHdxN01OcE5zbGw4Q1l0OWJPRVVGM2J6ckdjQW1rTkpEcmd6QWZtQkx3UU04Y1VjUkN1WkNSNEhwZzBmak91bU1FYU1pYnNucmVESnJBQjBKSlVuRjdQbU0wM2c?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 04:04:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Novel tech for next-generation green agriculture - CORDIS",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilgFBVV95cUxQVWJwV1NNLWxFcGZZUUxDZUdNUjlBZjFEdHhNVi1ENnVyUWxkcHZCcWgwRDhXTTNmbW9uQTdHUzZfaWthQjAyWi1vMzV2ZjF0Rk1WSzlTQklsY211dmJrVzBILTNBT1lNRzlHbllLa0F0V0l0NnhIbkNIQUhGV3kzRTZ6ZV84bHNIV2xaakpVcjdsZTlMd3c?oc=5\" target=\"_blank\">Novel tech for next-generation green agriculture</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">CORDIS</font>",
+    "link": "https://news.google.com/rss/articles/CBMilgFBVV95cUxQVWJwV1NNLWxFcGZZUUxDZUdNUjlBZjFEdHhNVi1ENnVyUWxkcHZCcWgwRDhXTTNmbW9uQTdHUzZfaWthQjAyWi1vMzV2ZjF0Rk1WSzlTQklsY211dmJrVzBILTNBT1lNRzlHbllLa0F0V0l0NnhIbkNIQUhGV3kzRTZ6ZV84bHNIV2xaakpVcjdsZTlMd3c?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 03:54:54 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech baseball freshman arrested on DWI charge Monday - The Daily Toreador",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMioAFBVV95cUxOWG9RS1FGVUJSTXkxT2pWWUtlWWJIRmo4U2h4QURmcXhaYy0tdHd3QUdza0Y4MWY4ZFBBOU5xMF82QmRQNkotVnpUQ1pIQWtOTWsxVVZKNml3LS1ZMVpHLTdrcGVEOGhtNHNUdUhTWEpSOThKaGVNeVNBZE1MeWNYUUNrcS1UZVZMVEJmeEJhblFVWDI4MldlQ2tRLWptbkJm?oc=5\" target=\"_blank\">Tech baseball freshman arrested on DWI charge Monday</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The Daily Toreador</font>",
+    "link": "https://news.google.com/rss/articles/CBMioAFBVV95cUxOWG9RS1FGVUJSTXkxT2pWWUtlWWJIRmo4U2h4QURmcXhaYy0tdHd3QUdza0Y4MWY4ZFBBOU5xMF82QmRQNkotVnpUQ1pIQWtOTWsxVVZKNml3LS1ZMVpHLTdrcGVEOGhtNHNUdUhTWEpSOThKaGVNeVNBZE1MeWNYUUNrcS1UZVZMVEJmeEJhblFVWDI4MldlQ2tRLWptbkJm?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 03:47:55 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "‘Battle for 806’: Texas Tech Esports club, Lubbock Christian Esports hosting tournament benefitting - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiygFBVV95cUxPQWVabkVEbklpc2NuMXhudlNVaWJuM0wzendJNDNSek4yZVRRYVNFVnRYcy13UDE1Y3gwVVVjVEZHXzF3anJ1bi1mckUxTDBJV2I2SV8wZDEwT3VoVXNtLVdIVk1pQXVmYklYNVJYbG1LWDRnanh0bGRyQ3hqaHF2SUo5c3pENGE4MFJ2cjhoVF9nVlBPZjFZMUk2WWsxRzEtaUU1S3hwMVpkX083REU2eHRzeFVnZG5mbl9PZWtoNGd5d2pPQjZKVW13?oc=5\" target=\"_blank\">‘Battle for 806’: Texas Tech Esports club, Lubbock Christian Esports hosting tournament benefitting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMiygFBVV95cUxPQWVabkVEbklpc2NuMXhudlNVaWJuM0wzendJNDNSek4yZVRRYVNFVnRYcy13UDE1Y3gwVVVjVEZHXzF3anJ1bi1mckUxTDBJV2I2SV8wZDEwT3VoVXNtLVdIVk1pQXVmYklYNVJYbG1LWDRnanh0bGRyQ3hqaHF2SUo5c3pENGE4MFJ2cjhoVF9nVlBPZjFZMUk2WWsxRzEtaUU1S3hwMVpkX083REU2eHRzeFVnZG5mbl9PZWtoNGd5d2pPQjZKVW13?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 03:36:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas authorities identify Austin bar shooting victims",
+    "description": "Three victims and the suspected gunman were killed, and more were injured in the Sunday shooting that the FBI says could have terrorism links.",
+    "link": "https://www.bbc.com/news/articles/cgjznzgly0po?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Tue, 03 Mar 2026 03:15:07 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Bulldogs Complete Two Rounds at Golden Nugget Invitational - LA Tech Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMisgFBVV95cUxPLWwxdndvbDFEVkVVcDdNUmJnUEJJSDlxWlo2dGlTWW9XemFXS2hVZ2xCbEtVLWZSSzE0VGU0cTdUR1cxMFBsYks2dExpNmR2Qk5od3dOOXlCb01XV0JRamYyTVB0XzVoSkdNM1hjWEdEekFObFo0ZFBTUHM1Zk9zRDBvcGlVaURCVFJRMFhVczZBdEg3Ti0yMTNTN1JRV0lWS0RsaV9fYXg0anpuTmZiU2J3?oc=5\" target=\"_blank\">Bulldogs Complete Two Rounds at Golden Nugget Invitational</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">LA Tech Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMisgFBVV95cUxPLWwxdndvbDFEVkVVcDdNUmJnUEJJSDlxWlo2dGlTWW9XemFXS2hVZ2xCbEtVLWZSSzE0VGU0cTdUR1cxMFBsYks2dExpNmR2Qk5od3dOOXlCb01XV0JRamYyTVB0XzVoSkdNM1hjWEdEekFObFo0ZFBTUHM1Zk9zRDBvcGlVaURCVFJRMFhVczZBdEg3Ti0yMTNTN1JRV0lWS0RsaV9fYXg0anpuTmZiU2J3?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 03:04:07 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Hometown Special: Badovinac lifts Montana Tech women to first tournament title in 43 years - SWX Local Sports",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMipAJBVV95cUxOdUZ2WVhJYUVqRGVPM3NxTzhhOTJWOW1vZU13dVQyYzAyZXk4NFpOT2ljNUY2Z1hIYzhxaEdEVklyRXp3TmNHenh2bUhWX0ktcy1WTDlaTXNfMGR6blpvVEVlZmIycmE1Y2hNb2NtZF95UWJBZ1JkcUgyNnpFTVZLTzVPX2laVmRTQnpuNTEwR0xKWVJyY1RSaDJBdGxQczRjUHJpMlBNTGZtQ3pmaGFiRV8wb2ZwcEhBc2xSZTU0MHdKVXA5c1RmNjEteG1icloxajREak9aaGoyMXFGbEN1NG82RGFIS0hIQ1BwaGpuYXg5MlFSMzV6Tl9RNVFHSHZSOWhnQjBZZWFHalNfWTM4Ni1LZjQ2Q2Rjak42by10bjhZVWFu?oc=5\" target=\"_blank\">Hometown Special: Badovinac lifts Montana Tech women to first tournament title in 43 years</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">SWX Local Sports</font>",
+    "link": "https://news.google.com/rss/articles/CBMipAJBVV95cUxOdUZ2WVhJYUVqRGVPM3NxTzhhOTJWOW1vZU13dVQyYzAyZXk4NFpOT2ljNUY2Z1hIYzhxaEdEVklyRXp3TmNHenh2bUhWX0ktcy1WTDlaTXNfMGR6blpvVEVlZmIycmE1Y2hNb2NtZF95UWJBZ1JkcUgyNnpFTVZLTzVPX2laVmRTQnpuNTEwR0xKWVJyY1RSaDJBdGxQczRjUHJpMlBNTGZtQ3pmaGFiRV8wb2ZwcEhBc2xSZTU0MHdKVXA5c1RmNjEteG1icloxajREak9aaGoyMXFGbEN1NG82RGFIS0hIQ1BwaGpuYXg5MlFSMzV6Tl9RNVFHSHZSOWhnQjBZZWFHalNfWTM4Ni1LZjQ2Q2Rjak42by10bjhZVWFu?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 03:03:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech baseball player released from jail following DWI arrest - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMimgFBVV95cUxQOVB2aEVxRW5iOXJ5VDd3cnNrQlZKY2pGakt5OE9xLVNxTEFfUWVZV1hTSFBpR05hd2tYakx2NVdEMy1Qdk5GcERWZTlfQUcwXzdLODFvM2ZyckFuZERoZVUzYTRMS1ZkSmJmYkNLSElySlgyTVdaaTNkUGNWVEJIZDZGekhVOTBVbXNacDRWZWsxZV9CRFJCZ3Bn0gGuAUFVX3lxTFBtdGw1S3Jpck1wVllTMXZ2cXVrOGxWWjJmVzJwdlg0bWpZX2pYd0U3MUtTV0VqQks5QWhnYUE4a2VXOG5keFR0YTFQYVBKelJBWTk5LUsxUThnSHBvTUFVS2VKZHVlLUhVLW5mQlJYbU80Q3VZSVpwQmtCTk1LS1JlLV9ZWnlnMHU0Z3AtYWVvV1dTRFhmdWF5eGhLWHZiTXZQWUdSRVhZekNzTEh0Zw?oc=5\" target=\"_blank\">Texas Tech baseball player released from jail following DWI arrest</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMimgFBVV95cUxQOVB2aEVxRW5iOXJ5VDd3cnNrQlZKY2pGakt5OE9xLVNxTEFfUWVZV1hTSFBpR05hd2tYakx2NVdEMy1Qdk5GcERWZTlfQUcwXzdLODFvM2ZyckFuZERoZVUzYTRMS1ZkSmJmYkNLSElySlgyTVdaaTNkUGNWVEJIZDZGekhVOTBVbXNacDRWZWsxZV9CRFJCZ3Bn0gGuAUFVX3lxTFBtdGw1S3Jpck1wVllTMXZ2cXVrOGxWWjJmVzJwdlg0bWpZX2pYd0U3MUtTV0VqQks5QWhnYUE4a2VXOG5keFR0YTFQYVBKelJBWTk5LUsxUThnSHBvTUFVS2VKZHVlLUhVLW5mQlJYbU80Q3VZSVpwQmtCTk1LS1JlLV9ZWnlnMHU0Z3AtYWVvV1dTRFhmdWF5eGhLWHZiTXZQWUdSRVhZekNzTEh0Zw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 02:55:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Baldwin County Council on Aging offers free tech help for seniors - fox10tv.com",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMimgFBVV95cUxQTXBOOUpFUU10R0tQTGxhbUJyay1EZ2tpSFpWcGZfY0tvd1JIbmVqQnYtY2lNY0ktQzdacVZwcE8zZ1RkaDBwZDZVQU03Z0NvV3p3dGZXVG5YZW94VW1FV0E5NjRCdjlSYk1Jbm1QdUIzdnRERTlzUU9IMlY5czRuZGVRbEcyZmxKbm5YU3ZsQWxGSlFzcGgwQnV30gGuAUFVX3lxTE1pem9ja0hvajlVMTdhcFZZcHVZM1JfR1hMZDRHZVpBYjVkX01RaW9oVnlIcE5YQ1ZkeDRuUGF2UC1TS280aWVNcm1TVXI0N1FrNFpDTDk5U3BnYkhsXzdmSmlUcFBoWGZrdWJRLVduU3FFblJyUGRuR0VLOHExb0p1MC1DTkJuNTlaT0ZTRnRFcFU2blBvZVhCaWd4Wi12anR2bDFXYUo2cEI4LU56dw?oc=5\" target=\"_blank\">Baldwin County Council on Aging offers free tech help for seniors</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">fox10tv.com</font>",
+    "link": "https://news.google.com/rss/articles/CBMimgFBVV95cUxQTXBOOUpFUU10R0tQTGxhbUJyay1EZ2tpSFpWcGZfY0tvd1JIbmVqQnYtY2lNY0ktQzdacVZwcE8zZ1RkaDBwZDZVQU03Z0NvV3p3dGZXVG5YZW94VW1FV0E5NjRCdjlSYk1Jbm1QdUIzdnRERTlzUU9IMlY5czRuZGVRbEcyZmxKbm5YU3ZsQWxGSlFzcGgwQnV30gGuAUFVX3lxTE1pem9ja0hvajlVMTdhcFZZcHVZM1JfR1hMZDRHZVpBYjVkX01RaW9oVnlIcE5YQ1ZkeDRuUGF2UC1TS280aWVNcm1TVXI0N1FrNFpDTDk5U3BnYkhsXzdmSmlUcFBoWGZrdWJRLVduU3FFblJyUGRuR0VLOHExb0p1MC1DTkJuNTlaT0ZTRnRFcFU2blBvZVhCaWd4Wi12anR2bDFXYUo2cEI4LU56dw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 02:20:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Cougars Face McNeese, Incarnate Word Before Starting Big 12 Play Against Texas Tech - University of Houston Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMixgFBVV95cUxQQ25wdkotNUtuMUE0cDBlOXZiMFBQV2xrcmw3UU9lbFB1RjhjWWxCRFMwWkt2eTNoSWRldVgtbXMxc04yN25Ha0ZXOVNtdkpjaFVOMnM4UU5YLXVXamN2RjZRRXQ3QmdQOVFVemxjRFhjaU9Cbmd6ODlLM3NjRl8xZU5wUDlBS1dmYV9xLXZ3eVBQZlE5NWlndzNnY2xuN1FMWXZNMGNVWkNBVnNmeDlxamZ0ZUFSRUFodUV5bXBWSGZGSGhNcEE?oc=5\" target=\"_blank\">Cougars Face McNeese, Incarnate Word Before Starting Big 12 Play Against Texas Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">University of Houston Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMixgFBVV95cUxQQ25wdkotNUtuMUE0cDBlOXZiMFBQV2xrcmw3UU9lbFB1RjhjWWxCRFMwWkt2eTNoSWRldVgtbXMxc04yN25Ha0ZXOVNtdkpjaFVOMnM4UU5YLXVXamN2RjZRRXQ3QmdQOVFVemxjRFhjaU9Cbmd6ODlLM3NjRl8xZU5wUDlBS1dmYV9xLXZ3eVBQZlE5NWlndzNnY2xuN1FMWXZNMGNVWkNBVnNmeDlxamZ0ZUFSRUFodUV5bXBWSGZGSGhNcEE?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 02:15:09 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "This Happened When Tech Stocks Became Cheaper Than Staple Stocks (NYSEARCA:IVV) - Seeking Alpha",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiqAFBVV95cUxOc2FVUFROYkVQanJ3enJHT1BsTFJFTUJrdzVhc1RYdTExSHJxaXdjV3owQ2JSMlY1dEh6bVVWZ1JpSjA0eTBsWEZpbmJUcXAyTWdMS1RCTmYyUWxjR3ZZckZZdWlOY2JoUGV1V3BqeU95UGZuQUIzNzF2ZE1yR1dkTm1BckpMeS14NXpUYzFMYmdSSkRycXlSNE5vYktZaHNaRlpFY284Qjk?oc=5\" target=\"_blank\">This Happened When Tech Stocks Became Cheaper Than Staple Stocks (NYSEARCA:IVV)</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Seeking Alpha</font>",
+    "link": "https://news.google.com/rss/articles/CBMiqAFBVV95cUxOc2FVUFROYkVQanJ3enJHT1BsTFJFTUJrdzVhc1RYdTExSHJxaXdjV3owQ2JSMlY1dEh6bVVWZ1JpSjA0eTBsWEZpbmJUcXAyTWdMS1RCTmYyUWxjR3ZZckZZdWlOY2JoUGV1V3BqeU95UGZuQUIzNzF2ZE1yR1dkTm1BckpMeS14NXpUYzFMYmdSSkRycXlSNE5vYktZaHNaRlpFY284Qjk?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 01:41:19 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech baseball player arrested on suspicion of DWI - Lubbock Avalanche-Journal",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMi7AFBVV95cUxQUWxEdXU1YlJhUmlleWpUVzFyVTFCVDV4aXFRZWxmT1ZlU3ZsZ2xIVVFWaWJoVm9Pdm1tZkdXeWVJZS1jX20tdWJXeWhPTEw0SF9YXzI1cnFuRFY2TGF3dk5acXZ6aHBGeEZuYl85Q0F1MmJGcUFzc2NrZUEtQlNtVzF0RkJTNThsQkEySzdSbUJGeHJzbF9veVRCS0RtaHFsSm9jMXJfU1B0TzVzTFM4alRkaXpUOGtacmpicEN5U2RQWHBmWkZCSk81YldCVERiaHpuSG56V1NyaVhGUDkwclRsR0xSelZYSGZCZw?oc=5\" target=\"_blank\">Texas Tech baseball player arrested on suspicion of DWI</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Lubbock Avalanche-Journal</font>",
+    "link": "https://news.google.com/rss/articles/CBMi7AFBVV95cUxQUWxEdXU1YlJhUmlleWpUVzFyVTFCVDV4aXFRZWxmT1ZlU3ZsZ2xIVVFWaWJoVm9Pdm1tZkdXeWVJZS1jX20tdWJXeWhPTEw0SF9YXzI1cnFuRFY2TGF3dk5acXZ6aHBGeEZuYl85Q0F1MmJGcUFzc2NrZUEtQlNtVzF0RkJTNThsQkEySzdSbUJGeHJzbF9veVRCS0RtaHFsSm9jMXJfU1B0TzVzTFM4alRkaXpUOGtacmpicEN5U2RQWHBmWkZCSk81YldCVERiaHpuSG56V1NyaVhGUDkwclRsR0xSelZYSGZCZw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 00:47:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "The ‘European’ Jolla Phone Is an Anti-Big-Tech Smartphone - WIRED",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiWEFVX3lxTE5HTmZzTXZ3YmxSVlFjdXpScWhCQVZiY3BWSW1zYTJWMDgybEZuSHJpR2k1ZWg1NjVFTnU5VmZoVV93ZURTcFR2LTM3VVBEVnZqUGVweGxwOFM?oc=5\" target=\"_blank\">The ‘European’ Jolla Phone Is an Anti-Big-Tech Smartphone</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">WIRED</font>",
+    "link": "https://news.google.com/rss/articles/CBMiWEFVX3lxTE5HTmZzTXZ3YmxSVlFjdXpScWhCQVZiY3BWSW1zYTJWMDgybEZuSHJpR2k1ZWg1NjVFTnU5VmZoVV93ZURTcFR2LTM3VVBEVnZqUGVweGxwOFM?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 00:36:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Preview: LA Tech vs. Arkansas State - LA Tech Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMijwFBVV95cUxOR284d1Zuc3pCQTh0QlhCUm9nWklWLV9yeU1adjZrUGRoeWRzaWpNam9LazRNZzRyVkVKRk9tajEzd1c1cmItV3RTSHFWdzVRRmxVODc0YVVYVEVJUVF4N1JmMmwtSm1uT3hRZmNtYUNkMVpYRkJvQ3Z5TFNvQTY5cEptRDYzZWFLUnZMdHVrYw?oc=5\" target=\"_blank\">Preview: LA Tech vs. Arkansas State</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">LA Tech Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMijwFBVV95cUxOR284d1Zuc3pCQTh0QlhCUm9nWklWLV9yeU1adjZrUGRoeWRzaWpNam9LazRNZzRyVkVKRk9tajEzd1c1cmItV3RTSHFWdzVRRmxVODc0YVVYVEVJUVF4N1JmMmwtSm1uT3hRZmNtYUNkMVpYRkJvQ3Z5TFNvQTY5cEptRDYzZWFLUnZMdHVrYw?oc=5",
+    "pub_date": "Tue, 03 Mar 2026 00:02:33 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech, LCU Esports clubs hosting tournament benefitting Children’s Miracle Network - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiugFBVV95cUxPQUdLT3Nqbjg5MkJ4MEU1Y29JZ2JfVk1BNFVqTWdSV3dJU0pwN1lsZXE2TUt6YklfVTUyNG0tQUVfRnZLejNlQ3kwZGJQTTdBNlIwb18tTFBPRF91Z2dHalZVS2s1N0RULVNEOVpTSWZZNDlyNDhmaFhnbUdCZ1YyX0dDajVkR013NXNSb1J4eUlQM3RwWHZRbVpHd3hGcXhhcVJkMVdRUzFhZC15OFdTczdUZzlidDNPUmfSAc4BQVVfeXFMTnc5cXBILXhkVXg4a2I0V2xfcEFpOWhKc3E5ekhPdHVhZEttOWg5aTFkWXZYaEZlYzItQVJPeWEweFctMU5nTElzOXRjenBOZGZYUE9HeHI2VkJ5b2VSamFaY1BfZ19TeFQ3T3dFTzFKN3pReDJkWDZRUDF3UTdWdDk1Z2JtZHM2a05qcEdVclYwNU9peG9rUWVQdjQ3ODczejAxb3BBeGlLMkw0eVhaVDVSVU5SM2w1SzRpQkF3LXZaMXFnbURlZ2pEOERIR3c?oc=5\" target=\"_blank\">Texas Tech, LCU Esports clubs hosting tournament benefitting Children’s Miracle Network</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMiugFBVV95cUxPQUdLT3Nqbjg5MkJ4MEU1Y29JZ2JfVk1BNFVqTWdSV3dJU0pwN1lsZXE2TUt6YklfVTUyNG0tQUVfRnZLejNlQ3kwZGJQTTdBNlIwb18tTFBPRF91Z2dHalZVS2s1N0RULVNEOVpTSWZZNDlyNDhmaFhnbUdCZ1YyX0dDajVkR013NXNSb1J4eUlQM3RwWHZRbVpHd3hGcXhhcVJkMVdRUzFhZC15OFdTczdUZzlidDNPUmfSAc4BQVVfeXFMTnc5cXBILXhkVXg4a2I0V2xfcEFpOWhKc3E5ekhPdHVhZEttOWg5aTFkWXZYaEZlYzItQVJPeWEweFctMU5nTElzOXRjenBOZGZYUE9HeHI2VkJ5b2VSamFaY1BfZ19TeFQ3T3dFTzFKN3pReDJkWDZRUDF3UTdWdDk1Z2JtZHM2a05qcEdVclYwNU9peG9rUWVQdjQ3ODczejAxb3BBeGlLMkw0eVhaVDVSVU5SM2w1SzRpQkF3LXZaMXFnbURlZ2pEOERIR3c?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 23:26:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Cal Wraps Regular Season At Georgia Tech, Wake Forest - California Golden Bears Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMirAFBVV95cUxPZGNieWswYklsbjQ4S0R0NTQwVktyZHhPX3VnTjI4MExwWi03Tnl5cnRPYjNWUnpzTG9VNTc4ZHZ6UG9fbmhtOGY3X3VkR2twc2cxRFNXZENrZnZ0Z1JEUHZ1Z0hQM29NTkNWWnFfa25JQlZQR1JTd0tDQmFaYVZ2eE9LdXV4QnZBYVZEWXpYRC1QUWl1R25WUXh0S0taa2NlNVl3eXVKVkY0X21j?oc=5\" target=\"_blank\">Cal Wraps Regular Season At Georgia Tech, Wake Forest</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">California Golden Bears Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMirAFBVV95cUxPZGNieWswYklsbjQ4S0R0NTQwVktyZHhPX3VnTjI4MExwWi03Tnl5cnRPYjNWUnpzTG9VNTc4ZHZ6UG9fbmhtOGY3X3VkR2twc2cxRFNXZENrZnZ0Z1JEUHZ1Z0hQM29NTkNWWnFfa25JQlZQR1JTd0tDQmFaYVZ2eE9LdXV4QnZBYVZEWXpYRC1QUWl1R25WUXh0S0taa2NlNVl3eXVKVkY0X21j?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 23:21:32 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech’s Rawls College of Business center named after Lubbock real estate alumni - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiswFBVV95cUxQTFRQX2RwdVZxaDkxRmtFX2ZQVXVXdDRnOWNaTFgzaU9XS1FEa18zaC15R19WVXJUeVp0aGJJU2tsQTRaR2pVVzIxa2padDEtR2c1S0Y1a2pfamYwNGhLQnoxbnR3XzUwcEhjSnN4dERWZ05ueWYtTlNfaThoTnBweE1ZR05CaEl6WWtBNW9xUGg2RnRtM3hrbDU1S0daYzd1YU9yUDhIOHhiTzRxQXBiZnRkMNIBxwFBVV95cUxQT1I5UTJLNUZ0Nm5pUTNGdllJR1c5X0ZIbkNCTC1IWExZdVZhYzJzdjlFYktNNzJnaGVJbTJRanNtb1ZmMWlTYTBzVUo2bk10NEdqOU5RMHp3dTJKNUh2aEVHNHU1RWRuaEhQNkJjU18zbkw1amJUZENDdGEyVmQxRWRqWnQ2RXNSdnRqeUVPb3V1dU1iQXFGMkQtU3IwZm5QWlRCOGkxVXkyeVFQVlhjWFU1c3p2c1pXYnUzb1J5cmoyUnBTM3Zj?oc=5\" target=\"_blank\">Texas Tech’s Rawls College of Business center named after Lubbock real estate alumni</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxQTFRQX2RwdVZxaDkxRmtFX2ZQVXVXdDRnOWNaTFgzaU9XS1FEa18zaC15R19WVXJUeVp0aGJJU2tsQTRaR2pVVzIxa2padDEtR2c1S0Y1a2pfamYwNGhLQnoxbnR3XzUwcEhjSnN4dERWZ05ueWYtTlNfaThoTnBweE1ZR05CaEl6WWtBNW9xUGg2RnRtM3hrbDU1S0daYzd1YU9yUDhIOHhiTzRxQXBiZnRkMNIBxwFBVV95cUxQT1I5UTJLNUZ0Nm5pUTNGdllJR1c5X0ZIbkNCTC1IWExZdVZhYzJzdjlFYktNNzJnaGVJbTJRanNtb1ZmMWlTYTBzVUo2bk10NEdqOU5RMHp3dTJKNUh2aEVHNHU1RWRuaEhQNkJjU18zbkw1amJUZENDdGEyVmQxRWRqWnQ2RXNSdnRqeUVPb3V1dU1iQXFGMkQtU3IwZm5QWlRCOGkxVXkyeVFQVlhjWFU1c3p2c1pXYnUzb1J5cmoyUnBTM3Zj?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 23:09:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "No. 10 Tech hosts TCU for home finale - Texas Tech Red Raiders",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMikgFBVV95cUxPV01KbUdHd2huYkEzM2tUMjI0Y3RtZ00zcFF0WkVFNWxrSVdxMXlfeUdjVDQ2dTktZm5kRE94WUpOQTQ5LWJvbi1JWjM5aGZYOTl6dmM5Y1lIZTM5Q0dOUk1kbzRBc2ZjblRtZVJpbDlIaVJGeUZkZS04TEp6WnllcEdDQUhwZU53bDBZaVhCSk12QQ?oc=5\" target=\"_blank\">No. 10 Tech hosts TCU for home finale</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech Red Raiders</font>",
+    "link": "https://news.google.com/rss/articles/CBMikgFBVV95cUxPV01KbUdHd2huYkEzM2tUMjI0Y3RtZ00zcFF0WkVFNWxrSVdxMXlfeUdjVDQ2dTktZm5kRE94WUpOQTQ5LWJvbi1JWjM5aGZYOTl6dmM5Y1lIZTM5Q0dOUk1kbzRBc2ZjblRtZVJpbDlIaVJGeUZkZS04TEp6WnllcEdDQUhwZU53bDBZaVhCSk12QQ?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 22:22:27 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Devon Hawkins weighs in on rising cloud storage costs in CNBC tech feature - Elon University",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiswFBVV95cUxPODNsbm0tcXdMaHN2ZFI4T050MXdGVlRubU83TGUzQk5Nb2dSenE5WGtlMm1EeTIzNnR5V2pscFZwcENlcXFLb2NsQzVFeFRmWEM4M0hfU3VMM0d2bXZTMDRSdEh5QWdVYnZuTGQ3U2VrckltZklIc3pyTGY3c0ZqbFNMdk9zalFLcEh1OU9ETW1aWk1aalg5VFFTY2pONksxaGV4cGlKRlF2S3Q1NGI3MVpQUQ?oc=5\" target=\"_blank\">Devon Hawkins weighs in on rising cloud storage costs in CNBC tech feature</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Elon University</font>",
+    "link": "https://news.google.com/rss/articles/CBMiswFBVV95cUxPODNsbm0tcXdMaHN2ZFI4T050MXdGVlRubU83TGUzQk5Nb2dSenE5WGtlMm1EeTIzNnR5V2pscFZwcENlcXFLb2NsQzVFeFRmWEM4M0hfU3VMM0d2bXZTMDRSdEh5QWdVYnZuTGQ3U2VrckltZklIc3pyTGY3c0ZqbFNMdk9zalFLcEh1OU9ETW1aWk1aalg5VFFTY2pONksxaGV4cGlKRlF2S3Q1NGI3MVpQUQ?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 22:21:01 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "A Gift That Goes ON&ON: Brownlees Invest in Texas Tech Real Estate Education - Texas Tech University",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiuAFBVV95cUxPQXNhLW5rOGdCdFZKbnM0OVAtUzBMZFoteklZNmo1YzJ6MmtfSEhxRnlBTGdsMXVZYlJTMGFjcTR5WHdfOW1FbFRtWWhPa2hCRy1rRzhLdkNBRXphU0VSMmFzRmtpTFZXd3ZFdmdrazdCREI3akpUSjdkUzJDdUdJN1BMU2R0UTVjMjNDOGM0cHYzTW5tdWZDX3dHM3EwemE1TDdfSG1XSE5wX1dyXzB6OERUTEpWOHZX?oc=5\" target=\"_blank\">A Gift That Goes ON&ON: Brownlees Invest in Texas Tech Real Estate Education</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech University</font>",
+    "link": "https://news.google.com/rss/articles/CBMiuAFBVV95cUxPQXNhLW5rOGdCdFZKbnM0OVAtUzBMZFoteklZNmo1YzJ6MmtfSEhxRnlBTGdsMXVZYlJTMGFjcTR5WHdfOW1FbFRtWWhPa2hCRy1rRzhLdkNBRXphU0VSMmFzRmtpTFZXd3ZFdmdrazdCREI3akpUSjdkUzJDdUdJN1BMU2R0UTVjMjNDOGM0cHYzTW5tdWZDX3dHM3EwemE1TDdfSG1XSE5wX1dyXzB6OERUTEpWOHZX?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 22:12:43 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Montana Technological University places second at Safety Olympics - Montana Tech",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiowFBVV95cUxOUmRLdGZBZnNUWVJZMlp1NDRaQi1ubVBfbVY4cC1wSERzNXNmOTE0dkJWQUxRNGNhY3hreEpTN2NGZExBT1k5ZUNVNHJPQ0UzamZmSVZ4MnZwWEFRZmZZekdyMFprcEF3cVlQbWctX1VMRUwzZUVndmNFb2FRSXNOLVZjZDM5cG9sT1BaWW9pZ3VYeWJ5ZnNicW9SRnVSQWVLeEtz?oc=5\" target=\"_blank\">Montana Technological University places second at Safety Olympics</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Montana Tech</font>",
+    "link": "https://news.google.com/rss/articles/CBMiowFBVV95cUxOUmRLdGZBZnNUWVJZMlp1NDRaQi1ubVBfbVY4cC1wSERzNXNmOTE0dkJWQUxRNGNhY3hreEpTN2NGZExBT1k5ZUNVNHJPQ0UzamZmSVZ4MnZwWEFRZmZZekdyMFprcEF3cVlQbWctX1VMRUwzZUVndmNFb2FRSXNOLVZjZDM5cG9sT1BaWW9pZ3VYeWJ5ZnNicW9SRnVSQWVLeEtz?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 22:04:10 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Snow named USTFCCCA National Athlete of the Week - Texas Tech Red Raiders",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiogFBVV95cUxNWUNXQ3B4ZV8xSHk2XzNjcVJyeVRENjk1bFFRc24xYlYxNmE0Nl9HTndkOFdLaVJSTHdHaTJ6bjRvRW15dUgyUll1a3JBVjFiSm05dFdURVpGR0l1cWVtN2pOcTBmNEttLTVFXzlZdUJUOTBDUE5kNVZoVDRIWDRmcWJsMkVGUWZ4NU5RcUxablZGV09TbjZQWnA1MGZIdkNudWc?oc=5\" target=\"_blank\">Snow named USTFCCCA National Athlete of the Week</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech Red Raiders</font>",
+    "link": "https://news.google.com/rss/articles/CBMiogFBVV95cUxNWUNXQ3B4ZV8xSHk2XzNjcVJyeVRENjk1bFFRc24xYlYxNmE0Nl9HTndkOFdLaVJSTHdHaTJ6bjRvRW15dUgyUll1a3JBVjFiSm05dFdURVpGR0l1cWVtN2pOcTBmNEttLTVFXzlZdUJUOTBDUE5kNVZoVDRIWDRmcWJsMkVGUWZ4NU5RcUxablZGV09TbjZQWnA1MGZIdkNudWc?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 21:52:27 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tickets on Sale for ACU Softball Home Game vs. Texas Tech - Abilene Christian Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilwFBVV95cUxNSmxYWUNaQjZYazNSVFQwY1ZqalNXSFBOMS1ncEUyRTc1bG5yV2V3cnNVV0EyZ1EwZUVZU3VncjdGWlR3ZUdXTDI1Y2pNdF9kZjExNVlvWVNvQ1JDd2pfRUtMeV9jNEZTSHpxekkza2xHakw0V3N4cmowWUZ0YkpjeGxKZnZYUm05VG9xRENGUUxaT3FaZ2lF?oc=5\" target=\"_blank\">Tickets on Sale for ACU Softball Home Game vs. Texas Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Abilene Christian Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMilwFBVV95cUxNSmxYWUNaQjZYazNSVFQwY1ZqalNXSFBOMS1ncEUyRTc1bG5yV2V3cnNVV0EyZ1EwZUVZU3VncjdGWlR3ZUdXTDI1Y2pNdF9kZjExNVlvWVNvQ1JDd2pfRUtMeV9jNEZTSHpxekkza2xHakw0V3N4cmowWUZ0YkpjeGxKZnZYUm05VG9xRENGUUxaT3FaZ2lF?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 21:37:04 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Watch: How the US-Israel war with Iran is jeopardising shipping",
+    "description": "Ben Chu has been looking at what’s happened to marine traffic in the Strait of Hormuz, a key trade passage.",
+    "link": "https://www.bbc.com/news/videos/cvgjnv2y90wo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 21:21:05 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Softball Travels to Georgia Tech for Midweek Matchup - Troy University Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilAFBVV95cUxNaXRkbXNib3VMS1pNeUE0TjRCNGFiWXlhTVZQRFVOc1p2ak9lcWpLeUxfRFBGbjZwSUNGc0NuZ2huNlE5cVBtNjNHMDlfc1V0MEdqTE1JUmY3UXEwY2RDaUJpVHJYMlhkckJDQnBNa2kxMmlLT3FHQUlDR2FrcGk1el9NcEQ2RmdBMkF1Y0ZtNVUxazB2?oc=5\" target=\"_blank\">Softball Travels to Georgia Tech for Midweek Matchup</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Troy University Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMilAFBVV95cUxNaXRkbXNib3VMS1pNeUE0TjRCNGFiWXlhTVZQRFVOc1p2ak9lcWpLeUxfRFBGbjZwSUNGc0NuZ2huNlE5cVBtNjNHMDlfc1V0MEdqTE1JUmY3UXEwY2RDaUJpVHJYMlhkckJDQnBNa2kxMmlLT3FHQUlDR2FrcGk1el9NcEQ2RmdBMkF1Y0ZtNVUxazB2?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 21:15:48 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "India and Canada reset ties with 'landmark' nuclear energy deal",
+    "description": "A host of deals, including one to supply India with uranium, is unveiled as Mark Carney meets Narendra Modi in Delhi.",
+    "link": "https://www.bbc.com/news/articles/cx24gl7jrgno?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 20:18:12 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Anderson, Atwell earn Big 12 weekly awards - Texas Tech Red Raiders",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMizgFBVV95cUxOTVhBeDdzODFHMDVDcHBYOFhFdnpkelZteVVZYWswTTNCWFh2N0dIZDgwX3pCc01sNWNsN2VnWkY5ZVh2MXhjUXZTR0JQcDJFbkxXRUNkVHY4Zmc3TzVxQnF3NXlhZzNtRVVzWlJfSi1hN1l6cU1QRnZNUWZHTGVaVXZJeVBET2g4Y2hSYjVOR29qUUc1b0V4c2M1QmRycExOUVUxRnZQLTUwdjJxTW1OYXpfdEhwOHFQdnJSR29tM0ludjRid3A0Z09aOWp3dw?oc=5\" target=\"_blank\">Anderson, Atwell earn Big 12 weekly awards</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech Red Raiders</font>",
+    "link": "https://news.google.com/rss/articles/CBMizgFBVV95cUxOTVhBeDdzODFHMDVDcHBYOFhFdnpkelZteVVZYWswTTNCWFh2N0dIZDgwX3pCc01sNWNsN2VnWkY5ZVh2MXhjUXZTR0JQcDJFbkxXRUNkVHY4Zmc3TzVxQnF3NXlhZzNtRVVzWlJfSi1hN1l6cU1QRnZNUWZHTGVaVXZJeVBET2g4Y2hSYjVOR29qUUc1b0V4c2M1QmRycExOUVUxRnZQLTUwdjJxTW1OYXpfdEhwOHFQdnJSR29tM0ludjRid3A0Z09aOWp3dw?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 20:17:22 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Preview: at Texas Tech - TCU Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMie0FVX3lxTE80V3E0azJCNFl3bk43aWpHZjd3MGlGMHNfZXBJSUhYaGtraWRVdEFlNFJCRzVGY0dNWGdjVUVXemdraG9aV2lpQlZwY3ExMHY4QmVaZVdkaTY0TjRiWENzaVliN0RMcWY1ZElRX09GZF93Tm9iVUh1RU1CVQ?oc=5\" target=\"_blank\">Preview: at Texas Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">TCU Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMie0FVX3lxTE80V3E0azJCNFl3bk43aWpHZjd3MGlGMHNfZXBJSUhYaGtraWRVdEFlNFJCRzVGY0dNWGdjVUVXemdraG9aV2lpQlZwY3ExMHY4QmVaZVdkaTY0TjRiWENzaVliN0RMcWY1ZElRX09GZF93Tm9iVUh1RU1CVQ?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 20:00:50 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "#44 Irish Suffer 4-0 Loss At #61 Georgia Tech - Notre Dame Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiekFVX3lxTFBlRE1hNXBKRkNYVTBwS2RGQUZXdXE1eXFSaHM4RkpjeHlOQ3NVRkFZeEVfLTl5TXVVdzhxSFhReTJZYTc5R25rNEU4UUIyZDJ6bExDV2QzbXJVT3ctckhqVERLaUg1VEhlY3BLQTQ0eUdBTjNEMXkwUEhn?oc=5\" target=\"_blank\">#44 Irish Suffer 4-0 Loss At #61 Georgia Tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Notre Dame Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMiekFVX3lxTFBlRE1hNXBKRkNYVTBwS2RGQUZXdXE1eXFSaHM4RkpjeHlOQ3NVRkFZeEVfLTl5TXVVdzhxSFhReTJZYTc5R25rNEU4UUIyZDJ6bExDV2QzbXJVT3ctckhqVERLaUg1VEhlY3BLQTQ0eUdBTjNEMXkwUEhn?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 19:20:04 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas college student identified among victims in Austin bar shooting probed as possible terror attack - Fox News",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiwAFBVV95cUxOQjBIbDRWSl9FRGszRGt4SmRCN0MwS09FMEZZdkVYZEZLd3dCeV9ET2xObnljTGFPaktSeGp5SXhlaUhSUUZ0MW4xcUg1QVdfb1FVcG0xNm0tem03cWcxV1JkOS02MWd0WXl6dVVaSlluUEtLRS1mZlg5azh0TlhtdGE1YlNvSEpWdC1wT1hUUklMTlE2TV9QU25RckRXeGt5eVpyWlQ4NGJzY2pOaE90OWlYOXJxWUxDd1NxaWRIdkjSAcYBQVVfeXFMTUxraVpCSzFDWGJ4LXVFTHNGbk5rN2FRY3dROVZRY1dGTnJOS2t6SXI4dnUyRnZ1RE1pbURSMk9NSmVGaHJreEdKYy1IR0lPWWdGbFllMUhfX3hwWjg1SE5mRERLeGVWRXJ1ZXFGOVVYS09wVHczZWVRdV8wa0EyU2toRjhYTlR6VkpIaUZzaGhoTndoTkEyOWUtdkh0d0dpZ0tHQXpZcmUyM0ZXVVVTaUQ0aUgzUmNwd1JFaDNOTmR5VUZuTnhR?oc=5\" target=\"_blank\">Texas college student identified among victims in Austin bar shooting probed as possible terror attack</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Fox News</font>",
+    "link": "https://news.google.com/rss/articles/CBMiwAFBVV95cUxOQjBIbDRWSl9FRGszRGt4SmRCN0MwS09FMEZZdkVYZEZLd3dCeV9ET2xObnljTGFPaktSeGp5SXhlaUhSUUZ0MW4xcUg1QVdfb1FVcG0xNm0tem03cWcxV1JkOS02MWd0WXl6dVVaSlluUEtLRS1mZlg5azh0TlhtdGE1YlNvSEpWdC1wT1hUUklMTlE2TV9QU25RckRXeGt5eVpyWlQ4NGJzY2pOaE90OWlYOXJxWUxDd1NxaWRIdkjSAcYBQVVfeXFMTUxraVpCSzFDWGJ4LXVFTHNGbk5rN2FRY3dROVZRY1dGTnJOS2t6SXI4dnUyRnZ1RE1pbURSMk9NSmVGaHJreEdKYy1IR0lPWWdGbFllMUhfX3hwWjg1SE5mRERLeGVWRXJ1ZXFGOVVYS09wVHczZWVRdV8wa0EyU2toRjhYTlR6VkpIaUZzaGhoTndoTkEyOWUtdkh0d0dpZ0tHQXpZcmUyM0ZXVVVTaUQ0aUgzUmNwd1JFaDNOTmR5VUZuTnhR?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 19:19:37 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Austin 6th Street shooting: Victim identified as Texas Tech student - FOX 7 Austin",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMigAFBVV95cUxPbkM5VzEzUkRFVV9HM2JLVjU5RXhsWkNDZm9rUWpwQm0xRFBmLTVsaEVYeHdCSWp2ZTVlalZ6WlRYX2RhQUlPeHJLSkp2elZOeHFPYklqN196SzNWUlF6dXNBY0hVQThHT2lIbXZyZG8yRUo5NlVNSlBudXJUWENndNIBhgFBVV95cUxORm85eU1LcE92dG1xX3ItOGEzeFNta3k1U2ZkeERmUG5mMXRrdzFtSmxMRmFKdEx6UHBEaUN3bkNUYlg4TFV1c3dHYlBXMUU2dDdJcXRHQkRxcDU3SXdXLXR2QjBjT254TjdyaWd4YWc0b01vbXFVS0k1VzNnOUItU3ZrbC1oUQ?oc=5\" target=\"_blank\">Austin 6th Street shooting: Victim identified as Texas Tech student</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">FOX 7 Austin</font>",
+    "link": "https://news.google.com/rss/articles/CBMigAFBVV95cUxPbkM5VzEzUkRFVV9HM2JLVjU5RXhsWkNDZm9rUWpwQm0xRFBmLTVsaEVYeHdCSWp2ZTVlalZ6WlRYX2RhQUlPeHJLSkp2elZOeHFPYklqN196SzNWUlF6dXNBY0hVQThHT2lIbXZyZG8yRUo5NlVNSlBudXJUWENndNIBhgFBVV95cUxORm85eU1LcE92dG1xX3ItOGEzeFNta3k1U2ZkeERmUG5mMXRrdzFtSmxMRmFKdEx6UHBEaUN3bkNUYlg4TFV1c3dHYlBXMUU2dDdJcXRHQkRxcDU3SXdXLXR2QjBjT254TjdyaWd4YWc0b01vbXFVS0k1VzNnOUItU3ZrbC1oUQ?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 19:09:10 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech student Ryder Harrington killed in Austin mass shooting - Lubbock Avalanche-Journal",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMihwJBVV95cUxOTkZIS0RvRW95dG53RGwyakp3cXIyRTY1WUZ3Z1ZGWEdnalhidm1teGw4eUJqbnNJLWs4MDFqOHdnUUtiZ2VNbWR1elEwUW9WalpQSEZnRjk3dmg5TzRReWxRNGJhZ0V4S0hHUmFocU9ZZlktbWFOallTNVdNREVNbUNzaE1zMDR2bjlHdExWcTNyZmdHNEIyY0VvZEV2UmVueGVHVGdqTEVGNVUtQW9haElHNnB1Uk9CNW9OWVUwTjZ1NUJURkd1aEN0d2NTa2NMSkJOcVJ5YUViRWFFUjRsd2JfemloX0FwVGk5Z25XcDJDWi11Vl9qMk5jVnFJcm1fbk9VMWtyTQ?oc=5\" target=\"_blank\">Texas Tech student Ryder Harrington killed in Austin mass shooting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Lubbock Avalanche-Journal</font>",
+    "link": "https://news.google.com/rss/articles/CBMihwJBVV95cUxOTkZIS0RvRW95dG53RGwyakp3cXIyRTY1WUZ3Z1ZGWEdnalhidm1teGw4eUJqbnNJLWs4MDFqOHdnUUtiZ2VNbWR1elEwUW9WalpQSEZnRjk3dmg5TzRReWxRNGJhZ0V4S0hHUmFocU9ZZlktbWFOallTNVdNREVNbUNzaE1zMDR2bjlHdExWcTNyZmdHNEIyY0VvZEV2UmVueGVHVGdqTEVGNVUtQW9haElHNnB1Uk9CNW9OWVUwTjZ1NUJURkd1aEN0d2NTa2NMSkJOcVJ5YUViRWFFUjRsd2JfemloX0FwVGk5Z25XcDJDWi11Vl9qMk5jVnFJcm1fbk9VMWtyTQ?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 19:07:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "France to boost nuclear arsenal and extend deterrence to European allies",
+    "description": "Emmanuel Macron said eight countries could enjoy protection from France's nuclear umbrella - but that Paris would retain sole decision-making power.",
+    "link": "https://www.bbc.com/news/articles/cj4zlnezrl7o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 18:16:14 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Herd Baseball Heads to Virginia Tech for Midweek Contest - Marshall University Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMilgFBVV95cUxNRVR3VC1oWnd6RzZsQkp1ZEVkOTdaMnBTX0JRdnNITnhtdDVSWTlEaG80d1RPOWZjdzUtenJtNkd4ZUVTQUxiUVlqME4tWTJTOHNaQzdQOUlIS0FKcmFVa3RMWGt2dWlUaFBBblo3bEl4OVZ2a2IybWhKT2FlNVRwUE1RYXFQRllud1FFcDVjams2SDhnblE?oc=5\" target=\"_blank\">Herd Baseball Heads to Virginia Tech for Midweek Contest</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Marshall University Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMilgFBVV95cUxNRVR3VC1oWnd6RzZsQkp1ZEVkOTdaMnBTX0JRdnNITnhtdDVSWTlEaG80d1RPOWZjdzUtenJtNkd4ZUVTQUxiUVlqME4tWTJTOHNaQzdQOUlIS0FKcmFVa3RMWGt2dWlUaFBBblo3bEl4OVZ2a2IybWhKT2FlNVRwUE1RYXFQRllud1FFcDVjams2SDhnblE?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 18:06:36 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Tech workers urge DOD, Congress to withdraw Anthropic label as a supply-chain risk - TechCrunch",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMitwFBVV95cUxQX0J1bTJRM01QcGI5OWJRSU1JOXhfM19UdzUxbUp5cWxMc0dwN1lWM3JvTE5iOVFnd0w4YmRxNkNiS2RLZjJqRThLRG04STlsdnU3VV82d3Zsb0Nlbm9FTWlGaVU1bm5yUlVIQjUyLUVnLUk2cFlwX1BheldBQ0Z5SnlfTVZjdWtXeEF4a0tWNDNJTUFSVmMwZ0Z3NDZ2UGtJcl81VVFDWjI5MXZDbFRrb3Z4NGNSZVU?oc=5\" target=\"_blank\">Tech workers urge DOD, Congress to withdraw Anthropic label as a supply-chain risk</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">TechCrunch</font>",
+    "link": "https://news.google.com/rss/articles/CBMitwFBVV95cUxQX0J1bTJRM01QcGI5OWJRSU1JOXhfM19UdzUxbUp5cWxMc0dwN1lWM3JvTE5iOVFnd0w4YmRxNkNiS2RLZjJqRThLRG04STlsdnU3VV82d3Zsb0Nlbm9FTWlGaVU1bm5yUlVIQjUyLUVnLUk2cFlwX1BheldBQ0Z5SnlfTVZjdWtXeEF4a0tWNDNJTUFSVmMwZ0Z3NDZ2UGtJcl81VVFDWjI5MXZDbFRrb3Z4NGNSZVU?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 17:18:34 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Virginia Tech, Liberty cancel football games in 2029, 2030 - Virginia Tech Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMimgFBVV95cUxQSThXYTJrZXFPRzRyYjBFRjZEWWlBVkthUlBJMkVITEtHU0Q0RTdXb1M4aXhKSWtWdmtOdzFaLXMwMjZQU3h0S2RMbjBOTFVNeDNMMU9YTUQzVzhjQkowc2JHVXNmTHBjNGZJbW9fYVhRMy1ucjYtTmkzSnB3TURqZHpNWF9DY0J3c2Q0U3pIcjhQYXlCdXFwdmNn?oc=5\" target=\"_blank\">Virginia Tech, Liberty cancel football games in 2029, 2030</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Virginia Tech Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMimgFBVV95cUxQSThXYTJrZXFPRzRyYjBFRjZEWWlBVkthUlBJMkVITEtHU0Q0RTdXb1M4aXhKSWtWdmtOdzFaLXMwMjZQU3h0S2RMbjBOTFVNeDNMMU9YTUQzVzhjQkowc2JHVXNmTHBjNGZJbW9fYVhRMy1ucjYtTmkzSnB3TURqZHpNWF9DY0J3c2Q0U3pIcjhQYXlCdXFwdmNn?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 17:04:48 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Lost Rembrandt painting rediscovered after 65 years",
+    "description": "The painting, created by the Dutch master in 1633, had disappeared after being sold  in 1961.",
+    "link": "https://www.bbc.com/news/articles/c1kgln0yg3po?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 16:54:40 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Saturday Night Live criticised for 'hurtful' Tourette's sketch",
+    "description": "The condition is \"not a joke\", the Tourette Action charity says, as the Baftas fallout continues.",
+    "link": "https://www.bbc.com/news/articles/c05v0ln6nq3o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 16:43:24 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Tech stocks today: Nvidia invests $4B in photonics makers, Apple announces low-cost iPhone, OpenAI strikes deal with Pentagon - Yahoo Finance",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiggJBVV95cUxQVGctY29oeFhEZDBMeXZLZXF5MjBkV2wyVkQ0cVd3cm9MU05ia3pDRk1nVGFHV0F1Zm03TFQwZjNrQ2pXdHd0UmFJQ0RTNkJJVlBlR3EtdEx5THZlRlVoLUhNQ1FaUEI4UkU1bGZtWEFGdjhSZWJ0dnFVREpkZEtCWVBCVTV3UDlOY3Y1NzRyTkxmNlNBLXJHZ2FOa1UyaUxxamlTQlQ4Qll6XzNCMnZsbUJpcFVFUGEwSFRPRXVpdS1iaURZazgwQ2VUN1RZY01uYzlXVVR1RkpNTzZobGZ1Q2N5OUh0YXlnODZWTVlzNDNLLXRlcEVTYmQ4NWJPS00wUVE?oc=5\" target=\"_blank\">Tech stocks today: Nvidia invests $4B in photonics makers, Apple announces low-cost iPhone, OpenAI strikes deal with Pentagon</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Yahoo Finance</font>",
+    "link": "https://news.google.com/rss/articles/CBMiggJBVV95cUxQVGctY29oeFhEZDBMeXZLZXF5MjBkV2wyVkQ0cVd3cm9MU05ia3pDRk1nVGFHV0F1Zm03TFQwZjNrQ2pXdHd0UmFJQ0RTNkJJVlBlR3EtdEx5THZlRlVoLUhNQ1FaUEI4UkU1bGZtWEFGdjhSZWJ0dnFVREpkZEtCWVBCVTV3UDlOY3Y1NzRyTkxmNlNBLXJHZ2FOa1UyaUxxamlTQlQ4Qll6XzNCMnZsbUJpcFVFUGEwSFRPRXVpdS1iaURZazgwQ2VUN1RZY01uYzlXVVR1RkpNTzZobGZ1Q2N5OUh0YXlnODZWTVlzNDNLLXRlcEVTYmQ4NWJPS00wUVE?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 16:40:06 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Texas Tech Student Identified as One of the Victims in Austin Shooting - The New York Times",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiekFVX3lxTE8yb3czSmFKeUdZZ1hrSDFMRG9qVFM2b0ZvWHJYTm4tOHhPYmhIT2QyR1VpcTNaR19lSEhaZWFPcmZMWHhfc0RiTHhtdjJwX0ZQQml6YUpZRHV3VXAzR1hLdlNLQlYtUm1xU185ellPTVVKd2dqM3FxQXFB?oc=5\" target=\"_blank\">Texas Tech Student Identified as One of the Victims in Austin Shooting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The New York Times</font>",
+    "link": "https://news.google.com/rss/articles/CBMiekFVX3lxTE8yb3czSmFKeUdZZ1hrSDFMRG9qVFM2b0ZvWHJYTm4tOHhPYmhIT2QyR1VpcTNaR19lSEhaZWFPcmZMWHhfc0RiTHhtdjJwX0ZQQml6YUpZRHV3VXAzR1hLdlNLQlYtUm1xU185ellPTVVKd2dqM3FxQXFB?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 16:36:14 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Discover New Technology at the Arlington Public Library's Tech Fair - City of Arlington (.gov)",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiuwFBVV95cUxOZmd1Ql9yNVB6dDlBaUFfcDRuckRPQU9DZXV6YlVacFV4WExZZmExdno5Z25aR3ZsaHNGclhWS2dKZ0V4eVJvbDNCQjhuQ0xUQXpaQk9nZHFhSVlEd001SVRzd2RPcVhUa19VMHZMQU8zeE1iN1ZxU0dHT3poTm1HWXBIWno3aVRxRlo4OUd0aDdha1V5TWYyYmQtMmFpU1NxakgzMnFPZG5UR3U0QkRINW9wTk1Jek4zYTU0?oc=5\" target=\"_blank\">Discover New Technology at the Arlington Public Library's Tech Fair</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">City of Arlington (.gov)</font>",
+    "link": "https://news.google.com/rss/articles/CBMiuwFBVV95cUxOZmd1Ql9yNVB6dDlBaUFfcDRuckRPQU9DZXV6YlVacFV4WExZZmExdno5Z25aR3ZsaHNGclhWS2dKZ0V4eVJvbDNCQjhuQ0xUQXpaQk9nZHFhSVlEd001SVRzd2RPcVhUa19VMHZMQU8zeE1iN1ZxU0dHT3poTm1HWXBIWno3aVRxRlo4OUd0aDdha1V5TWYyYmQtMmFpU1NxakgzMnFPZG5UR3U0QkRINW9wTk1Jek4zYTU0?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 16:09:01 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "BYD stock jumps on 'disruptive tech' teaser, despite 41% sales tumble - Yahoo Finance",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMisAFBVV95cUxPYmp4LWxlZzhCRWxleHZicE4td1ZxTWxRSE5LTDZyQWo4Tmt6TVIycGRudlM3Z1pXSUdVckZtN3J1RW1fam1sbWRhVWViRU9PQUtHcThXdURFU3M4a0JKMVF5cUlDRzlRU01DRk5HUEZrWW1qUWtZNE9nWnpQV1RJTTNWaW8zY1RHWi1OaVhOTU1aenBfRnJRZFBuamQza2lqMmIyNWV4dVZzYTFuTkNpeA?oc=5\" target=\"_blank\">BYD stock jumps on 'disruptive tech' teaser, despite 41% sales tumble</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Yahoo Finance</font>",
+    "link": "https://news.google.com/rss/articles/CBMisAFBVV95cUxPYmp4LWxlZzhCRWxleHZicE4td1ZxTWxRSE5LTDZyQWo4Tmt6TVIycGRudlM3Z1pXSUdVckZtN3J1RW1fam1sbWRhVWViRU9PQUtHcThXdURFU3M4a0JKMVF5cUlDRzlRU01DRk5HUEZrWW1qUWtZNE9nWnpQV1RJTTNWaW8zY1RHWi1OaVhOTU1aenBfRnJRZFBuamQza2lqMmIyNWV4dVZzYTFuTkNpeA?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 16:06:09 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Former Texas Tech student killed in Austin bar shooting - KCBD",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMijgFBVV95cUxPb3lIUlcwRXF4M0VCLVVGM3hDVjIxdWJOTG5HeUJvQ1JhRFd5a2M4eEh0Y1oyaEtabGJnSjJfdmlSdXhqc0dXVGpLVGhGV2FBeVkzQ3JiUkNWRHdVaDNZTW5DaWRyTHBJdGZYd25ud29mUC1vcUplRGxhOWlmNjF6azlDaG1KOUpBd09LRkl3?oc=5\" target=\"_blank\">Former Texas Tech student killed in Austin bar shooting</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">KCBD</font>",
+    "link": "https://news.google.com/rss/articles/CBMijgFBVV95cUxPb3lIUlcwRXF4M0VCLVVGM3hDVjIxdWJOTG5HeUJvQ1JhRFd5a2M4eEh0Y1oyaEtabGJnSjJfdmlSdXhqc0dXVGpLVGhGV2FBeVkzQ3JiUkNWRHdVaDNZTW5DaWRyTHBJdGZYd25ud29mUC1vcUplRGxhOWlmNjF6azlDaG1KOUpBd09LRkl3?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 15:24:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Hegseth on Iran attacks: 'This is not Iraq, this is not endless'",
+    "description": "US Secretary of Defense Pete Hegseth offered few details about the operation, leaving questions unanswered about the scope or duration.",
+    "link": "https://www.bbc.com/news/videos/cn71jg14dnyo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 15:07:36 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "The Pentagon’s Favorite Tech Guy Is This Hawaiian Shirt-Wearing Founder - The New York Times",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiiAFBVV95cUxNTGFZTHpfQ3dWTjctbmpTcUhNa2RPdkc4b1E0YmNyNUtmQ0xJT1lWYnQ1ZjBLNUlxdVd6MFVvWmwyMlVBdE9uaE5WcHpJWXlDc00xSkNiMGpoQnBHeDRkWU5jVjF1d1NRSnpYMW1NVk8tWkxqbUxBcFRFMExiTWpOQUlWMUFVQ2Jj?oc=5\" target=\"_blank\">The Pentagon’s Favorite Tech Guy Is This Hawaiian Shirt-Wearing Founder</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The New York Times</font>",
+    "link": "https://news.google.com/rss/articles/CBMiiAFBVV95cUxNTGFZTHpfQ3dWTjctbmpTcUhNa2RPdkc4b1E0YmNyNUtmQ0xJT1lWYnQ1ZjBLNUlxdVd6MFVvWmwyMlVBdE9uaE5WcHpJWXlDc00xSkNiMGpoQnBHeDRkWU5jVjF1d1NRSnpYMW1NVk8tWkxqbUxBcFRFMExiTWpOQUlWMUFVQ2Jj?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 14:00:14 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "'They hit so hard the house was shaking': Iranians describe impact of US-Israel attacks",
+    "description": "People in Iran tell the BBC they hear explosions day and night, as the US and Israel continue striking the country for a third day.",
+    "link": "https://www.bbc.com/news/articles/cx2jyv3jp01o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 13:54:20 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Watch: Video appears to show US F-15 fighter jet crashing in Kuwait",
+    "description": "The US says six of its F-15 jets were \"mistakenly shot down by Kuwaiti air defenses\", with all crew in a stable condition.",
+    "link": "https://www.bbc.com/news/videos/ce8wed33e07o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 09:43:33 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "China's annual parliament meet to unveil roadmap for tech race with the West - Reuters",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiygFBVV95cUxNdWt2bjRPRXFoX25rR0VXWHR4Y3dxR3hHSklBODZKYTFobFhLWU0yd0NBbS1NdVl2N1c5WjZuYnpUbnVtLTZkS3g4VmlFQTBRUmJBbTB3NGRYUTZBN3BWSHNMaVZjdUVwaW5tNmRDcnk4aFc2TDlpcUxSVU14N2YxNHBtMEdpdV8xU0NmTHktbWNBendtb3UzaWRkdXFnUS1lVF9ONDBFSEYtcE9nMDZPUXVXanN5MHppM1liVzY2N01YTjJvN052eUh3?oc=5\" target=\"_blank\">China's annual parliament meet to unveil roadmap for tech race with the West</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Reuters</font>",
+    "link": "https://news.google.com/rss/articles/CBMiygFBVV95cUxNdWt2bjRPRXFoX25rR0VXWHR4Y3dxR3hHSklBODZKYTFobFhLWU0yd0NBbS1NdVl2N1c5WjZuYnpUbnVtLTZkS3g4VmlFQTBRUmJBbTB3NGRYUTZBN3BWSHNMaVZjdUVwaW5tNmRDcnk4aFc2TDlpcUxSVU14N2YxNHBtMEdpdV8xU0NmTHktbWNBendtb3UzaWRkdXFnUS1lVF9ONDBFSEYtcE9nMDZPUXVXanN5MHppM1liVzY2N01YTjJvN052eUh3?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 07:20:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "The winners of the smartphone boom think they know what the next big tech gadget is - CNN",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMie0FVX3lxTFBLZl9tV0Z6RWdBMDVhUVdudnVCY01UUDV6dlJjUVFXSTQwNDVMa0lBa0RPcVVrVkx0VE9nN3dnOEJVT3lMbjVfb2dkaDJqOWN1Vi1SNGc3UFJtV01kTGRsMzl3VlFBT0NfRGdhRzkxVlFDT1pCcFNTYnExZw?oc=5\" target=\"_blank\">The winners of the smartphone boom think they know what the next big tech gadget is</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">CNN</font>",
+    "link": "https://news.google.com/rss/articles/CBMie0FVX3lxTFBLZl9tV0Z6RWdBMDVhUVdudnVCY01UUDV6dlJjUVFXSTQwNDVMa0lBa0RPcVVrVkx0VE9nN3dnOEJVT3lMbjVfb2dkaDJqOWN1Vi1SNGc3UFJtV01kTGRsMzl3VlFBT0NfRGdhRzkxVlFDT1pCcFNTYnExZw?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 07:00:33 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Deepfake attack: 'Many people could have been cheated'",
+    "description": "The boss of the Bombay Stock Exchange was recently targeted in what is a growing global problem.",
+    "link": "https://www.bbc.com/news/articles/c0j59vydxj9o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 06:47:00 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "A rap star might just beat a former PM - what this says about Nepal's Gen Z election",
+    "description": "Many hope the vote could bring change after protests last year, and shatter decades of political paralysis.",
+    "link": "https://www.bbc.com/news/articles/c8r137lkj5zo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 06:34:28 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Michael B Jordan upends Oscars race as Sinners wins big at Actor Awards",
+    "description": "The US star's best actor win for Sinners leaves the Oscars race too close to call.",
+    "link": "https://www.bbc.com/news/articles/clyzklvk79yo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 05:08:35 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "No. 20 Tech defeats Arizona State on Senior Day - Texas Tech Red Raiders",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiogFBVV95cUxOWUJyb3JmTFowbDllc3lGMDFrSmZfQkdvT1U3M0JMQmZRSDJ4LURrWm5BSVk5X29yM1pWa3luWWtONklBN0Fvc25Tb2lWdWtXcW5OZEtjQlBscDFNMnc0aEF0MnNJWDAzMFZDS2xEeVJLVktBX0xWWTl2V2lHeGlXQm10V0NZb0VRQndoZ0hNSkVpT2JRdmhTMkVoLVBzMDFCcHc?oc=5\" target=\"_blank\">No. 20 Tech defeats Arizona State on Senior Day</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">Texas Tech Red Raiders</font>",
+    "link": "https://news.google.com/rss/articles/CBMiogFBVV95cUxOWUJyb3JmTFowbDllc3lGMDFrSmZfQkdvT1U3M0JMQmZRSDJ4LURrWm5BSVk5X29yM1pWa3luWWtONklBN0Fvc25Tb2lWdWtXcW5OZEtjQlBscDFNMnc0aEF0MnNJWDAzMFZDS2xEeVJLVktBX0xWWTl2V2lHeGlXQm10V0NZb0VRQndoZ0hNSkVpT2JRdmhTMkVoLVBzMDFCcHc?oc=5",
+    "pub_date": "Mon, 02 Mar 2026 00:36:37 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Kidnapping of foreigners soars in Africa's lawless Sahel region",
+    "description": "Growing insecurity in the Sahel made 2025 one of the worst years on record for the abduction of foreigners in Africa.",
+    "link": "https://www.bbc.com/news/articles/c0lj18d5lx3o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Mon, 02 Mar 2026 00:02:10 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Could Kim's teen daughter become North Korea's next leader?",
+    "description": "Kim Jue Ae is becoming more visible alongside her father, but much about her remains a mystery.",
+    "link": "https://www.bbc.com/news/articles/cgjzdlx983po?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 23:11:11 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "'Wonderful' war photographer Paul Conroy dies",
+    "description": "Jamie Doran played the photographer, who has died aged 61, in the 2018 movie A Private War.",
+    "link": "https://www.bbc.com/news/articles/c5y6jvlv83ro?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 19:47:03 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Months of planning behind US-Israeli mission to target Iran's supreme leader",
+    "description": "A piece of crucial intelligence arrived just hours before the attack on a compound in central Tehran.",
+    "link": "https://www.bbc.com/news/articles/c86y5540vnno?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 14:45:56 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "At last, reasons to be cheerful about European tech - The Economist",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMinAFBVV95cUxNbkJpZFFPMmlFSVB2bTFlVjF0ZHZydm5Oejg4R2FHOWcwLXhZWnZNdzFNUWwwc1RWYUxraksyT3Y0QnEyRC1jNV9Fc1UzQWhhZVA2Y3hMaGc0ZFROQ0FtdFNvTHlHSTNKdnFWS3pPc09lU3dqVTM2Zng1QWhuUmh3TElBYlVDSFhNQm5YLXlwTjhqSDZBQWE5bEM5cUY?oc=5\" target=\"_blank\">At last, reasons to be cheerful about European tech</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">The Economist</font>",
+    "link": "https://news.google.com/rss/articles/CBMinAFBVV95cUxNbkJpZFFPMmlFSVB2bTFlVjF0ZHZydm5Oejg4R2FHOWcwLXhZWnZNdzFNUWwwc1RWYUxraksyT3Y0QnEyRC1jNV9Fc1UzQWhhZVA2Y3hMaGc0ZFROQ0FtdFNvTHlHSTNKdnFWS3pPc09lU3dqVTM2Zng1QWhuUmh3TElBYlVDSFhNQm5YLXlwTjhqSDZBQWE5bEM5cUY?oc=5",
+    "pub_date": "Sun, 01 Mar 2026 13:41:58 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "North Carolina 89-82 Virginia Tech (Feb 28, 2026) Final Score - ESPN",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMingFBVV95cUxQOFAwMkhmckFzZXR5WVp0YlotZ2E2UXF2UWdJOGoyOG9hNGFGNUlQWFh0Q3l3aThqaGJ3SWpBMlYyclF6OWV1X0FIVW5VbFdBbFNjOHBXWWl6V0N5OU5rOU9ncXZUTlRhZXdKSWtYWE95ZzBwSWhXazlVY2pBdDFKbGtwaTR1RGtpVmVSWDU0QXB5Y19qczVYOVp1SmJzUQ?oc=5\" target=\"_blank\">North Carolina 89-82 Virginia Tech (Feb 28, 2026) Final Score</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">ESPN</font>",
+    "link": "https://news.google.com/rss/articles/CBMingFBVV95cUxQOFAwMkhmckFzZXR5WVp0YlotZ2E2UXF2UWdJOGoyOG9hNGFGNUlQWFh0Q3l3aThqaGJ3SWpBMlYyclF6OWV1X0FIVW5VbFdBbFNjOHBXWWl6V0N5OU5rOU9ncXZUTlRhZXdKSWtYWE95ZzBwSWhXazlVY2pBdDFKbGtwaTR1RGtpVmVSWDU0QXB5Y19qczVYOVp1SmJzUQ?oc=5",
+    "pub_date": "Sun, 01 Mar 2026 08:00:00 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "UNC-Virginia Tech Postgame Notes - University of North Carolina Athletics",
+    "description": "<a href=\"https://news.google.com/rss/articles/CBMiigFBVV95cUxNb3pBaXpTMFZHWDhjdE5wWmRWb04zZjl2d3dsYl80OE5hQVB5QlpyZ1hUUXNxQ3dCN0gxbXo4VWQ0bm1TUzZjTmRwM2M3eVRwR1NyeVZwc1N1akpITWs2S0U0a21wdm1vblcyd1liU0VDMmlCMVZ5U2J3NmZNWUd4NWF3a19GaHlkQXc?oc=5\" target=\"_blank\">UNC-Virginia Tech Postgame Notes</a>&nbsp;&nbsp;<font color=\"#6f6f6f\">University of North Carolina Athletics</font>",
+    "link": "https://news.google.com/rss/articles/CBMiigFBVV95cUxNb3pBaXpTMFZHWDhjdE5wWmRWb04zZjl2d3dsYl80OE5hQVB5QlpyZ1hUUXNxQ3dCN0gxbXo4VWQ0bm1TUzZjTmRwM2M3eVRwR1NyeVZwc1N1akpITWs2S0U0a21wdm1vblcyd1liU0VDMmlCMVZ5U2J3NmZNWUd4NWF3a19GaHlkQXc?oc=5",
+    "pub_date": "Sun, 01 Mar 2026 06:05:03 GMT",
+    "source": "Google News Tech",
+    "category": "tech"
+  },
+  {
+    "title": "Ayatollah Khamenei's iron grip on power in Iran comes to an end",
+    "description": "Iranian state TV confirms the supreme leader has been killed on the first day of massive US and Israeli air strikes on the country.",
+    "link": "https://www.bbc.com/news/articles/c3gdnpjvj4ko?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 01:47:42 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "How responsible are climbers for each other's safety? Mountaineers react to manslaughter",
+    "description": "A woman's death during a climbing trip has sparked debates about personal responsibility and risk.",
+    "link": "https://www.bbc.com/news/articles/cwy8ppn4142o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 00:57:16 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Wellness peptide craze: Why people are injecting drugs 'not for human consumption'",
+    "description": "Growing numbers of people are injecting unregulated peptides for health reasons - but one expert says they are \"lab rats\".",
+    "link": "https://www.bbc.com/news/articles/cdr268m5pxro?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 00:51:29 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Why is WhatsApp's privacy policy facing a legal challenge in India?",
+    "description": "A 2021 policy update requires users to share data with Meta for ads purposes to continue using the app.",
+    "link": "https://www.bbc.com/news/articles/cp81wegj123o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sun, 01 Mar 2026 00:21:43 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Where have Nepal's 'nepo kids' gone as corruption takes centre stage in election?",
+    "description": "The excess of politicians' children was front and centre of the anger that drove protests that toppled the government last year.",
+    "link": "https://www.bbc.com/news/articles/cgqgl3j5nj4o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Sat, 28 Feb 2026 23:03:48 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "How Ghislaine Maxwell brought Bill Clinton into Epstein's orbit",
+    "description": "Documents in the Epstein files reveal how Maxwell nurtured the connection between the two men after Clinton left the White House.",
+    "link": "https://www.bbc.com/news/articles/cp85jdqdyq7o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Fri, 27 Feb 2026 21:48:24 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "What the Warner Bros deal could mean for streaming, cinemas and news",
+    "description": "If Paramount's takeover of Warner Bros goes ahead it could significantly reshape Hollywood.",
+    "link": "https://www.bbc.com/news/articles/c20j5n2w4q6o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Fri, 27 Feb 2026 21:46:14 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Why are Afghanistan and Pakistan fighting?",
+    "description": "The two sides have different versions of how and why the deadly dispute began.",
+    "link": "https://www.bbc.com/news/articles/cdjmrxkwk3mo?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Fri, 27 Feb 2026 13:26:23 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "Why Trump means the Cuban Revolution faces its biggest threat yet",
+    "description": "Will a worsening internal crisis create the conditions for the Cuban Revolution to unravel from within?",
+    "link": "https://www.bbc.com/news/articles/c9q5wdeg4j8o?at_medium=RSS&at_campaign=rss",
+    "pub_date": "Fri, 27 Feb 2026 12:46:26 GMT",
+    "source": "BBC World News",
+    "category": "world"
+  },
+  {
+    "title": "The most beautiful sections of China's Great Wall",
+    "description": "Having lived in Beijing for almost 12 years, I've had plenty of time to travel widely in China.",
+    "link": "https://www.cnn.com/travel/article/china-beautiful-great-wall-sections-cmd/index.html",
+    "pub_date": "Mon, 18 Sep 2023 02:57:08 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Look of the Week: Blackpink headline Coachella in Korean hanboks",
+    "description": "Bringing the second day of this year's Coachella to a close, K-Pop girl group Blackpink made history Saturday night when they became the first Asian act to ever headline the festival. To a crowd of, reportedly, over 125,000 people, Jennie, Jisoo, Lisa and Rosé used the ground-breaking moment to pay homage to Korean heritage by arriving onstage in hanboks: a traditional type of dress.",
+    "link": "https://www.cnn.com/style/article/blackpink-coachella-2023-hanboks-lotw/index.html",
+    "pub_date": "Tue, 18 Apr 2023 15:39:40 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Still haven't filed your taxes? Here's what you need to know",
+    "description": "So far this tax season, the IRS has received more than 90 million income tax returns for 2022.",
+    "link": "https://www.cnn.com/2023/04/13/success/tax-filing-tips/index.html",
+    "pub_date": "Fri, 14 Apr 2023 20:07:40 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Markets digest bank earnings after recent turmoil",
+    "description": "",
+    "link": "https://www.cnn.com/business/live-news/stock-market-bank-earnings/index.html",
+    "pub_date": "Fri, 14 Apr 2023 20:00:28 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Retail spending fell in March as consumers pull back",
+    "description": "Spending at US retailers fell in March as consumers pulled back amid recessionary fears fueled by the banking crisis.",
+    "link": "https://www.cnn.com/2023/04/14/economy/march-retail-sales/index.html",
+    "pub_date": "Fri, 14 Apr 2023 14:29:52 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Analysis: Fox News is about to enter the true No Spin Zone",
+    "description": "This is it.",
+    "link": "https://www.cnn.com/2023/04/14/media/fox-news-dominion-hnk-intl/index.html",
+    "pub_date": "Fri, 14 Apr 2023 06:41:00 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Silicon Valley Bank collapse renews calls to address disparities impacting entrepreneurs of color",
+    "description": "When customers at Silicon Valley Bank rushed to withdraw billions of dollars last month, venture capitalist Arlan Hamilton stepped in to help some of the founders of color who panicked about losing access to payroll funds.",
+    "link": "https://www.cnn.com/2023/04/13/business/silicon-valley-bank-entrepreneurs-of-color-reaj/index.html",
+    "pub_date": "Thu, 13 Apr 2023 21:13:04 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "'I was up to my waist down a hippo's throat.' He survived, and here's his advice",
+    "description": "Paul Templer was living his best life.",
+    "link": "https://www.cnn.com/travel/article/hippo-attack-avoid-survive-paul-templer/index.html",
+    "pub_date": "Wed, 12 Apr 2023 12:44:43 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Michael Jordan's 1998 NBA Finals sneakers sell for a record $2.2 million",
+    "description": "In 1998, Michael Jordan laced up a pair of his iconic black and red Air Jordan 13s to bring home a Bulls victory during Game 2 of his final NBA championship — and now they are the most expensive sneakers ever to sell at auction.\n\nThe game-winning sneakers sold for $2.2 million at Sotheby's in New York on Tuesday, smashing the sneaker auction record of $1.47 million, set in 2021 by a pair of Nike Air Ships that Jordan wore earlier in his career.",
+    "link": "https://www.cnn.com/style/article/michael-jordan-sneakers-1998-finals-sothebys-auction-record/index.html",
+    "pub_date": "Wed, 12 Apr 2023 03:17:57 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "How Playboy cut ties with Hugh Hefner to create a post-MeToo brand",
+    "description": "Hugh Hefner launched Playboy Magazine 70 years ago this year. The first issue included a nude photograph of Marilyn Monroe, which he had purchased and published without her knowledge or consent.",
+    "link": "https://www.cnn.com/style/article/playboy-the-conversation/index.html",
+    "pub_date": "Tue, 11 Apr 2023 07:10:28 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "They bought an abandoned 'ghost house' in the Japanese countryside",
+    "description": "He'd spent years backpacking around the world, and Japanese traveler Daisuke Kajiyama was finally ready to return home to pursue his long-held dream of opening up a guesthouse.",
+    "link": "https://www.cnn.com/travel/article/couple-turned-abandoned-japanese-home-into-guest-house/index.html",
+    "pub_date": "Mon, 10 Apr 2023 12:22:59 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Here's the real reason to turn on airplane mode when you fly",
+    "description": "We all know the routine by heart: \"Please ensure your seats are in the upright position, tray tables stowed, window shades are up, laptops are stored in the overhead bins and electronic devices are set to flight mode.\"",
+    "link": "https://www.cnn.com/travel/article/airplane-mode-reasons-why/index.html",
+    "pub_date": "Fri, 07 Apr 2023 12:52:23 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "'A definitive backslide.' Inside fashion's worrying runway trend",
+    "description": "Now that the Fall-Winter 2023 catwalks have been disassembled, it's clear one trend was more pervasive than any collective penchant for ruffles, pleated skirts or tailored coats.",
+    "link": "https://www.cnn.com/style/article/fashion-week-fall-winter-2023-size-diversity-skinny-wegovy/index.html",
+    "pub_date": "Thu, 06 Apr 2023 20:53:38 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Relaxed entry rules make it easier than ever to visit this stunning Asian nation",
+    "description": "Due to its remoteness and short summer season, Mongolia has long been a destination overlooked by travelers.",
+    "link": "https://www.cnn.com/travel/article/mongolia-reasons-to-visit-2023/index.html",
+    "pub_date": "Fri, 31 Mar 2023 04:25:31 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Scientists identify secret ingredient in Leonardo da Vinci paintings",
+    "description": "\"Old Masters\" such as Leonardo da Vinci, Sandro Botticelli and Rembrandt may have used proteins, especially egg yolk, in their oil paintings, according to a new study.",
+    "link": "https://www.cnn.com/style/article/old-masters-da-vinci-egg-yolk-painting-scn/index.html",
+    "pub_date": "Thu, 30 Mar 2023 17:43:18 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "The surreal facades of America's strip clubs",
+    "description": "Some people travel the world in search of adventure, while others seek out natural wonders, cultural landmarks or culinary experiences. But French photographer François Prost was looking for something altogether different during his recent road trip across America: strip clubs.",
+    "link": "https://www.cnn.com/style/article/francois-prost-gentlemens-club/index.html",
+    "pub_date": "Mon, 06 Mar 2023 14:13:40 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Nelly Cheboi, who creates computer labs for Kenyan schoolchildren, is CNN's Hero of the Year",
+    "description": "Celebrities and musicians are coming together tonight to honor everyday people making the world a better place.",
+    "link": "https://www.cnn.com/2022/12/11/us/cnn-heroes-all-star-tribute-hero-of-the-year/index.html",
+    "pub_date": "Mon, 12 Dec 2022 10:38:27 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "CNN Heroes: Sharing the Spotlight",
+    "description": "",
+    "link": "https://www.cnn.com/specials/cnn-heroes-salutes-special",
+    "pub_date": "Sat, 10 Dec 2022 19:39:29 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "These were the best and worst places for air quality in 2021, new report shows",
+    "description": "Air pollution spiked to unhealthy levels around the world in 2021, according to a new report.",
+    "link": "https://www.cnn.com/2022/03/22/world/air-pollution-2021-iqair-report-climate/index.html",
+    "pub_date": "Tue, 22 Mar 2022 16:43:47 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Not only is Lake Powell's water level plummeting because of drought, its total capacity is shrinking, too",
+    "description": "Lake Powell, the second-largest human-made reservoir in the US, has lost nearly 7% of its potential storage capacity since 1963, when Glen Canyon Dam was built, a new report shows.",
+    "link": "https://www.cnn.com/2022/03/21/us/lake-powell-capacity-shrinking-drought-climate/index.html",
+    "pub_date": "Mon, 21 Mar 2022 19:54:24 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Big-box stores could help slash emissions and save millions by putting solar panels on roofs. Why aren't more of them doing it?",
+    "description": "As the US attempts to wean itself off its heavy reliance on fossil fuels and shift to cleaner energy sources, many experts are eyeing a promising solution: your neighborhood big-box stores and shopping malls.",
+    "link": "https://www.cnn.com/2022/03/20/us/solar-power-on-big-box-store-rooftops-climate/index.html",
+    "pub_date": "Sun, 20 Mar 2022 07:01:50 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Sign up to our newsletter for a weekly roundup of travel news",
+    "description": "",
+    "link": "https://www.cnn.com/specials/travel-newsletter",
+    "pub_date": "Fri, 10 Dec 2021 18:58:28 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  },
+  {
+    "title": "Donate now to a Top 10 CNN Hero",
+    "description": "Anderson Cooper explains how you can easily donate to any of the 2021 Top 10 CNN Heroes.",
+    "link": "https://www.cnn.com/videos/tv/2021/11/26/how-to-donate-matching-cnnheroes.cnn",
+    "pub_date": "Fri, 26 Nov 2021 21:14:02 GMT",
+    "source": "CNN World News",
+    "category": "world"
+  }
+]
