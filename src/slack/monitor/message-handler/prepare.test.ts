@@ -451,7 +451,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
     expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
