@@ -24,7 +24,7 @@ function extractBearerToken(header: unknown): string {
 
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
-  | { ok: false };
+  | { ok: false; unknownAddonEvent?: boolean; addOnBearerToken?: string }
 
 function parseGoogleChatInboundPayload(
   raw: unknown,
@@ -50,17 +50,44 @@ function parseGoogleChatInboundPayload(
     authorizationEventObject?: { systemIdToken?: string };
   };
 
-  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
-    const chat = rawObj.chat;
-    const messagePayload = chat.messagePayload;
-    eventPayload = {
-      type: "MESSAGE",
-      space: messagePayload?.space,
-      message: messagePayload?.message,
-      user: chat.user,
-      eventTime: chat.eventTime,
-    };
+  if (rawObj.commonEventObject?.hostApp === "CHAT") {
+    const chat = rawObj.chat as (typeof rawObj.chat & {
+      addedToSpacePayload?: { space?: GoogleChatSpace };
+      removedFromSpacePayload?: { space?: GoogleChatSpace };
+    }) | undefined;
     addOnBearerToken = String(rawObj.authorizationEventObject?.systemIdToken ?? "").trim();
+
+    if (chat?.messagePayload) {
+      // MESSAGE event
+      const messagePayload = chat.messagePayload;
+      eventPayload = {
+        type: "MESSAGE",
+        space: messagePayload?.space,
+        message: messagePayload?.message,
+        user: chat.user,
+        eventTime: chat.eventTime,
+      };
+    } else if (chat?.addedToSpacePayload) {
+      // ADDED_TO_SPACE event
+      eventPayload = {
+        type: "ADDED_TO_SPACE",
+        space: chat.addedToSpacePayload.space,
+        user: chat.user,
+        eventTime: chat.eventTime,
+      };
+    } else if (chat?.removedFromSpacePayload) {
+      // REMOVED_FROM_SPACE event
+      eventPayload = {
+        type: "REMOVED_FROM_SPACE",
+        space: chat.removedFromSpacePayload.space,
+        user: chat.user,
+        eventTime: chat.eventTime,
+      };
+    } else {
+      // Unknown Add-on event type: return flag so caller can respond 200
+      // after verifying the token (avoid auth bypass)
+      return { ok: false, unknownAddonEvent: true, addOnBearerToken };
+    }
   }
 
   const event = eventPayload as GoogleChatEvent;
@@ -163,10 +190,9 @@ export function createGoogleChatWebhookRequestHandler(params: {
         }
 
         const parsed = parseGoogleChatInboundPayload(body.value, res);
-        if (!parsed.ok) {
+        if (!parsed.ok && !parsed.unknownAddonEvent) {
           return true;
         }
-        parsedEvent = parsed.event;
 
         if (!parsed.addOnBearerToken) {
           res.statusCode = 401;
@@ -179,7 +205,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           res,
           isMatch: async (target) => {
             const verification = await verifyGoogleChatRequest({
-              bearer: parsed.addOnBearerToken,
+              bearer: parsed.addOnBearerToken!,
               audienceType: target.audienceType,
               audience: target.audience,
             });
@@ -189,6 +215,16 @@ export function createGoogleChatWebhookRequestHandler(params: {
         if (!selectedTarget) {
           return true;
         }
+
+        // Unknown Add-on event type: respond 200 after auth passes
+        if (parsed.unknownAddonEvent) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end("{}");
+          return true;
+        }
+
+        parsedEvent = (parsed as { ok: true; event: GoogleChatEvent }).event;
       }
 
       if (!selectedTarget || !parsedEvent) {
