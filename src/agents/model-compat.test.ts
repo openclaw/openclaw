@@ -19,6 +19,10 @@ const baseModel = (): Model<Api> =>
     maxTokens: 1024,
   }) as Model<Api>;
 
+function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -39,6 +43,22 @@ function createRegistry(models: Record<string, Model<Api>>): ModelRegistry {
       return models[`${provider}/${modelId}`] ?? null;
     },
   } as ModelRegistry;
+}
+
+function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsDeveloperRole(normalized)).toBe(false);
+}
+
+function expectResolvedForwardCompat(
+  model: Model<Api> | undefined,
+  expected: { provider: string; id: string },
+): void {
+  expect(model?.id).toBe(expected.id);
+  expect(model?.name).toBe(expected.id);
+  expect(model?.provider).toBe(expected.provider);
 }
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
@@ -102,67 +122,38 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
 
 describe("normalizeModelCompat", () => {
   it("forces supportsDeveloperRole off for z.ai models", () => {
-    const model = baseModel();
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    expectSupportsDeveloperRoleForcedOff();
   });
 
   it("forces supportsDeveloperRole off for moonshot models", () => {
-    const model = {
-      ...baseModel(),
+    expectSupportsDeveloperRoleForcedOff({
       provider: "moonshot",
       baseUrl: "https://api.moonshot.ai/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    });
   });
 
   it("forces supportsDeveloperRole off for custom moonshot-compatible endpoints", () => {
-    const model = {
-      ...baseModel(),
+    expectSupportsDeveloperRoleForcedOff({
       provider: "custom-kimi",
       baseUrl: "https://api.moonshot.cn/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    });
   });
 
   it("forces supportsDeveloperRole off for DashScope provider ids", () => {
-    const model = {
-      ...baseModel(),
+    expectSupportsDeveloperRoleForcedOff({
       provider: "dashscope",
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    });
   });
 
   it("forces supportsDeveloperRole off for DashScope-compatible endpoints", () => {
-    const model = {
-      ...baseModel(),
+    expectSupportsDeveloperRoleForcedOff({
       provider: "custom-qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    });
   });
 
-  it("leaves non-zai models untouched", () => {
+  it("leaves native api.openai.com model untouched", () => {
     const model = {
       ...baseModel(),
       provider: "openai",
@@ -173,13 +164,73 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat).toBeUndefined();
   });
 
-  it("does not override explicit z.ai compat false", () => {
+  it("forces supportsDeveloperRole off for Azure OpenAI (Chat Completions, not Responses API)", () => {
+    expectSupportsDeveloperRoleForcedOff({
+      provider: "azure-openai",
+      baseUrl: "https://my-deployment.openai.azure.com/openai",
+    });
+  });
+  it("forces supportsDeveloperRole off for generic custom openai-completions provider", () => {
+    expectSupportsDeveloperRoleForcedOff({
+      provider: "custom-cpa",
+      baseUrl: "https://cpa.example.com/v1",
+    });
+  });
+
+  it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
+    expectSupportsDeveloperRoleForcedOff({
+      provider: "qwen-proxy",
+      baseUrl: "https://qwen-api.example.org/compatible-mode/v1",
+    });
+  });
+
+  it("leaves openai-completions model with empty baseUrl untouched", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openai",
+    };
+    delete (model as { baseUrl?: unknown }).baseUrl;
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(normalized.compat).toBeUndefined();
+  });
+
+  it("forces supportsDeveloperRole off for malformed baseUrl values", () => {
+    expectSupportsDeveloperRoleForcedOff({
+      provider: "custom-cpa",
+      baseUrl: "://api.openai.com malformed",
+    });
+  });
+
+  it("overrides explicit supportsDeveloperRole true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsDeveloperRole: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+
+  it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized).not.toBe(model);
+    expect(supportsDeveloperRole(model)).toBeUndefined();
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+
+  it("does not override explicit compat false", () => {
     const model = baseModel();
     model.compat = { supportsDeveloperRole: false };
     const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 });
 
@@ -201,9 +252,7 @@ describe("resolveForwardCompatModel", () => {
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
     });
     const model = resolveForwardCompatModel("anthropic", "claude-opus-4-6", registry);
-    expect(model?.id).toBe("claude-opus-4-6");
-    expect(model?.name).toBe("claude-opus-4-6");
-    expect(model?.provider).toBe("anthropic");
+    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-opus-4-6" });
   });
 
   it("resolves anthropic sonnet 4.6 dot variant with suffix", () => {
@@ -214,9 +263,7 @@ describe("resolveForwardCompatModel", () => {
       ),
     });
     const model = resolveForwardCompatModel("anthropic", "claude-sonnet-4.6-20260219", registry);
-    expect(model?.id).toBe("claude-sonnet-4.6-20260219");
-    expect(model?.name).toBe("claude-sonnet-4.6-20260219");
-    expect(model?.provider).toBe("anthropic");
+    expectResolvedForwardCompat(model, { provider: "anthropic", id: "claude-sonnet-4.6-20260219" });
   });
 
   it("does not resolve anthropic 4.6 fallback for other providers", () => {

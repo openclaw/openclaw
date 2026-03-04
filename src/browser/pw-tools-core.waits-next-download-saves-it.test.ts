@@ -87,7 +87,11 @@ describe("pw-tools-core", () => {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    expect(path.dirname(String(savedPath))).toBe(params.tempDir);
+    const [savedDirReal, tempDirReal] = await Promise.all([
+      fs.realpath(path.dirname(String(savedPath))).catch(() => path.dirname(String(savedPath))),
+      fs.realpath(params.tempDir).catch(() => params.tempDir),
+    ]);
+    expect(savedDirReal).toBe(tempDirReal);
     expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
     expect(path.basename(String(savedPath))).toContain(".part");
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
@@ -120,7 +124,7 @@ describe("pw-tools-core", () => {
 
       const res = await p;
       await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
-      expect(res.path).toBe(targetPath);
+      await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
   });
   it("clicks a ref and atomically finalizes explicit download paths", async () => {
@@ -156,7 +160,7 @@ describe("pw-tools-core", () => {
 
       const res = await p;
       await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "report-content" });
-      expect(res.path).toBe(targetPath);
+      await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
     });
   });
 
@@ -188,9 +192,8 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        const res = await p;
-        expect(res.path).toBe(linkedPath);
-        expect(await fs.readFile(linkedPath, "utf8")).toBe("download-content");
+        await expect(p).rejects.toThrow(/alias escape blocked|Hardlinked path is not allowed/i);
+        expect(await fs.readFile(linkedPath, "utf8")).toBe("outside-before");
         expect(await fs.readFile(outsidePath, "utf8")).toBe("outside-before");
       });
     },

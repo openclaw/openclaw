@@ -27,6 +27,7 @@ private let lastGatewayDefaultsKeys = [
     "gateway.last.tls",
     "gateway.last.stableID",
 ]
+private let lastGatewayKeychainEntry = KeychainEntry(service: gatewayService, account: "lastConnection")
 
 private func snapshotDefaults(_ keys: [String]) -> [String: Any?] {
     let defaults = UserDefaults.standard
@@ -84,9 +85,13 @@ private func withBootstrapSnapshots(_ body: () -> Void) {
     body()
 }
 
-private func withLastGatewayDefaultsSnapshot(_ body: () -> Void) {
-    let snapshot = snapshotDefaults(lastGatewayDefaultsKeys)
-    defer { restoreDefaults(snapshot) }
+private func withLastGatewaySnapshot(_ body: () -> Void) {
+    let defaultsSnapshot = snapshotDefaults(lastGatewayDefaultsKeys)
+    let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry])
+    defer {
+        restoreDefaults(defaultsSnapshot)
+        restoreKeychain(keychainSnapshot)
+    }
     body()
 }
 
@@ -135,7 +140,7 @@ private func withLastGatewayDefaultsSnapshot(_ body: () -> Void) {
     }
 
     @Test func lastGateway_manualRoundTrip() {
-        withLastGatewayDefaultsSnapshot {
+        withLastGatewaySnapshot {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "example.com",
                 port: 443,
@@ -147,28 +152,24 @@ private func withLastGatewayDefaultsSnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func lastGateway_discoveredDoesNotPersistResolvedHostPort() {
-        withLastGatewayDefaultsSnapshot {
-            // Simulate a prior manual record that included host/port.
-            applyDefaults([
-                "gateway.last.host": "10.0.0.99",
-                "gateway.last.port": 18789,
-                "gateway.last.tls": true,
-                "gateway.last.stableID": "manual|10.0.0.99|18789",
-                "gateway.last.kind": "manual",
-            ])
+    @Test func lastGateway_discoveredOverwritesManual() {
+        withLastGatewaySnapshot {
+            GatewaySettingsStore.saveLastGatewayConnectionManual(
+                host: "10.0.0.99",
+                port: 18789,
+                useTLS: true,
+                stableID: "manual|10.0.0.99|18789")
 
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: "gw|abc", useTLS: true)
 
-            let defaults = UserDefaults.standard
-            #expect(defaults.object(forKey: "gateway.last.host") == nil)
-            #expect(defaults.object(forKey: "gateway.last.port") == nil)
             #expect(GatewaySettingsStore.loadLastGatewayConnection() == .discovered(stableID: "gw|abc", useTLS: true))
         }
     }
 
-    @Test func lastGateway_backCompat_manualLoadsWhenKindMissing() {
-        withLastGatewayDefaultsSnapshot {
+    @Test func lastGateway_migratesFromUserDefaults() {
+        withLastGatewaySnapshot {
+            // Clear Keychain entry and plant legacy UserDefaults values.
+            applyKeychain([lastGatewayKeychainEntry: nil])
             applyDefaults([
                 "gateway.last.kind": nil,
                 "gateway.last.host": "example.org",
@@ -179,6 +180,11 @@ private func withLastGatewayDefaultsSnapshot(_ body: () -> Void) {
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
             #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+
+            // Legacy keys should be cleaned up after migration.
+            let defaults = UserDefaults.standard
+            #expect(defaults.object(forKey: "gateway.last.stableID") == nil)
+            #expect(defaults.object(forKey: "gateway.last.host") == nil)
         }
     }
 

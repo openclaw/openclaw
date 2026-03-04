@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -140,6 +141,11 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      const activeSessionEntry =
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+        activeSessionEntry?.systemPromptReport,
+      );
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -151,12 +157,14 @@ export function createFollowupRunner(params: {
             agentId: queued.run.agentId,
             sessionKey: queued.run.sessionKey,
           }),
-          run: (provider, model) => {
+          run: async (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
-            return runEmbeddedPiAgent({
+            const result = await runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
+              trigger: "user",
+              messageChannel: queued.originatingChannel ?? undefined,
               messageProvider: queued.run.messageProvider,
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
@@ -193,6 +201,11 @@ export function createFollowupRunner(params: {
               timeoutMs: queued.run.timeoutMs,
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature:
+                bootstrapPromptWarningSignaturesSeen[
+                  bootstrapPromptWarningSignaturesSeen.length - 1
+                ],
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
@@ -203,6 +216,10 @@ export function createFollowupRunner(params: {
                 }
               },
             });
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
           },
         });
         runResult = fallbackResult.result;
@@ -233,6 +250,7 @@ export function createFollowupRunner(params: {
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
+          systemPromptReport: runResult.meta?.systemPromptReport,
           logLabel: "followup",
         });
       }
