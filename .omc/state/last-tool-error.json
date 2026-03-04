@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"node -e \\\"require('fs').readFileSync('/Users/yoonbyungwook/Projects/pronto-lab/prontoclaw/src/discord/monitor/provider.ts', 'utf8'); console.log('File reads OK')\\\" && node -e \\\"\\nconst fs ...",
-  "error": "Exit code 1\nFile reads OK\n[eval]:14\nif (braces \\!== 0 || parens \\!== 0 || brackets \\!== 0) {\n           ^\n\nSyntaxError: Invalid or unexpected token\n    at makeContextifyScript (node:internal/vm:185:14)\n    at node:internal/process/execution:107:22\n    at [eval]-wrapper:6:24\n    at runScript (node:internal/process/execution:101:62)\n    at evalScript (node:internal/process/execution:133:3)\n    at node:internal/main/eval_string:51:3\n\nNode.js v20.19.6\n\nFile reads OK\n[eval]:14\nif (braces \\!== 0 || pa...",
-  "timestamp": "2026-02-27T02:25:06.482Z",
-  "retry_count": 1
-}
