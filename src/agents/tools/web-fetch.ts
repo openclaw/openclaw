@@ -370,27 +370,31 @@ async function maybeFetchParallelWebFetchPayload(
     return null;
   }
 
-  const result = await fetchParallelContent({
-    url: params.urlToFetch,
-    apiKey: params.parallelExtractApiKey,
-    baseUrl: params.parallelExtractBaseUrl,
-    timeoutSeconds: params.parallelExtractTimeoutSeconds,
-  });
-  if (!result) {
+  try {
+    const result = await fetchParallelContent({
+      url: params.urlToFetch,
+      apiKey: params.parallelExtractApiKey,
+      baseUrl: params.parallelExtractBaseUrl,
+      timeoutSeconds: params.parallelExtractTimeoutSeconds,
+    });
+    if (!result) {
+      return null;
+    }
+
+    const payload = buildParallelWebFetchPayload({
+      parallel: result,
+      rawUrl: params.url,
+      finalUrlFallback: params.finalUrlFallback,
+      statusFallback: params.statusFallback,
+      extractMode: params.extractMode,
+      maxChars: params.maxChars,
+      tookMs: params.tookMs,
+    });
+    writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  } catch {
     return null;
   }
-
-  const payload = buildParallelWebFetchPayload({
-    parallel: result,
-    rawUrl: params.url,
-    finalUrlFallback: params.finalUrlFallback,
-    statusFallback: params.statusFallback,
-    extractMode: params.extractMode,
-    maxChars: params.maxChars,
-    tookMs: params.tookMs,
-  });
-  writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
-  return payload;
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {

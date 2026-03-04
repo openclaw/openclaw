@@ -12,6 +12,12 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import {
+  PROVIDER_ENV_VARS,
+  PROVIDER_PLACEHOLDERS,
+  SEARCH_PROVIDER_OPTIONS,
+  type SearchProviderValue,
+} from "../config/search-providers.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -20,35 +26,12 @@ import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
-const SEARCH_PROVIDER_OPTIONS = [
-  { value: "brave", label: "Brave Search", hint: "Free tier available" },
-  { value: "parallel", label: "Parallel", hint: "LLM-optimized excerpts" },
-  { value: "perplexity", label: "Perplexity", hint: "AI-synthesized answers" },
-  { value: "grok", label: "Grok (xAI)", hint: "xAI web search" },
-  { value: "gemini", label: "Gemini", hint: "Google Search grounding" },
-  { value: "kimi", label: "Kimi (Moonshot)", hint: "Native web search" },
-  { value: "skip", label: "Skip", hint: "Configure later" },
-] as const;
+const ONBOARDING_PROVIDER_OPTIONS = [
+  ...SEARCH_PROVIDER_OPTIONS,
+  { value: "skip" as const, label: "Skip", hint: "Configure later" },
+];
 
-type SearchProviderValue = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
-
-const PROVIDER_ENV_VARS: Record<Exclude<SearchProviderValue, "skip">, string> = {
-  brave: "BRAVE_API_KEY",
-  parallel: "PARALLEL_API_KEY",
-  perplexity: "PERPLEXITY_API_KEY",
-  grok: "XAI_API_KEY",
-  gemini: "GEMINI_API_KEY",
-  kimi: "KIMI_API_KEY",
-};
-
-const PROVIDER_PLACEHOLDERS: Record<Exclude<SearchProviderValue, "skip">, string> = {
-  brave: "BSA...",
-  parallel: "par-...",
-  perplexity: "pplx-...",
-  grok: "xai-...",
-  gemini: "AIza...",
-  kimi: "sk-...",
-};
+type OnboardingProviderValue = SearchProviderValue | "skip";
 
 async function promptSearchProviderOnboarding(
   config: OpenClawConfig,
@@ -64,9 +47,9 @@ async function promptSearchProviderOnboarding(
     "Web search (optional)",
   );
 
-  const provider = await prompter.select<SearchProviderValue>({
+  const provider = await prompter.select<OnboardingProviderValue>({
     message: "Search provider",
-    options: [...SEARCH_PROVIDER_OPTIONS],
+    options: [...ONBOARDING_PROVIDER_OPTIONS],
     initialValue: "skip",
   });
 
@@ -123,6 +106,7 @@ async function promptSearchProviderOnboarding(
               | Record<string, unknown>
               | undefined),
             enabled: true,
+            ...(key ? { apiKey: key } : {}),
           },
         }
       : config.tools?.web?.fetch;
