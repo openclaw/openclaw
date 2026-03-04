@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts, resolveFeishuAccount } from "./accounts.js";
 import {
   monitorSingleAccount,
