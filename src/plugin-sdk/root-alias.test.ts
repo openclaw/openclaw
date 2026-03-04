@@ -27,16 +27,12 @@ describe("plugin-sdk root alias", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it(
-    "loads legacy root exports lazily through the proxy",
-    () => {
-      expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
-      expect(typeof rootSdk.default).toBe("object");
-      expect(rootSdk.default).toBe(rootSdk);
-      expect(rootSdk.__esModule).toBe(true);
-    },
-    180_000,
-  );
+  it("loads legacy root exports lazily through the proxy", () => {
+    expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
+    expect(typeof rootSdk.default).toBe("object");
+    expect(rootSdk.default).toBe(rootSdk);
+    expect(rootSdk.__esModule).toBe(true);
+  }, 180_000);
 
   it("preserves reflection semantics for lazily resolved exports", () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
