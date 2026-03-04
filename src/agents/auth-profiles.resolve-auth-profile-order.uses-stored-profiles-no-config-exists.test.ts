@@ -193,6 +193,14 @@ describe("resolveAuthProfileOrder", () => {
     const order = resolveMinimaxOrderWithProfile(profile);
     expect(order).toEqual([]);
   });
+  it("keeps token profiles with inline token when no expires is set", () => {
+    const order = resolveMinimaxOrderWithProfile({
+      type: "token",
+      provider: "minimax",
+      token: "sk-minimax",
+    });
+    expect(order).toEqual(["minimax:default"]);
+  });
   it("keeps oauth profiles that can refresh", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
