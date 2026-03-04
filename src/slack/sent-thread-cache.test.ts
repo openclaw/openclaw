@@ -12,7 +12,7 @@ import {
 
 describe("slack sent-thread-cache", () => {
   afterEach(() => {
-    clearSlackThreadParticipationCache();
+    _resetForTests(undefined);
     vi.restoreAllMocks();
   });
 
