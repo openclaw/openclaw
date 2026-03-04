@@ -1,9 +1,10 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
-import { resolveSpawnCommand, type SpawnCommandCache } from "./process.js";
+import { resolveSpawnCommand, type SpawnCommandCache, waitForExit } from "./process.js";
 
 const tempDirs: string[] = [];
 
@@ -223,5 +224,25 @@ describe("resolveSpawnCommand", () => {
     expect(second.command).toBe("C:\\node\\node.exe");
     expect(first.args[0]).toBe(scriptPath);
     expect(second.args[0]).toBe(scriptPath);
+  });
+});
+
+describe("waitForExit", () => {
+  it("resolves when the child already exited before waiting starts", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.once("close", () => {
+        resolve();
+      });
+      child.once("error", reject);
+    });
+
+    const exit = await waitForExit(child);
+    expect(exit.code).toBe(0);
+    expect(exit.signal).toBeNull();
+    expect(exit.error).toBeNull();
   });
 });

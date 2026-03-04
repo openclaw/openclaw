@@ -140,6 +140,15 @@ export function spawnWithResolvedCommand(
 }
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<SpawnExit> {
+  // Handle callers that start waiting after the child has already exited.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return {
+      code: child.exitCode,
+      signal: child.signalCode,
+      error: null,
+    };
+  }
+
   return await new Promise<SpawnExit>((resolve) => {
     let settled = false;
     const finish = (result: SpawnExit) => {
