@@ -20,7 +20,7 @@ export async function readResponseWithLimit(
   }
 
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Buffer[] = [];
   let total = 0;
   try {
     while (true) {
@@ -29,14 +29,17 @@ export async function readResponseWithLimit(
         break;
       }
       if (value?.length) {
-        total += value.length;
+        const chunk = Buffer.isBuffer(value)
+          ? value
+          : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+        total += chunk.length;
         if (total > maxBytes) {
           try {
             await reader.cancel();
           } catch {}
           throw onOverflow({ size: total, maxBytes, res });
         }
-        chunks.push(value);
+        chunks.push(chunk);
       }
     }
   } finally {
@@ -45,8 +48,5 @@ export async function readResponseWithLimit(
     } catch {}
   }
 
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total,
-  );
+  return Buffer.concat(chunks, total);
 }
