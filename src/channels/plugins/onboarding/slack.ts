@@ -33,9 +33,9 @@ function buildSlackManifest(botName: string) {
   // Slack apps support up to 25 slash commands. This list covers the most
   // commonly used native commands. Note: /status is reserved by Slack so
   // OpenClaw registers it as /agentstatus instead.
-  // Additional commands (think, verbose, reasoning, elevated, exec, model,
-  // models, activation, send, queue, focus, unfocus, agents, export-session)
-  // can be added manually if needed.
+  // Additional commands not included here due to the 25-command limit
+  // (verbose, reasoning, exec, activation, send, queue, focus, unfocus,
+  // agents, export-session) can be added manually if needed.
   const manifest = {
     display_information: {
       name: safeName,
