@@ -1068,7 +1068,11 @@ export async function resolveImplicitProviders(params: {
           ? {
               baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
               api: explicitOllama.api ?? "ollama",
-              models: explicitOllama.models ?? ollamaProvider.models,
+              // Use explicit models only when user supplied a non-empty list; otherwise keep discovery results
+              models:
+                Array.isArray(explicitOllama.models) && explicitOllama.models.length > 0
+                  ? explicitOllama.models
+                  : ollamaProvider.models,
             }
           : {}),
         apiKey: ollamaKey ?? explicitOllama?.apiKey ?? "ollama-local",
