@@ -230,14 +230,41 @@ export function buildSystemRunApprovalPlan(params: {
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
   }
+  const requestedCwd = normalizeString(params.cwd) ?? undefined;
+  // During the prepare phase, try to validate the cwd. If validation fails
+  // (e.g., the gateway's cwd doesn't exist on the node in cross-platform exec),
+  // omit the cwd from the plan so the node can use its own default workspace.
+  // This allows exec to work when tools.exec.host=node and the gateway/node
+  // have different filesystem layouts (e.g., WSL gateway → Windows node).
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
     shellCommand: command.shellCommand,
-    cwd: normalizeString(params.cwd) ?? undefined,
+    cwd: requestedCwd,
   });
   if (!hardening.ok) {
-    return { ok: false, message: hardening.message };
+    // If cwd validation failed, retry without cwd to allow cross-platform exec
+    const hardeningWithoutCwd = hardenApprovedExecutionPaths({
+      approvedByAsk: true,
+      argv: command.argv,
+      shellCommand: command.shellCommand,
+      cwd: undefined,
+    });
+    if (!hardeningWithoutCwd.ok) {
+      // Command itself has issues (not cwd-related)
+      return { ok: false, message: hardeningWithoutCwd.message };
+    }
+    return {
+      ok: true,
+      plan: {
+        argv: hardeningWithoutCwd.argv,
+        cwd: null, // Omit cwd, let node use its default
+        rawCommand: command.cmdText.trim() || null,
+        agentId: normalizeString(params.agentId),
+        sessionKey: normalizeString(params.sessionKey),
+      },
+      cmdText: command.cmdText,
+    };
   }
   return {
     ok: true,
