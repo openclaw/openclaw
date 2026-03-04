@@ -562,3 +562,13 @@ Tools are exposed in two parallel channels:
 
 That means the agent sees both “what tools exist” and “how to call them.” If a tool
 doesn’t appear in the system prompt or the schema, the model cannot call it.
+
+## Plugin Tools
+
+Plugin-provided tools are available when the corresponding plugin is installed:
+
+- **Feishu tools** (`@openclaw/feishu`): `feishu_doc`, `feishu_chat`, `feishu_wiki`, `feishu_drive`, `feishu_bitable`, `feishu_perm`, `feishu_reaction`
+- **Slack tools** (built-in): `slack_*` actions
+- **Discord tools** (built-in): `discord_*` actions
+
+For Feishu tool documentation, see [Feishu Channel](/channels/feishu#available-tools).
