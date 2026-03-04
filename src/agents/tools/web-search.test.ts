@@ -15,6 +15,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveBraveMode,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -274,5 +275,27 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("resolveBraveMode", () => {
+  it("defaults to 'web' when no config is provided", () => {
+    expect(resolveBraveMode({})).toBe("web");
+  });
+
+  it("defaults to 'web' when mode is undefined", () => {
+    expect(resolveBraveMode({ mode: undefined })).toBe("web");
+  });
+
+  it("returns 'llm-context' when configured", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("returns 'web' when mode is explicitly 'web'", () => {
+    expect(resolveBraveMode({ mode: "web" })).toBe("web");
+  });
+
+  it("falls back to 'web' for unrecognized mode values", () => {
+    expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
   });
 });
