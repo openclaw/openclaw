@@ -518,6 +518,10 @@ describe("primary model defaults", () => {
         primaryModel: "minimax/MiniMax-M2.5-highspeed",
       },
       {
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-Lightning"),
+        primaryModel: "minimax/MiniMax-M2.5-Lightning",
+      },
+      {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
         primaryModel: "zai/glm-5",
       },

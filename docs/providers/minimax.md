@@ -9,7 +9,7 @@ title: "MiniMax"
 # MiniMax
 
 MiniMax is an AI company that builds the **M2/M2.5** model family. The current
-coding-focused release is **MiniMax M2.5** (December 23, 2025), built for
+coding-focused release is **MiniMax M2.5** (January 2026), built for
 real-world complex tasks.
 
 Source: [MiniMax M2.5 release note](https://www.minimax.io/news/minimax-m25)
