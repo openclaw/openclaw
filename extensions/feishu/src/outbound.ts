@@ -93,6 +93,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "feishu", ...result };
   },
+  sendCard: async ({ cfg, to, card, accountId }) => {
+    const { sendCardFeishu } = await import("./send.js");
+    const cardObj = typeof card === "string" ? JSON.parse(card) : card;
+    const result = await sendCardFeishu({ cfg, to, card: cardObj, accountId: accountId ?? undefined });
+    return { channel: "feishu", ...result };
+  },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
     // Send text first if provided
     if (text?.trim()) {
