@@ -165,7 +165,11 @@ export function createSlackMessageHandler(params: {
     ) {
       return;
     }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
+    // app_mention events should not be deduplicated because:
+    // 1. The downstream debouncer already handles dedup at the flush level via buildKey
+    // 2. prepareSlackMessage correctly merges wasMentioned across debounced entries
+    // Without this exemption, ~50% of @mentions in channels are silently ignored due to race conditions between message and app_mention event delivery (see issue #34833)
+    if (opts.source !== "app_mention" && ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     trackEvent?.();
