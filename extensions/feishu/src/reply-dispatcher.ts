@@ -145,6 +145,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  /** Buffered block text when streaming-card cannot be used (blockStreamingDefault path). */
+  let blockBufferText = "";
 
   const mergeStreamingText = (nextText: string) => {
     if (!streamText) {
@@ -265,14 +267,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (streamingEnabled && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            } else {
+              // Buffer blocks when streaming-card cannot be used (e.g. blockStreamingDefault
+              // is on but Feishu streaming disabled). Send on onIdle (#34093).
+              if (!blockBufferText) {
+                blockBufferText = text;
+              } else if (text.startsWith(blockBufferText)) {
+                blockBufferText = text;
+              } else if (!blockBufferText.endsWith(text)) {
+                blockBufferText += text;
+              }
               return;
-            }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
             }
           }
 
@@ -309,6 +319,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             return;
           }
 
+          blockBufferText = ""; // Clear buffer when sending final (avoids duplicate in onIdle).
           let first = true;
           if (useCard) {
             for (const chunk of core.channel.text.chunkTextWithMode(
@@ -369,6 +380,48 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
+        if (blockBufferText.trim()) {
+          const useCard =
+            renderMode === "card" || (renderMode === "auto" && shouldUseCard(blockBufferText));
+          let first = true;
+          if (useCard) {
+            for (const chunk of core.channel.text.chunkTextWithMode(
+              blockBufferText,
+              textChunkLimit,
+              chunkMode,
+            )) {
+              await sendMarkdownCardFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: first ? mentionTargets : undefined,
+                accountId,
+              });
+              first = false;
+            }
+          } else {
+            const converted = core.channel.text.convertMarkdownTables(blockBufferText, tableMode);
+            for (const chunk of core.channel.text.chunkTextWithMode(
+              converted,
+              textChunkLimit,
+              chunkMode,
+            )) {
+              await sendMessageFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: first ? mentionTargets : undefined,
+                accountId,
+              });
+              first = false;
+            }
+          }
+          blockBufferText = "";
+        }
         await closeStreaming();
         typingCallbacks.onIdle?.();
       },
