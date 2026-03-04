@@ -1,6 +1,16 @@
 import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
 
+// Utility to check if all levels are selected
+function allLevelsSelected(levelFilters: Record<LogLevel, boolean>) {
+  return LEVELS.every((level) => levelFilters[level]);
+}
+
+// Utility to check if none are selected
+function noLevelsSelected(levelFilters: Record<LogLevel, boolean>) {
+  return LEVELS.every((level) => !levelFilters[level]);
+}
+
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
 export type LogsProps = {
@@ -53,6 +63,14 @@ export function renderLogs(props: LogsProps) {
   });
   const exportLabel = needle || levelFiltered ? "filtered" : "visible";
 
+  // Handlers for select/deselect all
+  function handleSelectAll() {
+    LEVELS.forEach((level) => props.onLevelToggle(level, true));
+  }
+  function handleDeselectAll() {
+    LEVELS.forEach((level) => props.onLevelToggle(level, false));
+  }
+
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -98,20 +116,29 @@ export function renderLogs(props: LogsProps) {
         </label>
       </div>
 
-      <div class="chip-row" style="margin-top: 12px;">
-        ${LEVELS.map(
-          (level) => html`
-            <label class="chip log-chip ${level}">
-              <input
-                type="checkbox"
-                .checked=${props.levelFilters[level]}
-                @change=${(e: Event) =>
-                  props.onLevelToggle(level, (e.target as HTMLInputElement).checked)}
-              />
-              <span>${level}</span>
-            </label>
-          `,
-        )}
+
+      <div class="row" style="margin-top: 12px; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <button class="btn small" @click=${handleSelectAll} ?disabled=${allLevelsSelected(props.levelFilters)}>
+          Select All
+        </button>
+        <button class="btn small" @click=${handleDeselectAll} ?disabled=${noLevelsSelected(props.levelFilters)}>
+          Deselect All
+        </button>
+        <div class="chip-row" style="display: flex; flex-wrap: wrap; gap: 8px; min-width: 0;">
+          ${LEVELS.map(
+            (level) => html`
+              <label class="chip log-chip ${level}">
+                <input
+                  type="checkbox"
+                  .checked=${props.levelFilters[level]}
+                  @change=${(e: Event) =>
+                    props.onLevelToggle(level, (e.target as HTMLInputElement).checked)}
+                />
+                <span>${level}</span>
+              </label>
+            `,
+          )}
+        </div>
       </div>
 
       ${
