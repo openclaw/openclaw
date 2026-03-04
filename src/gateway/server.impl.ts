@@ -274,26 +274,45 @@ export async function startGatewayServer(
       }
     }
     if (preflightHost) {
+      // Align with the bind retry policy in http-listen.ts: the real listener
+      // retries EADDRINUSE up to 4 times at 500ms intervals to tolerate
+      // TIME_WAIT sockets from a prior instance. The preflight probe must be
+      // at least as tolerant, otherwise it rejects startups that the real
+      // bind path would have survived.
+      const PREFLIGHT_MAX_RETRIES = 4;
+      const PREFLIGHT_RETRY_MS = 500;
       const probeHost = preflightHost;
-      await new Promise<void>((resolve, reject) => {
-        const probe = net.createServer();
-        probe.once("error", (err: NodeJS.ErrnoException) => {
-          if (err.code === "EADDRINUSE") {
-            reject(
-              new GatewayLockError(
-                `another gateway instance is already listening on ws://${probeHost}:${port}`,
-                err,
-              ),
-            );
-          } else {
-            resolve();
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const probe = net.createServer();
+            probe.once("error", (err: NodeJS.ErrnoException) => {
+              if (err.code === "EADDRINUSE") {
+                reject(err);
+              } else {
+                resolve();
+              }
+            });
+            probe.once("listening", () => {
+              probe.close(() => resolve());
+            });
+            probe.listen(port, probeHost);
+          });
+          break; // port is free
+        } catch (err) {
+          if (
+            (err as NodeJS.ErrnoException).code === "EADDRINUSE" &&
+            attempt < PREFLIGHT_MAX_RETRIES
+          ) {
+            await new Promise<void>((r) => setTimeout(r, PREFLIGHT_RETRY_MS));
+            continue;
           }
-        });
-        probe.once("listening", () => {
-          probe.close(() => resolve());
-        });
-        probe.listen(port, probeHost);
-      });
+          throw new GatewayLockError(
+            `another gateway instance is already listening on ws://${probeHost}:${port}`,
+            err,
+          );
+        }
+      }
     }
   }
 
