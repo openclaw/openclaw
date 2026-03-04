@@ -256,7 +256,6 @@ export async function runAgentTurnWithFallback(params: {
               },
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), cliProvider);
-            let lifecycleTerminalEmitted = false;
             try {
               const result = await runCliAgent({
                 sessionId: params.followupRun.run.sessionId,
@@ -306,33 +305,34 @@ export async function runAgentTurnWithFallback(params: {
                   endedAt: Date.now(),
                 },
               });
-              lifecycleTerminalEmitted = true;
-
               return result;
             } catch (err) {
-              // The user has a codex-cli backend in their config, but this
-              // particular model was auto-routed to it (isCodexAutoFallback)
-              // rather than the user explicitly requesting CLI execution.
-              // When the CLI binary is missing or crashes, fall through to
-              // the embedded runner which provides text-only output (no tool
-              // calls for codex models).
+              // The codex-cli backend was auto-selected based on model API
+              // detection (the user configured a codex-cli backend, but didn't
+              // explicitly request CLI execution for this model). When the CLI
+              // binary is missing or crashes, fall through to the embedded
+              // runner which provides text-only output (no tool calls for
+              // codex models).
               if (isCodexAutoFallback) {
-                defaultRuntime.log(
-                  `Codex CLI unavailable, falling back to embedded runner (tool calls will not be available): ${String(err)}`,
-                );
-                // Close the CLI lifecycle so downstream consumers don't stall
-                // on the open "start" event. The embedded runner emits its own.
+                // Do NOT emit lifecycle:error here — the embedded runner will
+                // emit its own lifecycle:start/end pair. Emitting error here
+                // would leave downstream consumers seeing a permanently-errored
+                // run even though the embedded runner succeeds.
+                // Instead, close the CLI lifecycle cleanly with "end" so the
+                // event stream is consistent, and warn about degradation.
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
                   data: {
-                    phase: "error",
+                    phase: "end",
                     startedAt,
                     endedAt: Date.now(),
-                    error: `CLI fallback: ${String(err)}`,
                   },
                 });
-                lifecycleTerminalEmitted = true;
+                defaultRuntime.warn(
+                  `Codex CLI failed, falling back to embedded runner WITHOUT tool support. ` +
+                    `User will receive text-only output. Error: ${String(err)}`,
+                );
               } else {
                 emitAgentEvent({
                   runId,
@@ -344,23 +344,7 @@ export async function runAgentTurnWithFallback(params: {
                     error: String(err),
                   },
                 });
-                lifecycleTerminalEmitted = true;
                 throw err;
-              }
-            } finally {
-              // Defensive backstop: never let a CLI run complete without a terminal
-              // lifecycle event, otherwise downstream consumers can hang.
-              if (!lifecycleTerminalEmitted) {
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: "CLI run completed without lifecycle terminal event",
-                  },
-                });
               }
             }
           }
