@@ -530,7 +530,7 @@ function isGroqModel(model: { provider?: unknown; baseUrl?: unknown }): boolean 
   }
   if (typeof model.baseUrl === "string") {
     const baseUrl = model.baseUrl.toLowerCase();
-    return baseUrl.includes("groq.com") || baseUrl.includes("api.groq");
+    return baseUrl.includes("groq.com") || baseUrl.includes(".groq.");
   }
   return false;
 }
@@ -861,7 +861,13 @@ function createGroqReasoningWrapper(
                 : "default";
               payloadObj.reasoning_effort = normalized;
               log.debug(
-                `normalized Groq reasoning_effort from "${currentValue}" to "${normalized}" (${model.id})`,
+                `normalized Groq reasoning_effort from "${String(currentValue)}" to "${String(normalized)}" (${model.id})`,
+              );
+            } else if (thinkingLevel === "off" && currentValue !== "none") {
+              // Ensure thinkingLevel="off" always results in "none"
+              payloadObj.reasoning_effort = "none";
+              log.debug(
+                `normalized Groq reasoning_effort from "${currentValue}" to "none" (${model.id})`,
               );
             }
           }
