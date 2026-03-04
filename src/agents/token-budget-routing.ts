@@ -15,13 +15,14 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
+  isBudgetExhausted,
   loadBudgetState,
   recordBudgetUsage,
   resolveActiveTier,
   saveBudgetState,
   tierKey,
 } from "./token-budget.js";
-import type { TokenBudgetConfig } from "./token-budget.types.js";
+import type { TokenBudgetConfig, TokenBudgetState } from "./token-budget.types.js";
 
 const log = createSubsystemLogger("token-budget");
 
@@ -37,21 +38,24 @@ export type TokenBudgetRoutingParams<T> = ModelFallbackParams<T>;
 /**
  * Build the fallbacks list for when a budget tier is active.
  *
- * Remaining (non-exhausted) budget tiers go first, followed by the
- * original primary model as the final catch-all.
+ * Only non-exhausted remaining budget tiers are included, followed by
+ * the original primary model as the final catch-all.
  */
 function buildBudgetFallbacks(
   config: TokenBudgetConfig,
+  state: TokenBudgetState,
   activeTierIndex: number,
   originalPrimary: { provider: string; model: string },
   originalFallbacks?: string[],
 ): string[] {
   const fallbacks: string[] = [];
 
-  // Add remaining budget tiers after the active one.
+  // Add remaining budget tiers after the active one, skipping exhausted ones.
   for (let i = activeTierIndex + 1; i < config.tiers.length; i++) {
     const tier = config.tiers[i];
-    fallbacks.push(`${tier.provider}/${tier.model}`);
+    if (!isBudgetExhausted(state, tier)) {
+      fallbacks.push(`${tier.provider}/${tier.model}`);
+    }
   }
 
   // Add the original primary model.
@@ -131,6 +135,7 @@ export async function runWithTokenBudgetRouting<T>(
   const activeTierIndex = budgetConfig.tiers.indexOf(activeTier);
   const budgetFallbacks = buildBudgetFallbacks(
     budgetConfig,
+    state,
     activeTierIndex,
     { provider: params.provider, model: params.model },
     params.fallbacksOverride,
@@ -153,7 +158,15 @@ export async function runWithTokenBudgetRouting<T>(
   if (matchedTier) {
     // Extract actual usage from the result, or fall back to a conservative estimate.
     const usage = extractUsageFromResult(fallbackResult.result);
-    const tokens = usage ? (usage.input || 0) + (usage.output || 0) : DEFAULT_ESTIMATED_TOKENS;
+    let tokens: number;
+    if (usage) {
+      tokens = (usage.input || 0) + (usage.output || 0);
+    } else {
+      tokens = DEFAULT_ESTIMATED_TOKENS;
+      log.warn(
+        `No usage metadata in result; recording estimate of ${DEFAULT_ESTIMATED_TOKENS} tokens`,
+      );
+    }
 
     recordBudgetUsage(state, matchedTier.provider, matchedTier.model, tokens);
 
@@ -166,7 +179,11 @@ export async function runWithTokenBudgetRouting<T>(
       log.info(`Budget tier ${usedKey} exhausted — next request will use next tier or primary`);
     }
 
-    saveBudgetState(state);
+    try {
+      saveBudgetState(state);
+    } catch (err) {
+      log.warn(`Failed to persist budget state: ${String(err)}`);
+    }
   }
 
   return fallbackResult;

@@ -18,9 +18,13 @@ import type {
 const STATE_FILENAME = "token-budget.json";
 const CURRENT_VERSION = 1 as const;
 
-/** Build a tier key for use in the usage map. */
+/**
+ * Build a tier key for use in the usage map.
+ * Lowercases both provider and model to match the normalized IDs
+ * returned by `runWithModelFallback`.
+ */
 export function tierKey(provider: string, model: string): string {
-  return `${provider}/${model}`;
+  return `${provider.toLowerCase()}/${model.toLowerCase()}`;
 }
 
 /**

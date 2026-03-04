@@ -1,10 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { TokenBudgetState } from "./token-budget.types.js";
 
 // Mock runWithModelFallback to avoid importing the full dependency tree.
 const fallbackMock = vi.fn();
 vi.mock("./model-fallback.js", () => ({
   runWithModelFallback: (...args: unknown[]) => fallbackMock(...args),
+}));
+
+// Mock budget state persistence so tests never touch real disk.
+let mockState: TokenBudgetState | null = null;
+vi.mock("./token-budget.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./token-budget.js")>();
+  return {
+    ...actual,
+    loadBudgetState: (...args: Parameters<typeof actual.loadBudgetState>) => {
+      if (mockState) {
+        return mockState;
+      }
+      return actual.loadBudgetState(...args);
+    },
+    saveBudgetState: (state: TokenBudgetState) => {
+      mockState = state;
+    },
+  };
+});
+
+// Mock normalizeProviderId to avoid importing model-selection dependency tree.
+vi.mock("./model-selection.js", () => ({
+  normalizeProviderId: (p: string) => p.toLowerCase(),
 }));
 
 // Import after mocking.
@@ -27,6 +51,7 @@ function makeConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
 describe("runWithTokenBudgetRouting", () => {
   beforeEach(() => {
     fallbackMock.mockReset();
+    mockState = null;
     // Default mock: invoke the run callback with provider/model from params.
     fallbackMock.mockImplementation(
       async (params: {
@@ -87,9 +112,6 @@ describe("runWithTokenBudgetRouting", () => {
   });
 
   it("falls back to primary when all tiers have zero limit", async () => {
-    // Tiers with dailyTokenLimit of 1 will be considered exhausted
-    // only if usage >= 1. With no prior usage, tier 1 should still be active.
-    // Use the mock to simulate: set up state where tiers are exhausted.
     const cfg: OpenClawConfig = {
       tokenBudget: {
         enabled: true,
@@ -141,10 +163,38 @@ describe("runWithTokenBudgetRouting", () => {
       run: async () => "result",
     });
 
-    // Usage should be 5000 + 2000 = 7000, not the default 4000 estimate.
-    // We can't easily check the persisted state here, but verifying no
-    // error is thrown with the new extraction path is the key assertion.
-    expect(fallbackMock).toHaveBeenCalledTimes(1);
+    // Verify usage was recorded (7000 = 5000 input + 2000 output).
+    expect(mockState).not.toBeNull();
+    expect(mockState!.usage.tiers["openai/gpt-5.1-codex"]).toBe(7000);
+  });
+
+  it("excludes exhausted tiers from fallback chain", async () => {
+    const today = new Date().toLocaleDateString("en-CA");
+    // Pre-set state so first tier (codex) is exhausted.
+    mockState = {
+      version: 1,
+      usage: {
+        date: today,
+        tiers: { "openai/gpt-5.1-codex": 1_500_000 },
+      },
+    };
+
+    const cfg = makeConfig();
+
+    await runWithTokenBudgetRouting({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run: async () => "result",
+    });
+
+    // Should route to second tier (codex-mini) since first is exhausted.
+    expect(fallbackMock.mock.calls[0][0].provider).toBe("openai");
+    expect(fallbackMock.mock.calls[0][0].model).toBe("gpt-5.1-codex-mini");
+    // Fallbacks should NOT include the exhausted first tier.
+    const fallbacks = fallbackMock.mock.calls[0][0].fallbacksOverride;
+    expect(fallbacks).not.toContain("openai/gpt-5.1-codex");
+    expect(fallbacks).toContain("anthropic/claude-sonnet-4-6");
   });
 
   it("preserves original fallbacks in budget fallback chain", async () => {
