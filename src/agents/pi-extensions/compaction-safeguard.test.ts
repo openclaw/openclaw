@@ -1073,6 +1073,88 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
   });
 
+  it("does not treat preserved latest asks as satisfying overlap checks", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockResolvedValueOnce(
+        [
+          "## Decisions",
+          "Keep current flow.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Follow rules.",
+          "## Pending user asks",
+          "latest ask status",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      )
+      .mockResolvedValueOnce(
+        [
+          "## Decisions",
+          "Keep current flow.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Follow rules.",
+          "## Pending user asks",
+          "older context",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 1,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          { role: "assistant", content: "latest assistant reply", timestamp: 4 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
+    expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
+  });
+
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
     mockSummarizeInStages.mockReset();
 
