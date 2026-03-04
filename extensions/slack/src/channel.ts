@@ -365,6 +365,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadId,
       });
       const result = await send(to, text, {
+        cfg,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
@@ -390,6 +391,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadId,
       });
       const result = await send(to, text, {
+        cfg,
         mediaUrl,
         mediaLocalRoots,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,

@@ -5,7 +5,7 @@ import {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -45,6 +45,7 @@ export type SlackSendIdentity = {
 };
 
 type SlackSendOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -262,7 +263,7 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,

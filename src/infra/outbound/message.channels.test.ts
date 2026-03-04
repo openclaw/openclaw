@@ -27,6 +27,76 @@ afterEach(() => {
 });
 
 describe("sendMessage channel normalization", () => {
+  it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
+    const resolvedCfg = {
+      __resolvedCfgMarker: "cfg-from-secret-resolution",
+      channels: {},
+    } as Record<string, unknown>;
+    const seen: {
+      resolveCfg?: unknown;
+      sendCfg?: unknown;
+      to?: string;
+    } = {};
+    const imessageAliasPlugin: ChannelPlugin = {
+      id: "imessage",
+      meta: {
+        id: "imessage",
+        label: "iMessage",
+        selectionLabel: "iMessage",
+        docsPath: "/channels/imessage",
+        blurb: "iMessage test stub.",
+        aliases: ["imsg"],
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to, cfg }) => {
+          seen.resolveCfg = cfg;
+          const normalized = String(to ?? "")
+            .trim()
+            .replace(/^imessage:/i, "");
+          return { ok: true, to: normalized };
+        },
+        sendText: async ({ cfg, to }) => {
+          seen.sendCfg = cfg;
+          seen.to = to;
+          return { channel: "imessage", messageId: "i-resolved" };
+        },
+        sendMedia: async ({ cfg, to }) => {
+          seen.sendCfg = cfg;
+          seen.to = to;
+          return { channel: "imessage", messageId: "i-resolved-media" };
+        },
+      },
+    };
+
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: imessageAliasPlugin,
+        },
+      ]),
+    );
+
+    const result = await sendMessage({
+      cfg: resolvedCfg,
+      to: " imessage:+15551234567 ",
+      content: "hi",
+      channel: "imsg",
+    });
+
+    expect(result.channel).toBe("imessage");
+    expect(seen.resolveCfg).toBe(resolvedCfg);
+    expect(seen.sendCfg).toBe(resolvedCfg);
+    expect(seen.to).toBe("+15551234567");
+  });
+
   it("normalizes Teams alias", async () => {
     const sendMSTeams = vi.fn(async () => ({
       messageId: "m1",

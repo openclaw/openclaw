@@ -34,6 +34,7 @@ const loadWebMediaMock = vi.fn().mockResolvedValue({
   contentType: "image/png",
   kind: "image",
 });
+const runtimeLoadConfigMock = vi.fn(() => ({}));
 const mediaKindFromMimeMock = vi.fn(() => "image");
 const isVoiceCompatibleAudioMock = vi.fn(() => false);
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
@@ -41,7 +42,7 @@ const resizeToJpegMock = vi.fn();
 
 const runtimeStub = {
   config: {
-    loadConfig: () => ({}),
+    loadConfig: runtimeLoadConfigMock,
   },
   media: {
     loadWebMedia: loadWebMediaMock as unknown as PluginRuntime["media"]["loadWebMedia"],
@@ -65,6 +66,7 @@ const runtimeStub = {
 } as unknown as PluginRuntime;
 
 let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
+let resolveMediaMaxBytes: typeof import("./send/client.js").resolveMediaMaxBytes;
 
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
@@ -80,11 +82,14 @@ const makeClient = () => {
 beforeAll(async () => {
   setMatrixRuntime(runtimeStub);
   ({ sendMessageMatrix } = await import("./send.js"));
+  ({ resolveMediaMaxBytes } = await import("./send/client.js"));
 });
 
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({});
     mediaKindFromMimeMock.mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReturnValue(false);
     setMatrixRuntime(runtimeStub);
@@ -214,6 +219,8 @@ describe("sendMessageMatrix media", () => {
 describe("sendMessageMatrix threads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({});
     setMatrixRuntime(runtimeStub);
   });
 
@@ -238,5 +245,82 @@ describe("sendMessageMatrix threads", () => {
       event_id: "$thread",
       "m.in_reply_to": { event_id: "$thread" },
     });
+  });
+});
+
+describe("sendMessageMatrix cfg threading", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({
+      channels: {
+        matrix: {
+          mediaMaxMb: 7,
+        },
+      },
+    });
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("does not call runtime loadConfig when cfg is provided", async () => {
+    const { client } = makeClient();
+    const providedCfg = {
+      channels: {
+        matrix: {
+          mediaMaxMb: 4,
+        },
+      },
+    };
+
+    await sendMessageMatrix("room:!room:example", "hello cfg", {
+      client,
+      cfg: providedCfg as any,
+    });
+
+    expect(runtimeLoadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to runtime loadConfig when cfg is omitted", async () => {
+    const { client } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello runtime", { client });
+
+    expect(runtimeLoadConfigMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveMediaMaxBytes cfg threading", () => {
+  beforeEach(() => {
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({
+      channels: {
+        matrix: {
+          mediaMaxMb: 9,
+        },
+      },
+    });
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("uses provided cfg and skips runtime loadConfig", () => {
+    const providedCfg = {
+      channels: {
+        matrix: {
+          mediaMaxMb: 3,
+        },
+      },
+    };
+
+    const maxBytes = resolveMediaMaxBytes(undefined, providedCfg as any);
+
+    expect(maxBytes).toBe(3 * 1024 * 1024);
+    expect(runtimeLoadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to runtime loadConfig when cfg is omitted", () => {
+    const maxBytes = resolveMediaMaxBytes();
+
+    expect(maxBytes).toBe(9 * 1024 * 1024);
+    expect(runtimeLoadConfigMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -107,7 +107,7 @@ describe("handleDiscordMessagingAction", () => {
       expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
       return;
     }
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
+    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -120,7 +120,7 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1");
+    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1", {});
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -134,7 +134,7 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
+    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
   });
 
   it("rejects removes without emoji", async () => {

@@ -240,6 +240,37 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("threads resolved cfg on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+      const cfg = {
+        channels: {
+          mattermost: {
+            botToken: "resolved-bot-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      } as OpenClawConfig;
+
+      await sendText({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
+        }),
+      );
+    });
   });
 
   describe("config", () => {
