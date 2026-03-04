@@ -197,6 +197,30 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function isUnknownDeviceIdError(error: unknown): boolean {
+  return normalizeErrorMessage(error).toLowerCase().includes("unknown deviceid");
+}
+
+function resolvePairedDeviceIdByAlias(
+  paired: PairedDevice[] | undefined,
+  aliasOrName: string,
+): { deviceId?: string; error?: string } {
+  const alias = aliasOrName.trim();
+  const devices = Array.isArray(paired) ? paired : [];
+  const matches = devices.filter((device) => (device.displayName ?? "").trim() === alias);
+  if (matches.length === 1) {
+    return { deviceId: matches[0]?.deviceId?.trim() };
+  }
+  if (matches.length > 1) {
+    return {
+      error: `Multiple paired devices match alias \"${alias}\". Use an exact deviceId from \`openclaw devices list\`.`,
+    };
+  }
+  return {
+    error: `No paired device matches alias \"${alias}\". Use an exact deviceId from \`openclaw devices list\`.`,
+  };
+}
+
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
@@ -233,7 +257,9 @@ export function registerDevicesCli(program: Command) {
               width: tableWidth,
               columns: [
                 { key: "Request", header: "Request", minWidth: 10 },
-                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Type", header: "Type", minWidth: 8 },
+                { key: "Name", header: "Name", minWidth: 16, flex: true },
+                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
                 { key: "IP", header: "IP", minWidth: 12 },
                 { key: "Age", header: "Age", minWidth: 8 },
@@ -241,7 +267,9 @@ export function registerDevicesCli(program: Command) {
               ],
               rows: list.pending.map((req) => ({
                 Request: req.requestId,
-                Device: req.displayName || req.deviceId,
+                Type: "pending",
+                Name: req.displayName ?? "",
+                deviceId: req.deviceId,
                 Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
                 Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
@@ -259,14 +287,18 @@ export function registerDevicesCli(program: Command) {
             renderTable({
               width: tableWidth,
               columns: [
-                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Type", header: "Type", minWidth: 8 },
+                { key: "Name", header: "Name", minWidth: 16, flex: true },
+                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
                 { key: "IP", header: "IP", minWidth: 12 },
               ],
               rows: list.paired.map((device) => ({
-                Device: device.displayName || device.deviceId,
+                Type: "paired",
+                Name: device.displayName ?? "",
+                deviceId: device.deviceId,
                 Roles: device.roles?.length ? device.roles.join(", ") : "",
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
@@ -285,20 +317,47 @@ export function registerDevicesCli(program: Command) {
     devices
       .command("remove")
       .description("Remove a paired device entry")
-      .argument("<deviceId>", "Paired device id")
-      .action(async (deviceId: string, opts: DevicesRpcOpts) => {
-        const trimmed = deviceId.trim();
+      .argument("<identifier>", "Paired deviceId or unique alias/display name")
+      .action(async (identifier: string, opts: DevicesRpcOpts) => {
+        const trimmed = identifier.trim();
         if (!trimmed) {
-          defaultRuntime.error("deviceId is required");
+          defaultRuntime.error("deviceId or alias is required");
           defaultRuntime.exit(1);
           return;
         }
-        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
+        let resolvedDeviceId = trimmed;
+        try {
+          const result = await callGatewayCli("device.pair.remove", opts, { deviceId: resolvedDeviceId });
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          defaultRuntime.log(
+            `${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}${resolvedDeviceId === trimmed ? "" : theme.muted(` (from alias: ${trimmed})`)}`,
+          );
+          return;
+        } catch (error) {
+          if (!isUnknownDeviceIdError(error)) {
+            throw error;
+          }
+        }
+
+        const list = await listPairingWithFallback(opts);
+        const resolved = resolvePairedDeviceIdByAlias(list.paired, trimmed);
+        if (!resolved.deviceId) {
+          defaultRuntime.error(resolved.error ?? "Unable to resolve paired device alias");
+          defaultRuntime.exit(1);
+          return;
+        }
+        resolvedDeviceId = resolved.deviceId;
+        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: resolvedDeviceId });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+        defaultRuntime.log(
+          `${theme.warn("Removed")} ${theme.command(resolvedDeviceId)}${theme.muted(` (from alias: ${trimmed})`)}`,
+        );
       }),
   );
 
