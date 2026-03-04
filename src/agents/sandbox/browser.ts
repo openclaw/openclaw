@@ -87,6 +87,8 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    // Default to trusted-network mode (same as normal browser) to allow localhost access
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
