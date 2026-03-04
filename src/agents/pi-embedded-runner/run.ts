@@ -491,7 +491,7 @@ export async function runEmbeddedPiAgent(
             resolveProfilesUnavailableReason({
               store: authStore,
               profileIds,
-            }) ?? "rate_limit"
+            }) ?? "auth"
           );
         }
         const classified = classifyFailoverReason(params.message);

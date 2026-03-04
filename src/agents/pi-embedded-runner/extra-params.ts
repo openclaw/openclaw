@@ -895,11 +895,14 @@ export function applyExtraParamsToAgent(
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
+  // Always apply the wrapper for Anthropic so OAuth tokens (sk-ant-oat-*) get
+  // the required betas injected even when no explicit betas are configured.
+  if (provider === "anthropic" || anthropicBetas?.length) {
+    const betas = anthropicBetas ?? [];
     log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      `applying Anthropic beta header for ${provider}/${modelId}: ${betas.join(",") || "(oauth-only)"}`,
     );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, betas);
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

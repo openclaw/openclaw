@@ -954,7 +954,9 @@ describe("applyExtraParamsToAgent", () => {
       options: { headers: { "X-Custom": "1" } },
     });
 
-    expect(headers).toEqual({ "X-Custom": "1" });
+    expect(headers?.["X-Custom"]).toBe("1");
+    // Default pi-ai betas are always present for Anthropic, but context1m must be absent
+    expect(headers?.["anthropic-beta"]).not.toContain("context-1m-2025-08-07");
   });
 
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
@@ -1001,6 +1003,36 @@ describe("applyExtraParamsToAgent", () => {
     expect(betaHeader).not.toContain("context-1m-2025-08-07");
   });
 
+  it("injects OAuth betas for sk-ant-oat tokens even without configured betas (#34792)", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    // No anthropicBeta or context1m configured — reproduces the regression
+    const cfg = {};
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-test-oauth-token",
+      headers: { "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
+    expect(betaHeader).toContain("oauth-2025-04-20");
+    expect(betaHeader).toContain("claude-code-20250219");
+  });
+
   it("merges existing anthropic-beta headers with configured betas", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
@@ -1028,7 +1060,9 @@ describe("applyExtraParamsToAgent", () => {
       modelId: "claude-haiku-3-5",
       options: { headers: { "X-Custom": "1" } },
     });
-    expect(headers).toEqual({ "X-Custom": "1" });
+    expect(headers?.["X-Custom"]).toBe("1");
+    // context1m must not be present for non-Opus/Sonnet models
+    expect(headers?.["anthropic-beta"]).not.toContain("context-1m-2025-08-07");
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
