@@ -4,6 +4,7 @@ import {
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
@@ -393,5 +394,50 @@ describe("expandTextLinks", () => {
     const text = " Hello world";
     const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
     expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
+  });
+});
+
+describe("hasBotMention (issue #19883: forum topic mention detection)", () => {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const forumMsg = (text: string, entities?: unknown[]): any => ({
+    text,
+    entities,
+    chat: { id: -1001234567890, type: "supergroup", is_forum: true },
+    message_thread_id: 42,
+  });
+
+  it("detects mention when text uses lowercase but botUsername has mixed case", () => {
+    // User types '@mybot' (lowercase) in a forum topic; API registers botUsername as 'MyBot'.
+    // text.includes(`@${'MyBot'}`) compares 'hello @mybot' against '@MyBot' → false on buggy main.
+    const msg = forumMsg("hello @mybot can you help?");
+    expect(hasBotMention(msg, "MyBot")).toBe(true);
+  });
+
+  it("detects mention via entity when entity slice has different case than botUsername", () => {
+    // User types '@MYBOT' (all caps). text lowercased ('@mybot') vs '@MyBot' → false.
+    // Entity slice '.slice(6,12)' = '@MYBOT', lowercased = '@mybot', vs '@MyBot' → false on buggy main.
+    const msg = forumMsg("hello @MYBOT here", [{ type: "mention", offset: 6, length: 6 }]);
+    expect(hasBotMention(msg, "MyBot")).toBe(true);
+  });
+
+  it("returns false when bot is not mentioned at all", () => {
+    const msg = forumMsg("just chatting here");
+    expect(hasBotMention(msg, "MyBot")).toBe(false);
+  });
+
+  it("detects mention when both text and botUsername are already lowercase", () => {
+    const msg = forumMsg("hello @mybot please answer");
+    expect(hasBotMention(msg, "mybot")).toBe(true);
+  });
+
+  it("uses caption when text is absent (forum photo message)", () => {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const msg: any = {
+      caption: "@mybot please describe this image",
+      caption_entities: [{ type: "mention", offset: 0, length: 6 }],
+      chat: { id: -1001234567890, type: "supergroup", is_forum: true },
+      message_thread_id: 42,
+    };
+    expect(hasBotMention(msg, "MyBot")).toBe(true);
   });
 });
