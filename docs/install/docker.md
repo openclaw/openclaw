@@ -81,6 +81,31 @@ After it finishes:
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
+### Multi-instance startup on one host
+
+If you run multiple gateway containers on the same host (especially 2-4 vCPU nodes),
+avoid starting all instances at once. Startup is CPU and memory heavy and can cause
+short host stalls when several instances initialize in parallel.
+
+Recommended rollout for 3+ instances:
+
+- Start one container at a time.
+- Wait for `/healthz` to return success before starting the next one.
+- Keep a 60-90 second gap between starts when hosts are resource constrained.
+- Capacity-plan startup headroom (roughly ~800 MB burst per instance is a useful baseline; steady-state is typically lower).
+
+Example staggered start loop:
+
+```bash
+for container in agent-1 agent-2 agent-3; do
+  docker start "$container"
+  until [ "$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; do
+    sleep 5
+  done
+  echo "$container healthy"
+done
+```
+
 ### Enable agent sandbox for Docker gateway (opt-in)
 
 `docker-setup.sh` can also bootstrap `agents.defaults.sandbox.*` for Docker
