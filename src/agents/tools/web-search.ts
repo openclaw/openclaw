@@ -7,6 +7,7 @@ import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
+import { DEFAULT_PARALLEL_BASE_URL, PARALLEL_BETA_HEADER } from "./parallel-shared.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import { resolveCitationRedirectUrl } from "./web-search-citation-redirect.js";
 import {
@@ -36,8 +37,6 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
-
-import { DEFAULT_PARALLEL_BASE_URL, PARALLEL_BETA_HEADER } from "./parallel-shared.js";
 
 type ParallelConfig = {
   apiKey?: string;

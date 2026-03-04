@@ -4,6 +4,13 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import {
+  PROVIDER_ENV_VARS,
+  PROVIDER_PLACEHOLDERS,
+  SEARCH_PROVIDER_OPTIONS,
+  type SearchProviderValue,
+} from "../config/search-providers.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -159,13 +166,6 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
     runtime,
   ) as ChannelsWizardMode;
 }
-
-import {
-  PROVIDER_ENV_VARS,
-  PROVIDER_PLACEHOLDERS,
-  SEARCH_PROVIDER_OPTIONS,
-  type SearchProviderValue,
-} from "../config/search-providers.js";
 
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,

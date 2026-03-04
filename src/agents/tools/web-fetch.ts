@@ -8,6 +8,10 @@ import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
+  DEFAULT_PARALLEL_BASE_URL as DEFAULT_PARALLEL_EXTRACT_BASE_URL,
+  PARALLEL_BETA_HEADER,
+} from "./parallel-shared.js";
+import {
   extractReadableContent,
   htmlToMarkdown,
   markdownToText,
@@ -40,10 +44,6 @@ const DEFAULT_FETCH_MAX_REDIRECTS = 3;
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
-import {
-  DEFAULT_PARALLEL_BASE_URL as DEFAULT_PARALLEL_EXTRACT_BASE_URL,
-  PARALLEL_BETA_HEADER,
-} from "./parallel-shared.js";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";

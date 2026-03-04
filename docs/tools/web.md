@@ -189,9 +189,9 @@ Parallel provides LLM-optimized search with structured excerpts from real-time w
 **Environment alternative:** set `PARALLEL_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
 
-### Parallel extract (web_fetch fallback)
+### Parallel extract (web_fetch)
 
-Parallel also provides a content extraction API that can be used as a fallback for `web_fetch`.
+Parallel also provides a content extraction API that can be used as the primary extractor for `web_fetch`.
 This is opt-in and requires explicit configuration:
 
 ```json5
@@ -210,7 +210,7 @@ This is opt-in and requires explicit configuration:
 }
 ```
 
-When enabled, Parallel extract is tried before Firecrawl in the fallback chain.
+When enabled, Parallel extract is tried first for HTML content, before Readability and Firecrawl.
 
 ## web_search
 
