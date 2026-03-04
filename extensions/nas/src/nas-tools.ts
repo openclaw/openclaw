@@ -319,7 +319,6 @@ export function createNasTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "nas_list",
       label: "NAS List",
       description: "List files/directories from NAS mount (default /mnt/nas).",
-      ownerOnly: true,
       parameters: listParams,
       execute: async (_id, rawParams) => {
         const cfg = getConfig(api);
@@ -342,7 +341,6 @@ export function createNasTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "nas_search",
       label: "NAS Search",
       description: "Search text within NAS files using ripgrep under NAS root.",
-      ownerOnly: true,
       parameters: searchParams,
       execute: async (_id, rawParams) => {
         const cfg = getConfig(api);
@@ -394,7 +392,6 @@ export function createNasTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "nas_read",
       label: "NAS Read",
       description: "Read a text file from NAS root.",
-      ownerOnly: true,
       parameters: readParams,
       execute: async (_id, rawParams) => {
         const cfg = getConfig(api);
@@ -419,7 +416,6 @@ export function createNasTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "nas_summary",
       label: "NAS Summary",
       description: "Build a quick structural summary for a text file in NAS root.",
-      ownerOnly: true,
       parameters: summaryParams,
       execute: async (_id, rawParams) => {
         const cfg = getConfig(api);
