@@ -328,8 +328,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio files, "file" for documents and video */
-  msgType?: "file" | "audio";
+  /** Use "audio" for audio files, "media" for video, "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -467,8 +467,9 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
+    // Feishu API: opus -> "audio", mp4/video -> "media", everything else -> "file"
+    // Using "file" for video types causes error 230055 (upload type mismatch).
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
