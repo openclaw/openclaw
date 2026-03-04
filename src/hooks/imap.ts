@@ -25,6 +25,7 @@ export type ImapHookOverrides = {
   hookToken?: string;
   himalayaConfig?: string;
   query?: string;
+  allowedSenders?: string[];
 };
 
 export type ImapHookRuntimeConfig = {
@@ -38,6 +39,7 @@ export type ImapHookRuntimeConfig = {
   hookToken: string;
   himalayaConfig?: string;
   query: string;
+  allowedSenders?: string[];
 };
 
 export function buildDefaultImapHookUrl(
@@ -89,6 +91,7 @@ export function resolveImapHookRuntimeConfig(
 
   const himalayaConfig = overrides.himalayaConfig ?? imap?.himalayaConfig;
   const query = overrides.query ?? imap?.query ?? DEFAULT_IMAP_QUERY;
+  const allowedSenders = overrides.allowedSenders ?? imap?.allowedSenders;
 
   return {
     ok: true,
@@ -103,6 +106,9 @@ export function resolveImapHookRuntimeConfig(
       hookToken,
       himalayaConfig: himalayaConfig?.trim() || undefined,
       query,
+      allowedSenders: allowedSenders?.length
+        ? allowedSenders.map((s) => s.toLowerCase().trim()).filter(Boolean)
+        : undefined,
     },
   };
 }

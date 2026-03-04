@@ -1237,6 +1237,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Path to himalaya configuration file. When omitted, himalaya uses its default config location (~/.config/himalaya/config.toml).",
   "hooks.imap.query":
     'Himalaya envelope filter query applied when listing envelopes. Default: "not flag Seen" (unread messages). Supports himalaya query syntax (from, subject, date, flag operators). Flag names are case-sensitive (e.g., "Seen", "Answered").',
+  "hooks.imap.allowedSenders":
+    'Optional array of allowed sender email addresses. When set, only emails from these addresses will be processed. If omitted or empty, all senders are allowed. Example: ["user@example.com", "notifications@github.com"]',
   "hooks.internal":
     "Internal hook runtime settings for bundled/custom event handlers loaded from module paths. Use this for trusted in-process automations and keep handler loading tightly scoped.",
   "hooks.internal.enabled":

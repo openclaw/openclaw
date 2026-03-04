@@ -66,6 +66,8 @@ export type HooksImapConfig = {
   himalayaConfig?: string;
   /** Filter query for envelopes (default: "not flag Seen") */
   query?: string;
+  /** Optional allowlist of sender email addresses. If set, only emails from these addresses will be processed. */
+  allowedSenders?: string[];
 };
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";

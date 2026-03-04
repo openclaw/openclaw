@@ -593,6 +593,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.imap.allowUnsafeExternalContent": "IMAP Hook Allow Unsafe External Content",
   "hooks.imap.himalayaConfig": "IMAP Hook Himalaya Config Path",
   "hooks.imap.query": "IMAP Hook Envelope Query",
+  "hooks.imap.allowedSenders": "IMAP Hook Allowed Senders",
   "hooks.internal": "Internal Hooks",
   "hooks.internal.enabled": "Internal Hooks Enabled",
   "hooks.internal.handlers": "Internal Hook Handlers",
