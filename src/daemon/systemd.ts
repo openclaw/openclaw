@@ -175,6 +175,19 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+function isSystemdUserManagerUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("not been booted") ||
+    normalized.includes("no medium found") ||
+    normalized.includes("command failed: systemctl --user is-enabled")
+  );
+}
+
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
@@ -352,7 +365,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (
+    isSystemctlMissing(detail) ||
+    isSystemdUnitNotEnabled(detail) ||
+    isSystemdUserManagerUnavailable(detail)
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
