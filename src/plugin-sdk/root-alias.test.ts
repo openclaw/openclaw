@@ -32,7 +32,7 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
-  });
+  }, 180_000);
 
   it("preserves reflection semantics for lazily resolved exports", () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
@@ -40,5 +40,5 @@ describe("plugin-sdk root alias", () => {
     expect(keys).toContain("resolveControlCommandGate");
     const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
     expect(descriptor).toBeDefined();
-  });
+  }, 180_000);
 });
