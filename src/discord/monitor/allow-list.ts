@@ -21,6 +21,7 @@ export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
   fanOut?: boolean;
   fanOutMaxRounds?: number;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
@@ -31,6 +32,7 @@ export type DiscordGuildEntryResolved = {
     {
       allow?: boolean;
       requireMention?: boolean;
+      ignoreOtherMentions?: boolean;
       fanOut?: boolean;
       fanOutMaxRounds?: number;
       skills?: string[];
@@ -47,6 +49,7 @@ export type DiscordGuildEntryResolved = {
 export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
   fanOut?: boolean;
   fanOutMaxRounds?: number;
   skills?: string[];
@@ -272,6 +275,34 @@ export function resolveDiscordOwnerAllowFrom(params: {
   return [match.matchKey];
 }
 
+const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
+
+export function resolveDiscordOwnerAccess(params: {
+  allowFrom?: string[];
+  sender: { id: string; name?: string; tag?: string };
+  allowNameMatching?: boolean;
+}): {
+  ownerAllowList: DiscordAllowList | null;
+  ownerAllowed: boolean;
+} {
+  const ownerAllowList = normalizeDiscordAllowList(
+    params.allowFrom,
+    DISCORD_OWNER_ALLOWLIST_PREFIXES,
+  );
+  const ownerAllowed = ownerAllowList
+    ? allowListMatches(
+        ownerAllowList,
+        {
+          id: params.sender.id,
+          name: params.sender.name,
+          tag: params.sender.tag,
+        },
+        { allowNameMatching: params.allowNameMatching },
+      )
+    : false;
+  return { ownerAllowList, ownerAllowed };
+}
+
 export function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
   allowFrom?: string[];
@@ -368,6 +399,7 @@ function resolveDiscordChannelConfigEntry(
   const resolved: DiscordChannelConfigResolved = {
     allowed: entry.allow !== false,
     requireMention: entry.requireMention,
+    ignoreOtherMentions: entry.ignoreOtherMentions,
     fanOut: entry.fanOut,
     fanOutMaxRounds: entry.fanOutMaxRounds,
     skills: entry.skills,
