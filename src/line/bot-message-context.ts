@@ -10,7 +10,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type { ResolvedLineAccount } from "./types.js";
+import type { ResolvedLineAccount, LineGroupConfig } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -22,6 +22,7 @@ interface BuildLineMessageContextParams {
   allMedia: MediaRef[];
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
+  commandAuthorized: boolean;
 }
 
 export type LineSourceInfo = {
@@ -49,10 +50,10 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
 
 function buildPeerId(source: EventSource): string {
   if (source.type === "group" && source.groupId) {
-    return `group:${source.groupId}`;
+    return source.groupId;
   }
   if (source.type === "room" && source.roomId) {
-    return `room:${source.roomId}`;
+    return source.roomId;
   }
   if (source.type === "user" && source.userId) {
     return source.userId;
@@ -206,6 +207,20 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
+function resolveLineGroupSystemPrompt(
+  groups: Record<string, LineGroupConfig | undefined> | undefined,
+  source: LineSourceInfoWithPeerId,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const entry =
+    (source.groupId ? (groups[source.groupId] ?? groups[`group:${source.groupId}`]) : undefined) ??
+    (source.roomId ? (groups[source.roomId] ?? groups[`room:${source.roomId}`]) : undefined) ??
+    groups["*"];
+  return entry?.systemPrompt?.trim() || undefined;
+}
+
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -215,6 +230,7 @@ async function finalizeLineInboundContext(params: {
   rawBody: string;
   timestamp: number;
   messageSid: string;
+  commandAuthorized: boolean;
   media: {
     firstPath: string | undefined;
     firstContentType?: string;
@@ -286,8 +302,12 @@ async function finalizeLineInboundContext(params: {
     MediaUrls: params.media.paths,
     MediaTypes: params.media.types,
     ...params.locationContext,
+    CommandAuthorized: params.commandAuthorized,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
+    GroupSystemPrompt: params.source.isGroup
+      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      : undefined,
   });
 
   const pinnedMainDmOwner = !params.source.isGroup
@@ -342,7 +362,7 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const { event, allMedia, cfg, account } = params;
+  const { event, allMedia, cfg, account, commandAuthorized } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
@@ -388,6 +408,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     rawBody,
     timestamp,
     messageSid: messageId,
+    commandAuthorized,
     media: {
       firstPath: allMedia[0]?.path,
       firstContentType: allMedia[0]?.contentType,
@@ -418,8 +439,9 @@ export async function buildLinePostbackContext(params: {
   event: PostbackEvent;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
+  commandAuthorized: boolean;
 }) {
-  const { event, cfg, account } = params;
+  const { event, cfg, account, commandAuthorized } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
@@ -451,6 +473,7 @@ export async function buildLinePostbackContext(params: {
     rawBody,
     timestamp,
     messageSid,
+    commandAuthorized,
     media: {
       firstPath: "",
       firstContentType: undefined,

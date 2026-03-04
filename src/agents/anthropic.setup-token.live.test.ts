@@ -51,7 +51,7 @@ function listSetupTokenProfiles(store: {
       if (normalizeProviderId(cred.provider) !== "anthropic") {
         return false;
       }
-      return isSetupToken(cred.token);
+      return isSetupToken(cred.token ?? "");
     })
     .map(([id]) => id);
 }

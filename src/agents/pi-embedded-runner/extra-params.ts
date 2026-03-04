@@ -560,6 +560,107 @@ function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): S
   };
 }
 
+type MoonshotThinkingType = "enabled" | "disabled";
+
+function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
+  if (typeof value === "boolean") {
+    return value ? "enabled" : "disabled";
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (
+      normalized === "enabled" ||
+      normalized === "enable" ||
+      normalized === "on" ||
+      normalized === "true"
+    ) {
+      return "enabled";
+    }
+    if (
+      normalized === "disabled" ||
+      normalized === "disable" ||
+      normalized === "off" ||
+      normalized === "false"
+    ) {
+      return "disabled";
+    }
+    return undefined;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const typeValue = (value as Record<string, unknown>).type;
+    return normalizeMoonshotThinkingType(typeValue);
+  }
+  return undefined;
+}
+
+function resolveMoonshotThinkingType(params: {
+  configuredThinking: unknown;
+  thinkingLevel?: ThinkLevel;
+}): MoonshotThinkingType | undefined {
+  const configured = normalizeMoonshotThinkingType(params.configuredThinking);
+  if (configured) {
+    return configured;
+  }
+  if (!params.thinkingLevel) {
+    return undefined;
+  }
+  return params.thinkingLevel === "off" ? "disabled" : "enabled";
+}
+
+function isMoonshotToolChoiceCompatible(toolChoice: unknown): boolean {
+  if (toolChoice == null) {
+    return true;
+  }
+  if (toolChoice === "auto" || toolChoice === "none") {
+    return true;
+  }
+  if (typeof toolChoice === "object" && !Array.isArray(toolChoice)) {
+    const typeValue = (toolChoice as Record<string, unknown>).type;
+    return typeValue === "auto" || typeValue === "none";
+  }
+  return false;
+}
+
+/**
+ * Moonshot Kimi supports native binary thinking mode:
+ * - { thinking: { type: "enabled" } }
+ * - { thinking: { type: "disabled" } }
+ *
+ * When thinking is enabled, Moonshot only accepts tool_choice auto|none.
+ * Normalize incompatible values to auto instead of failing the request.
+ */
+function createMoonshotThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingType?: MoonshotThinkingType,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
+
+          if (thinkingType) {
+            payloadObj.thinking = { type: thinkingType };
+            effectiveThinkingType = thinkingType;
+          }
+
+          if (
+            effectiveThinkingType === "enabled" &&
+            !isMoonshotToolChoiceCompatible(payloadObj.tool_choice)
+          ) {
+            payloadObj.tool_choice = "auto";
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -806,6 +907,19 @@ export function applyExtraParamsToAgent(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
+
+  if (provider === "moonshot") {
+    const moonshotThinkingType = resolveMoonshotThinkingType({
+      configuredThinking: merged?.thinking,
+      thinkingLevel,
+    });
+    if (moonshotThinkingType) {
+      log.debug(
+        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
+      );
+    }
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
 
   if (provider === "openrouter") {

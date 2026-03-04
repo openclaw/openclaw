@@ -416,6 +416,20 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(appModel.openChatRequestID == 1)
     }
 
+    @Test @MainActor func handleDeepLinkCoalescesPromptWhenRateLimited() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
+        let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
+        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        #expect(coalescedPrompt.id != firstPrompt.id)
+        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
+    }
+
     @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {
         let appModel = NodeAppModel()
         appModel._test_setGatewayConnected(true)

@@ -6,7 +6,7 @@ settings:
 
 overrides:
   hono: 4.11.10
-  fast-xml-parser: 5.3.6
+  fast-xml-parser: 5.3.8
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
   form-data: 2.5.4
@@ -45,9 +45,6 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.5
         version: 1.3.5
-      '@larksuiteoapi/node-sdk':
-        specifier: ^1.59.0
-        version: 1.59.0
       '@line/bot-sdk':
         specifier: ^10.6.0
         version: 10.6.0
@@ -120,9 +117,6 @@ importers:
       gaxios:
         specifier: 7.1.3
         version: 7.1.3
-      google-auth-library:
-        specifier: 10.6.1
-        version: 10.6.1
       grammy:
         specifier: ^1.41.0
         version: 1.41.0
@@ -259,10 +253,6 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
-    optionalDependencies:
-      '@discordjs/opus':
-        specifier: ^0.10.0
-        version: 0.10.0
 
   extensions/acpx:
     dependencies:
@@ -270,7 +260,11 @@ importers:
         specifier: 0.1.15
         version: 0.1.15(zod@4.3.6)
 
-  extensions/bluebubbles: {}
+  extensions/bluebubbles:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/copilot-proxy: {}
 
@@ -347,21 +341,39 @@ importers:
         specifier: ^10.6.1
         version: 10.6.1
       openclaw:
-        specifier: '>=2026.3.1'
-        version: 2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: '>=2026.3.2'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/imessage: {}
 
-  extensions/irc: {}
+  extensions/irc:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/line: {}
 
-  extensions/llm-task: {}
+  extensions/llm-task:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
 
-  extensions/lobster: {}
+  extensions/lobster:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
 
   extensions/matrix:
     dependencies:
+      '@mariozechner/pi-agent-core':
+        specifier: 0.55.3
+        version: 0.55.3(ws@8.19.0)(zod@4.3.6)
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
@@ -378,13 +390,20 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  extensions/mattermost: {}
+  extensions/mattermost:
+    dependencies:
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/memory-core:
     dependencies:
       openclaw:
-        specifier: '>=2026.3.1'
-        version: 2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: '>=2026.3.2'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/memory-lancedb:
     dependencies:
@@ -409,7 +428,11 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
 
-  extensions/nextcloud-talk: {}
+  extensions/nextcloud-talk:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/nostr:
     dependencies:
@@ -437,8 +460,8 @@ importers:
   extensions/tlon:
     dependencies:
       '@tloncorp/api':
-        specifier: github:tloncorp/api-beta#main
-        version: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87
+        specifier: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
+        version: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
       '@tloncorp/tlon-skill':
         specifier: 0.1.9
         version: 0.1.9
@@ -448,6 +471,9 @@ importers:
       '@urbit/http-api':
         specifier: ^3.0.0
         version: 3.0.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/twitch:
     dependencies:
@@ -469,6 +495,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
+      commander:
+        specifier: ^14.0.3
+        version: 14.0.3
       ws:
         specifier: ^8.19.0
         version: 8.19.0
@@ -483,6 +512,9 @@ importers:
       undici:
         specifier: 7.22.0
         version: 7.22.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/zalouser:
     dependencies:
@@ -492,6 +524,9 @@ importers:
       zca-js:
         specifier: 2.1.1
         version: 2.1.1
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   packages/clawdbot:
     dependencies:
@@ -2902,8 +2937,8 @@ packages:
     resolution: {integrity: sha512-5Kc5CM2Ysn3vTTArBs2vESUt0AQiWZA86yc1TI3B+lxXmtEq133C1nxXNOgnzhrivdPZIh3zLj5gDnZjoLL5GA==}
     engines: {node: '>=12.17.0'}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
-    resolution: {tarball: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87}
+  '@tloncorp/api@git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87':
+    resolution: {commit: 7eede1c1a756977b09f96aa14a92e2b06318ae87, repo: https://github.com/tloncorp/api-beta.git, type: git}
     version: 0.0.2
 
   '@tloncorp/tlon-skill-darwin-arm64@0.1.9':
@@ -3963,8 +3998,8 @@ packages:
   fast-uri@3.1.0:
     resolution: {integrity: sha512-iPeeDKJSWf4IEOasVVrknXpaBV0IApz/gp7S2bb7Z4Lljbl2MGJRqInZiUrQwV16cpzw/D3S5j5Julj/gT52AA==}
 
-  fast-xml-parser@5.3.6:
-    resolution: {integrity: sha512-QNI3sAvSvaOiaMl8FYU4trnEzCwiRr8XMWgAHzlrWpTSj+QaCSvOf1h82OEP1s4hiAXhnbXSyFWCf4ldZzZRVA==}
+  fast-xml-parser@5.3.8:
+    resolution: {integrity: sha512-53jIF4N6u/pxvaL1eb/hEZts/cFLWZ92eCfLrNyCI0k38lettCG/Bs40W9pPwoPXyHQlKu2OUbQtiEIZK/J6Vw==}
     hasBin: true
 
   fd-slicer@1.1.0:
@@ -4942,8 +4977,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.3.1:
-    resolution: {integrity: sha512-7Pt5ykhaYa8TYpLWnBhaMg6Lp6kfk3rMKgqJ3WWESKM9BizYu1fkH/rF9BLeXlsNASgZdLp4oR8H0XfvIIoXIg==}
+  openclaw@2026.3.2:
+    resolution: {integrity: sha512-Gkqx24m7PF1DUXPI968DuC9n52lTZ5hI3X5PIi0HosC7J7d6RLkgVppj1mxvgiQAWMp41E41elvoi/h4KBjFcQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
     peerDependencies:
@@ -6711,7 +6746,7 @@ snapshots:
   '@aws-sdk/xml-builder@3.972.8':
     dependencies:
       '@smithy/types': 4.13.0
-      fast-xml-parser: 5.3.6
+      fast-xml-parser: 5.3.8
       tslib: 2.8.1
 
   '@aws/lambda-invoke-store@0.2.3': {}
@@ -8872,7 +8907,7 @@ snapshots:
 
   '@tinyhttp/content-disposition@2.2.4': {}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
+  '@tloncorp/api@git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87':
     dependencies:
       '@aws-sdk/client-s3': 3.1000.0
       '@aws-sdk/s3-request-presigner': 3.1000.0
@@ -10082,7 +10117,7 @@ snapshots:
 
   fast-uri@3.1.0: {}
 
-  fast-xml-parser@5.3.6:
+  fast-xml-parser@5.3.8:
     dependencies:
       strnum: 2.2.0
 
@@ -11154,7 +11189,7 @@ snapshots:
       ws: 8.19.0
       zod: 4.3.6
 
-  openclaw@2026.3.1(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3)):
+  openclaw@2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.11.10)(node-llama-cpp@3.16.2(typescript@5.9.3)):
     dependencies:
       '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.1000.0
@@ -11209,6 +11244,7 @@ snapshots:
       qrcode-terminal: 0.12.0
       sharp: 0.34.5
       sqlite-vec: 0.1.7-alpha.2
+      strip-ansi: 7.2.0
       tar: 7.5.9
       tslog: 4.10.2
       undici: 7.22.0

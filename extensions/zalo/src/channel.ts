@@ -3,7 +3,7 @@ import type {
   ChannelDock,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -20,7 +20,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalo";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -32,6 +32,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import { zaloOnboardingAdapter } from "./onboarding.js";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
@@ -422,7 +423,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         abortSignal: ctx.abortSignal,
         useWebhook: Boolean(account.config.webhookUrl),
         webhookUrl: account.config.webhookUrl,
-        webhookSecret: account.config.webhookSecret,
+        webhookSecret: normalizeSecretInputString(account.config.webhookSecret),
         webhookPath: account.config.webhookPath,
         fetcher,
         statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),

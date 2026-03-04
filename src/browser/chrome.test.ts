@@ -21,6 +21,8 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 
+type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
+
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(filePath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
@@ -33,6 +35,67 @@ async function readDefaultProfileFromLocalState(
   const profile = localState.profile as Record<string, unknown>;
   const infoCache = profile.info_cache as Record<string, unknown>;
   return infoCache.Default as Record<string, unknown>;
+}
+
+async function withMockChromeCdpServer(params: {
+  wsPath: string;
+  onConnection?: (wss: WebSocketServer) => void;
+  run: (baseUrl: string) => Promise<void>;
+}) {
+  const server = createServer((req, res) => {
+    if (req.url === "/json/version") {
+      const addr = server.address() as AddressInfo;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}${params.wsPath}`,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url !== params.wsPath) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+  params.onConnection?.(wss);
+  await new Promise<void>((resolve, reject) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+    server.once("error", reject);
+  });
+  try {
+    const addr = server.address() as AddressInfo;
+    await params.run(`http://127.0.0.1:${addr.port}`);
+  } finally {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, timeoutMs: number) {
+  await stopOpenClawChrome(
+    {
+      proc,
+      cdpPort: 12345,
+    } as unknown as StopChromeTarget,
+    timeoutMs,
+  );
+}
+
+function makeChromeTestProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
+  return {
+    killed: overrides?.killed ?? false,
+    exitCode: overrides?.exitCode ?? null,
+    kill: vi.fn(),
+  };
 }
 
 describe("browser chrome profile decoration", () => {
@@ -143,14 +206,6 @@ describe("browser chrome helpers", () => {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
 
-  function makeProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
-    return {
-      killed: overrides?.killed ?? false,
-      exitCode: overrides?.exitCode ?? null,
-      kill: vi.fn(),
-    };
-  }
-
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -248,129 +303,63 @@ describe("browser chrome helpers", () => {
   });
 
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
-    const server = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        const addr = server.address() as AddressInfo;
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/health`,
-          }),
-        );
-        return;
-      }
-      res.writeHead(404);
-      res.end();
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/health",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (raw) => {
+            let message: { id?: unknown; method?: unknown } | null = null;
+            try {
+              const text =
+                typeof raw === "string"
+                  ? raw
+                  : Buffer.isBuffer(raw)
+                    ? raw.toString("utf8")
+                    : Array.isArray(raw)
+                      ? Buffer.concat(raw).toString("utf8")
+                      : Buffer.from(raw).toString("utf8");
+              message = JSON.parse(text) as { id?: unknown; method?: unknown };
+            } catch {
+              return;
+            }
+            if (message?.method === "Browser.getVersion" && message.id === 1) {
+              ws.send(
+                JSON.stringify({
+                  id: 1,
+                  result: { product: "Chrome/Mock" },
+                }),
+              );
+            }
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        await expect(isChromeCdpReady(baseUrl, 300, 400)).resolves.toBe(true);
+      },
     });
-    const wss = new WebSocketServer({ noServer: true });
-    server.on("upgrade", (req, socket, head) => {
-      if (req.url !== "/devtools/browser/health") {
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
-    });
-    wss.on("connection", (ws) => {
-      ws.on("message", (raw) => {
-        let message: { id?: unknown; method?: unknown } | null = null;
-        try {
-          const text =
-            typeof raw === "string"
-              ? raw
-              : Buffer.isBuffer(raw)
-                ? raw.toString("utf8")
-                : Array.isArray(raw)
-                  ? Buffer.concat(raw).toString("utf8")
-                  : Buffer.from(raw).toString("utf8");
-          message = JSON.parse(text) as { id?: unknown; method?: unknown };
-        } catch {
-          return;
-        }
-        if (message?.method === "Browser.getVersion" && message.id === 1) {
-          ws.send(
-            JSON.stringify({
-              id: 1,
-              result: { product: "Chrome/Mock" },
-            }),
-          );
-        }
-      });
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-      server.once("error", reject);
-    });
-    const addr = server.address() as AddressInfo;
-    await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 300, 400)).resolves.toBe(true);
-
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   it("reports cdpReady false when websocket opens but command channel is stale", async () => {
-    const server = createServer((req, res) => {
-      if (req.url === "/json/version") {
-        const addr = server.address() as AddressInfo;
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/stale`,
-          }),
-        );
-        return;
-      }
-      res.writeHead(404);
-      res.end();
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/stale",
+      // Simulate a stale command channel: WS opens but never responds to commands.
+      onConnection: (wss) => wss.on("connection", (_ws) => {}),
+      run: async (baseUrl) => {
+        await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
+      },
     });
-    const wss = new WebSocketServer({ noServer: true });
-    server.on("upgrade", (req, socket, head) => {
-      if (req.url !== "/devtools/browser/stale") {
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
-    });
-    // Simulate a stale command channel: WS opens but never responds to commands.
-    wss.on("connection", (_ws) => {});
-
-    await new Promise<void>((resolve, reject) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-      server.once("error", reject);
-    });
-    const addr = server.address() as AddressInfo;
-    await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 300, 150)).resolves.toBe(false);
-
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
-    const proc = makeProc({ killed: true });
-    await stopOpenClawChrome(
-      {
-        proc,
-        cdpPort: 12345,
-      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-      10,
-    );
+    const proc = makeChromeTestProc({ killed: true });
+    await stopChromeWithProc(proc, 10);
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
   it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = makeProc();
-    await stopOpenClawChrome(
-      {
-        proc,
-        cdpPort: 12345,
-      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-      10,
-    );
+    const proc = makeChromeTestProc();
+    await stopChromeWithProc(proc, 10);
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
@@ -382,14 +371,8 @@ describe("browser chrome helpers", () => {
         json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
       } as unknown as Response),
     );
-    const proc = makeProc();
-    await stopOpenClawChrome(
-      {
-        proc,
-        cdpPort: 12345,
-      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-      1,
-    );
+    const proc = makeChromeTestProc();
+    await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });

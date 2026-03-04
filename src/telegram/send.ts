@@ -42,6 +42,7 @@ type TelegramApi = Bot["api"];
 type TelegramApiOverride = Partial<TelegramApi>;
 
 type TelegramSendOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1038,6 +1039,7 @@ export async function sendStickerTelegram(
 }
 
 type TelegramPollOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   verbose?: boolean;

@@ -1,5 +1,6 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -12,7 +13,22 @@ vi.mock("./client.js", () => ({
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
 
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: () => ({
+          enqueue: async () => {},
+          flushKey: async () => {},
+        }),
+      },
+      text: {
+        hasControlCommand: () => false,
+      },
+    },
+  }),
+}));
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {
