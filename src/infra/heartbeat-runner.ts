@@ -237,23 +237,25 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
-/** Resolve jitter for cold-start staggering. Explicit config or 10% of interval. */
+/** Resolve jitter for cold-start staggering. Explicit config or 10% of interval. Clamped to intervalMs. */
 export function resolveHeartbeatJitterMs(
   heartbeat: HeartbeatConfig | undefined,
   intervalMs: number,
 ): number {
+  let jitterMs: number;
   const raw = heartbeat?.jitter?.trim();
   if (raw) {
     try {
       const ms = parseDurationMs(raw, { defaultUnit: "m" });
-      if (ms >= 0) {
-        return ms;
-      }
+      jitterMs = ms >= 0 ? ms : Math.floor(intervalMs * 0.1);
     } catch {
-      // fall through to default
+      jitterMs = Math.floor(intervalMs * 0.1);
     }
+  } else {
+    jitterMs = Math.floor(intervalMs * 0.1);
   }
-  return Math.floor(intervalMs * 0.1);
+  // Clamp so the first run never waits longer than the interval itself
+  return Math.min(jitterMs, intervalMs);
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
