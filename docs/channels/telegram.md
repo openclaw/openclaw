@@ -406,10 +406,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `channels.telegram.actions.sendMessage`
     - `channels.telegram.actions.deleteMessage`
+    - `channels.telegram.actions.editMessage`
     - `channels.telegram.actions.reactions`
     - `channels.telegram.actions.sticker` (default: disabled)
+    - `channels.telegram.actions.createForumTopic`
 
-    Note: `edit` and `topic-create` are currently enabled by default and do not have separate `channels.telegram.actions.*` toggles.
+    Note: `edit` maps to `actions.editMessage`, and `topic-create` maps to `actions.createForumTopic`.
+    Both default to enabled when unset.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions)
 
@@ -770,6 +773,8 @@ Primary reference:
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
+  - `channels.telegram.groups.<id>.tools`: per-group tool policy (`allow`, `alsoAllow`, `deny`).
+  - `channels.telegram.groups.<id>.toolsBySender`: per-sender tool policy overrides inside this group.
   - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
   - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
@@ -778,6 +783,8 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
   - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+  - `channels.telegram.direct.<id>.tools`: per-DM tool policy (`allow`, `alsoAllow`, `deny`).
+  - `channels.telegram.direct.<id>.toolsBySender`: per-sender tool policy overrides inside this DM.
   - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
@@ -800,7 +807,9 @@ Primary reference:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.actions.editMessage`: gate Telegram tool message edits.
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
+- `channels.telegram.actions.createForumTopic`: gate Telegram forum topic creation.
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
