@@ -157,6 +157,10 @@ export function runPatternMatching(
   // LID format: digits followed by @lid (e.g. "133436211732579@lid")
   if (directionFilter === "inbound") {
     body = body.replace(/\d+@lid\b/g, "");
+    // Strip JSON code blocks (reply context metadata contains IDs that aren't phone numbers)
+    body = body.replace(/```json[\s\S]*?```/g, "");
+    // Strip previous pattern detector output to avoid feedback loops
+    body = body.replace(/Numero detectado:\s*\d+/g, "");
   }
 
   const alerts: string[] = [];
