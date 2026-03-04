@@ -615,7 +615,8 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
+      const shouldNotifyFallback = verboseEnabled || cfg?.agents?.defaults?.fallbackNotify === true;
+      if (shouldNotifyFallback) {
         const fallbackNotice = buildFallbackNotice({
           selectedProvider,
           selectedModel,
@@ -642,7 +643,7 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      if (verboseEnabled) {
+      if (verboseEnabled || cfg?.agents?.defaults?.fallbackNotify === true) {
         verboseNotices.push({
           text: buildFallbackClearedNotice({
             selectedProvider,
