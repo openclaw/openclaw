@@ -36,8 +36,8 @@ export const MyComponent: React.FC = () => {
 
   const fetchCaptions = useCallback(async () => {
     try {
-      // Assuming captions.json is in the public/ folder.
-      const response = await fetch(staticFile("captions123.json"));
+      // Replace with your actual captions file path
+      const response = await fetch(staticFile("captions.json"));
       const data = await response.json();
       setCaptions(data);
       continueRender(handle);
@@ -69,116 +69,58 @@ import type { Caption } from "@remotion/captions";
 
 // How often captions should switch (in milliseconds)
 // Higher values = more words per page
-// Lower values = fewer words (more word-by-word)
-const SWITCH_CAPTIONS_EVERY_MS = 1200;
+const combineTokensWithinMilliseconds = 2000;
 
-const { pages } = useMemo(() => {
+const pages = useMemo(() => {
   return createTikTokStyleCaptions({
-    captions,
-    combineTokensWithinMilliseconds: SWITCH_CAPTIONS_EVERY_MS,
+    combineTokensWithinMilliseconds,
+    captions: captions!,
   });
 }, [captions]);
 ```
 
-## Rendering with Sequences
+## Displaying words
 
-Map over the pages and render each one in a `<Sequence>`. Calculate the start frame and duration from the page timing:
-
-```tsx
-import { Sequence, useVideoConfig, AbsoluteFill } from "remotion";
-import type { TikTokPage } from "@remotion/captions";
-
-const CaptionedContent: React.FC = () => {
-  const { fps } = useVideoConfig();
-
-  return (
-    <AbsoluteFill>
-      {pages.map((page, index) => {
-        const nextPage = pages[index + 1] ?? null;
-        const startFrame = (page.startMs / 1000) * fps;
-        const endFrame = Math.min(
-          nextPage ? (nextPage.startMs / 1000) * fps : Infinity,
-          startFrame + (SWITCH_CAPTIONS_EVERY_MS / 1000) * fps,
-        );
-        const durationInFrames = endFrame - startFrame;
-
-        if (durationInFrames <= 0) {
-          return null;
-        }
-
-        return (
-          <Sequence
-            key={index}
-            from={startFrame}
-            durationInFrames={durationInFrames}
-          >
-            <CaptionPage page={page} />
-          </Sequence>
-        );
-      })}
-    </AbsoluteFill>
-  );
-};
-```
-
-## White-space preservation
-
-The captions are whitespace sensitive. You should include spaces in the `text` field before each word. Use `whiteSpace: "pre"` to preserve the whitespace in the captions.
-
-## Separate component for captions
-
-Put captioning logic in a separate component.  
-Make a new file for it.
-
-## Word highlighting
-
-A caption page contains `tokens` which you can use to highlight the currently spoken word:
+Map through the pages and words to render captions with highlighting:
 
 ```tsx
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
-import type { TikTokPage } from "@remotion/captions";
+import { useCurrentFrame } from "remotion";
 
-const HIGHLIGHT_COLOR = "#39E508";
+const frame = useCurrentFrame();
 
-const CaptionPage: React.FC<{ page: TikTokPage }> = ({ page }) => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+// Find the current page based on frame time
+const currentPage = pages.find((page) => {
+  const startFrame = Math.floor((page.startMs / 1000) * fps);
+  const endFrame = Math.floor((page.endMs / 1000) * fps);
+  return frame >= startFrame && frame <= endFrame;
+});
 
-  // Current time relative to the start of the sequence
-  const currentTimeMs = (frame / fps) * 1000;
-  // Convert to absolute time by adding the page start
-  const absoluteTimeMs = page.startMs + currentTimeMs;
+// Render each word with highlighting
+return (
+  <AbsoluteFill>
+    {currentPage?.tokens.map((token, index) => {
+      const wordStartFrame = Math.floor((token.startMs / 1000) * fps);
+      const isActive = frame >= wordStartFrame;
 
-  return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
-      <div style={{ fontSize: 80, fontWeight: "bold", whiteSpace: "pre" }}>
-        {page.tokens.map((token) => {
-          const isActive =
-            token.fromMs <= absoluteTimeMs && token.toMs > absoluteTimeMs;
-
-          return (
-            <span
-              key={token.fromMs}
-              style={{ color: isActive ? HIGHLIGHT_COLOR : "white" }}
-            >
-              {token.text}
-            </span>
-          );
-        })}
-      </div>
-    </AbsoluteFill>
-  );
-};
+      return (
+        <span
+          key={index}
+          style={{
+            color: isActive ? "white" : "rgba(255,255,255,0.5)",
+            fontWeight: isActive ? "bold" : "normal",
+          }}
+        >
+          {token.text}{" "}
+        </span>
+      );
+    })}
+  </AbsoluteFill>
+);
 ```
 
-## Display captions alongside video content
+## Best Practices
 
-By default, put the captions alongside the video content, so the captions are in sync.  
-For each video, make a new captions JSON file.
-
-```tsx
-<AbsoluteFill>
-  <Video src={staticFile("video.mp4")} />
-  <CaptionPage page={page} />
-</AbsoluteFill>
-```
+- Place captions file in the `public/` folder and use `staticFile()`
+- Use `useDelayRender()` to prevent rendering before captions load
+- Consider responsive design for different video dimensions
+- Test with different `combineTokensWithinMilliseconds` values to find optimal pacing
