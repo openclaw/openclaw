@@ -13,6 +13,8 @@ ARG INSTALL_BREW=1
 ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
 ARG FINAL_USER=sandbox
 
+ARG BOUNDARY_VERSION=0.20.1
+
 ENV BUN_INSTALL=${BUN_INSTALL_DIR}
 ENV HOMEBREW_PREFIX=${BREW_INSTALL_DIR}
 ENV HOMEBREW_CELLAR=${BREW_INSTALL_DIR}/Cellar
@@ -29,6 +31,12 @@ RUN if [ "${INSTALL_BUN}" = "1" ]; then \
   curl -fsSL https://bun.sh/install | bash; \
   ln -sf "${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \
 fi
+
+
+RUN curl -fsSL "https://releases.hashicorp.com/boundary/${BOUNDARY_VERSION}/boundary_${BOUNDARY_VERSION}_linux_amd64.zip" -o /tmp/boundary.zip \
+  && unzip -q /tmp/boundary.zip -d /usr/local/bin \
+  && chmod +x /usr/local/bin/boundary \
+  && rm -f /tmp/boundary.zip
 
 RUN if [ "${INSTALL_BREW}" = "1" ]; then \
   if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \
