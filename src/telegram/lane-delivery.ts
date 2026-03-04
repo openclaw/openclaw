@@ -156,6 +156,41 @@ function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTarget
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
   const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
+  const canMaterializeDraftFinal = (
+    lane: DraftLaneState,
+    previewButtons?: TelegramInlineButtons,
+  ) => {
+    const hasPreviewButtons = Boolean(previewButtons && previewButtons.length > 0);
+    return (
+      isDraftPreviewLane(lane) &&
+      !hasPreviewButtons &&
+      typeof lane.stream?.materialize === "function"
+    );
+  };
+
+  const tryMaterializeDraftPreviewForFinal = async (args: {
+    lane: DraftLaneState;
+    laneName: LaneName;
+    text: string;
+  }): Promise<boolean> => {
+    const stream = args.lane.stream;
+    if (!stream || !isDraftPreviewLane(args.lane)) {
+      return false;
+    }
+    // Draft previews have no message_id to edit; materialize the final text
+    // into a real message and treat that as the finalized delivery.
+    stream.update(args.text);
+    const materializedMessageId = await stream.materialize?.();
+    if (typeof materializedMessageId !== "number") {
+      params.log(
+        `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
+      );
+      return false;
+    }
+    args.lane.lastPartialText = args.text;
+    params.markDelivered();
+    return true;
+  };
 
   const tryEditPreviewMessage = async (args: {
     laneName: LaneName;
@@ -361,6 +396,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           });
           if (archivedResultAfterFlush) {
             return archivedResultAfterFlush;
+          }
+        }
+        if (canMaterializeDraftFinal(lane, previewButtons)) {
+          const materialized = await tryMaterializeDraftPreviewForFinal({
+            lane,
+            laneName,
+            text,
+          });
+          if (materialized) {
+            params.finalizedPreviewByLane[laneName] = true;
+            return "preview-finalized";
           }
         }
         const finalized = await tryUpdatePreviewForLane({
