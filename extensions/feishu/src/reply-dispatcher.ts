@@ -42,7 +42,7 @@ export type CreateFeishuReplyDispatcherParams = {
   runtime: RuntimeEnv;
   chatId: string;
   replyToMessageId?: string;
-  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  /** When true, send messages without reply metadata (no reply_in_thread quote). */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
   /** True when inbound message is already inside a thread/topic context */
