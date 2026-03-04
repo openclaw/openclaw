@@ -93,23 +93,37 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: {
+  userTimezone?: string;
+  userTime?: string;
+}) {
   if (!params.userTimezone) {
     return [];
   }
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: params.userTimezone,
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  const dateStr = formatter.format(now);
+  let dateStr: string;
+  if (params.userTime) {
+    // Caller provided a pre-resolved timestamp — use it directly
+    dateStr = params.userTime;
+  } else {
+    const now = new Date();
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: params.userTimezone,
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+      dateStr = formatter.format(now);
+    } catch {
+      // Invalid timezone — fall back to UTC representation
+      dateStr = now.toUTCString();
+    }
+  }
   return [
     "## Current Date & Time",
     `Current date and time: ${dateStr}`,
@@ -518,7 +532,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    !userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
@@ -578,6 +592,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime: params.userTime,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
