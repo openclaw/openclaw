@@ -5,6 +5,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
+import { isSystemdSystemScope } from "../../daemon/systemd-scope.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -85,6 +86,7 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_SYSTEMD_SYSTEM",
   "OPENCLAW_NIX_MODE",
 ];
 
@@ -150,7 +152,8 @@ export function renderRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
+      const journalctlScope = isSystemdSystemScope(env) ? "" : "--user ";
+      hints.push(`Logs: journalctl ${journalctlScope}-u ${unit}.service -n 200 --no-pager`);
     } else if (process.platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
@@ -172,7 +175,8 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
-      return [...base, `systemctl --user start ${unit}.service`];
+      const systemctlScope = isSystemdSystemScope(env) ? "" : "--user ";
+      return [...base, `systemctl ${systemctlScope}start ${unit}.service`];
     }
     case "win32": {
       const task = resolveGatewayWindowsTaskName(profile);
