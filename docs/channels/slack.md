@@ -253,6 +253,43 @@ Manual reply tags are supported:
 
 Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
 
+## Thread bindings (ACP sessions)
+
+Slack supports thread-bound ACP sessions, allowing `/acp spawn` to bind an ACP agent to a Slack thread. Messages in the bound thread route directly to the ACP session, and ACP output is delivered back to the same thread.
+
+Enable thread bindings in config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true, // global toggle
+      idleHours: 24, // auto-unbind after idle period (0 = disabled)
+      maxAgeHours: 0, // max binding lifetime (0 = unlimited)
+    },
+  },
+  channels: {
+    slack: {
+      threadBindings: {
+        enabled: true, // adapter-level toggle
+        spawnAcpSessions: true, // required for /acp spawn --thread
+        spawnSubagentSessions: false,
+      },
+    },
+  },
+}
+```
+
+Thread placement modes:
+
+- `--thread auto`: in an existing thread, binds that thread; outside a thread, creates a new thread as the binding target.
+- `--thread here`: binds the current thread; fails if not in a thread.
+- `--thread off`: no binding (default).
+
+Bound threads bypass mention requirements -- messages in a bound thread are routed to the ACP session without needing to mention the bot.
+
+See [ACP Agents](/tools/acp-agents) for full `/acp` command reference.
+
 ## Media, chunking, and delivery
 
 <AccordionGroup>

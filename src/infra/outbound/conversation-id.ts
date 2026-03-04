@@ -6,6 +6,37 @@ function normalizeConversationId(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+/**
+ * Resolve a channel/conversation ID from target strings only (ignoring threadId).
+ * Useful for extracting the parent channel when threadId is a different entity
+ * (e.g., Slack thread_ts vs. channel ID).
+ */
+export function resolveParentConversationIdFromTargets(params: {
+  targets: Array<string | undefined | null>;
+}): string | undefined {
+  for (const rawTarget of params.targets) {
+    const target = normalizeConversationId(rawTarget);
+    if (!target) {
+      continue;
+    }
+    if (target.startsWith("channel:")) {
+      const channelId = normalizeConversationId(target.slice("channel:".length));
+      if (channelId) {
+        return channelId;
+      }
+      continue;
+    }
+    const mentionMatch = target.match(/^<#(\d+)>$/);
+    if (mentionMatch?.[1]) {
+      return mentionMatch[1];
+    }
+    if (/^\d{6,}$/.test(target)) {
+      return target;
+    }
+  }
+  return undefined;
+}
+
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
