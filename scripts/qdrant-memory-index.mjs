@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
 
 const ROOT_DIR = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const MEMORY_DIR = path.join(ROOT_DIR, "memory");
@@ -24,18 +24,23 @@ const cfg = {
   codeIndexEnabled:
     String(process.env.OPENCLAW_QDRANT_CODE_INDEX_ENABLED || "false").toLowerCase() === "true",
   codeProjectsFile:
-    process.env.OPENCLAW_QDRANT_CODE_PROJECTS_FILE || path.join(ROOT_DIR, "qdrant-setup", "projects.json"),
+    process.env.OPENCLAW_QDRANT_CODE_PROJECTS_FILE ||
+    path.join(ROOT_DIR, "qdrant-setup", "projects.json"),
   codeProjectPaths: process.env.OPENCLAW_QDRANT_CODE_PROJECT_PATHS || "",
   codeExtensions: new Set(
-    (process.env.OPENCLAW_QDRANT_CODE_EXTENSIONS ||
-      ".ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.swift,.dart,.sql,.sh,.yaml,.yml,.json,.md")
+    (
+      process.env.OPENCLAW_QDRANT_CODE_EXTENSIONS ||
+      ".ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.swift,.dart,.sql,.sh,.yaml,.yml,.json,.md"
+    )
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   ),
   codeIgnoreDirs: new Set(
-    (process.env.OPENCLAW_QDRANT_CODE_IGNORE_DIRS ||
-      "node_modules,.git,dist,build,.next,.nuxt,.pnpm-store,coverage,.turbo,.cache,vendor,tmp")
+    (
+      process.env.OPENCLAW_QDRANT_CODE_IGNORE_DIRS ||
+      "node_modules,.git,dist,build,.next,.nuxt,.pnpm-store,coverage,.turbo,.cache,vendor,tmp"
+    )
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
@@ -71,7 +76,9 @@ function chunkText(text, maxChars) {
       if (p.length <= maxChars) {
         current = p;
       } else {
-        for (let i = 0; i < p.length; i += maxChars) chunks.push(p.slice(i, i + maxChars));
+        for (let i = 0; i < p.length; i += maxChars) {
+          chunks.push(p.slice(i, i + maxChars));
+        }
       }
       continue;
     }
@@ -89,20 +96,27 @@ function chunkText(text, maxChars) {
       current = "";
       for (let i = 0; i < p.length; i += maxChars) {
         const part = p.slice(i, i + maxChars);
-        if (part.length === maxChars) chunks.push(part);
-        else current = part;
+        if (part.length === maxChars) {
+          chunks.push(part);
+        } else {
+          current = part;
+        }
       }
     }
   }
 
-  if (current) chunks.push(current);
+  if (current) {
+    chunks.push(current);
+  }
   return chunks;
 }
 
 function isLikelyBinary(buf) {
   const max = Math.min(buf.length, 8000);
   for (let i = 0; i < max; i += 1) {
-    if (buf[i] === 0) return true;
+    if (buf[i] === 0) {
+      return true;
+    }
   }
   return false;
 }
@@ -124,13 +138,37 @@ async function fetchJson(url, options) {
 
 function qdrantHeaders() {
   const headers = { "Content-Type": "application/json" };
-  if (cfg.qdrantApiKey) headers["api-key"] = cfg.qdrantApiKey;
+  if (cfg.qdrantApiKey) {
+    headers["api-key"] = cfg.qdrantApiKey;
+  }
   return headers;
+}
+
+function isGeminiNativeEmbeddingUrl(url) {
+  const u = String(url || "").toLowerCase();
+  return u.includes("generativelanguage.googleapis.com") && u.includes(":embedcontent");
+}
+
+function normalizeGeminiModelName(model) {
+  const raw = String(model || "").trim();
+  if (!raw) {
+    return "models/gemini-embedding-001";
+  }
+  if (raw.startsWith("models/")) {
+    return raw;
+  }
+  return `models/${raw}`;
 }
 
 function embeddingHeaders() {
   if (!cfg.embeddingApiKey) {
     throw new Error("OPENCLAW_QDRANT_EMBEDDING_API_KEY or OPENAI_API_KEY is required");
+  }
+  if (isGeminiNativeEmbeddingUrl(cfg.embeddingApiUrl)) {
+    return {
+      "Content-Type": "application/json",
+      "x-goog-api-key": cfg.embeddingApiKey,
+    };
   }
   return {
     "Content-Type": "application/json",
@@ -148,7 +186,9 @@ async function ensureCollection() {
     });
   } catch (err) {
     const msg = String(err?.message || err);
-    if (msg.includes("HTTP 409")) return;
+    if (msg.includes("HTTP 409")) {
+      return;
+    }
     throw err;
   }
 }
@@ -176,6 +216,24 @@ async function deleteByKindAndProject(kind, projectId) {
 }
 
 async function embed(text) {
+  if (isGeminiNativeEmbeddingUrl(cfg.embeddingApiUrl)) {
+    const data = await fetchJson(cfg.embeddingApiUrl, {
+      method: "POST",
+      headers: embeddingHeaders(),
+      body: JSON.stringify({
+        model: normalizeGeminiModelName(cfg.embeddingModel),
+        content: {
+          parts: [{ text }],
+        },
+      }),
+    });
+    const values = data?.embedding?.values;
+    if (!Array.isArray(values) || !values.length) {
+      throw new Error(`Invalid Gemini embedding response: ${JSON.stringify(data)}`);
+    }
+    return values;
+  }
+
   const data = await fetchJson(cfg.embeddingApiUrl, {
     method: "POST",
     headers: embeddingHeaders(),
@@ -188,7 +246,9 @@ async function embed(text) {
 }
 
 async function upsertPoints(points) {
-  if (!points.length) return;
+  if (!points.length) {
+    return;
+  }
   const url = `${cfg.qdrantUrl}/collections/${cfg.collection}/points?wait=true`;
   await fetchJson(url, {
     method: "PUT",
@@ -199,7 +259,10 @@ async function upsertPoints(points) {
 
 async function collectMemoryFiles() {
   const files = [];
-  for (const rel of ["MEMORY.md", path.join("memory", `${new Date().toISOString().slice(0, 10)}.md`)]) {
+  for (const rel of [
+    "MEMORY.md",
+    path.join("memory", `${new Date().toISOString().slice(0, 10)}.md`),
+  ]) {
     const abs = path.join(ROOT_DIR, rel);
     try {
       await fs.access(abs);
@@ -213,9 +276,11 @@ async function collectMemoryFiles() {
     const entries = await fs.readdir(MEMORY_DIR, { withFileTypes: true });
     for (const e of entries
       .filter((x) => x.isFile() && x.name.endsWith(".md"))
-      .sort((a, b) => a.name.localeCompare(b.name))) {
+      .toSorted((a, b) => a.name.localeCompare(b.name))) {
       const p = path.join(MEMORY_DIR, e.name);
-      if (!files.includes(p)) files.push(p);
+      if (!files.includes(p)) {
+        files.push(p);
+      }
     }
   } catch {
     // skip
@@ -244,9 +309,13 @@ async function loadCodeProjects() {
     const parsed = JSON.parse(raw);
     const fromFile = Array.isArray(parsed?.projects) ? parsed.projects : [];
     for (const p of fromFile) {
-      if (!p || typeof p !== "object") continue;
+      if (!p || typeof p !== "object") {
+        continue;
+      }
       const projectPath = String(p.path || "").trim();
-      if (!projectPath) continue;
+      if (!projectPath) {
+        continue;
+      }
       projects.push({
         id: String(p.id || path.basename(projectPath)).trim() || path.basename(projectPath),
         path: projectPath,
@@ -260,14 +329,20 @@ async function loadCodeProjects() {
   const seen = new Set();
   const out = [];
   for (const p of projects) {
-    if (!p.enabled) continue;
+    if (!p.enabled) {
+      continue;
+    }
     const abs = path.isAbsolute(p.path) ? p.path : path.resolve(ROOT_DIR, p.path);
     const key = `${p.id}::${abs}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      continue;
+    }
     seen.add(key);
     try {
       const st = await fs.stat(abs);
-      if (!st.isDirectory()) continue;
+      if (!st.isDirectory()) {
+        continue;
+      }
       out.push({ id: p.id, root: abs });
     } catch {
       // missing path, skip
@@ -284,14 +359,20 @@ async function* walkProjectFiles(projectRoot) {
     for (const entry of entries) {
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (cfg.codeIgnoreDirs.has(entry.name)) continue;
+        if (cfg.codeIgnoreDirs.has(entry.name)) {
+          continue;
+        }
         stack.push(abs);
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (!entry.isFile()) {
+        continue;
+      }
 
       const ext = path.extname(entry.name).toLowerCase();
-      if (!cfg.codeExtensions.has(ext)) continue;
+      if (!cfg.codeExtensions.has(ext)) {
+        continue;
+      }
 
       let st;
       try {
@@ -299,7 +380,9 @@ async function* walkProjectFiles(projectRoot) {
       } catch {
         continue;
       }
-      if (st.size > cfg.codeMaxFileBytes) continue;
+      if (st.size > cfg.codeMaxFileBytes) {
+        continue;
+      }
 
       yield abs;
     }
@@ -311,7 +394,9 @@ async function collectCodeDocuments(project) {
   let scanned = 0;
 
   for await (const abs of walkProjectFiles(project.root)) {
-    if (scanned >= cfg.codeMaxFiles) break;
+    if (scanned >= cfg.codeMaxFiles) {
+      break;
+    }
     scanned += 1;
 
     let buf;
@@ -321,9 +406,13 @@ async function collectCodeDocuments(project) {
       continue;
     }
 
-    if (isLikelyBinary(buf)) continue;
+    if (isLikelyBinary(buf)) {
+      continue;
+    }
     const text = buf.toString("utf8");
-    if (!text.trim()) continue;
+    if (!text.trim()) {
+      continue;
+    }
 
     const rel = path.relative(project.root, abs);
     const source = `code:${project.id}:${rel}`;
@@ -362,7 +451,7 @@ async function indexDocuments(docs) {
           chunk_index: i,
           text,
           updated_at: new Date().toISOString(),
-          ...(doc.meta || {}),
+          ...doc.meta,
         },
       });
 
@@ -372,7 +461,9 @@ async function indexDocuments(docs) {
     }
   }
 
-  if (points.length) await upsertPoints(points);
+  if (points.length) {
+    await upsertPoints(points);
+  }
   return totalChunks;
 }
 
