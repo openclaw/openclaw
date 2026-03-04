@@ -32,12 +32,22 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
-function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+export function resetChatStateForSessionSwitch(
+  state: AppViewState,
+  sessionKey: string,
+  options?: { clearAttachments?: boolean; clearQueue?: boolean },
+) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  if (options?.clearAttachments) {
+    state.chatAttachments = [];
+  }
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  if (options?.clearQueue) {
+    state.chatQueue = [];
+  }
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({

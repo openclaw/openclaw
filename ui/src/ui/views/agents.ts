@@ -68,6 +68,7 @@ export type AgentsProps = {
   toolsCatalogResult: ToolsCatalogResult | null;
   skillsFilter: string;
   onRefresh: () => void;
+  onStartNewSession: (agentId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -165,6 +166,7 @@ export function renderAgents(props: AgentsProps) {
                   selectedAgent,
                   defaultId,
                   props.agentIdentityById[selectedAgent.id] ?? null,
+                  () => props.onStartNewSession(selectedAgent.id),
                 )}
                 ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel))}
                 ${
@@ -296,6 +298,7 @@ function renderAgentHeader(
   agent: AgentsListResult["agents"][number],
   defaultId: string | null,
   agentIdentity: AgentIdentityResult | null,
+  onStartNewSession: () => void,
 ) {
   const badge = agentBadgeText(agent.id, defaultId);
   const displayName = normalizeAgentLabel(agent);
@@ -313,6 +316,7 @@ function renderAgentHeader(
       <div class="agent-header-meta">
         <div class="mono">${agent.id}</div>
         ${badge ? html`<span class="agent-pill">${badge}</span>` : nothing}
+        <button class="btn btn--sm" @click=${onStartNewSession}>Start New Session</button>
       </div>
     </section>
   `;
