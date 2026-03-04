@@ -13,7 +13,7 @@ import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
+  opts: { source: "message" | "app_mention"; wasMentioned?: boolean; bypassUserAuth?: boolean },
 ) => Promise<void>;
 
 export function createSlackMessageHandler(params: {

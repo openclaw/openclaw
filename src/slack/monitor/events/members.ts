@@ -67,17 +67,23 @@ export function registerSlackMemberEvents(params: {
           // Infer channel_type from channel ID prefix if not provided by the event.
           const resolvedChannelType = channelType ?? (channelId.startsWith("D") ? "im" : "channel");
           // Synthetic message acts as the trigger for the AI run.
-          // We use wasMentioned: true to bypass mention-gating, and a placeholder
-          // user ID that differs from the bot's own ID so it passes bot-message checks.
+          // We use wasMentioned: true to bypass mention-gating, bypassUserAuth: true to
+          // skip channel user-allowlist gating (this is a system action, not a user message),
+          // and the bot's own user ID so it passes bot-message identity checks.
+          // event_ts is stable across Slack retries, ensuring deduplication works correctly.
           const syntheticMessage: SlackMessageEvent = {
             type: "message",
             channel: channelId,
             channel_type: resolvedChannelType as SlackMessageEvent["channel_type"],
-            user: "SYSTEM_BOT_JOIN",
+            user: ctx.botUserId ?? "SYSTEM_BOT_JOIN",
             text: prompt,
-            ts: String(Date.now() / 1000),
+            ts: payload.event_ts ?? String(Date.now() / 1000),
           };
-          await handleSlackMessage(syntheticMessage, { source: "app_mention", wasMentioned: true });
+          await handleSlackMessage(syntheticMessage, {
+            source: "app_mention",
+            wasMentioned: true,
+            bypassUserAuth: true,
+          });
         }
       } catch (err) {
         ctx.runtime.error?.(danger(`slack join handler failed: ${String(err)}`));

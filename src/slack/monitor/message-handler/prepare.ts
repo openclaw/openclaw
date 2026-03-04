@@ -50,7 +50,7 @@ export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
-  opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+  opts: { source: "message" | "app_mention"; wasMentioned?: boolean; bypassUserAuth?: boolean };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
@@ -235,7 +235,8 @@ export async function prepareSlackMessage(params: {
     sender?.name ?? message.username?.trim() ?? message.user ?? message.bot_id ?? "unknown";
 
   const channelUserAuthorized = isRoom
-    ? resolveSlackUserAllowed({
+    ? opts.bypassUserAuth ||
+      resolveSlackUserAllowed({
         allowList: channelConfig?.users,
         userId: senderId,
         userName: senderName,
