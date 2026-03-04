@@ -2249,7 +2249,7 @@ export async function runEmbeddedAttempt(
                     {
                       iteration: hookTurnIteration,
                       toolCallsMade: toolResults.length,
-                      willContinue: toolResults.length > 0,
+                      hasToolResults: toolResults.length > 0,
                     },
                     hookCtx,
                   )

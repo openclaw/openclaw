@@ -118,7 +118,7 @@ describe("loop_iteration_end hook", () => {
     iteration: 3,
     toolCallsMade: 2,
     newMessagesAdded: 4,
-    willContinue: true,
+    hasToolResults: true,
   };
 
   it("fires handler with correct event shape", async () => {
@@ -133,7 +133,7 @@ describe("loop_iteration_end hook", () => {
       iteration: 3,
       toolCallsMade: 2,
       newMessagesAdded: 4,
-      willContinue: true,
+      hasToolResults: true,
     });
   });
 
