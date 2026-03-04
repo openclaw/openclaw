@@ -69,4 +69,22 @@ describe("addGatewayServiceCommands", () => {
       }),
     );
   });
+
+  it("forwards --system to install and lifecycle commands", async () => {
+    const gateway = createGatewayParentLikeCommand();
+
+    await gateway.parseAsync(["install", "--system"], { from: "user" });
+    await gateway.parseAsync(["restart", "--system"], { from: "user" });
+
+    expect(runDaemonInstall).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        system: true,
+      }),
+    );
+    expect(runDaemonRestart).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        system: true,
+      }),
+    );
+  });
 });
