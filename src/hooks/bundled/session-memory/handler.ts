@@ -11,6 +11,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../../config/sessions/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
@@ -209,6 +210,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
         sessionsDirs.add(path.dirname(currentSessionFile));
       }
       sessionsDirs.add(path.join(workspaceDir, "sessions"));
+      // Also search the agent's actual sessions directory, where topic
+      // transcripts (e.g. {sessionId}-topic-{topicId}.jsonl) are stored.
+      const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+      try {
+        sessionsDirs.add(resolveSessionTranscriptsDirForAgent(agentId));
+      } catch {
+        // Ignore resolution failures.
+      }
 
       for (const sessionsDir of sessionsDirs) {
         const recoveredSessionFile = await findPreviousSessionFile({
