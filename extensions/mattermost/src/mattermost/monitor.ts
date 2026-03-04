@@ -441,7 +441,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     fileId: string,
   ): Promise<{ buffer: Buffer; contentType?: string }> => {
     const url = `${client.apiBaseUrl}/files/${encodeURIComponent(fileId)}`;
-    const res = await fetchWithAuth(url, { method: "GET" });
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${client.token}`,
+      },
+    });
     if (!res.ok) {
       throw new Error(`Mattermost file download failed (${res.status} ${res.statusText})`);
     }
