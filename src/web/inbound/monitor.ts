@@ -40,7 +40,17 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
-  await waitForWaConnection(sock);
+  try {
+    await waitForWaConnection(sock);
+  } catch (err) {
+    // Close the socket to avoid leaking connections/FDs on connect failure.
+    try {
+      sock.ws?.close();
+    } catch {
+      // best-effort cleanup
+    }
+    throw err;
+  }
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
