@@ -273,8 +273,15 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
+  const hasToolCalls =
+   Array.isArray(assistantMessage.content) &&
+   (assistantMessage.content as Array<{ type?: string }>).some(
+     (block) => block?.type === "toolCall",
+   );
+   const userFacingRawText = hasToolCalls ? "" : rawText;
+
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(userFacingRawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -289,12 +296,16 @@ export function handleMessageEnd(
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
-    const rawTrimmed = rawText.trim();
+    const rawTrimmed = userFacingRawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
-      cleanedText = parsedFallback.text ?? rawCandidate;
+      const strippedCandidate = ctx.stripBlockTags(rawCandidate, {
+        thinking: false,
+        final: false,
+      });
+      const parsedFallback = parseReplyDirectives(stripTrailingDirective(strippedCandidate));
+      cleanedText = parsedFallback.text ?? strippedCandidate;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     }
