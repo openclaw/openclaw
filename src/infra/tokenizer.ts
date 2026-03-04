@@ -403,16 +403,3 @@ export async function warmupTokenizer(): Promise<void> {
 export function getConfig(): TokenizerConfig {
   return { ...config };
 }
-
-// ================================
-// 自动预热（模块加载时触发）
-// ================================
-
-// 当tokenizer启用时，模块加载后自动在后台预加载
-// 这样第一次调用时tokenizer可能已经就绪
-if (config.enabled) {
-  // 不等待，后台异步加载
-  warmupTokenizer().catch(() => {
-    // 忽略错误，不影响模块加载
-  });
-}
