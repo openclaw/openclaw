@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createEventHandlers } from "./tui-event-handlers.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import { createEventHandlers } from "./tui-event-handlers.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
@@ -425,5 +425,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("reloads history when a local run ends without a displayable final message", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-local-silent" },
+    });
+
+    noteLocalRunId("run-local-silent");
+
+    handleChatEvent({
+      runId: "run-local-silent",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 });
