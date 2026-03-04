@@ -1,6 +1,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { getChildLogger } from "../logging.js";
 import type { PollInput } from "../polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+const listenerLog = getChildLogger({ module: "web-active-listener" });
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -69,6 +72,13 @@ export function setActiveWebListener(
 
   const id = resolveWebAccountId(accountId);
   if (!listener) {
+    if (listeners.has(id)) {
+      // Diagnostic: trace every removal to help surface silent desync cases.
+      listenerLog.warn(
+        { accountId: id, stack: new Error("listener-removal-trace").stack },
+        "[active-listener] listener removed from map",
+      );
+    }
     listeners.delete(id);
   } else {
     listeners.set(id, listener);

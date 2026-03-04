@@ -13,7 +13,7 @@ import { getChildLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveWhatsAppAccount } from "../accounts.js";
-import { setActiveWebListener } from "../active-listener.js";
+import { getActiveWebListener, setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
 import {
   computeBackoff,
@@ -215,6 +215,10 @@ export async function monitorWebChannel(
       },
     });
 
+    // Register in the active listener map before emitting connected=true so the two
+    // are never out of sync (a send attempt between the emit and the registration would
+    // otherwise throw "No active WhatsApp Web listener").
+    setActiveWebListener(account.accountId, listener);
     status.connected = true;
     status.lastConnectedAt = Date.now();
     status.lastEventAt = status.lastConnectedAt;
@@ -231,8 +235,6 @@ export async function monitorWebChannel(
     enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
       sessionKey: connectRoute.sessionKey,
     });
-
-    setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;
@@ -251,7 +253,13 @@ export async function monitorWebChannel(
     });
 
     const closeListener = async () => {
-      setActiveWebListener(account.accountId, null);
+      // Only remove from map if this instance is still the active listener.
+      // During a rapid-restart storm, a newer monitorWebChannel instance may have
+      // already registered its listener; blindly clearing the map entry here would
+      // leave status=connected while the map is empty, causing the mid-session desync.
+      if (getActiveWebListener(account.accountId) === listener) {
+        setActiveWebListener(account.accountId, null);
+      }
       if (unregisterUnhandled) {
         unregisterUnhandled();
         unregisterUnhandled = null;
@@ -300,6 +308,28 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       watchdogTimer = setInterval(() => {
+        // Check for listener desync: map entry was removed without a close event.
+        // This can happen when a stale monitorWebChannel instance's closeListener
+        // runs and clears the map even though a newer instance had taken it over,
+        // or when the Baileys socket exits silently without emitting onClose.
+        // Without this check the watchdog was completely inert when lastMessageAt
+        // was null (e.g. no messages received in the current session), so the
+        // desync would go undetected indefinitely.
+        const hasListener = !!getActiveWebListener(account.accountId);
+        if (!hasListener) {
+          if (status.connected) {
+            heartbeatLogger.warn(
+              { connectionId, messagesHandled: handledMessages },
+              "watchdog: listener map empty while status=connected — forcing reconnect",
+            );
+            listener.signalClose?.({
+              status: 499,
+              isLoggedOut: false,
+              error: "watchdog-listener-desync",
+            });
+          }
+          return;
+        }
         if (!lastMessageAt) {
           return;
         }
