@@ -474,7 +474,7 @@ export async function finalizeOnboardingWizard(
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
-  if (webSearchProvider && webSearchEnabled !== false) {
+  if (webSearchProvider) {
     const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
       await import("../commands/onboard-search.js");
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
@@ -490,7 +490,7 @@ export async function finalizeOnboardingWizard(
         : envAvailable
           ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
           : undefined;
-    if (hasKey) {
+    if (webSearchEnabled !== false && hasKey) {
       await prompter.note(
         [
           "Web search is enabled, so your agent can look things up online when needed.",
@@ -503,7 +503,7 @@ export async function finalizeOnboardingWizard(
           .join("\n"),
         "Web search",
       );
-    } else {
+    } else if (!hasKey) {
       await prompter.note(
         [
           `Provider ${label} is selected but no API key was found.`,
@@ -511,6 +511,16 @@ export async function finalizeOnboardingWizard(
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
           `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          `Web search (${label}) is configured but disabled.`,
+          `Re-enable: ${formatCliCommand("openclaw configure --section web")}`,
+          "",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",
