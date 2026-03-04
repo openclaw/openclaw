@@ -13,6 +13,9 @@ export type DraftLaneState = {
 export type ArchivedPreview = {
   messageId: number;
   textSnapshot: string;
+  // Boundary-finalized previews should remain visible even if no matching
+  // final edit arrives; superseded previews can be safely deleted.
+  deleteIfUnused?: boolean;
 };
 
 export type LaneDeliveryResult = "preview-finalized" | "preview-updated" | "sent" | "skipped";
@@ -303,14 +306,20 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return "preview-finalized";
       }
     }
-    try {
-      await params.deletePreviewMessage(archivedPreview.messageId);
-    } catch (err) {
-      params.log(
-        `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
-      );
-    }
+    // Send the replacement message first, then clean up the old preview.
+    // This avoids the visual "disappear then reappear" flash.
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    // Once this archived preview is consumed by a fallback final send, delete it
+    // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
+    if (delivered || archivedPreview.deleteIfUnused !== false) {
+      try {
+        await params.deletePreviewMessage(archivedPreview.messageId);
+      } catch (err) {
+        params.log(
+          `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
+        );
+      }
+    }
     return delivered ? "sent" : "skipped";
   };
 
