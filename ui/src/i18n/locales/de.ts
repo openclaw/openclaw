@@ -120,10 +120,11 @@ export const de: TranslationMap = {
     onboardingDisabled: "Während der Einrichtung deaktiviert",
   },
   languages: {
-    en: "English",
+    en: "Englisch (English)",
     zhCN: "简体中文 (Vereinfachtes Chinesisch)",
     zhTW: "繁體中文 (Traditionelles Chinesisch)",
     ptBR: "Português (Brasilianisches Portugiesisch)",
     de: "Deutsch",
+    es: "Spanisch (Español)"
   },
 };

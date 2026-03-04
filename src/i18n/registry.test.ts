@@ -20,12 +20,13 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
 
 describe("ui i18n locale registry", () => {
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es"]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
 
   it("resolves browser locale fallbacks", () => {
     expect(resolveNavigatorLocale("de-DE")).toBe("de");
+    expect(resolveNavigatorLocale("es-ES")).toBe("es");
     expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
     expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(resolveNavigatorLocale("en-US")).toBe("en");
