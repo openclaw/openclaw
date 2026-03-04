@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -11,6 +13,7 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { resolveGatewayLaunchAgentLabel } from "../../daemon/constants.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
@@ -115,6 +118,15 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail.split("\n").slice(-3).join("\n");
 }
 
+function escapeXmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -199,6 +211,43 @@ async function refreshGatewayServiceEnv(params: {
   }
 
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+}
+
+async function refreshLaunchAgentServiceVersionFromResult(params: {
+  result: UpdateRunResult;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+
+  const version = params.result.after?.version?.trim();
+  if (!version) {
+    return false;
+  }
+
+  const label =
+    process.env.OPENCLAW_LAUNCHD_LABEL?.trim() ??
+    resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+  const home = process.env.HOME?.trim() || os.homedir();
+  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+
+  if (!(await pathExists(plistPath))) {
+    return false;
+  }
+
+  const content = await fs.readFile(plistPath, "utf8");
+  const replacement = `<key>OPENCLAW_SERVICE_VERSION</key>\n\t\t\t<string>${escapeXmlText(version)}</string>`;
+  const next = content.replace(
+    /<key>OPENCLAW_SERVICE_VERSION<\/key>\s*<string>[\s\S]*?<\/string>/,
+    replacement,
+  );
+
+  if (next === content) {
+    return false;
+  }
+
+  await fs.writeFile(plistPath, next, "utf8");
+  return true;
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -896,6 +945,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     configSnapshot,
     opts,
   });
+
+  if (!refreshGatewayServiceEnv) {
+    try {
+      await refreshLaunchAgentServiceVersionFromResult({ result });
+    } catch (err) {
+      if (!opts.json) {
+        defaultRuntime.log(
+          theme.warn(`Failed to refresh LaunchAgent OPENCLAW_SERVICE_VERSION: ${String(err)}`),
+        );
+      }
+    }
+  }
 
   await tryWriteCompletionCache(root, Boolean(opts.json));
   await tryInstallShellCompletion({

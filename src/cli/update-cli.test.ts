@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -559,6 +561,57 @@ describe("update-cli", () => {
 
     await updateCommand({ restart: false });
 
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("updateCommand patches LaunchAgent OPENCLAW_SERVICE_VERSION on macOS when --no-restart is set", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      configurable: true,
+    });
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plist-"));
+    const plistDir = path.join(homeDir, "Library", "LaunchAgents");
+    const plistPath = path.join(plistDir, "ai.openclaw.gateway.plist");
+    await fs.mkdir(plistDir, { recursive: true });
+    await fs.writeFile(
+      plistPath,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+\t<key>EnvironmentVariables</key>
+\t<dict>
+\t\t<key>OPENCLAW_SERVICE_VERSION</key>
+\t\t<string>2026.3.1</string>
+\t</dict>
+</dict>
+</plist>
+`,
+      "utf8",
+    );
+    pathExists.mockImplementation(async (candidate: string) => candidate === plistPath);
+
+    try {
+      await withEnvAsync({ HOME: homeDir }, async () => {
+        vi.mocked(runGatewayUpdate).mockResolvedValue(
+          makeOkUpdateResult({
+            after: { version: "2026.3.2" },
+          }),
+        );
+
+        await updateCommand({ restart: false });
+      });
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+
+    const updatedPlist = await fs.readFile(plistPath, "utf8");
+    expect(updatedPlist).toContain("<string>2026.3.2</string>");
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
