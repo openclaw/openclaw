@@ -51,7 +51,7 @@ async function promptCliLocaleSelection(params: {
     return undefined;
   }
 
-  const locale = await params.prompter.select({
+  const localeRaw = await params.prompter.select({
     message: "Language / 语言",
     options: [
       { value: "en", label: "English", hint: "Default" },
@@ -59,6 +59,7 @@ async function promptCliLocaleSelection(params: {
     ],
     initialValue: "en",
   });
+  const locale = normalizeCliLocale(String(localeRaw)) ?? "en";
   process.env.OPENCLAW_LOCALE = locale;
   return locale;
 }
