@@ -135,4 +135,17 @@ describe("llm-task tool (json-only)", () => {
     const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.disableTools).toBe(true);
   });
+
+  it("forces thinkLevel off for bounded json utility runs", async () => {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+      meta: {},
+      payloads: [{ text: JSON.stringify({ ok: true }) }],
+    });
+    const tool = createLlmTaskTool(fakeApi());
+    await tool.execute("id", { prompt: "x" });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    expect(call.thinkLevel).toBe("off");
+  });
 });

@@ -61,6 +61,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
+      thinkLevel: "off", // fixed-cost utility call; never inherit global thinkingDefault
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
     });
