@@ -72,7 +72,7 @@ export const resolveAuthLabel = async (
               : ` exp ${formatUntil(profile.expires)}`
             : "";
         return {
-          label: `${profileId} token ${maskApiKey(profile.token)}${exp}${more}`,
+          label: `${profileId} token ${maskApiKey(profile.token ?? "")}${exp}${more}`,
           source: "",
         };
       }
@@ -130,7 +130,7 @@ export const resolveAuthLabel = async (
           flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
         }
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=token:${maskApiKey(profile.token)}${suffix}`;
+        return `${profileId}=token:${maskApiKey(profile.token ?? "")}${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,
