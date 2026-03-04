@@ -148,6 +148,7 @@ export type OnboardOptions = {
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
+  daemonSystem?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;
   /** @deprecated Legacy alias for `skipChannels`. */
