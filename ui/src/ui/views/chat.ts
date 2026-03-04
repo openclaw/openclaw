@@ -164,19 +164,32 @@ function generateAttachmentId(): string {
 
 const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/gif,image/webp";
 
-function readFileAsAttachment(file: File, props: ChatProps) {
-  const reader = new FileReader();
-  reader.addEventListener("load", () => {
-    const dataUrl = reader.result as string;
-    const newAttachment: ChatAttachment = {
-      id: generateAttachmentId(),
-      dataUrl,
-      mimeType: file.type,
-    };
-    const current = props.attachments ?? [];
-    props.onAttachmentsChange?.([...current, newAttachment]);
+function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve({
+        id: generateAttachmentId(),
+        dataUrl: reader.result as string,
+        mimeType: file.type,
+      });
+    });
+    reader.readAsDataURL(file);
   });
-  reader.readAsDataURL(file);
+}
+
+function addAttachments(files: File[], props: ChatProps) {
+  const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+  if (imageFiles.length === 0 || !props.onAttachmentsChange) {
+    return;
+  }
+
+  Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then(
+    (newAttachments) => {
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, ...newAttachments]);
+    },
+  );
 }
 
 function handleFileSelect(e: Event, props: ChatProps) {
@@ -186,11 +199,7 @@ function handleFileSelect(e: Event, props: ChatProps) {
     return;
   }
 
-  for (const file of Array.from(files)) {
-    if (file.type.startsWith("image/")) {
-      readFileAsAttachment(file, props);
-    }
-  }
+  addAttachments(Array.from(files), props);
 
   // Reset so the same file can be re-selected
   input.value = "";
@@ -207,7 +216,11 @@ function handleDragLeave(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
   const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
-  compose?.classList.remove("chat-compose--dragover");
+  // Only remove dragover when leaving the compose area entirely,
+  // not when moving between child elements (e.g. textarea)
+  if (compose && !compose.contains(e.relatedTarget as Node)) {
+    compose.classList.remove("chat-compose--dragover");
+  }
 }
 
 function handleDrop(e: DragEvent, props: ChatProps) {
@@ -216,16 +229,16 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
   compose?.classList.remove("chat-compose--dragover");
 
-  const files = e.dataTransfer?.files;
-  if (!files || !props.onAttachmentsChange) {
+  if (!props.connected) {
     return;
   }
 
-  for (const file of Array.from(files)) {
-    if (file.type.startsWith("image/")) {
-      readFileAsAttachment(file, props);
-    }
+  const files = e.dataTransfer?.files;
+  if (!files) {
+    return;
   }
+
+  addAttachments(Array.from(files), props);
 }
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
@@ -248,13 +261,14 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 
   e.preventDefault();
 
+  const files: File[] = [];
   for (const item of imageItems) {
     const file = item.getAsFile();
-    if (!file) {
-      continue;
+    if (file) {
+      files.push(file);
     }
-    readFileAsAttachment(file, props);
   }
+  addAttachments(files, props);
 }
 
 function renderAttachmentPreview(props: ChatProps) {
