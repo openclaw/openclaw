@@ -733,6 +733,7 @@ async function sendSubagentAnnounceDirectly(params: {
   completionMessage?: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  announceType?: SubagentAnnounceType;
   bestEffortDeliver?: boolean;
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
@@ -779,7 +780,8 @@ async function sendSubagentAnnounceDirectly(params: {
         params.spawnMode === "session" &&
         (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
       let shouldSendCompletionDirectly = true;
-      if (!forceBoundSessionDirectDelivery) {
+      const shouldCoordinatePendingDescendants = params.announceType !== "cron job";
+      if (!forceBoundSessionDirectDelivery && shouldCoordinatePendingDescendants) {
         let pendingDescendantRuns = 0;
         try {
           const { countPendingDescendantRuns, countPendingDescendantRunsExcludingRun } =
@@ -916,6 +918,7 @@ async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  announceType?: SubagentAnnounceType;
   bestEffortDeliver?: boolean;
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
@@ -951,6 +954,7 @@ async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        announceType: params.announceType,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1403,6 +1407,7 @@ export async function runSubagentAnnounceFlow(params: {
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
+      announceType,
       bestEffortDeliver: params.bestEffortDeliver,
       completionRouteMode: completionResolution.routeMode,
       spawnMode: params.spawnMode,

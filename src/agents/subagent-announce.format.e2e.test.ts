@@ -622,6 +622,46 @@ describe("subagent announce formatting", () => {
     );
   });
 
+  it("keeps cron completion direct delivery even when sibling runs are still active", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-cron-direct",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-cron-direct",
+      },
+    };
+    readLatestAssistantReplyMock.mockResolvedValue("");
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: cron" }] }],
+    });
+    subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? 1 : 0,
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-cron-active-siblings",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      announceType: "cron job",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(msg).toContain("final answer: cron");
+    expect(msg).not.toContain("There are still 1 active subagent run for this session.");
+  });
+
   it("keeps session-mode completion delivery on the bound destination when sibling runs are active", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
