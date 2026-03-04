@@ -467,8 +467,8 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
+    // Feishu API: opus -> "audio", mp4 -> "media", everything else -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
