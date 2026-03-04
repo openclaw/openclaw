@@ -50,7 +50,6 @@ export type MatrixMonitorHandlerParams = {
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
-  mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -84,7 +83,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
     allowFrom,
     roomsConfig,
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -341,6 +339,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (!bodyText) {
         return;
       }
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
+
+      const baseRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+      });
+
+      const route = {
+        ...baseRoute,
+        sessionKey: threadRootId
+          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
+          : baseRoute.sessionKey,
+      };
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
 
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
@@ -416,30 +433,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const messageId = event.event_id ?? "";
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
-      const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
         messageId,
         threadRootId,
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
-
-      const baseRoute = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        accountId,
-        peer: {
-          kind: isDirectMessage ? "direct" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
-      });
-
-      const route = {
-        ...baseRoute,
-        sessionKey: threadRootId
-          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
-          : baseRoute.sessionKey,
-      };
 
       let threadStarterBody: string | undefined;
       let threadLabel: string | undefined;

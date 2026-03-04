@@ -6,6 +6,7 @@ import { EventType, type MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
   it("stores sender-labeled BodyForAgent for group thread messages", async () => {
+    const buildMentionRegexes = vi.fn().mockReturnValue([]);
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
     const formatInboundEnvelope = vi
       .fn()
@@ -52,6 +53,9 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
         commands: {
           shouldHandleTextCommands: vi.fn().mockReturnValue(true),
         },
+        mentions: {
+          buildMentionRegexes,
+        },
         text: {
           hasControlCommand: vi.fn().mockReturnValue(false),
           resolveMarkdownTableMode: vi.fn().mockReturnValue("code"),
@@ -84,7 +88,6 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
       logVerboseMessage,
       allowFrom: [],
       roomsConfig: undefined,
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "first",
       threadReplies: "inbound",
@@ -138,5 +141,6 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
         }),
       }),
     );
+    expect(buildMentionRegexes).toHaveBeenCalledWith({}, "main");
   });
 });
