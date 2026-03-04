@@ -102,6 +102,38 @@ describe("discoverAuthStorage", () => {
     });
   });
 
+  it("loads env-backed auth profile refs into runtime auth storage", async () => {
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.OPENROUTER_API_KEY;
+      process.env.OPENROUTER_API_KEY = "sk-or-v1-runtime-ref";
+      try {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openrouter:default": {
+                type: "api_key",
+                provider: "openrouter",
+                keyRef: { source: "env", provider: "default", id: "OPENROUTER_API_KEY" },
+              },
+            },
+          },
+          agentDir,
+        );
+
+        const authStorage = discoverAuthStorage(agentDir);
+        expect(authStorage.hasAuth("openrouter")).toBe(true);
+        await expect(authStorage.getApiKey("openrouter")).resolves.toBe("sk-or-v1-runtime-ref");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENROUTER_API_KEY;
+        } else {
+          process.env.OPENROUTER_API_KEY = previous;
+        }
+      }
+    });
+  });
+
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     await withAgentDir(async (agentDir) => {
       writeRuntimeOpenRouterProfile(agentDir);

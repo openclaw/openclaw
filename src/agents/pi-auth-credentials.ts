@@ -1,3 +1,4 @@
+import { coerceSecretRef } from "../config/types.secrets.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -12,9 +13,23 @@ export type PiOAuthCredential = {
 export type PiCredential = PiApiKeyCredential | PiOAuthCredential;
 export type PiCredentialMap = Record<string, PiCredential>;
 
+function resolveEnvSecretRefValue(refValue: unknown): string {
+  const ref = coerceSecretRef(refValue);
+  if (ref?.source !== "env") {
+    return "";
+  }
+  const envVar = ref.id.trim();
+  if (!envVar) {
+    return "";
+  }
+  return (process.env[envVar] ?? "").trim();
+}
+
 export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
   if (cred.type === "api_key") {
-    const key = typeof cred.key === "string" ? cred.key.trim() : "";
+    const key =
+      (typeof cred.key === "string" ? cred.key.trim() : "") ||
+      resolveEnvSecretRefValue(cred.keyRef);
     if (!key) {
       return null;
     }
@@ -22,7 +37,9 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
   }
 
   if (cred.type === "token") {
-    const token = typeof cred.token === "string" ? cred.token.trim() : "";
+    const token =
+      (typeof cred.token === "string" ? cred.token.trim() : "") ||
+      resolveEnvSecretRefValue(cred.tokenRef);
     if (!token) {
       return null;
     }
