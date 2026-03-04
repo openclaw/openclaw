@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { afterEach } from "vitest";
 
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
@@ -9,8 +10,23 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   return { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" };
 }
 
+const trackedTempDirs = new Set<string>();
+
+afterEach(() => {
+  for (const dir of trackedTempDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup for temp test fixtures.
+    }
+  }
+  trackedTempDirs.clear();
+});
+
 export function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  trackedTempDirs.add(dir);
+  return dir;
 }
 
 export type ShellParserParityFixtureCase = {
