@@ -43,6 +43,7 @@ const exportSet = new Set(exportedNames);
 
 const requiredSubpathEntries = [
   "core",
+  "compat",
   "telegram",
   "discord",
   "slack",
@@ -50,8 +51,43 @@ const requiredSubpathEntries = [
   "imessage",
   "whatsapp",
   "line",
+  "msteams",
+  "acpx",
+  "bluebubbles",
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "feishu",
+  "google-gemini-cli-auth",
+  "googlechat",
+  "irc",
+  "llm-task",
+  "lobster",
+  "matrix",
+  "mattermost",
+  "memory-core",
+  "memory-lancedb",
+  "minimax-portal-auth",
+  "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "synology-chat",
+  "talk-voice",
+  "test-utils",
+  "thread-ownership",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "zalo",
+  "zalouser",
   "account-id",
+  "keyed-async-queue",
 ];
+
+const requiredRuntimeShimEntries = ["root-alias.cjs"];
 
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any of these are missing, plugins will fail at runtime with:
@@ -97,6 +133,14 @@ for (const entry of requiredSubpathEntries) {
   }
   if (!existsSync(dtsPath)) {
     console.error(`MISSING SUBPATH DTS: dist/plugin-sdk/${entry}.d.ts`);
+    missing += 1;
+  }
+}
+
+for (const entry of requiredRuntimeShimEntries) {
+  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  if (!existsSync(shimPath)) {
+    console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
   }
 }
