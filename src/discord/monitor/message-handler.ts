@@ -30,6 +30,10 @@ type DiscordMessageHandlerParams = Omit<
 
 const RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
 
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => void;
+};
+
 function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string {
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
@@ -44,7 +48,7 @@ function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string 
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
-): DiscordMessageHandler {
+): DiscordMessageHandlerWithLifecycle {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
@@ -92,9 +96,13 @@ export function createDiscordMessageHandler(
     runActivityHeartbeat.unref?.();
   };
 
-  const onAbort = () => {
+  const deactivateStatusPublishing = () => {
     lifecycleActive = false;
     clearRunActivityHeartbeat();
+  };
+
+  const onAbort = () => {
+    deactivateStatusPublishing();
   };
 
   if (params.abortSignal?.aborted) {
@@ -236,7 +244,7 @@ export function createDiscordMessageHandler(
     },
   });
 
-  return async (data, client) => {
+  const handler: DiscordMessageHandlerWithLifecycle = async (data, client) => {
     // Filter bot-own messages before they enter the debounce queue.
     // The same check exists in preflightDiscordMessage(), but by that point
     // the message has already consumed debounce capacity and blocked
@@ -253,4 +261,8 @@ export function createDiscordMessageHandler(
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   };
+
+  handler.deactivate = deactivateStatusPublishing;
+
+  return handler;
 }
