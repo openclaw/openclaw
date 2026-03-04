@@ -90,77 +90,118 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   });
 
   it("fails fast when gateway-backed resolution is unavailable", async () => {
+    const envKey = "TALK_API_KEY_FAILFAST";
+    const priorValue = process.env[envKey];
+    delete process.env[envKey];
     callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-    await expect(
-      resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-          },
-        } as OpenClawConfig,
-        commandName: "memory status",
-        targetIds: new Set(["talk.apiKey"]),
-      }),
-    ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
+    try {
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: {
+            talk: {
+              apiKey: { source: "env", provider: "default", id: envKey },
+            },
+          } as OpenClawConfig,
+          commandName: "memory status",
+          targetIds: new Set(["talk.apiKey"]),
+        }),
+      ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
+    } finally {
+      if (priorValue === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = priorValue;
+      }
+    }
   });
 
   it("falls back to local resolution when gateway secrets.resolve is unavailable", async () => {
+    const priorValue = process.env.TALK_API_KEY;
     process.env.TALK_API_KEY = "local-fallback-key";
     callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-    const result = await resolveCommandSecretRefsViaGateway({
-      config: {
-        talk: {
-          apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
-      commandName: "memory status",
-      targetIds: new Set(["talk.apiKey"]),
-    });
-    delete process.env.TALK_API_KEY;
-
-    expect(result.resolvedConfig.talk?.apiKey).toBe("local-fallback-key");
-    expect(
-      result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-    ).toBe(true);
-  });
-
-  it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
-    callGateway.mockRejectedValueOnce(new Error("unknown method: secrets.resolve"));
-    await expect(
-      resolveCommandSecretRefsViaGateway({
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
         config: {
           talk: {
             apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
           },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
         } as OpenClawConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.apiKey"]),
-      }),
-    ).rejects.toThrow(/does not support secrets\.resolve/i);
+      });
+
+      expect(result.resolvedConfig.talk?.apiKey).toBe("local-fallback-key");
+      expect(
+        result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
+      ).toBe(true);
+    } finally {
+      if (priorValue === undefined) {
+        delete process.env.TALK_API_KEY;
+      } else {
+        process.env.TALK_API_KEY = priorValue;
+      }
+    }
+  });
+
+  it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
+    const envKey = "TALK_API_KEY_UNSUPPORTED";
+    const priorValue = process.env[envKey];
+    delete process.env[envKey];
+    callGateway.mockRejectedValueOnce(new Error("unknown method: secrets.resolve"));
+    try {
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: {
+            talk: {
+              apiKey: { source: "env", provider: "default", id: envKey },
+            },
+          } as OpenClawConfig,
+          commandName: "memory status",
+          targetIds: new Set(["talk.apiKey"]),
+        }),
+      ).rejects.toThrow(/does not support secrets\.resolve/i);
+    } finally {
+      if (priorValue === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = priorValue;
+      }
+    }
   });
 
   it("returns a version-skew hint when required-method capability check fails", async () => {
+    const envKey = "TALK_API_KEY_REQUIRED_METHOD";
+    const priorValue = process.env[envKey];
+    delete process.env[envKey];
     callGateway.mockRejectedValueOnce(
       new Error(
         'active gateway does not support required method "secrets.resolve" for "secrets.resolve".',
       ),
     );
-    await expect(
-      resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-          },
-        } as OpenClawConfig,
-        commandName: "memory status",
-        targetIds: new Set(["talk.apiKey"]),
-      }),
-    ).rejects.toThrow(/does not support secrets\.resolve/i);
+    try {
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: {
+            talk: {
+              apiKey: { source: "env", provider: "default", id: envKey },
+            },
+          } as OpenClawConfig,
+          commandName: "memory status",
+          targetIds: new Set(["talk.apiKey"]),
+        }),
+      ).rejects.toThrow(/does not support secrets\.resolve/i);
+    } finally {
+      if (priorValue === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = priorValue;
+      }
+    }
   });
 
   it("fails when gateway returns an invalid secrets.resolve payload", async () => {
