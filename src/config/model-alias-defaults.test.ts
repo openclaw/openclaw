@@ -35,6 +35,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-haiku-4-5": {},
             "openai/gpt-5.2": {},
           },
         },
@@ -43,6 +44,7 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-haiku-4-5"]?.alias).toBe("haiku");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 
