@@ -68,6 +68,7 @@ export const TelegramTopicSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    agentId: z.string().optional(),
   })
   .strict();
 
@@ -839,6 +840,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    typingReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value) => {

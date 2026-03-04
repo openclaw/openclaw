@@ -571,6 +571,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const sessionKey = ctx.resolveSlackSystemEventSessionKey({
         channelId: channelId,
         channelType: auth.channelType,
+        senderId: userId,
       });
 
       // Build context key - only include defined values to avoid "unknown" noise
