@@ -76,11 +76,13 @@ const PNPM_BOOLEAN_OPTIONS = new Set([
 ]);
 const PNPM_OPTIONS_WITH_VALUE = new Set([
   "-C",
+  "-p",
   "--changed-files-ignore-pattern",
   "--dir",
   "--filter",
   "--filter-prod",
   "--loglevel",
+  "--package",
   "--reporter",
   "--resume-from",
   "--test-pattern",
@@ -588,7 +590,8 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
   if (isOpenclawPackageExecutable(commandToken)) {
     return argv.slice(idx + 1);
   }
-  if (normalizeLower(commandToken) !== "exec") {
+  const commandLower = normalizeLower(commandToken);
+  if (commandLower !== "exec" && commandLower !== "dlx") {
     return null;
   }
 
