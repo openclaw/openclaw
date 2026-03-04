@@ -821,6 +821,58 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("normalizes unstructured model summary output to required heading format", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("free-form summary without required headings");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      maxHistoryShare: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "hello", timestamp: 1 }] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    const summary = result.compaction?.summary ?? "";
+    expect(summary).toContain("## Decisions");
+    expect(summary).toContain("## Open TODOs");
+    expect(summary).toContain("## Constraints/Rules");
+    expect(summary).toContain("## Pending user asks");
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("free-form summary without required headings");
+  });
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
     mockSummarizeInStages.mockReset();
 

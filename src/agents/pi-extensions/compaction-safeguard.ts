@@ -732,7 +732,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             })
           : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
-      let summary = historySummary;
+      const normalizedHistorySummary = hasRequiredSummarySections(historySummary)
+        ? historySummary
+        : buildStructuredFallbackSummary(historySummary, summarizationInstructions);
+
+      let summary = normalizedHistorySummary;
       if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
         const prefixSummary = await summarizeInStages({
           messages: turnPrefixMessages,
