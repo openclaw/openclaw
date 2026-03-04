@@ -100,7 +100,15 @@ export function mergeStreamingText(
   if (previous.includes(next)) {
     return previous;
   }
-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
+  // Find the longest suffix of `previous` that matches a prefix of `next` to avoid duplication.
+  // e.g. previous="第1条", next="1条 - 08" → overlap="1条" → merged="第1条 - 08"
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let i = maxOverlap; i > 0; i--) {
+    if (previous.endsWith(next.slice(0, i))) {
+      return previous + next.slice(i);
+    }
+  }
+  // No overlap found: append as-is.
   return `${previous}${next}`;
 }
 

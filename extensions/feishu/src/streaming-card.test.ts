@@ -15,4 +15,10 @@ describe("mergeStreamingText", () => {
     expect(mergeStreamingText("hello wor", "ld")).toBe("hello world");
     expect(mergeStreamingText("line1", "line2")).toBe("line1line2");
   });
+
+  it("deduplicates partially overlapping chunks", () => {
+    expect(mergeStreamingText("第1条", "1条 - 08")).toBe("第1条 - 08");
+    expect(mergeStreamingText("hello wo", "wo rld")).toBe("hello wo rld");
+    expect(mergeStreamingText("abcdef", "defghi")).toBe("abcdefghi");
+  });
 });
