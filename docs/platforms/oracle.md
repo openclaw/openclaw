@@ -66,7 +66,22 @@ sudo apt install -y build-essential
 
 **Note:** `build-essential` is required for ARM compilation of some dependencies.
 
-## 3) Configure User and Hostname
+## 3) Add Swap (recommended for smaller configs)
+
+If you chose fewer OCPUs (1–2) or less memory, a swap file prevents out-of-memory kills
+during npm installs or heavy agent sessions:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+Skip this step if you allocated the full 4 OCPU / 24 GB.
+
+## 4) Configure User and Hostname
 
 ```bash
 # Set hostname
@@ -79,7 +94,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Install Tailscale
+## 5) Install Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -96,7 +111,7 @@ tailscale status
 
 **From now on, connect via Tailscale:** `ssh ubuntu@openclaw` (or use the Tailscale IP).
 
-## 5) Install OpenClaw
+## 6) Install OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -107,7 +122,7 @@ When prompted "How do you want to hatch your bot?", select **"Do this later"**.
 
 > Note: If you hit ARM-native build issues, start with system packages (e.g. `sudo apt install -y build-essential`) before reaching for Homebrew.
 
-## 6) Configure Gateway (loopback + token auth) and enable Tailscale Serve
+## 7) Configure Gateway (loopback + token auth) and enable Tailscale Serve
 
 Use token auth as the default. It’s predictable and avoids needing any “insecure auth” Control UI flags.
 
@@ -126,7 +141,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Verify
+## 8) Verify
 
 ```bash
 # Check version
@@ -142,7 +157,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) Lock Down VCN Security
+## 9) Lock Down VCN Security
 
 Now that everything is working, lock down the VCN to block all traffic except Tailscale. OCI's Virtual Cloud Network acts as a firewall at the network edge — traffic is blocked before it reaches your instance.
 
@@ -294,10 +309,51 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 ---
 
+## Multi-Agent Setup on Oracle ARM
+
+Oracle's Always Free ARM tier (up to 4 OCPU / 24 GB RAM) has enough headroom to run
+multiple OpenClaw agents side by side — for example a dev agent, growth agent, and
+content agent sharing a single Gateway.
+
+### Quick setup
+
+Follow the [Multi-Agent docs](/concepts/multi-agent) for full details.
+The key steps on Oracle ARM:
+
+1. Create agent workspaces under a shared directory:
+
+```bash
+mkdir -p ~/agents/{dev,growth,content,shared}
+```
+
+2. Each agent gets its own `AGENTS.md`, `SOUL.md`, and `memory/` directory.
+3. Register agents in your Gateway config:
+
+```json5
+{
+  agents: {
+    dev:     { workspace: "~/agents/dev" },
+    growth:  { workspace: "~/agents/growth" },
+    content: { workspace: "~/agents/content" },
+  },
+}
+```
+
+4. Agents can communicate via `sessions_send` and share files through `~/agents/shared/`.
+
+### ARM performance tips
+
+- **Node compile cache** (see [Startup tuning](#startup-tuning-for-small-vms-and-arm-hosts) above) matters even more with multiple agents.
+- Keep agent workspaces on the same volume to avoid cross-mount I/O overhead.
+- Monitor memory with `free -h` — each active agent session uses ~50–150 MB depending on context size.
+
+---
+
 ## See Also
 
 - [Gateway remote access](/gateway/remote) — other remote access patterns
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs
 - [Gateway configuration](/gateway/configuration) — all config options
+- [Multi-Agent routing](/concepts/multi-agent) — run multiple agents on one Gateway
 - [DigitalOcean guide](/platforms/digitalocean) — if you want paid + easier signup
 - [Hetzner guide](/install/hetzner) — Docker-based alternative
