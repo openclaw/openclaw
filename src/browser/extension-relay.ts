@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
+import { setDefaultSecurityHeaders } from "../gateway/http-common.js";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import {
@@ -525,6 +526,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     };
 
     const server = createServer((req, res) => {
+      setDefaultSecurityHeaders(res);
       const url = new URL(req.url ?? "/", info.baseUrl);
       const path = url.pathname;
       const origin = getHeader(req, "origin");
