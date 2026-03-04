@@ -21,4 +21,17 @@ describe("resolveTranscriptPolicy e2e smoke", () => {
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict9");
   });
+
+  it("uses full sanitization for Ollama+Gemini models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "ollama",
+      modelId: "gemini-3-flash-preview:cloud",
+      modelApi: "ollama",
+    });
+    expect(policy.sanitizeMode).toBe("full");
+    expect(policy.sanitizeThoughtSignatures).toEqual({
+      allowBase64Only: true,
+      includeCamelCase: true,
+    });
+  });
 });

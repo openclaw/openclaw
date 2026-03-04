@@ -84,4 +84,17 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.validateAnthropicTurns).toBe(false);
   });
+
+  it("enables full sanitization for Ollama provider with Gemini model", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "ollama",
+      modelId: "gemini-3-flash-preview:cloud",
+      modelApi: "ollama",
+    });
+    expect(policy.sanitizeMode).toBe("full");
+    expect(policy.sanitizeThoughtSignatures).toEqual({
+      allowBase64Only: true,
+      includeCamelCase: true,
+    });
+  });
 });

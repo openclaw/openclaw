@@ -90,8 +90,11 @@ export function resolveTranscriptPolicy(params: {
     !isOpenAi &&
     !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
-  const isOpenRouterGemini =
-    (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
+  const isProxiedGemini =
+    (provider === "openrouter" ||
+      provider === "opencode" ||
+      provider === "kilocode" ||
+      provider === "ollama") &&
     modelId.toLowerCase().includes("gemini");
   const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
@@ -101,7 +104,7 @@ export function resolveTranscriptPolicy(params: {
   // Drop these blocks at send-time to keep sessions usable.
   const dropThinkingBlocks = isCopilotClaude;
 
-  const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
+  const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isProxiedGemini;
 
   const sanitizeToolCallIds =
     isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
@@ -115,7 +118,7 @@ export function resolveTranscriptPolicy(params: {
   // function_call in the conversation, so the repair must run universally.
   const repairToolUseResultPairing = true;
   const sanitizeThoughtSignatures =
-    isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
+    isProxiedGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
