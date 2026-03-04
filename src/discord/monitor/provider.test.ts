@@ -3,15 +3,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type NativeCommandSpecMock = {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+};
+
+type PluginCommandSpecMock = {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+};
+
 const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
+  createDiscordAutoPresenceControllerMock,
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
+  getPluginCommandSpecsMock,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
@@ -23,6 +37,13 @@ const {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
     clientConstructorOptionsMock: vi.fn(),
+    createDiscordAutoPresenceControllerMock: vi.fn(() => ({
+      enabled: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refresh: vi.fn(),
+      runNow: vi.fn(),
+    })),
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
@@ -42,7 +63,10 @@ const {
       staleSessionKeys: [],
     })),
     createdBindingManagers,
-    listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
+    getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
+    listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
+      { name: "cmd", description: "built-in", acceptsArgs: false },
+    ]),
     listSkillCommandsForAgentsMock: vi.fn(() => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
@@ -140,6 +164,10 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), error: vi.fn() }),
 }));
 
+vi.mock("../../plugins/commands.js", () => ({
+  getPluginCommandSpecs: getPluginCommandSpecsMock,
+}));
+
 vi.mock("../../runtime.js", () => ({
   createNonExitingRuntime: () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }),
 }));
@@ -202,6 +230,7 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: class DiscordPresenceListener {},
   DiscordReactionListener: class DiscordReactionListener {},
   DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
+  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
   registerDiscordListener: vi.fn(),
 }));
 
@@ -218,6 +247,10 @@ vi.mock("./native-command.js", () => ({
 
 vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: () => undefined,
+}));
+
+vi.mock("./auto-presence.js", () => ({
+  createDiscordAutoPresenceController: createDiscordAutoPresenceControllerMock,
 }));
 
 vi.mock("./provider.allowlist.js", () => ({
@@ -268,6 +301,13 @@ describe("monitorDiscordProvider", () => {
 
   beforeEach(() => {
     clientConstructorOptionsMock.mockClear();
+    createDiscordAutoPresenceControllerMock.mockClear().mockImplementation(() => ({
+      enabled: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refresh: vi.fn(),
+      runNow: vi.fn(),
+    }));
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
     clientGetPluginMock.mockClear().mockReturnValue(undefined);
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
@@ -279,7 +319,10 @@ describe("monitorDiscordProvider", () => {
       staleSessionKeys: [],
     });
     createdBindingManagers.length = 0;
-    listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
+    getPluginCommandSpecsMock.mockClear().mockReturnValue([]);
+    listNativeCommandSpecsForConfigMock
+      .mockClear()
+      .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
     listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
     monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
       params.threadBindings.stop();
@@ -384,5 +427,46 @@ describe("monitorDiscordProvider", () => {
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue?.listenerTimeout).toBe(300_000);
+  });
+
+  it("registers plugin commands as native Discord commands", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      { name: "cmd", description: "built-in", acceptsArgs: false },
+    ]);
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+    expect(commandNames).toContain("cmd");
+    expect(commandNames).toContain("cron_jobs");
+  });
+
+  it("reports connected status on startup and shutdown", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const setStatus = vi.fn();
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? { isConnected: true } : undefined,
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      setStatus,
+    });
+
+    const connectedTrue = setStatus.mock.calls.find((call) => call[0]?.connected === true);
+    const connectedFalse = setStatus.mock.calls.find((call) => call[0]?.connected === false);
+
+    expect(connectedTrue).toBeDefined();
+    expect(connectedFalse).toBeDefined();
   });
 });
