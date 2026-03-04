@@ -1490,6 +1490,14 @@ export function createWebSearchTool(options?: {
       }
       const rawDateAfter = readStringParam(params, "date_after");
       const rawDateBefore = readStringParam(params, "date_before");
+      if (rawFreshness && (rawDateAfter || rawDateBefore)) {
+        return jsonResult({
+          error: "conflicting_time_filters",
+          message:
+            "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       if ((rawDateAfter || rawDateBefore) && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_date_filter",
