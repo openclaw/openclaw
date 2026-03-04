@@ -127,7 +127,23 @@ describe("resolveTelegramToken", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("resolves top-level env SecretRef object when env var is available", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "resolved-from-env");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("resolved-from-env");
+    expect(res.source).toBe("config");
+  });
+
   it("throws when botToken is an unresolved SecretRef object", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const cfg = {
       channels: {
         telegram: {

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import type { BaseTokenResolution } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  normalizeResolvedSecretInputString,
+  resolveSecretInputRef,
+} from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
@@ -16,6 +20,23 @@ type ResolveTelegramTokenOpts = {
   accountId?: string | null;
   logMissingFile?: (message: string) => void;
 };
+
+function resolveTelegramSecretInputToken(params: { value: unknown; path: string }): string | undefined {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    defaults: { env: DEFAULT_SECRET_PROVIDER_ALIAS },
+  });
+  if (ref?.source === "env" && ref.provider === DEFAULT_SECRET_PROVIDER_ALIAS) {
+    const envToken = process.env[ref.id]?.trim();
+    if (envToken) {
+      return envToken;
+    }
+  }
+  return normalizeResolvedSecretInputString({
+    value: params.value,
+    path: params.path,
+  });
+}
 
 export function resolveTelegramToken(
   cfg?: OpenClawConfig,
@@ -66,7 +87,7 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const accountToken = normalizeResolvedSecretInputString({
+  const accountToken = resolveTelegramSecretInputToken({
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
@@ -92,7 +113,7 @@ export function resolveTelegramToken(
     }
   }
 
-  const configToken = normalizeResolvedSecretInputString({
+  const configToken = resolveTelegramSecretInputToken({
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
