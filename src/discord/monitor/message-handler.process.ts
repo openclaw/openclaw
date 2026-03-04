@@ -797,19 +797,27 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       markRunComplete();
       markDispatchIdle();
     }
-    if (statusReactionsEnabled && !dispatchAborted) {
-      if (dispatchError) {
-        await statusReactions.setError();
+    if (statusReactionsEnabled) {
+      if (dispatchAborted) {
+        if (removeAckAfterReply) {
+          void statusReactions.clear();
+        } else {
+          void statusReactions.restoreInitial();
+        }
       } else {
-        await statusReactions.setDone();
-      }
-      if (removeAckAfterReply) {
-        void (async () => {
-          await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
-          await statusReactions.clear();
-        })();
-      } else {
-        void statusReactions.restoreInitial();
+        if (dispatchError) {
+          await statusReactions.setError();
+        } else {
+          await statusReactions.setDone();
+        }
+        if (removeAckAfterReply) {
+          void (async () => {
+            await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
+            await statusReactions.clear();
+          })();
+        } else {
+          void statusReactions.restoreInitial();
+        }
       }
     }
   }
