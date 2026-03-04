@@ -159,6 +159,65 @@ describe("extractKeywords", () => {
     expect(keywords).not.toContain("ماذا");
   });
 
+  it("extracts keywords from Danish conversational query", () => {
+    const keywords = extractKeywords("igår diskuterede vi vagtplanen for plejehjemmet");
+    expect(keywords).toContain("diskuterede");
+    expect(keywords).toContain("vagtplanen");
+    expect(keywords).toContain("plejehjemmet");
+    expect(keywords).not.toContain("igår");
+    expect(keywords).not.toContain("vi");
+    expect(keywords).not.toContain("for");
+  });
+
+  it("filters Danish stop words", () => {
+    const keywords = extractKeywords("hvad er det vi skal gøre nu");
+    expect(keywords).not.toContain("hvad");
+    expect(keywords).not.toContain("er");
+    expect(keywords).not.toContain("det");
+    expect(keywords).not.toContain("vi");
+    expect(keywords).not.toContain("skal");
+    expect(keywords).not.toContain("gøre");
+    expect(keywords).not.toContain("nu");
+  });
+
+  it("extracts keywords from Norwegian conversational query", () => {
+    const keywords = extractKeywords("igår diskuterte vi distribusjonsstrategien");
+    expect(keywords).toContain("diskuterte");
+    expect(keywords).toContain("distribusjonsstrategien");
+    expect(keywords).not.toContain("igår");
+    expect(keywords).not.toContain("vi");
+  });
+
+  it("filters Norwegian stop words", () => {
+    const keywords = extractKeywords("hva er det vi skal gjøre nå");
+    expect(keywords).not.toContain("hva");
+    expect(keywords).not.toContain("er");
+    expect(keywords).not.toContain("det");
+    expect(keywords).not.toContain("vi");
+    expect(keywords).not.toContain("skal");
+    expect(keywords).not.toContain("gjøre");
+    expect(keywords).not.toContain("nå");
+  });
+
+  it("extracts keywords from Swedish conversational query", () => {
+    const keywords = extractKeywords("igår diskuterade vi distributionsstrategin");
+    expect(keywords).toContain("diskuterade");
+    expect(keywords).toContain("distributionsstrategin");
+    expect(keywords).not.toContain("igår");
+    expect(keywords).not.toContain("vi");
+  });
+
+  it("filters Swedish stop words", () => {
+    const keywords = extractKeywords("vad är det vi ska göra nu");
+    expect(keywords).not.toContain("vad");
+    expect(keywords).not.toContain("är");
+    expect(keywords).not.toContain("det");
+    expect(keywords).not.toContain("vi");
+    expect(keywords).not.toContain("ska");
+    expect(keywords).not.toContain("göra");
+    expect(keywords).not.toContain("nu");
+  });
+
   it("handles empty query", () => {
     expect(extractKeywords("")).toEqual([]);
     expect(extractKeywords("   ")).toEqual([]);
