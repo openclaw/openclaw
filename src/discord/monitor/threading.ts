@@ -12,6 +12,7 @@ import {
   resolveDiscordEmbedText,
   resolveDiscordMessageChannelId,
 } from "./message-utils.js";
+import { generateThreadTitle } from "./thread-title.js";
 
 export type DiscordThreadChannel = {
   id: string;
@@ -314,6 +315,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   replyToMode: ReplyToMode;
   agentId: string;
   channel: string;
+  cfg?: import("../../config/config.js").OpenClawConfig;
 }): Promise<DiscordAutoThreadReplyPlan> {
   const messageChannelId = (
     params.messageChannelId ||
@@ -334,6 +336,7 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
     channelType: params.channelType,
     baseText: params.baseText,
     combinedBody: params.combinedBody,
+    cfg: params.cfg,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,
@@ -363,6 +366,7 @@ export async function maybeCreateDiscordAutoThread(params: {
   channelType?: ChannelType;
   baseText: string;
   combinedBody: string;
+  cfg?: import("../../config/config.js").OpenClawConfig;
 }): Promise<string | undefined> {
   if (!params.isGuildMessage) {
     return undefined;
@@ -393,10 +397,15 @@ export async function maybeCreateDiscordAutoThread(params: {
     return undefined;
   }
   try {
-    const threadName = sanitizeDiscordThreadName(
-      params.baseText || params.combinedBody || "Thread",
-      params.message.id,
-    );
+    // Apply naming strategy: "summarize" uses LLM, "message" (default) uses full text
+    const rawText = params.baseText || params.combinedBody || "Thread";
+    let nameSource = rawText;
+
+    if (params.channelConfig?.autoThreadName === "summarize" && params.cfg) {
+      nameSource = await generateThreadTitle({ cfg: params.cfg, messageText: rawText });
+    }
+
+    const threadName = sanitizeDiscordThreadName(nameSource, params.message.id);
 
     // Parse archive duration from config, default to 60 minutes
     const archiveDuration = params.channelConfig?.autoArchiveDuration

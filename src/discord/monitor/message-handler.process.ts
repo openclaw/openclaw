@@ -328,6 +328,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     replyToMode,
     agentId: route.agentId,
     channel: route.channel,
+    cfg,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;

@@ -356,6 +356,8 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    /** Naming strategy for auto-created threads. "message" uses the message text (default), "summarize" uses LLM to generate a title. */
+    autoThreadName: z.enum(["message", "summarize"]).optional(),
     /** Archive duration for auto-created threads in minutes. Discord supports 60, 1440 (1 day), 4320 (3 days), 10080 (1 week). Default: 60. */
     autoArchiveDuration: z
       .union([
