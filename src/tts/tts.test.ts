@@ -57,8 +57,11 @@ const {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isValidMinimaxModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
   parseTtsDirectives,
   resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
@@ -203,6 +206,38 @@ describe("tts", () => {
     });
   });
 
+  describe("isValidMinimaxModel", () => {
+    it("matches the supported MiniMax model set and rejects unsupported values", () => {
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.8-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.8-turbo");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.6-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.6-turbo");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-02-hd");
+      expect(MINIMAX_TTS_MODELS).toContain("speech-02-turbo");
+      expect(MINIMAX_TTS_MODELS.length).toBeGreaterThan(0);
+
+      const cases = [
+        { model: "speech-2.8-hd", expected: true },
+        { model: "speech-2.8-turbo", expected: true },
+        { model: "speech-2.6-hd", expected: true },
+        { model: "speech-02-hd", expected: true },
+        { model: "invalid", expected: false },
+        { model: "", expected: false },
+        { model: "gpt-4o-mini-tts", expected: false },
+      ] as const;
+      for (const testCase of cases) {
+        expect(isValidMinimaxModel(testCase.model), testCase.model).toBe(testCase.expected);
+      }
+    });
+  });
+
+  describe("MINIMAX_TTS_VOICES", () => {
+    it("contains representative system voices", () => {
+      expect(MINIMAX_TTS_VOICES.length).toBeGreaterThan(0);
+      expect(MINIMAX_TTS_VOICES).toContain("English_expressive_narrator");
+    });
+  });
+
   describe("resolveOutputFormat", () => {
     it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
       const cases = [
@@ -310,6 +345,26 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts minimax as provider override and parses minimax directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input =
+        "Hello [[tts:provider=minimax minimax_voice=English_radiant_girl emotion=happy]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+      expect(result.overrides.minimax?.voiceId).toBe("English_radiant_girl");
+      expect(result.overrides.minimax?.emotion).toBe("happy");
+    });
+
+    it("parses minimax model via generic model directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:model=speech-2.8-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
@@ -349,6 +404,51 @@ describe("tts", () => {
 
       expect(result.overrides.openai?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
+    });
+  });
+
+  describe("resolveTtsConfig minimax", () => {
+    it("resolves minimax defaults when no config is provided", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: {} },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.minimax.model).toBe("speech-2.8-hd");
+      expect(config.minimax.voiceId).toBe("English_expressive_narrator");
+      expect(config.minimax.speed).toBe(1.0);
+      expect(config.minimax.vol).toBe(1.0);
+      expect(config.minimax.pitch).toBe(0);
+      expect(config.minimax.baseUrl).toBe("https://api.minimax.io");
+    });
+
+    it("respects explicit minimax config overrides", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "minimax",
+            minimax: {
+              model: "speech-2.8-turbo",
+              voiceId: "English_CalmWoman",
+              speed: 1.5,
+              vol: 3,
+              pitch: 2,
+              emotion: "happy",
+              languageBoost: "English",
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.provider).toBe("minimax");
+      expect(config.minimax.model).toBe("speech-2.8-turbo");
+      expect(config.minimax.voiceId).toBe("English_CalmWoman");
+      expect(config.minimax.speed).toBe(1.5);
+      expect(config.minimax.vol).toBe(3);
+      expect(config.minimax.pitch).toBe(2);
+      expect(config.minimax.emotion).toBe("happy");
+      expect(config.minimax.languageBoost).toBe("English");
     });
   });
 
@@ -505,6 +605,7 @@ describe("tts", () => {
             OPENAI_API_KEY: "test-openai-key",
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-openai.json",
           expected: "openai",
@@ -514,6 +615,7 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: "test-elevenlabs-key",
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-elevenlabs.json",
           expected: "elevenlabs",
@@ -523,6 +625,17 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            MINIMAX_API_KEY: "test-minimax-key",
+          },
+          prefsPath: "/tmp/tts-prefs-minimax.json",
+          expected: "minimax",
+        },
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-edge.json",
           expected: "edge",
