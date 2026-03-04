@@ -41,6 +41,7 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { createTimeDriftMonitor, type TimeDriftMonitor } from "../infra/time-drift-monitor.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
@@ -699,6 +700,33 @@ export async function startGatewayServer(
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
       });
 
+  // Time-drift detection: warn when the host clock has drifted from internet time.
+  let timeDriftMonitor: TimeDriftMonitor | null = null;
+  if (
+    !minimalTestGateway &&
+    cfgAtStart.cron?.enabled !== false &&
+    cfgAtStart.cron?.timeSyncCheck?.enabled !== false
+  ) {
+    const tsc = cfgAtStart.cron?.timeSyncCheck;
+    timeDriftMonitor = createTimeDriftMonitor({
+      source: tsc?.source,
+      thresholdSeconds: tsc?.thresholdSeconds,
+      intervalMinutes: tsc?.intervalMinutes,
+      log: logCron,
+    });
+    if (tsc?.blockStartup) {
+      const exceeds = await timeDriftMonitor.checkOnce();
+      if (exceeds) {
+        throw new Error(
+          "gateway startup blocked: host clock drift exceeds threshold (cron.timeSyncCheck.blockStartup is enabled)",
+        );
+      }
+    } else {
+      void timeDriftMonitor.checkOnce();
+    }
+    timeDriftMonitor.start();
+  }
+
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
@@ -887,6 +915,7 @@ export async function startGatewayServer(
             hooksConfig,
             heartbeatRunner,
             cronState,
+            timeDriftMonitor,
             browserControl,
             channelHealthMonitor,
           }),
@@ -896,6 +925,7 @@ export async function startGatewayServer(
             cronState = nextState.cronState;
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
+            timeDriftMonitor = nextState.timeDriftMonitor;
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
           },
@@ -951,6 +981,7 @@ export async function startGatewayServer(
     stopChannel,
     pluginServices,
     cron,
+    getTimeDriftMonitor: () => timeDriftMonitor,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,

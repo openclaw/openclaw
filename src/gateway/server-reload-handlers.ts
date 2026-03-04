@@ -14,6 +14,7 @@ import {
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
+import { createTimeDriftMonitor, type TimeDriftMonitor } from "../infra/time-drift-monitor.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -27,6 +28,7 @@ type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
+  timeDriftMonitor: TimeDriftMonitor | null;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
@@ -45,7 +47,11 @@ export function createGatewayReloadHandlers(params: {
   };
   logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logCron: { error: (msg: string) => void };
+  logCron: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
   createHealthMonitor: (checkIntervalMs: number) => ChannelHealthMonitor;
 }) {
@@ -73,11 +79,27 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartCron) {
       state.cronState.cron.stop();
+      state.timeDriftMonitor?.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
       });
+      // Rewire time-drift monitor from updated cron config.
+      // Only start if cron itself is enabled — no egress when cron is off.
+      const tsc = nextConfig.cron?.timeSyncCheck;
+      if (nextConfig.cron?.enabled !== false && tsc?.enabled !== false) {
+        // Create but don't start yet — deferred until after setState to avoid
+        // leaking a running interval if a later reload step throws.
+        nextState.timeDriftMonitor = createTimeDriftMonitor({
+          source: tsc?.source,
+          thresholdSeconds: tsc?.thresholdSeconds,
+          intervalMinutes: tsc?.intervalMinutes,
+          log: params.logCron,
+        });
+      } else {
+        nextState.timeDriftMonitor = null;
+      }
       void nextState.cronState.cron
         .start()
         .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
@@ -142,6 +164,13 @@ export function createGatewayReloadHandlers(params: {
     }
 
     params.setState(nextState);
+
+    // Start drift monitor after state is committed so a throw above
+    // cannot leak a running interval that the runtime can't stop.
+    if (nextState.timeDriftMonitor && nextState.timeDriftMonitor !== state.timeDriftMonitor) {
+      void nextState.timeDriftMonitor.checkOnce();
+      nextState.timeDriftMonitor.start();
+    }
   };
 
   let restartPending = false;

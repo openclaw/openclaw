@@ -469,6 +469,17 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        timezone: z.string().optional(),
+        timeSyncCheck: z
+          .object({
+            enabled: z.boolean().optional(),
+            source: z.string().optional(),
+            thresholdSeconds: z.number().positive().optional(),
+            intervalMinutes: z.number().min(0).optional(),
+            blockStartup: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -481,6 +492,20 @@ export const OpenClawSchema = z
               path: ["sessionRetention"],
               message: "invalid duration (use ms, s, m, h, d)",
             });
+          }
+        }
+        if (val.timezone !== undefined) {
+          const tz = val.timezone.trim();
+          if (tz) {
+            try {
+              Intl.DateTimeFormat(undefined, { timeZone: tz });
+            } catch {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["timezone"],
+                message: `invalid IANA timezone: "${tz}" (examples: America/New_York, Europe/London, Asia/Tokyo)`,
+              });
+            }
           }
         }
         if (val.runLog?.maxBytes !== undefined) {

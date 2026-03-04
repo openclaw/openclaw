@@ -52,22 +52,22 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   return offset;
 }
 
-function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {
+function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number, defaultTimezone?: string) {
   if (job.schedule.kind !== "cron") {
-    return computeNextRunAtMs(job.schedule, nowMs);
+    return computeNextRunAtMs(job.schedule, nowMs, defaultTimezone);
   }
 
   const staggerMs = resolveCronStaggerMs(job.schedule);
   const offsetMs = resolveStableCronOffsetMs(job.id, staggerMs);
   if (offsetMs <= 0) {
-    return computeNextRunAtMs(job.schedule, nowMs);
+    return computeNextRunAtMs(job.schedule, nowMs, defaultTimezone);
   }
 
   // Shift the schedule cursor backwards by the per-job offset so we can still
   // target the current schedule window if its staggered slot has not passed yet.
   let cursorMs = Math.max(0, nowMs - offsetMs);
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const baseNext = computeNextRunAtMs(job.schedule, cursorMs);
+    const baseNext = computeNextRunAtMs(job.schedule, cursorMs, defaultTimezone);
     if (baseNext === undefined) {
       return undefined;
     }
@@ -196,7 +196,11 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  defaultTimezone?: string,
+): number | undefined {
   if (!job.enabled) {
     return undefined;
   }
@@ -240,10 +244,10 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     }
     return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
   }
-  const next = computeStaggeredCronNextRunAtMs(job, nowMs);
+  const next = computeStaggeredCronNextRunAtMs(job, nowMs, defaultTimezone);
   if (next === undefined && job.schedule.kind === "cron") {
     const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
-    return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
+    return computeStaggeredCronNextRunAtMs(job, nextSecondMs, defaultTimezone);
   }
   return isFiniteTimestamp(next) ? next : undefined;
 }
@@ -362,7 +366,11 @@ function walkSchedulableJobs(
 function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
   let changed = false;
   try {
-    const newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+    const newNext = computeJobNextRunAtMs(
+      params.job,
+      params.nowMs,
+      params.state.deps.cronConfig?.timezone,
+    );
     if (params.job.state.nextRunAtMs !== newNext) {
       params.job.state.nextRunAtMs = newNext;
       changed = true;
@@ -490,7 +498,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
-  job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+  job.state.nextRunAtMs = computeJobNextRunAtMs(job, now, state.deps.cronConfig?.timezone);
   return job;
 }
 

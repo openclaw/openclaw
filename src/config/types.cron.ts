@@ -57,4 +57,25 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /**
+   * Default IANA timezone for cron expressions that do not specify an explicit
+   * tz field (e.g. "America/New_York", "Europe/Paris", "Asia/Tokyo").
+   * Falls back to the gateway process timezone when not set.
+   * Common cause of "hours-off" scheduling: containers default to UTC while
+   * the operator writes cron expressions in their local timezone.
+   */
+  timezone?: string;
+  /** Internet time-sync drift detection to catch misconfigured host clocks. */
+  timeSyncCheck?: {
+    /** Enable startup + periodic drift checks (default: true). */
+    enabled?: boolean;
+    /** URL to query for a Date header (default: "https://www.google.com"). */
+    source?: string;
+    /** Maximum acceptable drift in seconds (default: 60). */
+    thresholdSeconds?: number;
+    /** Periodic re-check interval in minutes; 0 disables periodic checks (default: 60). */
+    intervalMinutes?: number;
+    /** Block gateway startup when drift exceeds threshold (default: false). */
+    blockStartup?: boolean;
+  };
 };
