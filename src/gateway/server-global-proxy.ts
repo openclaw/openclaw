@@ -114,7 +114,22 @@ export function applyGlobalProxyDispatcher(cfg: ReturnType<typeof loadConfig>): 
       }),
     );
     applied = true;
-    log.info(`global proxy dispatcher set: ${proxyUrl}${isWsl2 ? " (wsl2 ipv4-only)" : ""}`);
+    // Redact credentials from the URL before logging (proxy URLs may contain user:password).
+    const safeUrl = (() => {
+      try {
+        const u = new URL(proxyUrl);
+        if (u.password) {
+          u.password = "***";
+        }
+        if (u.username) {
+          u.username = "***";
+        }
+        return u.toString();
+      } catch {
+        return proxyUrl;
+      }
+    })();
+    log.info(`global proxy dispatcher set: ${safeUrl}${isWsl2 ? " (wsl2 ipv4-only)" : ""}`);
   } catch (err) {
     log.error(`failed to set global proxy dispatcher: ${String(err)}`);
   }
