@@ -9,6 +9,10 @@ const sendMocks = vi.hoisted(() => ({
     (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
   >(async () => {}),
 }));
+const mediaMocks = vi.hoisted(() => ({
+  fetchRemoteMedia: vi.fn(),
+  saveMediaBuffer: vi.fn(),
+}));
 function createMockDraftStream() {
   return {
     update: vi.fn<(text: string) => void>(() => {}),
@@ -163,6 +167,12 @@ vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  fetchRemoteMedia: mediaMocks.fetchRemoteMedia,
+  saveMediaBuffer: mediaMocks.saveMediaBuffer,
+  getAgentScopedMediaLocalRoots: vi.fn(() => ({ images: "/tmp/media" })),
+}));
+
 const BASE_CHANNEL_ROUTE = {
   agentId: "main",
   channel: "discord",
@@ -220,6 +230,16 @@ beforeEach(() => {
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
+  mediaMocks.fetchRemoteMedia.mockReset();
+  mediaMocks.saveMediaBuffer.mockReset();
+  mediaMocks.fetchRemoteMedia.mockResolvedValue({
+    buffer: Buffer.from("image"),
+    contentType: "image/png",
+  });
+  mediaMocks.saveMediaBuffer.mockResolvedValue({
+    path: "/tmp/proxy-media.png",
+    contentType: "image/png",
+  });
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
@@ -734,5 +754,64 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("processDiscordMessage media proxy", () => {
+  it("forwards discordRestFetch to attachment downloads", async () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const attachment = {
+      id: "att-1",
+      url: "https://cdn.discordapp.com/attachments/1/image.png",
+      filename: "image.png",
+      content_type: "image/png",
+    };
+    const ctx = await createBaseContext({
+      message: {
+        id: "m1",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [attachment],
+      },
+      discordRestFetch: proxyFetch,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(mediaMocks.fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(mediaMocks.fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ url: attachment.url, fetchImpl: proxyFetch }),
+    );
+  });
+
+  it("forwards discordRestFetch to forwarded attachment downloads", async () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const forwardedAttachment = {
+      id: "att-fwd-1",
+      url: "https://cdn.discordapp.com/attachments/1/fwd.png",
+      filename: "fwd.png",
+      content_type: "image/png",
+    };
+    const ctx = await createBaseContext({
+      message: {
+        id: "m1",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        rawData: {
+          message_snapshots: [{ message: { attachments: [forwardedAttachment] } }],
+        },
+      },
+      discordRestFetch: proxyFetch,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(mediaMocks.fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(mediaMocks.fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ url: forwardedAttachment.url, fetchImpl: proxyFetch }),
+    );
   });
 });
