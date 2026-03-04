@@ -97,6 +97,7 @@ type SlackActionInput = Parameters<
 async function runSlackAction(
   action: SlackActionInput["action"],
   params: SlackActionInput["params"],
+  options?: { toolContext?: SlackActionInput["toolContext"] },
 ) {
   const { cfg, actions } = slackHarness();
   await actions.handleAction?.({
@@ -104,6 +105,7 @@ async function runSlackAction(
     action,
     cfg,
     params,
+    toolContext: options?.toolContext,
   });
   return { cfg, actions };
 }
@@ -1093,5 +1095,20 @@ describe("slack actions adapter", () => {
       }),
     ).rejects.toThrow(/edit requires message or blocks/i);
     expect(handleSlackAction).not.toHaveBeenCalled();
+  });
+
+  it("falls back to toolContext.currentChannelId for react when no explicit target", async () => {
+    await runSlackAction(
+      "react",
+      { messageId: "171234.567", emoji: "eyes" },
+      { toolContext: { currentChannelId: "D8SRXRDNF" } },
+    );
+
+    expectFirstSlackAction({
+      action: "react",
+      channelId: "D8SRXRDNF",
+      messageId: "171234.567",
+      emoji: "eyes",
+    });
   });
 });

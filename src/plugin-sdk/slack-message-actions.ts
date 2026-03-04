@@ -26,7 +26,13 @@ export async function handleSlackMessageAction(params: {
   const resolveChannelId = () => {
     const channelId =
       readStringParam(actionParams, "channelId") ??
-      readStringParam(actionParams, "to", { required: true });
+      readStringParam(actionParams, "to") ??
+      ctx.toolContext?.currentChannelId;
+    if (!channelId) {
+      throw new Error(
+        "Slack action requires a target channel (pass channelId, to, or react from an active Slack conversation)",
+      );
+    }
     return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
   };
 
