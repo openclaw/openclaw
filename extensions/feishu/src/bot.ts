@@ -1337,7 +1337,13 @@ export async function handleFeishuMessage(params: {
     const messageCreateTimeMs = event.message.create_time
       ? parseInt(event.message.create_time, 10)
       : undefined;
-    const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
+    // Strip the synthetic `:reaction:<emoji>:<uuid>` suffix added to reaction
+    // event message_ids before using the id in Feishu API calls (reply-to,
+    // typing indicator, etc.) which only accept bare open_message_ids.
+    const rawReplyTarget = ctx.rootId ?? ctx.messageId;
+    const replyTargetMessageId = rawReplyTarget.includes(":reaction:")
+      ? rawReplyTarget.slice(0, rawReplyTarget.indexOf(":reaction:"))
+      : rawReplyTarget;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

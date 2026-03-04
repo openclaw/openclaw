@@ -49,6 +49,20 @@ type ResolveReactionSyntheticEventParams = {
   uuid?: () => string;
 };
 
+/**
+ * Strips the synthetic reaction suffix (`:reaction:<emoji>:<uuid>`) appended
+ * by {@link resolveReactionSyntheticEvent} when constructing a unique session
+ * message_id for reaction events.
+ *
+ * The Feishu Open API does not recognise the suffixed identifier; callers that
+ * need to pass a real `open_message_id` to the API (e.g. for reply-to or
+ * typing indicator endpoints) should call this helper first.
+ */
+export function stripFeishuReactionSuffix(messageId: string): string {
+  const idx = messageId.indexOf(":reaction:");
+  return idx === -1 ? messageId : messageId.slice(0, idx);
+}
+
 export async function resolveReactionSyntheticEvent(
   params: ResolveReactionSyntheticEventParams,
 ): Promise<FeishuMessageEvent | null> {

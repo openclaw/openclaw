@@ -8,7 +8,7 @@ import {
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
-import { monitorSingleAccount } from "./monitor.account.js";
+import { monitorSingleAccount, stripFeishuReactionSuffix } from "./monitor.account.js";
 import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -574,5 +574,23 @@ describe("Feishu inbound debounce regressions", () => {
     expect(combined.text).toBe("fresh");
     expect(recordSpy).toHaveBeenCalledWith("default:om_old");
     expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
+  });
+});
+
+describe("stripFeishuReactionSuffix", () => {
+  it("strips :reaction:<emoji>:<uuid> suffix from a reaction message_id", () => {
+    const raw =
+      "om_x100b55b75bbd1ca4c3647ec6a73d3a3:reaction:THUMBSUP:350dd4ec-46af-41c9-affc-a68cd11a5e49";
+    expect(stripFeishuReactionSuffix(raw)).toBe("om_x100b55b75bbd1ca4c3647ec6a73d3a3");
+  });
+
+  it("leaves a plain message_id unchanged", () => {
+    const plain = "om_x100b55b75bbd1ca4c3647ec6a73d3a3";
+    expect(stripFeishuReactionSuffix(plain)).toBe(plain);
+  });
+
+  it("handles different emoji types (HEART, LIKE, etc.)", () => {
+    const withHeart = "om_abc123:reaction:HEART:11111111-2222-3333-4444-555555555555";
+    expect(stripFeishuReactionSuffix(withHeart)).toBe("om_abc123");
   });
 });
