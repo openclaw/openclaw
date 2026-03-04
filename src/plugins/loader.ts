@@ -801,12 +801,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     try {
       const result = register(api);
       if (result && typeof result.then === "function") {
-        registry.diagnostics.push({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: "plugin register returned a promise; async registration is ignored",
-        });
+        pushPluginLoadError(
+          "plugin register() returned a promise; async registration is not supported — hooks/tools may be missing",
+        );
+        continue;
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
