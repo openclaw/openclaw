@@ -27,7 +27,7 @@ and process access when the model does something dumb.
   - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress with a CIDR allowlist (for example `172.21.0.1/32`).
   - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with password in URL fragment (not query/header logs).
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
-  - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
+  - Use `agents.defaults.sandbox.browser.cdpSourceRange` for network-level CDP source restrictions; `allowedControlHosts`/`allowedControlUrls`/`allowedControlPorts` are not valid config keys.
 
 Not sandboxed:
 
