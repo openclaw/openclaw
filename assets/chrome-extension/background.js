@@ -34,6 +34,12 @@ const tabOperationLocks = new Set()
 /** @type {Set<number>} */
 const reattachPending = new Set()
 
+// Tabs the user explicitly detached via toolbar click. Auto-attach
+// will not re-attach these until the user manually re-attaches or
+// the tab is closed. Persisted in chrome.storage.session.
+/** @type {Set<number>} */
+const userDetachedTabs = new Set()
+
 // Reconnect state for exponential backoff.
 let reconnectAttempt = 0
 let reconnectTimer = null
@@ -70,7 +76,7 @@ async function getAutoAttach() {
 // Chrome-internal URLs that chrome.debugger cannot attach to.
 function isAutoAttachableUrl(url) {
   if (!url) return false
-  if (url === 'about:blank') return false
+  if (url.startsWith('about:')) return false
   if (url.startsWith('chrome://')) return false
   if (url.startsWith('chrome-extension://')) return false
   if (url.startsWith('chrome-error://')) return false
@@ -97,6 +103,7 @@ async function persistState() {
     await chrome.storage.session.set({
       persistedTabs: tabEntries,
       nextSession,
+      userDetached: [...userDetachedTabs],
     })
   } catch {
     // chrome.storage.session may not be available in all contexts.
@@ -107,9 +114,13 @@ async function persistState() {
 // maps and badges. Relay reconnect happens separately in background.
 async function rehydrateState() {
   try {
-    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession'])
+    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession', 'userDetached'])
     if (stored.nextSession) {
       nextSession = Math.max(nextSession, stored.nextSession)
+    }
+    // Restore tabs the user explicitly detached so auto-attach respects their intent.
+    for (const id of (stored.userDetached || [])) {
+      userDetachedTabs.add(id)
     }
     const entries = stored.persistedTabs || []
     // Phase 1: optimistically restore state and badges.
@@ -515,6 +526,7 @@ async function autoAttachTab(tabId) {
   if (tabs.has(tabId)) return
   if (tabOperationLocks.has(tabId)) return
   if (reattachPending.has(tabId)) return
+  if (userDetachedTabs.has(tabId)) return
 
   tabOperationLocks.add(tabId)
   try {
@@ -556,19 +568,25 @@ async function connectOrToggleForActiveTab() {
   try {
     if (reattachPending.has(tabId)) {
       reattachPending.delete(tabId)
+      userDetachedTabs.add(tabId)
       setBadge(tabId, 'off')
       void chrome.action.setTitle({
         tabId,
         title: 'OpenClaw Browser Relay (click to attach/detach)',
       })
+      void persistState()
       return
     }
 
     const existing = tabs.get(tabId)
     if (existing?.state === 'connected') {
+      userDetachedTabs.add(tabId)
       await detachTab(tabId, 'toggle')
       return
     }
+
+    // User is manually re-attaching — clear any previous detach exclusion.
+    userDetachedTabs.delete(tabId)
 
     // User is manually connecting — cancel any pending reconnect.
     cancelReconnect()
@@ -709,7 +727,9 @@ async function onDebuggerDetach(source, reason) {
   if (!tabs.has(tabId)) return
 
   // User explicitly cancelled or DevTools replaced the connection — respect their intent
+  // and prevent auto-attach from overriding it.
   if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') {
+    userDetachedTabs.add(tabId)
     void detachTab(tabId, reason)
     return
   }
@@ -806,6 +826,7 @@ async function onDebuggerDetach(source, reason) {
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
   reattachPending.delete(tabId)
+  userDetachedTabs.delete(tabId)
   if (!tabs.has(tabId)) return
   const tab = tabs.get(tabId)
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
@@ -901,7 +922,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
     if (!relayConnectPromise && !reconnectTimer) {
       console.log('Keepalive: WebSocket unhealthy, triggering reconnect')
-      await ensureRelayConnection().catch(() => {
+      await ensureRelayConnection().then(async () => {
+        await reannounceAttachedTabs()
+        await autoAttachAllTabs()
+      }).catch(() => {
         // ensureRelayConnection may throw without triggering onRelayClosed
         // (e.g. preflight fetch fails before WS is created), so ensure
         // reconnect is always scheduled on failure.
