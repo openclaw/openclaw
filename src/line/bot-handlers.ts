@@ -410,8 +410,11 @@ function getLineMentionees(
   if (message.type !== "text") {
     return [];
   }
-  const mentionees = (message as Record<string, unknown> & { mention?: { mentionees?: unknown[] } })
-    .mention?.mentionees;
+  const mentionees = (
+    message as Record<string, unknown> & {
+      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
+    }
+  ).mention?.mentionees;
   return Array.isArray(mentionees) ? mentionees : [];
 }
 
