@@ -29,6 +29,15 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
   });
 
+  it("returns true when systemd has degraded units (non-zero exit)", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("Command failed: systemctl --user status") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "● user.slice - User Slice\n   State: degraded\n", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
   it("returns false when systemd user bus is unavailable", async () => {
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
       const err = new Error("Failed to connect to bus") as Error & {
@@ -305,6 +314,27 @@ describe("systemd service control", () => {
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("stops the service even when systemd has degraded units", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        // assertSystemdAvailable: systemd available but degraded
+        const err = new Error("Command failed") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "State: degraded", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await stopSystemdService({ stdout, env: {} });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
