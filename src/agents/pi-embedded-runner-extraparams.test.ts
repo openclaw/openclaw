@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 
 describe("resolveExtraParams", () => {
@@ -1029,6 +1030,81 @@ describe("applyExtraParamsToAgent", () => {
       options: { headers: { "X-Custom": "1" } },
     });
     expect(headers).toEqual({ "X-Custom": "1" });
+  });
+
+  it("injects context-1m beta via additionalModelRequestFields for Bedrock Anthropic models", () => {
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      // Simulate underlying stream emitting a payload so the wrapper can mutate it
+      const payload: Record<string, unknown> = { messages: [] };
+      options?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/anthropic.claude-opus-4-6-v1": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "anthropic.claude-opus-4-6-v1");
+
+    const model = {
+      api: "amazon-bedrock",
+      provider: "amazon-bedrock",
+      id: "anthropic.claude-opus-4-6-v1",
+    } as Model<"amazon-bedrock">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0].additionalModelRequestFields).toEqual({
+      anthropic_beta: ["context-1m-2025-08-07"],
+    });
+  });
+
+  it("does not inject context-1m for non-Anthropic Bedrock models", () => {
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { messages: [] };
+      options?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/amazon.titan-text-express-v1": {
+              params: { context1m: true },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "amazon.titan-text-express-v1");
+
+    const model = {
+      api: "amazon-bedrock",
+      provider: "amazon-bedrock",
+      id: "amazon.titan-text-express-v1",
+    } as Model<"amazon-bedrock">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0].additionalModelRequestFields).toBeUndefined();
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
