@@ -78,13 +78,17 @@ export function applyHwvaultPresetToExecProvider(options: {
   return { passEnv, env };
 }
 
-function getHwvaultDefaultCommand(): string {
+export function getHwvaultDefaultCommandForPlatform(platform: NodeJS.Platform): string {
   // Avoid forcing a Unix path on Windows. On Windows we intentionally leave
   // this blank so users provide an explicit absolute path.
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return "";
   }
   return "/usr/local/bin/openclaw-hwvault-resolver";
+}
+
+function getHwvaultDefaultCommand(): string {
+  return getHwvaultDefaultCommandForPlatform(process.platform);
 }
 
 function isLikelyHwvaultExecProvider(

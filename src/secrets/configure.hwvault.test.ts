@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { applyHwvaultPresetToExecProvider } from "./configure.js";
+import {
+  applyHwvaultPresetToExecProvider,
+  getHwvaultDefaultCommandForPlatform,
+} from "./configure.js";
+
+describe("getHwvaultDefaultCommandForPlatform", () => {
+  it("returns empty default for Windows", () => {
+    expect(getHwvaultDefaultCommandForPlatform("win32")).toBe("");
+  });
+
+  it("returns resolver path for non-Windows", () => {
+    expect(getHwvaultDefaultCommandForPlatform("linux")).toBe(
+      "/usr/local/bin/openclaw-hwvault-resolver",
+    );
+  });
+});
 
 describe("applyHwvaultPresetToExecProvider", () => {
   it("adds required pass-through env names and policy env values", () => {
