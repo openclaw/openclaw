@@ -5,6 +5,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "patch": "bash ../patch-ui.sh",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts"
   },
