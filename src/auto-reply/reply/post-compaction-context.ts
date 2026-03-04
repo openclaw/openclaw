@@ -7,6 +7,9 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 
+/** Default AGENTS.md sections preserved across compaction when not configured. */
+export const DEFAULT_PRESERVE_SECTIONS = ["Session Startup", "Red Lines"];
+
 function formatDateStamp(nowMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
@@ -53,9 +56,14 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract "## Session Startup" and "## Red Lines" sections
-    // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    // Extract configured sections from AGENTS.md for post-compaction context.
+    // Defaults to ["Session Startup", "Red Lines"] when not configured.
+    const configuredSections = cfg?.agents?.defaults?.compaction?.preserveSections;
+    const sectionNames =
+      Array.isArray(configuredSections) && configuredSections.length > 0
+        ? configuredSections
+        : DEFAULT_PRESERVE_SECTIONS;
+    const sections = extractSections(content, sectionNames);
 
     if (sections.length === 0) {
       return null;
@@ -74,10 +82,18 @@ export async function readPostCompactionContext(
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
 
+    // Build a dynamic instruction referencing the actual preserved sections,
+    // so agents aren't told to "Execute your Session Startup sequence" when
+    // that section doesn't exist in their config.
+    const hasSessionStartup = sectionNames.some((s) => s.toLowerCase() === "session startup");
+    const startupInstruction = hasSessionStartup
+      ? "Execute your Session Startup sequence now — read the required files before responding to the user."
+      : "Execute your startup sequence now — re-read your workspace files before responding to the user.";
+
     return (
       "[Post-compaction context refresh]\n\n" +
       "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-      "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
+      `${startupInstruction}\n\n` +
       `Critical rules from AGENTS.md:\n\n${safeContent}\n\n${timeLine}`
     );
   } catch {

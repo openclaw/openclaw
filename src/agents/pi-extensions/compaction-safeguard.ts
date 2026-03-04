@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
-import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import {
+  DEFAULT_PRESERVE_SECTIONS,
+  extractSections,
+} from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -521,10 +524,10 @@ function appendSummarySection(summary: string, section: string): string {
 
 /**
  * Read and format critical workspace context for compaction summary.
- * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
+ * Extracts configured sections (or defaults: "Session Startup" and "Red Lines") from AGENTS.md.
  * Limited to 2000 chars to avoid bloating the summary.
  */
-async function readWorkspaceContextForSummary(): Promise<string> {
+async function readWorkspaceContextForSummary(preserveSections?: string[]): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
   const workspaceDir = process.cwd();
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -546,7 +549,11 @@ async function readWorkspaceContextForSummary(): Promise<string> {
         fs.closeSync(opened.fd);
       }
     })();
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    const sectionNames =
+      Array.isArray(preserveSections) && preserveSections.length > 0
+        ? preserveSections
+        : DEFAULT_PRESERVE_SECTIONS;
+    const sections = extractSections(content, sectionNames);
 
     if (sections.length === 0) {
       return "";
@@ -756,8 +763,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary = appendSummarySection(summary, toolFailureSection);
       summary = appendSummarySection(summary, fileOpsSummary);
 
-      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
-      const workspaceContext = await readWorkspaceContextForSummary();
+      // Append workspace critical context (configured sections from AGENTS.md)
+      const workspaceContext = await readWorkspaceContextForSummary(runtime?.preserveSections);
       if (workspaceContext) {
         summary = appendSummarySection(summary, workspaceContext);
       }

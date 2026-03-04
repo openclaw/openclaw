@@ -304,6 +304,11 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /**
+   * AGENTS.md section names to preserve in post-compaction context.
+   * Defaults to ["Session Startup", "Red Lines"] when not configured.
+   */
+  preserveSections?: string[];
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

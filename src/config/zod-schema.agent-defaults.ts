@@ -95,6 +95,10 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        preserveSections: z
+          .array(z.string().min(1).max(200))
+          .max(20)
+          .optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

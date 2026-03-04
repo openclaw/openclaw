@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.3
 
+- Compaction: add `agents.defaults.compaction.preserveSections` config to specify which AGENTS.md sections are preserved in post-compaction context. Defaults to `["Session Startup", "Red Lines"]` for backward compatibility. Agents with custom section names (e.g. "Safety", "Critical Rules") no longer lose those rules after compaction.
+
 ### Changes
 
 - Discord/allowBots mention gating: add `allowBots: "mentions"` to only accept bot-authored messages that mention the bot. Thanks @thewilloftheshadow.
