@@ -9,9 +9,11 @@ import { describe, it, expect, beforeEach, vi, type MockedFunction } from 'vites
 import {
   OpenClawIMessageEnhancer,
   createEnhancedIMessageProcessor,
+  processIMessageWithReplyContext,
   type EnhancedInboundContext,
 } from '../src/channel-integration.js';
 import type { IMessageMessage } from '../src/message-processor.js';
+import { REPLY_TEXT_MAX_LENGTH } from '../src/message-processor.js';
 
 // Mock the message processor
 vi.mock('../src/message-processor.js', () => ({
@@ -257,7 +259,7 @@ describe('OpenClawIMessageEnhancer', () => {
     });
 
     it('should truncate very long original messages', () => {
-      const longText = 'A'.repeat(200);
+      const longText = 'A'.repeat(REPLY_TEXT_MAX_LENGTH + 50);
       
       const context: EnhancedInboundContext = {
         chat_id: 'imessage:+1234567890',
@@ -283,8 +285,8 @@ describe('OpenClawIMessageEnhancer', () => {
 
       const result = enhancer.formatContextForAI(context);
 
-      expect(result).toContain('A'.repeat(150) + '...');
-      expect(result).not.toContain('A'.repeat(200));
+      expect(result).toContain('A'.repeat(REPLY_TEXT_MAX_LENGTH) + '...');
+      expect(result).not.toContain('A'.repeat(REPLY_TEXT_MAX_LENGTH + 50));
     });
   });
 

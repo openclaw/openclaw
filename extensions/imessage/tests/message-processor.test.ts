@@ -10,6 +10,7 @@ import {
   IMessageReplyProcessor,
   createIMessageReplyProcessor,
   processIMessageWithReplyContext,
+  REPLY_TEXT_MAX_LENGTH,
   type IMessageMessage,
   type EnhancedIMessageMessage 
 } from '../src/message-processor.js';
@@ -214,6 +215,32 @@ describe('IMessageReplyProcessor', () => {
       consoleSpy.mockRestore();
     });
 
+    it('should validate chatId to prevent shell injection', async () => {
+      const replyMessage: IMessageMessage = {
+        id: 2,
+        guid: 'reply-guid',
+        chat_id: -1, // Invalid chatId
+        sender: '+1234567890',
+        text: 'Reply with invalid chatId',
+        is_from_me: false,
+        created_at: '2026-03-04T18:55:00.000Z',
+        thread_originator_guid: 'target-guid',
+      };
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await processor.processMessage(replyMessage);
+
+      expect(result).toEqual(replyMessage); // Falls back to original message
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[iMessage Reply] Error fetching original message:',
+        expect.any(Error)
+      );
+      expect(mockExec).not.toHaveBeenCalled(); // Should not execute shell command
+      
+      consoleSpy.mockRestore();
+    });
+
     it('should handle multiple messages in history response', async () => {
       const replyMessage: IMessageMessage = {
         id: 3,
@@ -329,7 +356,7 @@ describe('IMessageReplyProcessor', () => {
       });
 
       it('should truncate long original messages', () => {
-        const longText = 'A'.repeat(250);
+        const longText = 'A'.repeat(REPLY_TEXT_MAX_LENGTH + 50);
         
         const message: EnhancedIMessageMessage = {
           id: 2,
@@ -350,7 +377,7 @@ describe('IMessageReplyProcessor', () => {
 
         const result = IMessageReplyProcessor.formatReplyContext(message);
         
-        expect(result).toContain('A'.repeat(200) + '...');
+        expect(result).toContain('A'.repeat(REPLY_TEXT_MAX_LENGTH) + '...');
         expect(result.length).toBeLessThan(longText.length + 100);
       });
     });

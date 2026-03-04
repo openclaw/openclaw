@@ -13,6 +13,7 @@ import type {
 import { 
   createIMessageReplyProcessor,
   IMessageReplyProcessor,
+  REPLY_TEXT_MAX_LENGTH,
   type IMessageMessage,
   type EnhancedIMessageMessage 
 } from "./message-processor.js";
@@ -78,6 +79,10 @@ export class OpenClawIMessageEnhancer {
         original_text: enhancedMessage.reply_to.text,
         original_sender: enhancedMessage.reply_to.sender,
         original_timestamp: enhancedMessage.reply_to.created_at,
+        // Note: This is a heuristic. is_from_me indicates the message was sent from this
+        // device, but doesn't guarantee it was from the AI assistant. In scenarios where
+        // a human also sends messages from the same device, this may be inaccurate.
+        // Future improvement: Track assistant message GUIDs in a registry for precise detection.
         is_original_from_assistant: enhancedMessage.reply_to.is_from_me,
       };
     }
@@ -123,8 +128,8 @@ export class OpenClawIMessageEnhancer {
       const originalTime = new Date(context.reply_context.original_timestamp).toLocaleString();
       
       // Truncate long messages for better readability
-      const originalText = context.reply_context.original_text.length > 150
-        ? context.reply_context.original_text.substring(0, 150) + "..."
+      const originalText = context.reply_context.original_text.length > REPLY_TEXT_MAX_LENGTH
+        ? context.reply_context.original_text.substring(0, REPLY_TEXT_MAX_LENGTH) + "..."
         : context.reply_context.original_text;
 
       formatted = `[Reply to ${originalSender} (${originalTime})]: "${originalText}"
@@ -163,37 +168,32 @@ ${context.message.text}`;
 }
 
 /**
- * Patch function to enhance an existing iMessage channel plugin with reply support
+ * Integration utility for adding reply context processing to iMessage messages
+ * 
+ * This provides a practical way to enhance iMessage messages with reply context
+ * that can be integrated into OpenClaw's existing message processing pipeline.
+ * 
+ * Usage pattern:
+ * 1. In the message monitoring code, when an inbound message is received
+ * 2. Call processIMessageWithReplyContext() to enhance it
+ * 3. Pass the enhanced context to the AI instead of the raw message
  */
-export function enhanceIMessageChannelWithReplySupport(
-  originalPlugin: ChannelPlugin<ResolvedIMessageAccount>,
-  runtime: PluginRuntime
-): ChannelPlugin<ResolvedIMessageAccount> {
+export async function processIMessageWithReplyContext(
+  runtime: PluginRuntime,
+  rawMessage: IMessageMessage,
+  chatType: "direct" | "group" = "direct"
+): Promise<EnhancedInboundContext> {
   const enhancer = new OpenClawIMessageEnhancer(runtime);
-
-  // Return enhanced plugin that wraps the original with reply processing
-  return {
-    ...originalPlugin,
-    
-    // Override the gateway message monitor to include reply processing
-    gateway: {
-      ...originalPlugin.gateway,
-      
-      async startAccount(ctx) {
-        // Call the original startAccount method
-        const originalResult = await originalPlugin.gateway?.startAccount?.(ctx);
-
-        // TODO: This is where we would intercept the message stream and add reply processing
-        // In a real implementation, this would hook into the message monitor pipeline
-        // and process each inbound message through enhancer.processInboundMessage()
-        
-        ctx.log?.info(`[Enhanced iMessage] Reply context support enabled for account ${ctx.account.accountId}`);
-        
-        return originalResult;
-      },
-    },
-  };
+  return enhancer.processInboundMessage(rawMessage, chatType);
 }
+
+/**
+ * DEPRECATED: This function was incomplete and has been removed.
+ * Use processIMessageWithReplyContext() instead for practical integration.
+ * 
+ * The proper integration should be done at the message monitoring level where
+ * inbound messages are processed before being sent to the AI system.
+ */
 
 /**
  * Factory function to create an enhanced iMessage processor

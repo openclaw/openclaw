@@ -7,6 +7,11 @@
 
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 
+/**
+ * Configuration constants
+ */
+export const REPLY_TEXT_MAX_LENGTH = 200;
+
 export interface IMessageMessage {
   id: number;
   guid: string;
@@ -91,9 +96,15 @@ export class IMessageReplyProcessor {
     chatId: number
   ): Promise<IMessageMessage | null> {
     try {
+      // Validate chatId to prevent shell command injection
+      const safeChatId = parseInt(String(chatId), 10);
+      if (!Number.isFinite(safeChatId) || safeChatId < 0) {
+        throw new Error(`Invalid chatId: ${chatId}`);
+      }
+
       // Use imsg CLI to query the message history and find the specific GUID
       const result = await this.runtime.shell.exec(
-        `imsg history --chat-id ${chatId} --limit 100 --json`,
+        `imsg history --chat-id ${safeChatId} --limit 100 --json`,
         {
           encoding: "utf8",
           timeout: 10000, // 10 second timeout
@@ -120,9 +131,10 @@ export class IMessageReplyProcessor {
         }
       }
 
-      // Message not found in recent history - try extended search
+      // Message not found in recent history - try extended search with pagination
+      // Skip messages we already checked by using offset or larger initial limit
       const extendedResult = await this.runtime.shell.exec(
-        `imsg history --chat-id ${chatId} --limit 500 --json`,
+        `imsg history --chat-id ${safeChatId} --limit 500 --json`,
         {
           encoding: "utf8",
           timeout: 30000, // 30 second timeout for extended search
@@ -132,7 +144,10 @@ export class IMessageReplyProcessor {
       if (extendedResult.exitCode === 0) {
         const extendedLines = extendedResult.stdout.trim().split("\n");
         
-        for (const line of extendedLines) {
+        // Skip the first 100 messages we already processed to avoid redundant work
+        const newMessages = extendedLines.slice(100);
+        
+        for (const line of newMessages) {
           if (!line.trim()) continue;
           
           try {
@@ -163,8 +178,8 @@ export class IMessageReplyProcessor {
 
     const originalSender = message.reply_to.is_from_me ? "You" : message.reply_to.sender;
     const originalTime = new Date(message.reply_to.created_at).toLocaleString();
-    const originalText = message.reply_to.text.length > 200 
-      ? message.reply_to.text.substring(0, 200) + "..."
+    const originalText = message.reply_to.text.length > REPLY_TEXT_MAX_LENGTH 
+      ? message.reply_to.text.substring(0, REPLY_TEXT_MAX_LENGTH) + "..."
       : message.reply_to.text;
 
     return `[Replying to message from ${originalSender} at ${originalTime}]: "${originalText}"`;
