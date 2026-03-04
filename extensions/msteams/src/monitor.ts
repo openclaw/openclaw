@@ -269,10 +269,47 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
-  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+
+  // Use raw body parser so we can repair invalid JSON escape sequences that some
+  // Bot Framework clients include in activity payloads (e.g. conversationUpdate
+  // activities with bare backslashes like \p or \q that are not valid per RFC 8259).
+  // The strict express.json() parser throws SyntaxError on such payloads, which
+  // causes a non-200 response and puts Azure Bot Service into exponential backoff,
+  // dropping all subsequent messages until the backoff window expires.
+  expressApp.use(express.raw({ type: "application/json", limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((req: Request, _res: Response, next: (err?: unknown) => void) => {
+    if (Buffer.isBuffer(req.body)) {
+      const rawText = req.body.toString("utf-8");
+      try {
+        req.body = JSON.parse(rawText);
+      } catch {
+        // Attempt to repair invalid escape sequences by double-escaping bare
+        // backslashes (e.g. \p → \\p). This recovers payloads sent by certain
+        // Teams clients that violate the JSON spec.
+        const fixed = rawText.replace(/\\([^"\\/bfnrtu])/g, "\\\\$1");
+        try {
+          req.body = JSON.parse(fixed);
+          log.warn("msteams: repaired invalid JSON escape sequences in Bot Framework activity");
+        } catch (parseErr) {
+          next(parseErr);
+          return;
+        }
+      }
+    }
+    next();
+  });
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+    if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 413) {
       res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    if (err instanceof SyntaxError) {
+      // JSON could not be repaired; acknowledge with HTTP 200 to prevent Azure
+      // Bot Service from entering exponential backoff for an unrecoverable payload.
+      log.error("msteams: unrecoverable JSON parse error in Bot Framework activity", {
+        error: String(err),
+      });
+      res.status(200).end();
       return;
     }
     next(err);
