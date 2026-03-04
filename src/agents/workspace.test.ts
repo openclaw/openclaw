@@ -90,7 +90,7 @@ describe("ensureAgentWorkspace", () => {
     await expectBootstrapSeeded(tempDir);
   });
 
-  it("always ensures a memory/ directory exists", async () => {
+  it("ensures memory/ directory exists when ensureBootstrapFiles is true", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
