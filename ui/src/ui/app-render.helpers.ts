@@ -188,7 +188,7 @@ export function renderChatControls(state: AppViewState) {
   return html`
     <div class="chat-controls">
       <!-- Agent selector -->
-      <label class="field chat-controls__agent">
+      <label class="field chat-controls__session">
         <select
           .value=${selectedAgentId ?? ""}
           ?disabled=${!state.connected}
