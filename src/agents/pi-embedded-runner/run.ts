@@ -843,7 +843,7 @@ export async function runEmbeddedPiAgent(
                 // the error message. This guards against provider errors like Jinja
                 // template failures that superficially resemble overflow messages.
                 const zeroInputTokens =
-                  lastAssistantUsage !== undefined && (lastAssistantUsage.input ?? 0) === 0;
+                  lastAssistantUsage !== undefined && lastAssistantUsage.input === 0;
                 if (
                   assistantErrorText &&
                   !zeroInputTokens &&

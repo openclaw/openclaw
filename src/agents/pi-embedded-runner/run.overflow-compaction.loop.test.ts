@@ -46,7 +46,8 @@ describe("overflow compaction in run loop", () => {
         lower.includes("request_too_large") ||
         lower.includes("request size exceeds") ||
         lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
+        lower.includes("prompt too large") ||
+        lower.includes("prompt is too long")
       );
     });
     mockedCompactDirect.mockResolvedValue({
