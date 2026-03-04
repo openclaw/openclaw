@@ -187,5 +187,22 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
+  // Fire gateway:ready hook after all initialization is complete.
+  // This provides a reliable trigger for post-restart actions like resuming tasks.
+  // Unlike gateway:startup (which fires after channels start), this fires after
+  // all services including ACP, memory backend, and restart sentinel are initialized.
+  if (params.cfg.hooks?.internal?.enabled) {
+    const isRestart = shouldWakeFromRestartSentinel();
+    setTimeout(() => {
+      const hookEvent = createInternalHookEvent("gateway", "ready", "gateway:ready", {
+        cfg: params.cfg,
+        deps: params.deps,
+        workspaceDir: params.defaultWorkspaceDir,
+        isRestart,
+      });
+      void triggerInternalHook(hookEvent);
+    }, 1000);
+  }
+
   return { browserControl, pluginServices };
 }
