@@ -5,3 +5,4 @@ export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-ty
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";

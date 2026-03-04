@@ -16,6 +16,8 @@ import type {
   ChannelPlugin,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/kudosity-sms";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/kudosity-sms";
+import { z } from "zod";
 import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
 import { kudositySmsOnboarding } from "./onboarding.js";
 import { getKudositySmsRuntime } from "./runtime.js";
@@ -132,6 +134,18 @@ const meta: ChannelMeta = {
 };
 
 // ─── Capabilities ────────────────────────────────────────────────────────────
+
+// ─── Config Schema ───────────────────────────────────────────────────────────
+
+const KudositySmsConfigSchema = buildChannelConfigSchema(
+  z
+    .object({
+      apiKey: z.string().optional(),
+      sender: z.string().optional(),
+      enabled: z.boolean().optional(),
+    })
+    .passthrough(),
+);
 
 const capabilities: ChannelCapabilities = {
   chatTypes: ["direct"],
@@ -252,6 +266,7 @@ export const kudositySmsPlugin: ChannelPlugin<KudositySmsAccount> = {
   id: "kudosity-sms",
   meta,
   capabilities,
+  configSchema: KudositySmsConfigSchema,
   config: configAdapter,
   onboarding: kudositySmsOnboarding,
   outbound,
