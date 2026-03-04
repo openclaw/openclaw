@@ -573,7 +573,7 @@ describe("chrome extension relay server", () => {
       .toBe(true);
   });
 
-  it("accepts extension websocket access with relay token query param", async () => {
+  it("rejects relay token in query params for extension websocket access", async () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = new URL(sharedUrl).port;
 
@@ -584,11 +584,11 @@ describe("chrome extension relay server", () => {
     const ext = new WebSocket(
       `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(String(token))}`,
     );
-    await waitForOpen(ext);
-    ext.close();
+    const err = await waitForError(ext);
+    expect(err.message).toContain("401");
   });
 
-  it("accepts /json endpoints with relay token query param", async () => {
+  it("rejects relay token in query params for /json endpoints", async () => {
     const sharedUrl = await ensureSharedRelayServer();
 
     const token = relayAuthHeaders(sharedUrl)["x-openclaw-relay-token"];
@@ -596,7 +596,7 @@ describe("chrome extension relay server", () => {
     const versionRes = await fetch(
       `${sharedUrl}/json/version?token=${encodeURIComponent(String(token))}`,
     );
-    expect(versionRes.status).toBe(200);
+    expect(versionRes.status).toBe(401);
   });
 
   it("accepts raw gateway token for relay auth compatibility", async () => {
@@ -608,9 +608,27 @@ describe("chrome extension relay server", () => {
     });
     expect(versionRes.status).toBe(200);
 
-    const ext = new WebSocket(
-      `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(TEST_GATEWAY_TOKEN)}`,
-    );
+    const ext = new WebSocket(`ws://127.0.0.1:${sharedPort}/extension`, undefined, {
+      headers: { "x-openclaw-relay-token": TEST_GATEWAY_TOKEN },
+    });
+    await waitForOpen(ext);
+    ext.close();
+  });
+
+  it("accepts extension websocket access with relay token subprotocol", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    const sharedPort = Number(new URL(sharedUrl).port);
+    const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)[
+      "x-openclaw-relay-token"
+    ];
+    expect(token).toBeTruthy();
+    const encodedToken = Buffer.from(String(token), "utf8")
+      .toString("base64url")
+      .replace(/=+$/g, "");
+    const ext = new WebSocket(`ws://127.0.0.1:${sharedPort}/extension`, [
+      "openclaw-relay-v1",
+      `openclaw-relay-token.${encodedToken}`,
+    ]);
     await waitForOpen(ext);
     ext.close();
   });
