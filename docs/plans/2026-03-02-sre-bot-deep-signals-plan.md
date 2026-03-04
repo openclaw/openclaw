@@ -299,7 +299,7 @@ export SCOPE_NAMESPACES="morpho-dev"
 output=$("$SCRIPT_DIR/prometheus-trends.sh" 2>/dev/null) || true
 if [[ -n "$output" ]]; then
   header=$(echo "$output" | head -1)
-  expected_header="metric_name	pod	current_value	6h_trend	24h_trend	threshold_proximity	status"
+  expected_header=$'metric_name\tpod\tcurrent_value\t6h_trend\t24h_trend\tthreshold_proximity\tstatus'
   if [[ "$header" != "$expected_header" ]]; then
     echo "FAIL: unexpected header: $header"
     exit 1
