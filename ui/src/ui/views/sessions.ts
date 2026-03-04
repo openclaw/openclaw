@@ -4,6 +4,7 @@ import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { renderErrorDisplay } from "../components/error-display.ts";
+import { renderWithLoading } from "../components/loading-wrapper.ts";
 
 export type SessionsProps = {
   loading: boolean;
@@ -190,28 +191,39 @@ export function renderSessions(props: SessionsProps) {
         ${props.result ? `Store: ${props.result.path}` : ""}
       </div>
 
-      <div class="table" style="margin-top: 16px;">
-        <div class="table-head">
-          <div>Key</div>
-          <div>Label</div>
-          <div>Kind</div>
-          <div>Updated</div>
-          <div>Tokens</div>
-          <div>Thinking</div>
-          <div>Verbose</div>
-          <div>Reasoning</div>
-          <div>Actions</div>
-        </div>
-        ${
-          rows.length === 0
-            ? html`
-                <div class="muted">No sessions found.</div>
-              `
-            : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
-              )
-        }
-      </div>
+      ${renderWithLoading(
+        {
+          loading: props.loading,
+          error: props.error,
+          hasData: (props.result?.sessions.length || 0) > 0,
+          skeletonType: "sessions",
+          rows: 5,
+        },
+        () => html`
+          <div class="table" style="margin-top: 16px;">
+            <div class="table-head">
+              <div>Key</div>
+              <div>Label</div>
+              <div>Kind</div>
+              <div>Updated</div>
+              <div>Tokens</div>
+              <div>Thinking</div>
+              <div>Verbose</div>
+              <div>Reasoning</div>
+              <div>Actions</div>
+            </div>
+            ${
+              rows.length === 0
+                ? html`
+                    <div class="muted">No sessions found.</div>
+                  `
+                : rows.map((row) =>
+                    renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                  )
+            }
+          </div>
+        `,
+      )}
     </section>
   `;
 }
