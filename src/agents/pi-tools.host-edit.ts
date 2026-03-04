@@ -99,7 +99,7 @@ export function wrapHostEditToolWithMismatchContent(
     ) => {
       const result = (await base.execute(toolCallId, params, signal, onUpdate)) as {
         isError?: boolean;
-        content: unknown[];
+        content: Array<{ type: string; text?: string }>;
         details?: unknown;
       };
 
