@@ -123,3 +123,7 @@ dist/protocol.schema.json
 
 # build artifacts
 *.egg-info/
+
+# Local evidence receipts (do not commit)
+ops/ledger/gate_*.json
+ops/ledger/gate_*.md
