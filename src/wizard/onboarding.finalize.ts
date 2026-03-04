@@ -23,6 +23,7 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { PROVIDER_ENV_VARS } from "../config/search-providers.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
@@ -481,15 +482,9 @@ export async function finalizeOnboardingWizard(
     search?.kimi?.apiKey ||
     search?.parallel?.apiKey,
   );
-  const webSearchEnv = Boolean(
-    (process.env.BRAVE_API_KEY ?? "").trim() ||
-    (process.env.PERPLEXITY_API_KEY ?? "").trim() ||
-    (process.env.XAI_API_KEY ?? "").trim() ||
-    (process.env.GEMINI_API_KEY ?? "").trim() ||
-    (process.env.KIMI_API_KEY ?? "").trim() ||
-    (process.env.MOONSHOT_API_KEY ?? "").trim() ||
-    (process.env.PARALLEL_API_KEY ?? "").trim(),
-  );
+  const configuredProvider = search?.provider ?? "brave";
+  const providerEnvVar = PROVIDER_ENV_VARS[configuredProvider];
+  const webSearchEnv = Boolean(providerEnvVar && (process.env[providerEnvVar] ?? "").trim());
   const hasWebSearchKey = Boolean(webSearchKey || webSearchProviderKey || webSearchEnv);
   await prompter.note(
     hasWebSearchKey
