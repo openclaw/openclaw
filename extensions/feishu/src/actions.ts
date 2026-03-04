@@ -13,6 +13,8 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
     return actions;
   },
 
+  supportsAction: ({ action }) => action === "react" || action === "reactions",
+
   handleAction: async (ctx) => {
     const { action, cfg, params, accountId } = ctx;
 

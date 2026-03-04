@@ -236,6 +236,19 @@ describe("feishuMessageActions", () => {
     });
   });
 
+  describe("supportsAction", () => {
+    it("supports react and reactions", () => {
+      expect(feishuMessageActions.supportsAction!({ action: "react" as never })).toBe(true);
+      expect(feishuMessageActions.supportsAction!({ action: "reactions" as never })).toBe(true);
+    });
+
+    it("does not support send or other actions", () => {
+      expect(feishuMessageActions.supportsAction!({ action: "send" as never })).toBe(false);
+      expect(feishuMessageActions.supportsAction!({ action: "broadcast" as never })).toBe(false);
+      expect(feishuMessageActions.supportsAction!({ action: "edit" as never })).toBe(false);
+    });
+  });
+
   describe("handleAction - unsupported", () => {
     it("throws for unsupported action", async () => {
       await expect(
