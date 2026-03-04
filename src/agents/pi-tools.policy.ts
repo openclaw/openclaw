@@ -245,7 +245,10 @@ function resolveModelToolPolicy(params: {
   const patternEntries = Object.entries(byModel).filter(([key]) => key.includes("*"));
 
   for (const [pattern, policy] of patternEntries) {
-    const compiledPatterns = compileGlobPatterns([pattern]);
+    const compiledPatterns = compileGlobPatterns({
+      raw: [pattern],
+      normalize: normalizeToolName,
+    });
     if (matchesAnyGlobPattern(normalizeToolName(fullModelId), compiledPatterns)) {
       return policy;
     }
