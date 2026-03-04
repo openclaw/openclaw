@@ -35,6 +35,7 @@ export type ResolvedBrowserConfig = {
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
+  stealth: boolean;
   extraArgs: string[];
 };
 
@@ -250,6 +251,7 @@ export function resolveBrowserConfig(
     };
   }
 
+  const stealth = cfg?.stealth !== false; // default: true
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
@@ -295,6 +297,7 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    stealth,
     ssrfPolicy,
     extraArgs,
   };

@@ -267,7 +267,11 @@ export async function launchOpenClawChrome(
     }
 
     // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
+    // Configurable via browser.stealth (default: true). Set to false to suppress
+    // Chrome's "unsupported command-line flag" warning banner.
+    if (resolved.stealth) {
+      args.push("--disable-blink-features=AutomationControlled");
+    }
 
     // Append user-configured extra arguments (e.g., stealth flags, window size)
     if (resolved.extraArgs.length > 0) {

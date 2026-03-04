@@ -44,6 +44,12 @@ export type BrowserConfig = {
   color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
+  /**
+   * Add --disable-blink-features=AutomationControlled to hide navigator.webdriver.
+   * Useful for web scraping; unnecessary for personal browsing and causes a Chrome warning banner.
+   * Default: true
+   */
+  stealth?: boolean;
   /** Start Chrome headless (best-effort). Default: false */
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
