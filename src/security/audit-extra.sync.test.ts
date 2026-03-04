@@ -89,4 +89,20 @@ describe("collectSmallModelRiskFindings web search key detection", () => {
     });
     expect(findings[0]?.detail).toContain("web_search");
   });
+
+  it("treats OPENROUTER_API_KEY as enabling web_search exposure", () => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: baseCfg,
+      env: { OPENROUTER_API_KEY: "openrouter-key" } as NodeJS.ProcessEnv,
+    });
+    expect(findings[0]?.detail).toContain("web_search");
+  });
+
+  it("treats MOONSHOT_API_KEY as enabling web_search exposure", () => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: baseCfg,
+      env: { MOONSHOT_API_KEY: "moonshot-key" } as NodeJS.ProcessEnv,
+    });
+    expect(findings[0]?.detail).toContain("web_search");
+  });
 });
