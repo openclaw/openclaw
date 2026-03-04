@@ -236,6 +236,13 @@ async function runPollCycle(cfg: ImapHookRuntimeConfig, expectedGeneration: numb
         );
         try {
           await processEnvelope(cfg, envelope);
+          // Check generation after processEnvelope to detect reloads that occurred during processing
+          if (expectedGeneration !== generation) {
+            log.debug(
+              `stale poll cycle detected after envelope ${envelope.id} processed, aborting`,
+            );
+            break;
+          }
           seenIds.add(envelope.id);
           totalProcessed++;
           log.debug(`envelope ${envelope.id} processed and added to seenIds`);
