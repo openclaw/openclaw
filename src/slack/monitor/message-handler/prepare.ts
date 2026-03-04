@@ -704,6 +704,7 @@ export async function prepareSlackMessage(params: {
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
+    ChannelId: message.channel,
     ParentSessionKey: threadKeys.parentSessionKey,
     // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
     ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,

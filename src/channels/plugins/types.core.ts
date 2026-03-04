@@ -255,6 +255,7 @@ export type ChannelThreadingContext = {
   CurrentMessageId?: string | number;
   ReplyToId?: string;
   ReplyToIdFull?: string;
+  ChannelId?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
 };

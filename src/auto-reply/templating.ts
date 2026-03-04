@@ -48,6 +48,8 @@ export type MsgContext = {
   AccountId?: string;
   ParentSessionKey?: string;
   MessageSid?: string;
+  /** Underlying provider channel identifier for inbound payload routing context. */
+  ChannelId?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
   MessageSids?: string[];
