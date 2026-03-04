@@ -24,6 +24,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
+    "bin/",
     "README-header.png",
     "README.md",
     "assets/",
