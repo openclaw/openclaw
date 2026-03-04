@@ -5,6 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpenClaw",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v15),
     ],
@@ -61,6 +62,7 @@ let package = Package(
             resources: [
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/DeviceModels"),
+                .copy("Resources/zh-Hans.lproj"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
