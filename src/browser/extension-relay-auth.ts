@@ -8,6 +8,9 @@ const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
 const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
 
+import fs from "node:fs";
+import path from "node:path";
+
 class SecretRefUnavailableError extends Error {
   readonly isSecretRefUnavailable = true;
 }
@@ -58,7 +61,22 @@ async function resolveGatewayAuthToken(): Promise<string | null> {
     if (err instanceof SecretRefUnavailableError) {
       throw err;
     }
-    // ignore config read failures; caller can fallback to per-process random token
+    // ignore config read failures
+  }
+
+  // Hard fallback: manually read from .openclaw/openclaw.json without loadConfig plugins
+  try {
+    const defaultPath =
+      process.env.OPENCLAW_CONFIG_PATH || path.join(process.cwd(), ".openclaw", "openclaw.json");
+    if (fs.existsSync(defaultPath)) {
+      const raw = fs.readFileSync(defaultPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed?.gateway?.auth?.token) {
+        return parsed.gateway.auth.token.trim();
+      }
+    }
+  } catch {
+    // ignore
   }
   return null;
 }
