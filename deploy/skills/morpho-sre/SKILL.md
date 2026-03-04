@@ -73,6 +73,51 @@ export K8S_CONTEXT="${K8S_CONTEXT:-$(kubectl config current-context)}"
 kubectl --context "$K8S_CONTEXT" get ns | sed -n '1,20p'
 ```
 
+## DB Query Guardrail (Slack Threads)
+
+- Trigger: any request about DB rows/counts/listing/filtering (for example "markets", "whitelisted", "listed", "market_warnings", "query this table", "run SQL").
+- Mandatory: run at least one successful live DB query before final answer. No SQL-only conceptual replies.
+- Mandatory: verify reachable schema first (`information_schema`/`\dt`) before table-specific query.
+- Mandatory response evidence line:
+  - `db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed> rows=<n>`
+- If live query cannot run:
+  - include exact failing command + exact error text
+  - include next unblock step
+  - never claim "no DB access" without attempting connectivity + credential lookup.
+
+Preferred runbook:
+
+```bash
+# 1) Find likely DB credential source
+kubectl --context "$K8S_CONTEXT" -n morpho-dev get secret | rg -i 'blue|indexer|pg|postgres'
+
+# 2) Decode candidate secret metadata/fields (do not paste sensitive values in final answer)
+kubectl --context "$K8S_CONTEXT" -n morpho-dev get secret <secret> -o json \
+  | jq -r '.data | to_entries[] | "\(.key)=<redacted>"'
+
+# 3) Run schema + target query with psql or node pg client
+# psql path (preferred when available)
+PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "${PGPORT:-5432}" -U "$PGUSER" -d "$PGDATABASE" \
+  -c 'select table_schema, table_name from information_schema.tables order by 1,2 limit 50;'
+
+# node pg fallback (bootstrap path prepared in container)
+node <<'NODE'
+const { Client } = require('/tmp/pgclient/node_modules/pg');
+const c = new Client({
+  host: process.env.PGHOST,
+  port: Number(process.env.PGPORT || 5432),
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  database: process.env.PGDATABASE,
+  ssl: false,
+});
+await c.connect();
+const r = await c.query("select now()");
+console.log(JSON.stringify({ rows: r.rowCount, sample: r.rows[0] }, null, 2));
+await c.end();
+NODE
+```
+
 ## Docker Image -> GitHub Repo Correlation
 
 ```bash
