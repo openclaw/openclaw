@@ -234,6 +234,36 @@ function resolveChannelAccountConfig(params: {
   return accountValue as Record<string, unknown>;
 }
 
+function resolveEffectiveAllowlistAccountId(params: {
+  cfg: OpenClawConfig;
+  channelId: ChannelId;
+  accountIdFromCommand?: string | null;
+  accountIdFromContext?: string | null;
+}): string {
+  const explicit = normalizeOptionalAccountId(params.accountIdFromCommand);
+  if (explicit) {
+    return normalizeAccountId(explicit);
+  }
+  const fromContext = normalizeOptionalAccountId(params.accountIdFromContext);
+  if (fromContext) {
+    return normalizeAccountId(fromContext);
+  }
+
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const channel = channels?.[params.channelId];
+  if (!channel || typeof channel !== "object") {
+    return normalizeAccountId(undefined);
+  }
+  const record = channel as Record<string, unknown>;
+  const hasAccounts = Boolean(record.accounts && typeof record.accounts === "object");
+  const rawDefaultAccount =
+    typeof record.defaultAccount === "string" ? record.defaultAccount.trim() : "";
+  if (hasAccounts && rawDefaultAccount) {
+    return normalizeAccountId(rawDefaultAccount);
+  }
+  return normalizeAccountId(undefined);
+}
+
 function resolveAccountTarget(
   parsed: Record<string, unknown>,
   channelId: ChannelId,
@@ -447,7 +477,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       },
     };
   }
-  const accountId = normalizeAccountId(parsed.account ?? params.ctx.AccountId);
+  const accountId = resolveEffectiveAllowlistAccountId({
+    cfg: params.cfg,
+    channelId,
+    accountIdFromCommand: parsed.account,
+    accountIdFromContext: params.ctx.AccountId,
+  });
   const scope = parsed.scope;
 
   if (parsed.action === "list") {

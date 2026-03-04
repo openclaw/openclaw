@@ -805,6 +805,99 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("Group allowFrom (config): chat:team");
   });
 
+  it("uses feishu defaultAccount for list when --account is omitted", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        feishu: {
+          defaultAccount: "ops",
+          accounts: {
+            default: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:default"],
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["chat:default"],
+            },
+            ops: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:ops"],
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["chat:ops"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist list all channel=feishu", cfg, {
+      AccountId: undefined,
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Channel: feishu (account ops)");
+    expect(result.reply?.text).toContain("DM allowFrom (config): user:ops");
+    expect(result.reply?.text).toContain("Group allowFrom (config): chat:ops");
+    expect(result.reply?.text).not.toContain("user:default");
+  });
+
+  it("writes to feishu defaultAccount for config edits when --account is omitted", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          feishu: {
+            defaultAccount: "ops",
+            accounts: {
+              default: {
+                allowFrom: ["user:default"],
+              },
+              ops: {
+                allowFrom: ["user:ops"],
+              },
+            },
+          },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        feishu: {
+          defaultAccount: "ops",
+          configWrites: true,
+          accounts: {
+            default: {
+              allowFrom: ["user:default"],
+              configWrites: true,
+            },
+            ops: {
+              allowFrom: ["user:ops"],
+              configWrites: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm channel=feishu --config user:new", cfg, {
+      AccountId: undefined,
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    const feishuCfg = written.channels?.feishu as {
+      accounts?: Record<string, { allowFrom?: string[] }>;
+    };
+    expect(feishuCfg.accounts?.ops?.allowFrom).toEqual(["user:ops", "user:new"]);
+    expect(feishuCfg.accounts?.default?.allowFrom).toEqual(["user:default"]);
+    expect(result.reply?.text).toContain("channels.feishu.accounts.ops.allowFrom");
+  });
+
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
     delete (Object.prototype as Record<string, unknown>).allowFrom;
 
