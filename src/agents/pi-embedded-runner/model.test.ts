@@ -166,6 +166,22 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
   });
 
+  it("normalizes Cloudflare auth header Bearer prefix typo in inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      cloudflare: {
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+        api: "anthropic-messages",
+        headers: { "cf-aig-authorization": "Bearer: test-token" },
+        models: [makeModel("claude-sonnet-4-5")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "cf-aig-authorization": "Bearer test-token" });
+  });
+
   it("omits headers when neither provider nor model specifies them", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       plain: {
@@ -220,6 +236,27 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("normalizes Cloudflare auth header Bearer prefix typo in fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "cloudflare-ai-gateway": {
+            baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+            headers: { "cf-aig-authorization": "Bearer: test-token" },
+            models: [makeModel("claude-sonnet-4-5")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("cloudflare-ai-gateway", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "cf-aig-authorization": "Bearer test-token",
     });
   });
 

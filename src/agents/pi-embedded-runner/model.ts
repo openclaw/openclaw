@@ -24,6 +24,27 @@ type InlineProviderConfig = {
 
 export { buildModelAliasLines };
 
+function normalizeCloudflareGatewayAuthHeader(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return headers;
+  }
+  let mutated = false;
+  const next = { ...headers };
+  for (const [key, value] of Object.entries(next)) {
+    if (key.toLowerCase() !== "cf-aig-authorization") {
+      continue;
+    }
+    const normalized = value.replace(/^\s*Bearer:\s*/i, "Bearer ");
+    if (normalized !== value) {
+      next[key] = normalized;
+      mutated = true;
+    }
+  }
+  return mutated ? next : headers;
+}
+
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
@@ -37,10 +58,11 @@ export function buildInlineProviderModels(
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
-      headers:
+      headers: normalizeCloudflareGatewayAuthHeader(
         entry?.headers || (model as InlineModelEntry).headers
           ? { ...entry?.headers, ...(model as InlineModelEntry).headers }
           : undefined,
+      ),
     }));
   });
 }
@@ -120,10 +142,11 @@ export function resolveModel(
           configuredModel?.maxTokens ??
           providerCfg?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
-        headers:
+        headers: normalizeCloudflareGatewayAuthHeader(
           providerCfg?.headers || configuredModel?.headers
             ? { ...providerCfg?.headers, ...configuredModel?.headers }
             : undefined,
+        ),
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }
@@ -140,10 +163,10 @@ export function resolveModel(
       overridden.baseUrl = providerOverride.baseUrl;
     }
     if (providerOverride.headers) {
-      overridden.headers = {
+      overridden.headers = normalizeCloudflareGatewayAuthHeader({
         ...(model as Model<Api> & { headers?: Record<string, string> }).headers,
         ...providerOverride.headers,
-      };
+      });
     }
     return { model: normalizeModelCompat(overridden), authStorage, modelRegistry };
   }
