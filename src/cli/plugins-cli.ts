@@ -53,6 +53,99 @@ export type PluginUninstallOptions = {
   dryRun?: boolean;
 };
 
+export type PluginImportClaudeOptions = {
+  from?: string;
+  out?: string;
+  dryRun?: boolean;
+};
+
+type ClaudeMcpServerEntry = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+};
+
+type ClaudeMcpConfig = {
+  mcpServers?: Record<string, ClaudeMcpServerEntry>;
+};
+
+function defaultClaudeMcpConfigPaths(): string[] {
+  const home = os.homedir();
+  return [
+    path.join(home, ".claude", "mcp.json"),
+    path.join(home, ".claude", "claude_desktop_config.json"),
+    path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+  ];
+}
+
+function resolveClaudeImportInputPath(from?: string): string | null {
+  if (from?.trim()) {
+    const explicit = resolveUserPath(from.trim());
+    return fs.existsSync(explicit) ? explicit : null;
+  }
+  for (const candidate of defaultClaudeMcpConfigPaths()) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function readClaudeMcpConfig(filePath: string): ClaudeMcpConfig {
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const parsed = JSON.parse(raw) as ClaudeMcpConfig;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid Claude MCP config: expected a JSON object");
+  }
+  if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") {
+    throw new Error("Invalid Claude MCP config: expected mcpServers object");
+  }
+  return parsed;
+}
+
+function normalizeClaudeMcpConfig(input: ClaudeMcpConfig): ClaudeMcpConfig {
+  const mcpServers: Record<string, ClaudeMcpServerEntry> = {};
+  for (const [name, server] of Object.entries(input.mcpServers ?? {})) {
+    if (!server || typeof server !== "object") {
+      continue;
+    }
+    const normalized: ClaudeMcpServerEntry = {};
+    if (typeof server.command === "string" && server.command.trim()) {
+      normalized.command = server.command;
+    }
+    if (Array.isArray(server.args)) {
+      normalized.args = server.args.filter((entry): entry is string => typeof entry === "string");
+    }
+    if (server.env && typeof server.env === "object") {
+      normalized.env = Object.fromEntries(
+        Object.entries(server.env).filter((entry): entry is [string, string] => {
+          return typeof entry[0] === "string" && typeof entry[1] === "string";
+        }),
+      );
+    }
+    if (typeof server.url === "string" && server.url.trim()) {
+      normalized.url = server.url;
+    }
+    if (server.headers && typeof server.headers === "object") {
+      normalized.headers = Object.fromEntries(
+        Object.entries(server.headers).filter((entry): entry is [string, string] => {
+          return typeof entry[0] === "string" && typeof entry[1] === "string";
+        }),
+      );
+    }
+    if (Object.keys(normalized).length > 0) {
+      mcpServers[name] = normalized;
+    }
+  }
+  return { mcpServers };
+}
+
+function defaultClaudeImportOutputPath(): string {
+  return path.join(resolveStateDir(process.env, os.homedir()), "mcp", "claude-import.json");
+}
+
 function resolveFileNpmSpecToLocalPath(
   raw: string,
 ): { ok: true; path: string } | { ok: false; error: string } | null {
@@ -786,6 +879,61 @@ export function registerPluginsCli(program: Command) {
         await writeConfigFile(result.config);
         defaultRuntime.log("Restart the gateway to load plugins.");
       }
+    });
+
+  plugins
+    .command("import-claude")
+    .description("Import Claude MCP marketplace/connectors config into OpenClaw state")
+    .option("--from <path>", "Path to Claude MCP config JSON")
+    .option(
+      "--out <path>",
+      "Destination path for imported config (default: ~/.openclaw/mcp/claude-import.json)",
+    )
+    .option("--dry-run", "Preview import without writing files", false)
+    .action(async (opts: PluginImportClaudeOptions) => {
+      const sourcePath = resolveClaudeImportInputPath(opts.from);
+      if (!sourcePath) {
+        defaultRuntime.error(
+          "Claude MCP config not found. Use --from <path> (for example: ~/Library/Application Support/Claude/claude_desktop_config.json)",
+        );
+        process.exit(1);
+      }
+
+      let parsed: ClaudeMcpConfig;
+      try {
+        parsed = readClaudeMcpConfig(sourcePath);
+      } catch (err) {
+        defaultRuntime.error(`Failed to parse Claude MCP config: ${String(err)}`);
+        process.exit(1);
+        return;
+      }
+
+      const normalized = normalizeClaudeMcpConfig(parsed);
+      const serverNames = Object.keys(normalized.mcpServers ?? {});
+      if (serverNames.length === 0) {
+        defaultRuntime.log(theme.warn("No MCP servers found to import."));
+        return;
+      }
+
+      const outputPath = resolveUserPath(opts.out?.trim() || defaultClaudeImportOutputPath());
+      defaultRuntime.log(`Source: ${shortenHomePath(sourcePath)}`);
+      defaultRuntime.log(`Servers: ${serverNames.length} (${serverNames.join(", ")})`);
+      defaultRuntime.log(`Output: ${shortenHomePath(outputPath)}`);
+
+      if (opts.dryRun) {
+        defaultRuntime.log(theme.muted("Dry run, no files written."));
+        return;
+      }
+
+      await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.promises.writeFile(outputPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+
+      defaultRuntime.log(theme.success("Imported Claude MCP config."));
+      defaultRuntime.log(
+        theme.muted(
+          "Next: wire this file into the runtime that consumes MCP server config (ACP harness / gateway backend).",
+        ),
+      );
     });
 
   plugins
