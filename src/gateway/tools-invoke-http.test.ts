@@ -124,6 +124,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "no_execute_test",
+      parameters: { type: "object", properties: {} },
+      // intentionally no execute - tests runtime guard
+    },
+    {
       name: "diffs_compat_test",
       parameters: {
         type: "object",
@@ -579,6 +584,21 @@ describe("POST /tools/invoke", () => {
     expect(crashBody.ok).toBe(false);
     expect(crashBody.error?.type).toBe("tool_error");
     expect(crashBody.error?.message).toBe("tool execution failed");
+  });
+
+  it("returns 500 when tool has no execute function", async () => {
+    setMainAllowedTools({ allow: ["no_execute_test"] });
+
+    const res = await invokeToolAuthed({
+      tool: "no_execute_test",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("tool_error");
+    expect(body.error?.message).toBe("Tool no_execute_test has no executable function");
   });
 
   it("passes deprecated format alias through invoke payloads even when schema omits it", async () => {
