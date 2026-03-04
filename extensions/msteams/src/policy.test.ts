@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk/compat";
+import type { MSTeamsConfig } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it } from "vitest";
 import {
   isMSTeamsGroupAllowed,
