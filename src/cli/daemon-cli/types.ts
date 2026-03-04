@@ -12,6 +12,7 @@ export type DaemonStatusOptions = {
   rpc: GatewayRpcOpts;
   probe: boolean;
   json: boolean;
+  system?: boolean;
 } & FindExtraGatewayServicesOptions;
 
 export type DaemonInstallOptions = {
@@ -20,8 +21,10 @@ export type DaemonInstallOptions = {
   token?: string;
   force?: boolean;
   json?: boolean;
+  system?: boolean;
 };
 
 export type DaemonLifecycleOptions = {
   json?: boolean;
+  system?: boolean;
 };
