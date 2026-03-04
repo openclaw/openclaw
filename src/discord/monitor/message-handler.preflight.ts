@@ -189,8 +189,13 @@ export async function preflightDiscordMessage(
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
-  const isDirectMessage = channelInfo?.type === ChannelType.DM;
-  const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+  // guild_id from the event payload is the authoritative signal for guild
+  // messages.  channelInfo.type can be stale (cache, API inconsistency, or
+  // Carbon library mismatch), so never classify a message as DM/GroupDM when
+  // guild_id is present.  This prevents guild messages from accidentally
+  // bypassing the requireMention gate.  Fixes #34353.
+  const isDirectMessage = !isGuildMessage && channelInfo?.type === ChannelType.DM;
+  const isGroupDm = !isGuildMessage && channelInfo?.type === ChannelType.GroupDM;
   logDebug(
     `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
   );
@@ -661,13 +666,20 @@ export async function preflightDiscordMessage(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionGate.shouldSkip=${mentionGate.shouldSkip} wasMentioned=${wasMentioned}`,
   );
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
+    // mentionGate.shouldSkip already accounts for canDetectMention; don't
+    // re-gate on botId — mention regexes (bot name / display name) can
+    // detect mentions even when the bot's Discord user ID is unavailable.
+    if (mentionGate.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
       logger.info(
         {
           channelId: messageChannelId,
           reason: "no-mention",
+          requireMention: shouldRequireMention,
+          canDetectMention,
+          wasMentioned,
+          effectiveWasMentioned,
         },
         "discord: skipping guild message",
       );
