@@ -132,10 +132,11 @@ const rootProxy = new Proxy(fastExports, {
     return monolithic ? prop in monolithic : false;
   },
   ownKeys(target) {
-    const monolithic = tryLoadMonolithicSdk();
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    if (monolithic) {
-      for (const key of Reflect.ownKeys(monolithic)) {
+    // Keep Object.keys/property reflection fast and deterministic.
+    // Only expose monolithic keys if it was already loaded by direct access.
+    if (monolithicSdk) {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
         keys.add(key);
       }
     }
