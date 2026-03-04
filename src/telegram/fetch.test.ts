@@ -130,6 +130,18 @@ describe("resolveTelegramFetch", () => {
     expect(resolved).toBe(alreadyWrapped);
   });
 
+  it("does not mutate global network defaults when a proxy fetch is injected", async () => {
+    const proxyFetch = vi.fn(async () => ({ ok: true }) as Response) as unknown as typeof fetch;
+
+    resolveTelegramFetch(proxyFetch, {
+      network: { autoSelectFamily: true, dnsResultOrder: "verbatim" },
+    });
+
+    expect(setDefaultAutoSelectFamily).not.toHaveBeenCalled();
+    expect(setDefaultResultOrder).not.toHaveBeenCalled();
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
   it("honors env enable override", async () => {
     vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "1");
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;

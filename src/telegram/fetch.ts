@@ -178,16 +178,19 @@ export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
-  applyTelegramNetworkWorkarounds(options?.network);
   const sourceFetch = proxyFetch ? resolveFetch(proxyFetch) : resolveFetch();
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  // When Telegram media fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
-  // switch to IPv4-safe network mode and retry once.
+  // Injected proxy fetches should stay self-contained and must not mutate
+  // process-wide network defaults/dispatchers used by other subsystems.
   if (proxyFetch) {
     return sourceFetch;
   }
+
+  applyTelegramNetworkWorkarounds(options?.network);
+  // When Telegram media fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
+  // switch to IPv4-safe network mode and retry once.
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
       return await sourceFetch(input, init);
