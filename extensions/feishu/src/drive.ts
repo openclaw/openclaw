@@ -93,7 +93,7 @@ async function createFolder(client: Lark.Client, name: string, folderToken?: str
     try {
       effectiveToken = await getRootFolderToken(client);
     } catch (err) {
-      log.warn('Failed to process drive operation:', { error: err });
+      console.error("Failed to get root folder token:", { error: err });
       // ignore and keep "0"
     }
   }

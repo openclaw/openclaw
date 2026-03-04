@@ -85,7 +85,7 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
 
     return null;
   } catch (err) {
-    log.warn('Failed to parse Bitable URL:', { url, error: err });
+    console.error("Failed to parse Bitable URL:", { url, error: err });
     return null;
   }
 }
@@ -277,7 +277,6 @@ async function cleanupNewBitable(
     }
 
     // Step 1b: Delete default placeholder fields by type (works for both Feishu and Lark)
-    const items = fieldsRes.data?.items ?? [];
     const defaultFieldsToDelete = items.filter(
       (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
     );
@@ -321,7 +320,7 @@ async function cleanupNewBitable(
         });
         cleanedRows = emptyRecordIds.length;
       } catch (err) {
-        log.warn('Failed to batch delete records, trying one by one:', { error: err });
+        logger.warn(`Failed to batch delete records, trying one by one: ${err}`);
         // Fallback: delete one by one if batch API is unavailable
         for (const recordId of emptyRecordIds) {
           try {

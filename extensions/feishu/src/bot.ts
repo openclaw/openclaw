@@ -343,7 +343,7 @@ function parseMessageContent(content: string, messageType: string): string {
     }
     return content;
   } catch (err) {
-    log.debug('Failed to parse message content as JSON:', { error: err });
+    console.error("Failed to parse message content as JSON:", { error: err });
     return content;
   }
 }
@@ -376,7 +376,7 @@ function parseMergeForwardContent(params: {
   try {
     items = JSON.parse(content);
   } catch (err) {
-    log.debug('Failed to parse quoted message content:', { error: err });
+    console.error("Failed to parse quoted message content:", { error: err });
     log?.(`feishu: merge_forward items parse failed`);
     return "[Merged and Forwarded Message - parse error]";
   }
@@ -448,7 +448,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return `[${contentType}]`;
     }
   } catch (err) {
-    log.warn('Failed to check permissions:', { error: err });
+    console.error("Failed to format sub-message content:", { error: err });
     return content;
   }
 }
@@ -538,7 +538,7 @@ function parseMediaKeys(
         return {};
     }
   } catch (err) {
-    log.debug('Failed to resolve sender name:', { senderId, error: err });
+    console.error("Failed to parse media keys:", { error: err });
     return {};
   }
 }
@@ -914,9 +914,7 @@ export async function handleFeishuMessage(params: {
 
       const items = response.data?.items ?? [];
       if (response.code === 0 && items.length > 0) {
-        log(
-          `feishu[${account.accountId}]: merge_forward API returned ${items.length} items`,
-        );
+        log(`feishu[${account.accountId}]: merge_forward API returned ${items.length} items`);
         const expandedContent = parseMergeForwardContent({
           content: JSON.stringify(items),
           log,
