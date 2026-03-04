@@ -100,4 +100,17 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it("accepts allowlisted custom app protocol origins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net",
+      origin: "app://localhost",
+      allowedOrigins: ["app://localhost"],
+      isLocalClient: false,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("allowlist");
+    }
+  });
 });
