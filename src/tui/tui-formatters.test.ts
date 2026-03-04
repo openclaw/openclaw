@@ -88,6 +88,22 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("[thinking]\nponder\n\nhello");
   });
 
+  it("keeps thinking while replacing stale NO_REPLY content with top-level assistant text", () => {
+    const text = extractTextFromMessage(
+      {
+        role: "assistant",
+        text: "real text field reply",
+        content: [
+          { type: "thinking", thinking: "ponder" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+      },
+      { includeThinking: true },
+    );
+
+    expect(text).toBe("[thinking]\nponder\n\nreal text field reply");
+  });
+
   it("sanitizes ANSI and control chars from string content", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -218,6 +234,16 @@ describe("extractContentFromMessage", () => {
       role: "assistant",
       text: "real text field reply",
       content: [{ type: "text", text: "NO_REPLY" }],
+    });
+
+    expect(text).toBe("real text field reply");
+  });
+
+  it("falls back to assistant text field when string content is stale NO_REPLY", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      text: "real text field reply",
+      content: "NO_REPLY",
     });
 
     expect(text).toBe("real text field reply");
