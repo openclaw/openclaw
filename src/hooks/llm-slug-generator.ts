@@ -75,18 +75,46 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config, supporting alias lookup (e.g. "minimax" → minimax/minimax)
-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
     const aliasIndex = buildModelAliasIndex({ cfg: params.cfg, defaultProvider: DEFAULT_PROVIDER });
-    const resolved = modelRef
-      ? resolveModelRefFromString({ raw: modelRef, defaultProvider: DEFAULT_PROVIDER, aliasIndex })
-      : null;
-    const rawProvider = resolved?.ref.provider ?? DEFAULT_PROVIDER;
-    const rawModel = resolved?.ref.model ?? DEFAULT_MODEL;
-    // Slug generation is a lightweight embedded LLM call — CLI backends are not supported.
-    // Fall back to default embedded provider when the agent's primary model is a CLI backend.
-    const provider = isCliProvider(rawProvider, params.cfg) ? DEFAULT_PROVIDER : rawProvider;
-    const model = isCliProvider(rawProvider, params.cfg) ? DEFAULT_MODEL : rawModel;
+
+    // Hook-level model override: hooks.internal.entries.session-memory.model
+    const hookEntry = params.cfg.hooks?.internal?.entries?.["session-memory"];
+    const hookModelRaw =
+      hookEntry && typeof hookEntry === "object"
+        ? (hookEntry as Record<string, unknown>).model
+        : undefined;
+    const hookResolved =
+      typeof hookModelRaw === "string" && hookModelRaw
+        ? resolveModelRefFromString({
+            raw: hookModelRaw,
+            defaultProvider: DEFAULT_PROVIDER,
+            aliasIndex,
+          })
+        : null;
+
+    let provider: string;
+    let model: string;
+
+    if (hookResolved && !isCliProvider(hookResolved.ref.provider, params.cfg)) {
+      // Use explicitly configured hook model
+      provider = hookResolved.ref.provider;
+      model = hookResolved.ref.model;
+    } else {
+      // Fall back to agent's effective model
+      const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
+      const resolved = modelRef
+        ? resolveModelRefFromString({
+            raw: modelRef,
+            defaultProvider: DEFAULT_PROVIDER,
+            aliasIndex,
+          })
+        : null;
+      const rawProvider = resolved?.ref.provider ?? DEFAULT_PROVIDER;
+      const rawModel = resolved?.ref.model ?? DEFAULT_MODEL;
+      // Slug generation is a lightweight embedded LLM call — CLI backends are not supported.
+      provider = isCliProvider(rawProvider, params.cfg) ? DEFAULT_PROVIDER : rawProvider;
+      model = isCliProvider(rawProvider, params.cfg) ? DEFAULT_MODEL : rawModel;
+    }
     const timeoutMs = resolveSlugTimeoutMs(params.cfg);
 
     const result = await runEmbeddedPiAgent({
