@@ -406,7 +406,7 @@ async function loadWebMediaInternal(
     }
   }
   const mime = await detectMime({ buffer: data, filePath: localPath });
-  const kind = mediaKindFromMime(mime);
+  const kind = kindFromMime(mime);
   let fileName = path.basename(localPath) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
