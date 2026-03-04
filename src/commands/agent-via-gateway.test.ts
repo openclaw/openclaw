@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentCliCommand } from "./agent-via-gateway.js";
+import { agentCliCommand, agentViaGatewayCommand } from "./agent-via-gateway.js";
 import { agentCommand } from "./agent.js";
 
 const runtime: RuntimeEnv = {
@@ -83,6 +83,31 @@ beforeEach(() => {
 });
 
 describe("agentCliCommand", () => {
+  it("accepts --session-key as a standalone session target", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "hi", sessionKey: "agent:ops:slack:channel:c0agdlshsva" },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string };
+      };
+      expect(request.params?.sessionKey).toBe("agent:ops:slack:channel:c0agdlshsva");
+    });
+  });
+
+  it("rejects calls without --to, --session-id, --session-key, or --agent", async () => {
+    await withTempStore(async () => {
+      await expect(agentViaGatewayCommand({ message: "hi" }, runtime)).rejects.toThrow(
+        "Pass --to <E.164>, --session-id, --session-key, or --agent to choose a session",
+      );
+    });
+  });
+
   it("uses a timer-safe max gateway timeout when --timeout is 0", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

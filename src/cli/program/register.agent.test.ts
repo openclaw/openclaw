@@ -71,13 +71,23 @@ describe("registerAgentCommands", () => {
   });
 
   it("runs agent command with deps and verbose enabled for --verbose on", async () => {
-    await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--session-key",
+      "agent:ops:slack:channel:c0agdlshsva",
+      "--verbose",
+      "ON",
+      "--json",
+    ]);
 
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(createDefaultDepsMock).toHaveBeenCalledTimes(1);
     expect(agentCliCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "hi",
+        sessionKey: "agent:ops:slack:channel:c0agdlshsva",
         verbose: "ON",
         json: true,
       }),
