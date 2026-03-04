@@ -570,6 +570,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-custom-no-cross-route",
+      // Keep a second custom scope token so legacy-shape detection is exercised.
+      // "agent:main:work" only yields one rest token and does not hit that path.
       sessionKey: "agent:main:work:ticket-123",
       expectBroadcast: false,
     });
