@@ -152,13 +152,20 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
+  // Add attachment previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
-      });
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+      } else {
+        contentBlocks.push({
+          type: "text",
+          text: `[Attached: ${att.fileName || "file"}]`,
+        });
+      }
     }
   }
 
@@ -186,10 +193,12 @@ export async function sendChatMessage(
           if (!parsed) {
             return null;
           }
+          const isImage = att.mimeType.startsWith("image/");
           return {
-            type: "image",
+            type: isImage ? "image" : "file",
             mimeType: parsed.mimeType,
             content: parsed.content,
+            ...(att.fileName ? { fileName: att.fileName } : {}),
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null)

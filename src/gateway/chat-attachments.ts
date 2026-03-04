@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 
@@ -14,10 +16,52 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
+export type ChatFileContent = {
+  type: "file";
+  filePath: string;
+  fileName: string;
+};
+
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  files?: ChatFileContent[];
 };
+
+/** Alias for backwards compatibility */
+export type ParsedMessageWithAttachments = ParsedMessageWithImages;
+
+const UPLOADS_DIR =
+  process.env.OPENCLAW_UPLOADS_DIR ||
+  path.join(process.env.HOME || "/Users/openclaw", ".openclaw", "workspace", "uploads");
+
+function sanitizeFileName(name: string): string {
+  // Remove path separators and other dangerous characters
+  return name
+    .replace(/[/\\:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 200);
+}
+
+function saveFileToDisk(
+  base64Data: string,
+  originalName: string,
+  log?: AttachmentLog,
+): string | null {
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true, mode: 0o700 });
+    const timestamp = Date.now();
+    const safeName = sanitizeFileName(originalName || "unnamed");
+    const fileName = `${timestamp}-${safeName}`;
+    const filePath = path.join(UPLOADS_DIR, fileName);
+    const buffer = Buffer.from(base64Data, "base64");
+    fs.writeFileSync(filePath, buffer, { mode: 0o600 });
+    return filePath;
+  } catch (err) {
+    log?.warn(`failed to save file ${originalName}: ${String(err)}`);
+    return null;
+  }
+}
 
 type AttachmentLog = {
   warn: (message: string) => void;
@@ -106,6 +150,8 @@ export async function parseMessageWithAttachments(
   }
 
   const images: ChatImageContent[] = [];
+  const files: ChatFileContent[] = [];
+  let parsedMessage = message;
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,28 +166,32 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
-    if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
-      continue;
-    }
-    if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
-      continue;
-    }
-    if (sniffedMime && providedMime && sniffedMime !== providedMime) {
-      log?.warn(
-        `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
-      );
-    }
 
-    images.push({
-      type: "image",
-      data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
-    });
+    const isImage = sniffedMime ? isImageMime(sniffedMime) : isImageMime(providedMime);
+
+    if (isImage) {
+      if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+        log?.warn(
+          `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
+        );
+      }
+      images.push({
+        type: "image",
+        data: b64,
+        mimeType: sniffedMime ?? providedMime ?? mime,
+      });
+    } else {
+      // Non-image: save to disk and inject path into message
+      const filePath = saveFileToDisk(b64, att.fileName || label, log);
+      if (filePath) {
+        files.push({ type: "file", filePath, fileName: att.fileName || label });
+        parsedMessage += `\n\n[Attached file: ${filePath}]`;
+        log?.warn(`attachment ${label}: saved non-image to ${filePath}`);
+      }
+    }
   }
 
-  return { message, images };
+  return { message: parsedMessage, images, files };
 }
 
 /**
