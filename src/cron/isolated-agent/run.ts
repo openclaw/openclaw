@@ -125,10 +125,18 @@ export async function runCronIsolatedAgentTurn(params: {
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
+  // Strip undefined values so per-agent overrides don't wipe global defaults.
+  // resolveAgentConfig() returns explicit `sandbox: undefined` (and similar)
+  // when the agent entry doesn't set those fields; Object.assign would copy
+  // that `undefined` over the global agents.defaults.sandbox, causing sandbox
+  // mode to fall back to "off".  See: #33349
+  const definedOverrides = Object.fromEntries(
+    Object.entries(agentOverrideRest).filter(([, v]) => v !== undefined),
+  ) as Partial<AgentDefaultsConfig>;
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
-    agentOverrideRest as Partial<AgentDefaultsConfig>,
+    definedOverrides,
   );
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
