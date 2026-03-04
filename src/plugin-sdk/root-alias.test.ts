@@ -13,7 +13,9 @@ type EmptySchema = {
       };
 };
 
-describe("plugin-sdk root alias", () => {
+// jiti transpiles the entire monolithic SDK on first lazy access, which can
+// take well over 60 s on slower CI runners.
+describe("plugin-sdk root alias", { timeout: 180_000 }, () => {
   it("exposes the fast empty config schema helper", () => {
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
     expect(typeof factory).toBe("function");
