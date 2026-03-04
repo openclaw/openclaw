@@ -44,9 +44,9 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   );
 }
 
-async function confirmGatewayReachable(port: number): Promise<boolean> {
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+async function confirmGatewayReachable(port: number, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const password = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
     auth: token || password ? { token, password } : undefined,
@@ -108,7 +108,7 @@ export async function inspectGatewayRestart(params: {
   let healthy = running && ownsPort;
   if (!healthy && running && portUsage.status === "busy") {
     try {
-      healthy = await confirmGatewayReachable(params.port);
+      healthy = await confirmGatewayReachable(params.port, env);
     } catch {
       // best-effort probe
     }
