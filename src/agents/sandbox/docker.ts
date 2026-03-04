@@ -441,6 +441,8 @@ async function createSandboxContainer(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   configHash?: string;
+  /** Ports to publish on the sandbox container for browser namespace sharing. */
+  browserPortPublishing?: Array<{ containerPort: number }>;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
@@ -462,6 +464,13 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
   });
   appendCustomBinds(args, cfg);
+  // Publish browser ports on the sandbox container when the browser will join
+  // this container's network namespace (Docker forbids -p with --network container:<id>).
+  if (params.browserPortPublishing) {
+    for (const { containerPort } of params.browserPortPublishing) {
+      args.push("-p", `127.0.0.1::${containerPort}`);
+    }
+  }
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
@@ -492,6 +501,8 @@ export async function ensureSandboxContainer(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  /** Ports to publish on the sandbox container for browser namespace sharing. */
+  browserPortPublishing?: Array<{ containerPort: number }>;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
@@ -502,6 +513,7 @@ export async function ensureSandboxContainer(params: {
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    browserPortPublishing: params.browserPortPublishing,
   });
   const now = Date.now();
   const state = await dockerContainerState(containerName);
@@ -549,6 +561,7 @@ export async function ensureSandboxContainer(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
+      browserPortPublishing: params.browserPortPublishing,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);

@@ -131,11 +131,26 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  // When browser namespace sharing is enabled, the browser container will join
+  // the sandbox container's network namespace. Docker forbids -p with --network
+  // container:<id>, so the browser's CDP/noVNC ports must be published on the
+  // sandbox container at creation time.
+  const browserPortPublishing =
+    resolvedCfg.browser.enabled && resolvedCfg.browser.shareNetworkNamespace
+      ? [
+          { containerPort: resolvedCfg.browser.cdpPort },
+          ...(resolvedCfg.browser.enableNoVnc
+            ? [{ containerPort: resolvedCfg.browser.noVncPort }]
+            : []),
+        ]
+      : undefined;
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    browserPortPublishing,
   });
 
   const evaluateEnabled =
@@ -164,6 +179,7 @@ export async function resolveSandboxContext(params: {
     cfg: resolvedCfg,
     evaluateEnabled,
     bridgeAuth,
+    sandboxContainerName: containerName,
   });
 
   const sandboxContext: SandboxContext = {
