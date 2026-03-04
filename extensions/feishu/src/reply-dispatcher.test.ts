@@ -300,25 +300,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
 
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("💭 思考中...");
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("💭 思考中...", {
+      mode: "replace",
+    });
 
     await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("🔧 正在使用 Read...");
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("🔧 正在使用Read工具...", {
+      mode: "replace",
+    });
 
     await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案");
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案", {
+      mode: "replace",
+    });
 
     await dispatcher.replyOptions.onToolStart?.({ name: "Grep", phase: "start" });
     await flushAsyncTasks();
     expect(streamingInstances[0].update).toHaveBeenLastCalledWith(
       "🔧 已使用 2 个工具，正在处理...\n---\n第一段答案",
+      { mode: "replace" },
     );
 
     await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案\n第二段答案" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案\n第二段答案");
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案\n第二段答案", {
+      mode: "replace",
+    });
 
     await options.onIdle?.();
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案\n第二段答案");

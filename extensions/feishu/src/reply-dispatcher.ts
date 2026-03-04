@@ -169,7 +169,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (toolUseCount >= 2) {
         return `🔧 已使用 ${toolUseCount} 个工具，正在处理...`;
       }
-      return `🔧 正在使用 ${lastToolName ?? "工具"}...`;
+      const toolName = lastToolName?.trim();
+      return toolName ? `🔧 正在使用${toolName}工具...` : "🔧 正在使用工具...";
     }
     return undefined;
   };
@@ -218,7 +219,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
       lastRenderedStreamContent = rendered;
-      await streaming.update(rendered);
+      await streaming.update(rendered, { mode: "replace" });
     });
   };
 

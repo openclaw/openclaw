@@ -8,6 +8,8 @@ import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type UpdateMode = "merge" | "replace";
+type PendingUpdate = { text: string; mode: UpdateMode };
 
 /** Optional header for streaming cards (title bar with color template) */
 export type StreamingCardHeader = {
@@ -113,7 +115,7 @@ export class FeishuStreamingSession {
   private closed = false;
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
-  private pendingText: string | null = null;
+  private pendingUpdate: PendingUpdate | null = null;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
@@ -250,11 +252,18 @@ export class FeishuStreamingSession {
       .catch((error) => onError?.(error));
   }
 
-  async update(text: string): Promise<void> {
+  async update(
+    text: string,
+    options?: {
+      mode?: UpdateMode;
+    },
+  ): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
+    const mode = options?.mode ?? "merge";
+    const pendingBase = this.pendingUpdate?.text ?? this.state.currentText;
+    const mergedInput = mode === "replace" ? text : mergeStreamingText(pendingBase, text);
     if (!mergedInput || mergedInput === this.state.currentText) {
       return;
     }
@@ -262,17 +271,18 @@ export class FeishuStreamingSession {
     // Throttle: skip if updated recently, but remember pending text
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = mergedInput;
+      this.pendingUpdate = { text: mergedInput, mode: "replace" };
       return;
     }
-    this.pendingText = null;
+    this.pendingUpdate = null;
     this.lastUpdateTime = now;
 
     this.queue = this.queue.then(async () => {
       if (!this.state || this.closed) {
         return;
       }
-      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
+      const mergedText =
+        mode === "replace" ? mergedInput : mergeStreamingText(this.state.currentText, mergedInput);
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
@@ -290,7 +300,12 @@ export class FeishuStreamingSession {
     await this.queue;
 
     const hasExplicitFinalText = finalText !== undefined;
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
+    const pendingMerged = this.pendingUpdate
+      ? this.pendingUpdate.mode === "replace"
+        ? this.pendingUpdate.text
+        : mergeStreamingText(this.state.currentText, this.pendingUpdate.text)
+      : this.state.currentText;
+    this.pendingUpdate = null;
     const text = hasExplicitFinalText
       ? finalText.length > 0
         ? mergeStreamingText(pendingMerged, finalText)
