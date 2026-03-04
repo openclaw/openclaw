@@ -223,6 +223,14 @@ function hashToolOutcome(
     }
   }
 
+  if (toolName === "exec") {
+    return digestStable({
+      status: details.status,
+      exitCode: details.exitCode ?? null,
+      text,
+    });
+  }
+
   return digestStable({
     details,
     text,

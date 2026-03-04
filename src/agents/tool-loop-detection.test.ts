@@ -444,6 +444,93 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("detects repeated exec calls with identical output despite volatile details", () => {
+      const state = createState();
+      const params = { command: "echo hello", timeout: 10000 };
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `exec-${i}`;
+        recordToolCall(state, "exec", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "hello" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 50 + i,
+              aggregated: "hello",
+              cwd: `/workspace/run-${i}`,
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    it("does not escalate exec to circuit breaker when output changes", () => {
+      const state = createState();
+      const params = { command: "date", timeout: 10000 };
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `exec-${i}`;
+        recordToolCall(state, "exec", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: `output-${i}` }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 50 + i,
+              aggregated: `output-${i}`,
+              cwd: "/workspace",
+            },
+          },
+        });
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.level).toBe("warning");
+      }
+    });
+
+    it("warns on exec generic repeat at warning threshold", () => {
+      const params = { command: "ls /tmp", timeout: 10000 };
+      const result = {
+        content: [{ type: "text", text: "file1 file2" }],
+        details: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 42,
+          aggregated: "file1 file2",
+          cwd: "/workspace",
+        },
+      };
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: "exec",
+        toolParams: params,
+        result,
+        count: WARNING_THRESHOLD,
+      });
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
     it("warns on ping-pong alternating patterns", () => {
       const state = createState();
       const readParams = { path: "/a.txt" };
