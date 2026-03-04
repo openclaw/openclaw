@@ -188,7 +188,7 @@ async function resolveTelegramCommandAuth(params: {
     groupConfig,
     topicConfig,
     groupAllowOverride,
-    effectiveGroupAllow,
+    configuredGroupAllowFrom,
     hasGroupAllowOverride,
   } = groupAllowContext;
   // Use direct config dmPolicy override if available for DMs
@@ -217,12 +217,14 @@ async function resolveTelegramCommandAuth(params: {
     return await sendAuthMessage("You are not authorized to use this command.");
   };
 
+  // Use configuredGroupAllowFrom (without pairing store) for native command authorization.
+  // Commands should only be authorized for explicitly configured users.
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,
     groupConfig,
     topicConfig,
     hasGroupAllowOverride,
-    effectiveGroupAllow,
+    effectiveGroupAllow: configuredGroupAllowFrom,
     senderId,
     senderUsername,
     enforceAllowOverride: requireAuth,
@@ -245,7 +247,7 @@ async function resolveTelegramCommandAuth(params: {
     telegramCfg,
     topicConfig,
     groupConfig,
-    effectiveGroupAllow,
+    effectiveGroupAllow: configuredGroupAllowFrom,
     senderId,
     senderUsername,
     resolveGroupPolicy,
