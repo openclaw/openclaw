@@ -1843,8 +1843,8 @@
 
 /* Chat text */
 .chat-text {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
   color: var(--chat-text);
   line-height: 1.5;
 }
