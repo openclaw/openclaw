@@ -196,10 +196,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(
-  modelId?: string,
-  provider?: string,
-): number | undefined {
+export function lookupContextTokens(modelId?: string, provider?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
