@@ -123,15 +123,21 @@ export class OpenClawApp extends LitElement {
   // The speech portion currently appended to the textarea; replaced on each interim update.
   // Tracking only the suffix (not the full base) means user edits elsewhere are preserved.
   private _lastVoiceSuffix = "";
+  // Cached after startRecording so resetTranscript() can be called synchronously on edits/sends.
+  private _voiceModule: { resetTranscript: () => void } | null = null;
 
   private _replaceVoiceSuffix(next: string) {
     const cur = this.chatMessage;
-    // If the textarea still ends with what we last wrote, replace just that part.
-    // If the user edited it (deleted characters from the suffix), fall back to appending.
-    const base =
-      this._lastVoiceSuffix && cur.endsWith(this._lastVoiceSuffix)
-        ? cur.slice(0, cur.length - this._lastVoiceSuffix.length)
-        : cur;
+    if (this._lastVoiceSuffix && !cur.endsWith(this._lastVoiceSuffix)) {
+      // User edited/deleted the suffix — accumulated transcript is stale.
+      // Reset so the next interim starts fresh from the current field contents.
+      this._lastVoiceSuffix = "";
+      this._voiceModule?.resetTranscript();
+      return;
+    }
+    const base = this._lastVoiceSuffix
+      ? cur.slice(0, cur.length - this._lastVoiceSuffix.length)
+      : cur;
     const sep = base && next ? " " : "";
     this._lastVoiceSuffix = next ? sep + next : "";
     this.chatMessage = base + this._lastVoiceSuffix;
@@ -143,6 +149,7 @@ export class OpenClawApp extends LitElement {
       this.voiceInputEnabled = true;
       this._lastVoiceSuffix = "";
       void import("./services/voice.ts").then((m) => {
+        this._voiceModule = m;
         m.startRecording(
           (interim) => {
             this._replaceVoiceSuffix(interim);
@@ -156,6 +163,7 @@ export class OpenClawApp extends LitElement {
               this._replaceVoiceSuffix("");
               this._lastVoiceSuffix = "";
               this.voiceInputEnabled = false;
+              this._voiceModule = null;
             }
           },
         ).catch((err) => {
@@ -163,6 +171,7 @@ export class OpenClawApp extends LitElement {
           this._replaceVoiceSuffix("");
           this._lastVoiceSuffix = "";
           this.voiceInputEnabled = false;
+          this._voiceModule = null;
         });
       });
     } else {
@@ -177,6 +186,7 @@ export class OpenClawApp extends LitElement {
         } finally {
           this._lastVoiceSuffix = "";
           this.voiceInputEnabled = false;
+          this._voiceModule = null;
         }
       });
     }
@@ -574,6 +584,12 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+    // If recording is still active, reset the accumulated transcript so continued
+    // speech doesn't re-surface already-sent words in the input field.
+    if (this.voiceInputEnabled) {
+      this._lastVoiceSuffix = "";
+      this._voiceModule?.resetTranscript();
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {

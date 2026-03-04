@@ -70,6 +70,10 @@ export async function startRecording(
   return Promise.reject(new Error("SpeechRecognition not supported"));
 }
 
+export function resetTranscript(): void {
+  lastTranscript = "";
+}
+
 export async function stopRecording(): Promise<string> {
   if (!recognition) {
     return "";
