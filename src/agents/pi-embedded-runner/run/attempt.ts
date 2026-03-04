@@ -238,9 +238,10 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
-    // Keep whitespace-only placeholders unchanged so they do not collapse to
-    // empty names (which can later surface as toolName="" loops).
-    return rawName;
+    // Return a clearly-invalid sentinel so tool dispatch produces a single
+    // descriptive "Tool _blank not found" error instead of looping on an
+    // empty name that the model keeps retrying (#34129, #29965).
+    return "_blank";
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
