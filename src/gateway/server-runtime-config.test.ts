@@ -227,6 +227,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         port: 18789,
+        host: "127.0.0.1",
       });
       expect(result.bindHost).toBe("0.0.0.0");
     });
@@ -247,6 +248,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         port: 18789,
+        host: "127.0.0.1",
       });
 
       expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
@@ -269,6 +271,25 @@ describe("resolveGatewayRuntimeConfig", () => {
       });
 
       expect(result.strictTransportSecurityHeader).toBeUndefined();
+    });
+  });
+
+  describe("control UI basePath normalization", () => {
+    it("normalizes Windows-style separators in controlUi.basePath", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            controlUi: {
+              basePath: "\\openclaw\\control\\",
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.controlUiBasePath).toBe("/openclaw/control");
     });
   });
 });

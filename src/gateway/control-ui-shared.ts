@@ -10,10 +10,14 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {
     return "";
   }
-  let normalized = basePath.trim();
+  let normalized = basePath.trim().replaceAll("\\", "/");
   if (!normalized) {
     return "";
   }
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  normalized = normalized.replace(/\/{2,}/g, "/");
   if (!normalized.startsWith("/")) {
     normalized = `/${normalized}`;
   }
