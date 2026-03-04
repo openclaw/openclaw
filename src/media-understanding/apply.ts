@@ -364,76 +364,88 @@ function resolveTextMimeFromName(name?: string): string | undefined {
 }
 
 /**
- * Check for well-known binary file signatures (magic bytes) in the buffer
- * header. This catches binary files even when MIME type is missing or wrong.
- * Magic bytes (also called "file signatures") are unique byte sequences at the start
- * of a file that identify its format, regardless of extension or MIME type.
+ * Well-known binary file signatures (magic bytes): unique byte sequences at the
+ * start of a file that identify its format, regardless of extension or MIME type.
+ * Each entry is a prefix match at byte offset 0.
+ *
+ * Adding a new format: append { name, bytes } to this array.
+ * For complex validation (e.g. MZ/PE offset checks), use the special-case
+ * block in hasBinaryFileSignature() below.
+ */
+const BINARY_SIGNATURES: ReadonlyArray<{ name: string; bytes: readonly number[] }> = [
+  // Archives
+  { name: "ZIP", bytes: [0x50, 0x4b, 0x03, 0x04] }, // also .docx, .xlsx, .jar, .odt
+  { name: "RAR", bytes: [0x52, 0x61, 0x72, 0x21] },
+  { name: "7z", bytes: [0x37, 0x7a, 0xbc, 0xaf] },
+  { name: "gzip", bytes: [0x1f, 0x8b] },
+  // Documents
+  { name: "OLE2", bytes: [0xd0, 0xcf, 0x11, 0xe0] }, // .msg, .doc, .xls, .ppt
+  // Executables & libraries
+  { name: "ELF", bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  { name: "Mach-O BE32", bytes: [0xfe, 0xed, 0xfa, 0xce] },
+  { name: "Mach-O LE32", bytes: [0xce, 0xfa, 0xed, 0xfe] },
+  { name: "Mach-O LE64", bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+  { name: "Mach-O FAT / Java Class", bytes: [0xca, 0xfe, 0xba, 0xbe] },
+  // Databases
+  // SQLite magic header: "SQLite format 3\0" (16 bytes, null-terminated)
+  // Spec: https://www.sqlite.org/fileformat.html#magic_header_string
+  {
+    name: "SQLite",
+    bytes: [
+      0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33,
+      0x00,
+    ],
+  },
+];
+
+/**
+ * Check for well-known binary file signatures (magic bytes) in the buffer header.
+ * This catches binary files even when MIME type is missing or wrong.
+ *
+ * Uses a table-driven approach for simple prefix matches, with special-case
+ * validation for formats that need deeper inspection (e.g. MZ/PE executables).
  */
 function hasBinaryFileSignature(buffer?: Buffer): boolean {
-  if (!buffer || buffer.length < 4) {
+  if (!buffer || buffer.length < 2) {
     return false;
   }
-  // ZIP (also .docx, .xlsx, .pptx, .jar, .odt, .ods, .odp)
-  if (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) {
-    return true;
+
+  // Table-driven prefix matching
+  for (const sig of BINARY_SIGNATURES) {
+    if (buffer.length >= sig.bytes.length) {
+      let match = true;
+      for (let i = 0; i < sig.bytes.length; i++) {
+        if (buffer[i] !== sig.bytes[i]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        return true;
+      }
+    }
   }
-  // OLE2 Compound Document (.msg, .doc, .xls, .ppt)
-  if (buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0) {
-    return true;
+
+  // Special case: Windows PE/MZ executable
+  // "MZ" (0x4D 0x5A) alone is only 2 printable ASCII bytes, prone to false positives
+  // on text files (e.g. "MZelda..."). Validate by reading the 4-byte LE offset at 0x3C
+  // and checking for the PE signature ("PE\0\0") at that offset.
+  // Need at least 0x3C + 4 = 64 bytes to read the offset field safely.
+  // Spec: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
+  if (buffer[0] === 0x4d && buffer[1] === 0x5a && buffer.length >= 0x3c + 4) {
+    const peOffset = buffer.readUInt32LE(0x3c);
+    if (
+      peOffset > 0 &&
+      peOffset + 4 <= buffer.length &&
+      buffer[peOffset] === 0x50 && // 'P'
+      buffer[peOffset + 1] === 0x45 && // 'E'
+      buffer[peOffset + 2] === 0x00 &&
+      buffer[peOffset + 3] === 0x00
+    ) {
+      return true;
+    }
   }
-  // ELF binary
-  if (buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
-    return true;
-  }
-  // Windows PE/MZ executable
-  if (buffer[0] === 0x4d && buffer[1] === 0x5a) {
-    return true;
-  }
-  // gzip
-  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
-    return true;
-  }
-  // RAR
-  if (buffer[0] === 0x52 && buffer[1] === 0x61 && buffer[2] === 0x72 && buffer[3] === 0x21) {
-    return true;
-  }
-  // 7z
-  if (buffer[0] === 0x37 && buffer[1] === 0x7a && buffer[2] === 0xbc && buffer[3] === 0xaf) {
-    return true;
-  }
-  // Mach-O (macOS binary) + FAT/Universal binaries & Java class files (0xCAFEBABE)
-  if (
-    (buffer[0] === 0xfe && buffer[1] === 0xed && buffer[2] === 0xfa) ||
-    (buffer[0] === 0xce && buffer[1] === 0xfa && buffer[2] === 0xed) ||
-    (buffer[0] === 0xcf && buffer[1] === 0xfa && buffer[2] === 0xed) ||
-    (buffer[0] === 0xca && buffer[1] === 0xfe && buffer[2] === 0xba && buffer[3] === 0xbe)
-  ) {
-    return true;
-  }
-  // SQLite magic header: "SQLite format 3\0" (16 bytes, null-terminated)
-  // Only 6 bytes ("SQLite") would false-positive on text files starting with the word "SQLite"
-  // Spec: https://www.sqlite.org/fileformat.html#magic_header_string
-  if (
-    buffer.length >= 16 &&
-    buffer[0] === 0x53 &&
-    buffer[1] === 0x51 &&
-    buffer[2] === 0x4c &&
-    buffer[3] === 0x69 &&
-    buffer[4] === 0x74 &&
-    buffer[5] === 0x65 &&
-    buffer[6] === 0x20 &&
-    buffer[7] === 0x66 &&
-    buffer[8] === 0x6f &&
-    buffer[9] === 0x72 &&
-    buffer[10] === 0x6d &&
-    buffer[11] === 0x61 &&
-    buffer[12] === 0x74 &&
-    buffer[13] === 0x20 &&
-    buffer[14] === 0x33 &&
-    buffer[15] === 0x00
-  ) {
-    return true;
-  }
+
   return false;
 }
 

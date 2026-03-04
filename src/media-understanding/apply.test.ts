@@ -1251,6 +1251,53 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("SQLite discussion points");
   });
 
+  it("skips Windows PE executable with valid PE header via MZ+PE validation", async () => {
+    // Build a minimal PE-like buffer: MZ at start, PE offset at 0x3C pointing to PE\0\0
+    // Use explicit byte array to ensure exact structure
+    const peBytes = Array.from({ length: 128 }, () => 0);
+    peBytes[0] = 0x4d; // 'M'
+    peBytes[1] = 0x5a; // 'Z'
+    // PE offset at 0x3C (60): little-endian 0x50 (80)
+    peBytes[0x3c] = 0x50;
+    peBytes[0x3d] = 0x00;
+    peBytes[0x3e] = 0x00;
+    peBytes[0x3f] = 0x00;
+    // PE signature at offset 80
+    peBytes[0x50] = 0x50; // 'P'
+    peBytes[0x51] = 0x45; // 'E'
+    peBytes[0x52] = 0x00;
+    peBytes[0x53] = 0x00;
+    const pe = Buffer.from(peBytes);
+    const filePath = await createTempMediaFile({
+      fileName: "app.unknown",
+      content: pe,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/octet-stream",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("allows text file starting with MZ through when no valid PE header exists", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "notes.dat",
+      content: "MZelda is my favourite game character\nMore text here about gaming",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain("MZelda");
+  });
+
   it("handles file shorter than magic header length gracefully", async () => {
     const filePath = await createTempMediaFile({
       fileName: "tiny.dat",
