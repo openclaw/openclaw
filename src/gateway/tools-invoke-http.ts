@@ -313,6 +313,19 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  // Plugin or misconfigured tools may omit execute at runtime; guard against fake success.
+  const exec = (tool as { execute?: unknown }).execute;
+  if (typeof exec !== "function") {
+    sendJson(res, 500, {
+      ok: false,
+      error: {
+        type: "tool_error",
+        message: `Tool ${toolName} has no executable function`,
+      },
+    });
+    return true;
+  }
+
   try {
     const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
@@ -338,8 +351,7 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(toolCallId, hookResult.params);
+    const result = await exec.call(tool, toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
