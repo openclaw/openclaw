@@ -1,6 +1,8 @@
 import os
 import logging
+from typing import List, Optional, Union
 from mem0 import Memory
+from mem0 import MemoryClient
 
 def _get_client():
     """
