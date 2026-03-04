@@ -26,6 +26,18 @@ describe("isXaiProvider", () => {
     expect(isXaiProvider("google")).toBe(false);
   });
 
+  it("matches venice with grok model id", () => {
+    expect(isXaiProvider("venice", "grok-4.1-fast")).toBe(true);
+  });
+
+  it("matches venice with grok model id (case insensitive)", () => {
+    expect(isXaiProvider("VENICE", "GROK-2-1214")).toBe(true);
+  });
+
+  it("does not match venice with non-grok model id", () => {
+    expect(isXaiProvider("venice", "llama-3.1-sonar-small")).toBe(false);
+  });
+
   it("handles undefined provider", () => {
     expect(isXaiProvider(undefined)).toBe(false);
   });
