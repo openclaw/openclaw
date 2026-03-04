@@ -22,6 +22,7 @@ import {
   buildDiscordSendError,
   buildDiscordTextChunks,
   createDiscordClient,
+  getDiscordErrorCode,
   normalizeDiscordPollInput,
   normalizeStickerIds,
   parseAndResolveRecipient,
@@ -262,11 +263,12 @@ export async function sendMessageDiscord(
   }
 
   let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
+  let effectiveChannelId = channelId;
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
         rest,
-        channelId,
+        effectiveChannelId,
         textWithMentions,
         opts.mediaUrl,
         opts.mediaLocalRoots,
@@ -281,7 +283,7 @@ export async function sendMessageDiscord(
     } else {
       result = await sendDiscordText(
         rest,
-        channelId,
+        effectiveChannelId,
         textWithMentions,
         opts.replyTo,
         request,
@@ -293,12 +295,61 @@ export async function sendMessageDiscord(
       );
     }
   } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      rest,
-      token,
-      hasMedia: Boolean(opts.mediaUrl),
-    });
+    const DISCORD_UNKNOWN_CHANNEL = 10003;
+    if (
+      getDiscordErrorCode(err) === DISCORD_UNKNOWN_CHANNEL &&
+      recipient.kind === "channel" &&
+      /^\d+$/.test(recipient.id)
+    ) {
+      const dmRecipient = { kind: "user" as const, id: recipient.id };
+      const { channelId: dmChannelId } = await resolveChannelId(rest, dmRecipient, request);
+      effectiveChannelId = dmChannelId;
+      try {
+        if (opts.mediaUrl) {
+          result = await sendDiscordMedia(
+            rest,
+            effectiveChannelId,
+            textWithMentions,
+            opts.mediaUrl,
+            opts.mediaLocalRoots,
+            opts.replyTo,
+            request,
+            accountInfo.config.maxLinesPerMessage,
+            opts.components,
+            opts.embeds,
+            chunkMode,
+            opts.silent,
+          );
+        } else {
+          result = await sendDiscordText(
+            rest,
+            effectiveChannelId,
+            textWithMentions,
+            opts.replyTo,
+            request,
+            accountInfo.config.maxLinesPerMessage,
+            opts.components,
+            opts.embeds,
+            chunkMode,
+            opts.silent,
+          );
+        }
+      } catch (retryErr) {
+        throw await buildDiscordSendError(retryErr, {
+          channelId: effectiveChannelId,
+          rest,
+          token,
+          hasMedia: Boolean(opts.mediaUrl),
+        });
+      }
+    } else {
+      throw await buildDiscordSendError(err, {
+        channelId: effectiveChannelId,
+        rest,
+        token,
+        hasMedia: Boolean(opts.mediaUrl),
+      });
+    }
   }
 
   recordChannelActivity({
