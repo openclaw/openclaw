@@ -17,17 +17,27 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import { resolveDaemonServiceEnv } from "./systemd-scope.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-async function resolveGatewayRestartPort() {
+function failUnsupportedSystemScope(system: boolean | undefined): boolean {
+  if (!system || process.platform === "linux") {
+    return false;
+  }
+  defaultRuntime.error("--system is only supported on Linux.");
+  defaultRuntime.exit(1);
+  return true;
+}
+
+async function resolveGatewayRestartPort(env: NodeJS.ProcessEnv) {
   const service = resolveGatewayService();
-  const command = await service.readCommand(process.env).catch(() => null);
+  const command = await service.readCommand(env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
+    ...(env as Record<string, string | undefined>),
     ...(serviceEnv ?? undefined),
   } as NodeJS.ProcessEnv;
 
@@ -36,29 +46,44 @@ async function resolveGatewayRestartPort() {
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
+  if (failUnsupportedSystemScope(opts.system)) {
+    return;
+  }
+  const serviceEnv = resolveDaemonServiceEnv({ system: opts.system }) as NodeJS.ProcessEnv;
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     opts,
+    env: serviceEnv,
     stopBeforeUninstall: true,
     assertNotLoadedAfterUninstall: true,
   });
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  if (failUnsupportedSystemScope(opts.system)) {
+    return;
+  }
+  const serviceEnv = resolveDaemonServiceEnv({ system: opts.system }) as NodeJS.ProcessEnv;
   return await runServiceStart({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
-    renderStartHints: renderGatewayServiceStartHints,
+    renderStartHints: () => renderGatewayServiceStartHints(serviceEnv),
     opts,
+    env: serviceEnv,
   });
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  if (failUnsupportedSystemScope(opts.system)) {
+    return;
+  }
+  const serviceEnv = resolveDaemonServiceEnv({ system: opts.system }) as NodeJS.ProcessEnv;
   return await runServiceStop({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     opts,
+    env: serviceEnv,
   });
 }
 
@@ -68,10 +93,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  if (failUnsupportedSystemScope(opts.system)) {
+    return false;
+  }
   const json = Boolean(opts.json);
+  const serviceEnv = resolveDaemonServiceEnv({ system: opts.system }) as NodeJS.ProcessEnv;
   const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
+  const restartPort = await resolveGatewayRestartPort(serviceEnv).catch(() =>
+    resolveGatewayPort(loadConfig(), serviceEnv),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -79,8 +108,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   return await runServiceRestart({
     serviceNoun: "Gateway",
     service,
-    renderStartHints: renderGatewayServiceStartHints,
+    renderStartHints: () => renderGatewayServiceStartHints(serviceEnv),
     opts,
+    env: serviceEnv,
     checkTokenDrift: true,
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       let health = await waitForGatewayHealthyRestart({
@@ -88,6 +118,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: restartPort,
         attempts: POST_RESTART_HEALTH_ATTEMPTS,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        env: serviceEnv,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
@@ -100,12 +131,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        await service.restart({ env: process.env, stdout });
+        await service.restart({ env: serviceEnv, stdout });
         health = await waitForGatewayHealthyRestart({
           service,
           port: restartPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          env: serviceEnv,
           includeUnknownListenersAsStale: process.platform === "win32",
         });
       }
