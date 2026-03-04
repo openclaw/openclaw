@@ -3,14 +3,14 @@ import type {
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {

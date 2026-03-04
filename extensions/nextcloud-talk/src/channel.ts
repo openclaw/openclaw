@@ -11,7 +11,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import {
   listNextcloudTalkAccountIds,
