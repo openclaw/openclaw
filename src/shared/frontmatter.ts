@@ -1,5 +1,5 @@
 import JSON5 from "json5";
-import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
+import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY, PROJECT_NAME } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
 export function normalizeStringList(input: unknown): string[] {
@@ -46,7 +46,7 @@ export function resolveBotManifestBlock(params: {
       return undefined;
     }
 
-    const manifestKeys = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
+    const manifestKeys = [MANIFEST_KEY, PROJECT_NAME, ...LEGACY_MANIFEST_KEYS];
     for (const key of manifestKeys) {
       const candidate = (parsed as Record<string, unknown>)[key];
       if (candidate && typeof candidate === "object") {

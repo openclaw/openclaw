@@ -148,7 +148,7 @@ describe("config plugin validation", () => {
   });
 
   it("warns for removed legacy plugin ids instead of failing validation", async () => {
-    const removedId = "google-antigravity-auth";
+    const removedId = "legacy-auth-plugin-removed";
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
@@ -166,22 +166,22 @@ describe("config plugin validation", () => {
           {
             path: `plugins.entries.${removedId}`,
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin removed: legacy-auth-plugin-removed (stale config entry ignored; remove it from plugins config)",
           },
           {
             path: "plugins.allow",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin removed: legacy-auth-plugin-removed (stale config entry ignored; remove it from plugins config)",
           },
           {
             path: "plugins.deny",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin removed: legacy-auth-plugin-removed (stale config entry ignored; remove it from plugins config)",
           },
           {
             path: "plugins.slots.memory",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin removed: legacy-auth-plugin-removed (stale config entry ignored; remove it from plugins config)",
           },
         ]),
       );

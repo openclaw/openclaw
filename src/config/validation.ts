@@ -24,7 +24,7 @@ import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./
 import { findLegacyConfigIssues } from "./legacy.js";
 import { BotSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["legacy-auth-plugin-removed"]);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {

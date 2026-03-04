@@ -220,7 +220,7 @@ describe("resolveUserPath", () => {
   });
 
   it("expands ~/ to home dir", () => {
-    expect(resolveUserPath("~/bot")).toBe(path.resolve(os.homedir(), "@hanzo/bot"));
+    expect(resolveUserPath("~/bot")).toBe(path.resolve(os.homedir(), "bot"));
   });
 
   it("resolves relative paths", () => {
@@ -231,7 +231,7 @@ describe("resolveUserPath", () => {
     vi.stubEnv("BOT_HOME", "/srv/bot-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(resolveUserPath("~/bot")).toBe(path.resolve("/srv/bot-home", "@hanzo/bot"));
+    expect(resolveUserPath("~/bot")).toBe(path.resolve("/srv/bot-home", "bot"));
 
     vi.unstubAllEnvs();
   });

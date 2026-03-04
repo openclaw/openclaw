@@ -3,7 +3,7 @@ import { chmodSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -122,14 +122,38 @@ function runScript(
 }
 
 describe("scripts/ios-team-id.sh", () => {
+  beforeAll(async () => {
+    fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "bot-ios-team-id-shared-"));
+    sharedHomeDir = path.join(fixtureRoot, "home");
+    sharedBinDir = path.join(fixtureRoot, "bin");
+    sharedFakePythonPath = path.join(sharedBinDir, "fake-python3");
+    await mkdir(sharedBinDir, { recursive: true });
+    await mkdir(path.join(sharedHomeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(
+      path.join(sharedHomeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
+      "",
+    );
+    await writeExecutable(path.join(sharedBinDir, "plutil"), `#!/usr/bin/env bash\necho '{}'`);
+    await writeExecutable(
+      path.join(sharedBinDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+echo "Domain/default pair of (com.apple.dt.Xcode, $3) does not exist" >&2
+exit 1`,
+    );
+  });
+
   it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "bot-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
     await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-    await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
-      recursive: true,
-    });
+    const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
+    await mkdir(profilesDir, { recursive: true });
+    await writeFile(path.join(profilesDir, "test.mobileprovision"), "stub");
     await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
     await writeFile(
       path.join(sharedHomeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),

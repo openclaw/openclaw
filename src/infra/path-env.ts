@@ -61,7 +61,7 @@ function candidateBinDirs(opts: EnsureBotPathOpts): { prepend: string[]; append:
   // Bundled macOS app: `bot` lives next to the executable (process.execPath).
   try {
     const execDir = path.dirname(execPath);
-    const siblingCli = path.join(execDir, "@hanzo/bot");
+    const siblingCli = path.join(execDir, "bot");
     if (isExecutable(siblingCli)) {
       prepend.push(execDir);
     }
@@ -75,7 +75,7 @@ function candidateBinDirs(opts: EnsureBotPathOpts): { prepend: string[]; append:
     opts.allowProjectLocalBin === true || isTruthyEnvValue(process.env.BOT_ALLOW_PROJECT_LOCAL_BIN);
   if (allowProjectLocalBin) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
-    if (isExecutable(path.join(localBinDir, "@hanzo/bot"))) {
+    if (isExecutable(path.join(localBinDir, "bot"))) {
       append.push(localBinDir);
     }
   }

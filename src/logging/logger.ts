@@ -15,7 +15,7 @@ import { formatLocalIsoWithOffset } from "./timestamps.js";
 export const DEFAULT_LOG_DIR = resolvePreferredBotTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "bot.log"); // legacy single-file path
 
-const LOG_PREFIX = "@hanzo/bot";
+const LOG_PREFIX = "bot";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB

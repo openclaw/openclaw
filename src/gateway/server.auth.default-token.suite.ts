@@ -67,12 +67,13 @@ export function registerDefaultAuthTokenSuite(): void {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     }
 
-    async function expectStatusMissingScopeButHealthAvailable(ws: WebSocket): Promise<void> {
+    async function expectStatusAndHealthMissingScope(ws: WebSocket): Promise<void> {
       const status = await rpcReq(ws, "status");
       expect(status.ok).toBe(false);
       expect(status.error?.message).toContain("missing scope");
       const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(true);
+      expect(health.ok).toBe(false);
+      expect(health.error?.message).toContain("missing scope");
     }
 
     test("closes silent handshakes after timeout", async () => {
@@ -202,12 +203,12 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("keeps health available but admin status restricted when scopes are empty", async () => {
+    test("does not grant admin when scopes are empty", async () => {
       const ws = await openWs(port);
       try {
         const res = await connectReq(ws, { scopes: [] });
         expect(res.ok).toBe(true);
-        await expectStatusMissingScopeButHealthAvailable(ws);
+        await expectStatusAndHealthMissingScope(ws);
       } finally {
         ws.close();
       }
@@ -252,7 +253,7 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(presenceScopes).toEqual([]);
       expect(presenceScopes).not.toContain("operator.admin");
 
-      await expectStatusMissingScopeButHealthAvailable(ws);
+      await expectStatusAndHealthMissingScope(ws);
 
       ws.close();
     });

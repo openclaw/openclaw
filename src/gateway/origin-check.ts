@@ -32,6 +32,8 @@ export function checkBrowserOrigin(params: {
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  /** When true the request arrived via a trusted reverse proxy (e.g. loopback → proxy → gateway). */
+  isTrustedProxyRequest?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
@@ -55,7 +57,12 @@ export function checkBrowserOrigin(params: {
   }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
-  if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
+  // Also accept loopback origins through trusted proxies -- the proxy verified
+  // the upstream connection, so loopback origins remain safe.
+  if (
+    (params.isLocalClient || params.isTrustedProxyRequest) &&
+    isLoopbackHost(parsedOrigin.hostname)
+  ) {
     return { ok: true, matchedBy: "local-loopback" };
   }
 

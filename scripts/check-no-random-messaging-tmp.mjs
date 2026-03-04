@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import ts from "typescript";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  collectTypeScriptFiles,
+  resolveRepoRoot,
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = [
   "src/channels",
@@ -70,19 +78,26 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   return lines;
 }
 
+const allowedCallsites = new Set();
+
 export async function main() {
+  const repoRoot = resolveRepoRoot(import.meta.url);
+  const absoluteRoots = sourceRoots.map((root) => path.join(repoRoot, root));
   const files = (
-    await Promise.all(sourceRoots.map(async (dir) => await collectTypeScriptFiles(dir)))
+    await Promise.all(
+      absoluteRoots.map(async (dir) => await collectTypeScriptFiles(dir, { ignoreMissing: true })),
+    )
   ).flat();
   const violations = [];
 
   for (const filePath of files) {
-    if (allowedCallsites.has(filePath)) {
+    const relPath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
+    if (allowedCallsites.has(relPath)) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
     for (const line of findMessagingTmpdirCallLines(content, filePath)) {
-      violations.push(`${path.relative(repoRoot, filePath)}:${line}`);
+      violations.push(`${relPath}:${line}`);
     }
   }
 
@@ -98,21 +113,6 @@ export async function main() {
     "Use resolvePreferredBotTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
   );
   process.exit(1);
-}
-
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
 }
 
 runAsScript(import.meta.url, main);

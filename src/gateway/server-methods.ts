@@ -39,9 +39,6 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (!client?.connect) {
     return null;
   }
-  if (method === "health") {
-    return null;
-  }
   const roleRaw = client.connect.role ?? "operator";
   const role = parseGatewayRole(roleRaw);
   if (!role) {

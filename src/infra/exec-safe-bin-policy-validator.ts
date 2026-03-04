@@ -28,6 +28,18 @@ function hasGlobToken(value: string): boolean {
   return /[*?[\]]/.test(value);
 }
 
+/**
+ * Detects shell variable expansion in a token (e.g. `$FOO`, `${FOO}`, `$(cmd)`).
+ * Tokens with shell expansion are stripped from safeBin argv before validation
+ * because the enforced command single-quotes all tokens, preventing actual expansion.
+ */
+export function hasShellExpansion(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return /\$/.test(value);
+}
+
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
 function isSafeLiteralToken(value: string): boolean {
@@ -97,12 +109,21 @@ function consumeShortOptionClusterToken(params: {
   allowedValueFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
 }): number {
+  // Profiles that declare at least one denied or value flag have explicit flag
+  // awareness. Unknown short options in such profiles are treated as harmless
+  // boolean flags (e.g. `wc -l` where only `--files0-from` is denied).
+  // Profiles without any flag declarations reject ALL short options to stay
+  // fail-closed (e.g. `tr` only expects positional arguments).
+  const profileHasFlagAwareness = params.allowedValueFlags.size > 0 || params.deniedFlags.size > 0;
   for (let j = 0; j < params.flags.length; j += 1) {
     const flag = params.flags[j];
     if (params.deniedFlags.has(flag)) {
       return -1;
     }
     if (!params.allowedValueFlags.has(flag)) {
+      if (!profileHasFlagAwareness) {
+        return -1;
+      }
       continue;
     }
     const inlineValue = params.cluster.slice(j + 1);
@@ -111,12 +132,18 @@ function consumeShortOptionClusterToken(params: {
     }
     return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
   }
-  return -1;
+  return params.flags.length > 0 && profileHasFlagAwareness ? params.index + 1 : -1;
 }
 
 function consumePositionalToken(token: string, positional: string[]): boolean {
   if (!isSafeLiteralToken(token)) {
     return false;
+  }
+  // Shell expansion tokens (e.g. $FOO, ${BAR}) are not counted as positionals
+  // because the enforced command single-quotes all tokens, neutralizing expansion.
+  // After enforcement `$FOO` becomes the literal string '$FOO', not a file path.
+  if (hasShellExpansion(token)) {
+    return true;
   }
   positional.push(token);
   return true;

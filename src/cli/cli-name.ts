@@ -1,9 +1,9 @@
 import path from "node:path";
 
-export const DEFAULT_CLI_NAME = "@hanzo/bot";
+export const DEFAULT_CLI_NAME = "bot";
 
 const KNOWN_CLI_NAMES = new Set([DEFAULT_CLI_NAME]);
-const CLI_PREFIX_RE = /^(?:((?:pnpm|npm|bunx|npx)\s+))?(bot)\b/;
+const CLI_PREFIX_RE = /^(?:((?:pnpm|npm|bunx|npx)\s+))?(?:@hanzo\/)?bot\b/;
 
 export function resolveCliName(argv: string[] = process.argv): string {
   const argv1 = argv[1];
@@ -24,7 +24,8 @@ export function replaceCliName(command: string, cliName = resolveCliName()): str
   if (!CLI_PREFIX_RE.test(command)) {
     return command;
   }
-  return command.replace(CLI_PREFIX_RE, (_match, runner: string | undefined) => {
-    return `${runner ?? ""}${cliName}`;
+  return command.replace(CLI_PREFIX_RE, (match) => {
+    const runnerMatch = match.match(/^((?:pnpm|npm|bunx|npx)\s+)/);
+    return `${runnerMatch?.[1] ?? ""}${cliName}`;
   });
 }

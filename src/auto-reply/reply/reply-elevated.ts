@@ -75,6 +75,7 @@ function isApprovedElevatedSender(params: {
   const senderIdTokens = new Set<string>();
   const senderFromTokens = new Set<string>();
   const senderE164Tokens = new Set<string>();
+  const senderHandleTokens = new Set<string>();
 
   if (params.ctx.SenderId?.trim()) {
     addFormattedTokens({
@@ -97,10 +98,26 @@ function isApprovedElevatedSender(params: {
       tokens: senderE164Tokens,
     });
   }
+  // Include SenderUsername and SenderTag as formatted identity tokens so
+  // channels whose formatAllowFrom preserves usernames (e.g. Discord) can
+  // match plain allowlist entries against them. Channels that normalize to
+  // phone numbers (e.g. WhatsApp) will filter out non-phone strings,
+  // keeping mutable display-name spoofing impossible.
+  const handleValues = [params.ctx.SenderUsername, params.ctx.SenderTag]
+    .map((v) => v?.trim())
+    .filter((v): v is string => Boolean(v));
+  if (handleValues.length > 0) {
+    addFormattedTokens({
+      formatAllowFrom: params.formatAllowFrom,
+      values: handleValues,
+      tokens: senderHandleTokens,
+    });
+  }
   const senderIdentityTokens = new Set<string>([
     ...senderIdTokens,
     ...senderFromTokens,
     ...senderE164Tokens,
+    ...senderHandleTokens,
   ]);
 
   const senderNameTokens = buildMutableTokens(params.ctx.SenderName);

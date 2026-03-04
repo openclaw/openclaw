@@ -92,6 +92,17 @@ function compileSafeBinProfiles(
 }
 
 export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
+  echo: {
+    // echo takes any number of positional args and writes them to stdout.
+    // No file-reading flags exist, so allow unlimited positionals.
+    maxPositional: undefined,
+    allowedValueFlags: [],
+  },
+  printf: {
+    // printf takes a format string plus arguments, writes to stdout only.
+    maxPositional: undefined,
+    allowedValueFlags: [],
+  },
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],

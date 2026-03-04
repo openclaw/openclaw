@@ -159,10 +159,13 @@ export async function cleanupGlobalRenameDirs(params: {
 }): Promise<{ removed: string[] }> {
   const removed: string[] = [];
   const root = params.globalRoot.trim();
-  const name = params.packageName.trim();
-  if (!root || !name) {
+  const rawName = params.packageName.trim();
+  if (!root || !rawName) {
     return { removed };
   }
+  // For scoped packages like @hanzo/bot, npm renames the base directory (bot)
+  // inside the scope directory (@hanzo/), so use only the basename portion.
+  const name = rawName.includes("/") ? rawName.split("/").pop()! : rawName;
   const prefix = `${GLOBAL_RENAME_PREFIX}${name}-`;
   let entries: string[] = [];
   try {

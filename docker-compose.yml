@@ -32,6 +32,7 @@ services:
     volumes:
       - ${BOT_CONFIG_DIR}:/home/node/.bot
       - ${BOT_WORKSPACE_DIR}:/home/node/.bot/workspace
+    network_mode: "service:bot-gateway"
     stdin_open: true
     tty: true
     init: true

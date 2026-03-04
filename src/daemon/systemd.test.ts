@@ -168,7 +168,7 @@ describe("splitArgsPreservingQuotes", () => {
       splitArgsPreservingQuotes('bot --name "My \\"Bot\\"" --foo bar', {
         escapeMode: "backslash",
       }),
-    ).toEqual(["@hanzo/bot", "--name", 'My "Bot"', "--foo", "bar"]);
+    ).toEqual(["bot", "--name", 'My "Bot"', "--foo", "bar"]);
   });
 
   it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
@@ -176,13 +176,13 @@ describe("splitArgsPreservingQuotes", () => {
       splitArgsPreservingQuotes('bot --path "C:\\\\Program Files\\\\Bot"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["@hanzo/bot", "--path", "C:\\\\Program Files\\\\Bot"]);
+    ).toEqual(["bot", "--path", "C:\\\\Program Files\\\\Bot"]);
 
     expect(
       splitArgsPreservingQuotes('bot --label "My \\"Quoted\\" Name"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["@hanzo/bot", "--label", 'My "Quoted" Name']);
+    ).toEqual(["bot", "--label", 'My "Quoted" Name']);
   });
 });
 

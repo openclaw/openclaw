@@ -27,7 +27,7 @@ vi.mock("../banner.js", () => ({
 }));
 
 vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "@hanzo/bot",
+  resolveCliName: () => "bot",
   replaceCliName: (cmd: string) => cmd,
 }));
 

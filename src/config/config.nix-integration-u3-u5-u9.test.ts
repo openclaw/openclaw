@@ -104,7 +104,7 @@ describe("Nix integration (U3, U5, U9)", () => {
             envWith({ BOT_HOME: home, BOT_CONFIG_PATH: "~/.hanzo/bot/custom.json" }),
             () => home,
           ),
-        ).toBe(path.join(home, ".bot", "custom.json"));
+        ).toBe(path.join(home, ".hanzo", "bot", "custom.json"));
       });
     });
 
@@ -180,10 +180,12 @@ describe("Nix integration (U3, U5, U9)", () => {
         expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "demo-plugin"));
         expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
         expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
-        expect(cfg.agents?.list?.[0]?.agentDir).toBe(path.join(home, ".bot", "agents", "main"));
+        expect(cfg.agents?.list?.[0]?.agentDir).toBe(
+          path.join(home, ".hanzo", "bot", "agents", "main"),
+        );
         expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
         expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
-          path.join(home, ".bot", "credentials", "wa-personal"),
+          path.join(home, ".hanzo", "bot", "credentials", "wa-personal"),
         );
       });
     });

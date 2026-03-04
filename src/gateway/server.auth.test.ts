@@ -385,6 +385,7 @@ describe("gateway server auth/connect", () => {
     });
 
     test("connect (req) handshake resolves server version from env precedence", async () => {
+      const { VERSION } = await import("../version.js");
       for (const testCase of [
         {
           env: {
@@ -392,7 +393,7 @@ describe("gateway server auth/connect", () => {
             BOT_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "2.4.6-service",
+          expectedVersion: VERSION,
         },
         {
           env: {
@@ -408,7 +409,7 @@ describe("gateway server auth/connect", () => {
             BOT_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "1.0.0-package",
+          expectedVersion: VERSION,
         },
       ]) {
         await withRuntimeVersionEnv(testCase.env, async () =>
@@ -473,7 +474,7 @@ describe("gateway server auth/connect", () => {
       }
     });
 
-    test("keeps health available but admin status restricted when scopes are empty", async () => {
+    test("does not grant admin when scopes are empty", async () => {
       const ws = await openWs(port);
       try {
         const res = await connectReq(ws, { scopes: [] });
@@ -482,7 +483,8 @@ describe("gateway server auth/connect", () => {
         expect(status.ok).toBe(false);
         expect(status.error?.message).toContain("missing scope");
         const health = await rpcReq(ws, "health");
-        expect(health.ok).toBe(true);
+        expect(health.ok).toBe(false);
+        expect(health.error?.message).toContain("missing scope");
       } finally {
         ws.close();
       }
@@ -531,7 +533,8 @@ describe("gateway server auth/connect", () => {
       expect(status.ok).toBe(false);
       expect(status.error?.message).toContain("missing scope");
       const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(true);
+      expect(health.ok).toBe(false);
+      expect(health.error?.message).toContain("missing scope");
 
       ws.close();
     });
@@ -621,7 +624,7 @@ describe("gateway server auth/connect", () => {
         device: deviceWithoutNonce,
       });
       expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("must have required property 'nonce'");
+      expect(res.error?.message ?? "").toContain("device nonce required");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 

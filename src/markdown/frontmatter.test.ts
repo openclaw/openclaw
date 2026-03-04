@@ -33,7 +33,7 @@ metadata:
     expect(result.metadata).toBeDefined();
 
     const parsed = JSON5.parse(result.metadata ?? "");
-    expect(parsed.bot?.emoji).toBe("disk");
+    expect(parsed["@hanzo/bot"]?.emoji).toBe("disk");
   });
 
   it("preserves inline JSON values", () => {
@@ -94,7 +94,7 @@ metadata:
   bot: true
 ---`;
     const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"@hanzo/bot":true}');
+    expect(result.metadata).toBe('{"bot":true}');
   });
 
   it("returns empty when frontmatter is missing", () => {

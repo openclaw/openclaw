@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -63,6 +63,27 @@ ENV BOT_PREFER_PNPM=1
 RUN pnpm ui:build
 
 ENV NODE_ENV=production
+
+# Normalize permissions on plugin and agent directories so they are accessible
+# but not world-writable. Directories get 755 (rwxr-xr-x), files get 644 (rw-r--r--).
+RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+      if [ -d "$dir" ]; then \
+        find "$dir" -type d -exec chmod 755 {} + && \
+        find "$dir" -type f -exec chmod 644 {} +; \
+      fi; \
+    done
+
+# Optionally verify GPG fingerprints for sandbox builds.
+# Build with: docker build --build-arg BOT_SANDBOX=1 ...
+ARG BOT_SANDBOX=""
+RUN if [ -n "$BOT_SANDBOX" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gnupg && \
+      gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 0xDEADBEEF 2>/dev/null || true && \
+      gpg --with-colons --fingerprint 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }' && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
 
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app

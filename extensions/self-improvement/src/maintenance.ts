@@ -10,6 +10,7 @@
  * Exposed as a tool so the agent (or user) can trigger it explicitly.
  */
 import type { AnyAgentTool, BotPluginApi } from "bot/plugin-sdk";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -169,7 +170,7 @@ async function analyzeAndPropose(baseDir: string, sessionCount: number) {
     const priority = failure.total >= 10 ? "high" : failure.total >= 5 ? "medium" : "low";
 
     proposals.push({
-      id: `prop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: `prop-${randomUUID()}`,
       type: failure.total >= 8 ? "new_tool" : "tool_improvement",
       priority,
       title: `${failure.total >= 8 ? "Build" : "Improve"} handling for ${failure.tool_id} ${failure.failure_mode} failures`,
@@ -194,7 +195,7 @@ async function analyzeAndPropose(baseDir: string, sessionCount: number) {
       );
       if (!exists) {
         proposals.push({
-          id: `prop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `prop-${randomUUID()}`,
           type: pc.type ?? "tool_improvement",
           priority: "medium",
           title: pc.title,

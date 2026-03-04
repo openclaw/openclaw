@@ -38,6 +38,7 @@ describe("doctor command", () => {
     const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
     expect((written.channels as Record<string, unknown>)?.whatsapp).toEqual({
       allowFrom: ["+15555550123"],
+      enabled: true,
     });
     expect(written.routing).toBeUndefined();
   });

@@ -258,10 +258,14 @@ function deriveIdHint(params: {
   }
 
   // Prefer the unscoped name so config keys stay stable even when the npm
-  // package is scoped (example: @bot/voice-call -> voice-call).
-  const unscoped = rawPackageName.includes("/")
+  // package is scoped (example: @hanzo/bot-voice-call -> voice-call).
+  let unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
+  // Strip the "bot-" prefix so @hanzo/bot-discord resolves to "discord".
+  if (unscoped.startsWith("bot-")) {
+    unscoped = unscoped.slice(4);
+  }
 
   if (!params.hasMultipleExtensions) {
     return unscoped;

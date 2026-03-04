@@ -346,7 +346,11 @@ describe("legacy config detection", () => {
       gateway: { bind: "tailnet" as const },
     });
     expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config).toBeNull();
+    // The controlUi.allowedOrigins seeding migration fires for non-loopback binds,
+    // so config may be non-null; verify bind mode is preserved.
+    if (res.config) {
+      expect(res.config.gateway?.bind).toBe("tailnet");
+    }
 
     const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
     expect(validated.ok).toBe(true);
@@ -390,7 +394,9 @@ describe("legacy config detection", () => {
     const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.channels?.telegram?.streamMode).toBe("partial");
+      // normalizeTelegramStreamingConfig resolves streamMode into the canonical
+      // `streaming` key and deletes the legacy `streamMode` field.
+      expect(res.config.channels?.telegram?.streaming).toBe("partial");
     }
   });
   it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {

@@ -60,6 +60,8 @@ describe("trigger handling", () => {
   it("rejects /restart by default", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      // commands.restart defaults to true; explicitly disable to test the gate.
+      const cfg = { ...makeCfg(home), commands: { restart: false } };
       const res = await getReplyFromConfig(
         {
           Body: "  [Dec 5] /restart",
@@ -68,7 +70,7 @@ describe("trigger handling", () => {
           CommandAuthorized: true,
         },
         {},
-        makeCfg(home),
+        cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("/restart is disabled");

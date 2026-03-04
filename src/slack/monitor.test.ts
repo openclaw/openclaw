@@ -129,14 +129,14 @@ describe("resolveSlackThreadTs", () => {
 
 describe("buildSlackSlashCommandMatcher", () => {
   it("matches with or without a leading slash", () => {
-    const matcher = buildSlackSlashCommandMatcher("@hanzo/bot");
+    const matcher = buildSlackSlashCommandMatcher("bot");
 
-    expect(matcher.test("@hanzo/bot")).toBe(true);
+    expect(matcher.test("bot")).toBe(true);
     expect(matcher.test("/bot")).toBe(true);
   });
 
   it("does not match similar names", () => {
-    const matcher = buildSlackSlashCommandMatcher("@hanzo/bot");
+    const matcher = buildSlackSlashCommandMatcher("bot");
 
     expect(matcher.test("/bot-bot")).toBe(false);
     expect(matcher.test("bot-bot")).toBe(false);

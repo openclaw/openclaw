@@ -103,7 +103,7 @@ describe("channel plugin registry", () => {
 describe("channel plugin catalog", () => {
   it("includes Microsoft Teams", () => {
     const entry = getChannelPluginCatalogEntry("msteams");
-    expect(entry?.install.npmSpec).toBe("@bot/msteams");
+    expect(entry?.install.npmSpec).toBe("@hanzo/bot-msteams");
     expect(entry?.meta.aliases).toContain("teams");
   });
 

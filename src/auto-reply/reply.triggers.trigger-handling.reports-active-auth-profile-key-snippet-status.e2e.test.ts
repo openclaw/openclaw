@@ -23,7 +23,9 @@ describe("trigger handling", () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const cfg = makeCfg(home);
-      const agentDir = join(home, ".hanzo", "bot", "agents", "main", "agent");
+      // BOT_STATE_DIR is set to join(home, ".bot") by the test harness,
+      // so the agent dir resolves under .bot, not .hanzo/bot.
+      const agentDir = join(home, ".bot", "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         join(agentDir, "auth-profiles.json"),

@@ -302,7 +302,7 @@ describe("gateway bonjour advertiser", () => {
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.name).toBe("bot (Bot)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
-    expect(gatewayCall?.[0]?.hostname).toBe("@hanzo/bot");
+    expect(gatewayCall?.[0]?.hostname).toBe("bot");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("bot.local");
 
     await started.stop();

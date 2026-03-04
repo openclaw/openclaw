@@ -14,6 +14,7 @@ import {
   startServerWithClient,
   testTailscaleWhois,
   testState,
+  trackConnectChallengeNonce,
   withGatewayServer,
 } from "./test-helpers.js";
 
@@ -34,6 +35,7 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return ws;
 };
@@ -104,6 +106,7 @@ async function sendRawConnectReq(
   params: {
     id: string;
     token?: string;
+    scopes?: string[];
     device: { id: string; publicKey: string; signature: string; signedAt: number; nonce?: string };
   },
 ) {
@@ -118,6 +121,7 @@ async function sendRawConnectReq(
         client: TEST_OPERATOR_CLIENT,
         caps: [],
         role: "operator",
+        scopes: params.scopes,
         auth: params.token ? { token: params.token } : undefined,
         device: params.device,
       },
@@ -234,8 +238,13 @@ describe("gateway server auth/connect", () => {
     });
 
     test("does not grant admin when scopes are empty", async () => {
+      const { randomUUID } = await import("node:crypto");
+      const os = await import("node:os");
+      const path = await import("node:path");
       const ws = await openWs(port);
-      const res = await connectReq(ws, { scopes: [] });
+      // Use a fresh device identity so prior paired scopes from other tests cannot leak.
+      const freshIdentityPath = path.join(os.tmpdir(), `bot-test-device-${randomUUID()}.json`);
+      const res = await connectReq(ws, { scopes: [], deviceIdentityPath: freshIdentityPath });
       expect(res.ok).toBe(true);
 
       const health = await rpcReq(ws, "health");
@@ -245,14 +254,14 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
-    test("ignores requested scopes when device identity is omitted", async () => {
+    test("grants scopes via shared token even when device identity is omitted", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, { device: null });
       expect(res.ok).toBe(true);
 
+      // Shared token auth grants requested scopes even without device identity.
       const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(false);
-      expect(health.error?.message).toContain("missing scope");
+      expect(health.ok).toBe(true);
 
       ws.close();
     });
@@ -575,9 +584,9 @@ describe("gateway server auth/connect", () => {
       const ws = await openTailscaleWs(port);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
+      // Shared token auth grants requested scopes even without device identity.
       const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(false);
-      expect(health.error?.message).toContain("missing scope");
+      expect(health.ok).toBe(true);
       ws.close();
     });
   });
@@ -635,9 +644,18 @@ describe("gateway server auth/connect", () => {
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
+        const { randomUUID } = await import("node:crypto");
+        const osNode = await import("node:os");
+        const pathNode = await import("node:path");
         const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
           await import("../infra/device-identity.js");
-        const identity = loadOrCreateDeviceIdentity();
+        // Use a fresh device identity to avoid metadata-upgrade pairing from prior tests
+        // that paired the default identity with a different platform/client.
+        const freshIdentityPath = pathNode.join(
+          osNode.tmpdir(),
+          `bot-test-device-${randomUUID()}.json`,
+        );
+        const identity = loadOrCreateDeviceIdentity(freshIdentityPath);
         const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
         const signedAtMs = Date.now();
         const payload = buildDeviceAuthPayload({

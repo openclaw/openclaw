@@ -12,4 +12,4 @@ export {
   type SafeBinProfileFixtures,
 } from "./exec-safe-bin-policy-profiles.js";
 
-export { validateSafeBinArgv } from "./exec-safe-bin-policy-validator.js";
+export { hasShellExpansion, validateSafeBinArgv } from "./exec-safe-bin-policy-validator.js";

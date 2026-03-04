@@ -10,6 +10,7 @@
  * indexed by context for retrieval in future sessions.
  */
 import type { BotPluginApi } from "bot/plugin-sdk";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -90,7 +91,7 @@ function saveFacts(): void {
 function addFact(fact: Omit<LearnedFact, "id" | "captured_at" | "confidence" | "applied">): void {
   const entry: LearnedFact = {
     ...fact,
-    id: `fact-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `fact-${randomUUID()}`,
     captured_at: new Date().toISOString(),
     confidence: 1.0, // User-stated facts are always confidence 1.0
     applied: 0,

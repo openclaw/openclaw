@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../src/auto-reply/templating.js";
 import type { BotConfig } from "../src/config/config.js";
+import { resolvePreferredBotTmpDir } from "../src/infra/tmp-bot-dir.js";
 import { applyMediaUnderstanding } from "../src/media-understanding/apply.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "../src/media-understanding/runner.js";
 
@@ -15,10 +16,19 @@ const writeExecutable = async (dir: string, name: string, content: string) => {
   return filePath;
 };
 
+/**
+ * Creates a temp media file inside the preferred bot tmp dir so the inbound
+ * path policy allows reading it. The file is padded to exceed
+ * MIN_AUDIO_FILE_BYTES (1024) for audio tests.
+ */
 const makeTempMedia = async (ext: string) => {
-  const dir = await makeTempDir("bot-media-e2e-");
+  const baseDir = resolvePreferredBotTmpDir();
+  await fs.mkdir(baseDir, { recursive: true });
+  const dir = await fs.mkdtemp(path.join(baseDir, "bot-media-e2e-"));
   const filePath = path.join(dir, `sample${ext}`);
-  await fs.writeFile(filePath, "audio");
+  // Pad file to 2048 bytes so audio files pass MIN_AUDIO_FILE_BYTES check.
+  const content = Buffer.alloc(2048, 0x41);
+  await fs.writeFile(filePath, content);
   return { dir, filePath };
 };
 

@@ -75,7 +75,7 @@ describe("ensureBotCliOnPath", () => {
   it("prepends the bundled app bin dir when a sibling bot exists", () => {
     const tmp = abs("/tmp/bot-path/case-bundled");
     const appBinDir = path.join(tmp, "AppBin");
-    const cliPath = path.join(appBinDir, "@hanzo/bot");
+    const cliPath = path.join(appBinDir, "bot");
     setDir(tmp);
     setDir(appBinDir);
     setExe(cliPath);
@@ -109,7 +109,7 @@ describe("ensureBotCliOnPath", () => {
   it("prepends mise shims when available", () => {
     const tmp = abs("/tmp/bot-path/case-mise");
     const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "@hanzo/bot");
+    const appCli = path.join(appBinDir, "bot");
     setDir(tmp);
     setDir(appBinDir);
     setExe(appCli);
@@ -141,13 +141,13 @@ describe("ensureBotCliOnPath", () => {
   it("only appends project-local node_modules/.bin when explicitly enabled", () => {
     const tmp = abs("/tmp/bot-path/case-project-local");
     const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "@hanzo/bot");
+    const appCli = path.join(appBinDir, "bot");
     setDir(tmp);
     setDir(appBinDir);
     setExe(appCli);
 
     const localBinDir = path.join(tmp, "node_modules", ".bin");
-    const localCli = path.join(localBinDir, "@hanzo/bot");
+    const localCli = path.join(localBinDir, "bot");
     setDir(path.join(tmp, "node_modules"));
     setDir(localBinDir);
     setExe(localCli);

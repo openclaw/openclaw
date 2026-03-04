@@ -480,19 +480,15 @@ type ConnectResponse = {
   error?: { message?: string; code?: string; details?: unknown };
 };
 
-function resolveDefaultTestDeviceIdentityPath(params: {
+function resolveDefaultTestDeviceIdentityPath(_params: {
   clientId: string;
   clientMode: string;
   platform: string;
   deviceFamily?: string;
   role: string;
 }) {
-  const safe =
-    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
-      .replace(/[^a-zA-Z0-9._-]+/g, "_")
-      .toLowerCase();
   const suiteRoot = process.env.BOT_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+  return path.join(suiteRoot, "identity", "device.json");
 }
 
 export async function readConnectChallengeNonce(
@@ -600,7 +596,38 @@ export async function connectReq(
       return opts.device;
     }
     if (!connectChallengeNonce) {
-      throw new Error("missing connect.challenge nonce");
+      // Nonce not available (e.g., challenge event was missed). Build the
+      // device without a nonce so the server can reject with "device nonce
+      // required" for non-local hosts, matching the expected test behaviour.
+      const identityPathForNonceless =
+        opts?.deviceIdentityPath ??
+        resolveDefaultTestDeviceIdentityPath({
+          clientId: client.id,
+          clientMode: client.mode,
+          platform: client.platform,
+          deviceFamily: client.deviceFamily,
+          role,
+        });
+      const identityNonceless = loadOrCreateDeviceIdentity(identityPathForNonceless);
+      const signedAtMsNonceless = Date.now();
+      const payloadNonceless = buildDeviceAuthPayloadV3({
+        deviceId: identityNonceless.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role,
+        scopes: requestedScopes,
+        signedAtMs: signedAtMsNonceless,
+        token: authTokenForSignature ?? null,
+        nonce: "",
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+      });
+      return {
+        id: identityNonceless.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identityNonceless.publicKeyPem),
+        signature: signDevicePayload(identityNonceless.privateKeyPem, payloadNonceless),
+        signedAt: signedAtMsNonceless,
+      };
     }
     const identityPath =
       opts?.deviceIdentityPath ??

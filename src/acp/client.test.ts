@@ -82,7 +82,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
 
   it("unwraps .cmd shim entrypoint on windows", async () => {
     const dir = await createTempDir();
-    const scriptPath = path.join(dir, "@hanzo/bot", "dist", "entry.js");
+    const scriptPath = path.join(dir, "bot", "dist", "entry.js");
     const shimPath = path.join(dir, "bot.cmd");
     await mkdir(path.dirname(scriptPath), { recursive: true });
     await writeFile(scriptPath, "console.log('ok')\n", "utf8");

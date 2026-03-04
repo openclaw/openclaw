@@ -15,6 +15,7 @@ import {
 import {
   SAFE_BIN_PROFILES,
   type SafeBinProfile,
+  hasShellExpansion,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
@@ -85,13 +86,27 @@ export function isSafeBinUsage(params: {
   ) {
     return false;
   }
-  const argv = params.argv.slice(1);
+  const rawArgv = params.argv.slice(1);
+  // Strip tokens containing shell variable expansion ($VAR, ${VAR}, $(cmd)).
+  // The enforced command single-quotes all tokens, preventing actual expansion.
+  // Stripping here ensures shell-variable positionals don't violate maxPositional
+  // constraints designed to prevent file access via safeBin commands.
+  const argv = rawArgv.filter((token) => !hasShellExpansion(token));
   const safeBinProfiles = params.safeBinProfiles ?? SAFE_BIN_PROFILES;
   const profile = safeBinProfiles[execName];
   if (!profile) {
     return false;
   }
-  return validateSafeBinArgv(argv, profile);
+  if (!validateSafeBinArgv(argv, profile)) {
+    return false;
+  }
+  // Update effectiveArgv to exclude shell-expansion tokens so the enforced
+  // command does not re-introduce them (even quoted, they would be opaque literals).
+  if (argv.length !== rawArgv.length && resolution.effectiveArgv) {
+    const execToken = resolution.effectiveArgv[0];
+    resolution.effectiveArgv = execToken ? [execToken, ...argv] : [...argv];
+  }
+  return true;
 }
 
 function isPathScopedExecutableToken(token: string): boolean {

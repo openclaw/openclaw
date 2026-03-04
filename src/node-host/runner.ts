@@ -27,6 +27,7 @@ import {
 export { buildNodeInvokeResultParams };
 
 type NodeHostRunOptions = {
+  gatewayUrl?: string;
   gatewayHost: string;
   gatewayPort: number;
   gatewayTls?: boolean;
@@ -218,10 +219,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     env: process.env,
   });
 
-  const host = gateway.host ?? "127.0.0.1";
-  const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
+  const url = opts.gatewayUrl
+    ? opts.gatewayUrl
+    : `${gateway.tls ? "wss" : "ws"}://${gateway.host ?? "127.0.0.1"}:${gateway.port ?? 18789}`;
   const pathEnv = ensureNodePathEnv();
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);

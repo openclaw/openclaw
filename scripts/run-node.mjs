@@ -8,7 +8,8 @@ import { pathToFileURL } from "node:url";
 const compiler = "tsdown";
 const compilerArgs = ["exec", compiler, "--no-clean"];
 
-const gitWatchedPaths = ["src", "tsconfig.json", "package.json"];
+export const runNodeWatchedPaths = ["src", "tsconfig.json", "package.json"];
+const gitWatchedPaths = runNodeWatchedPaths;
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {

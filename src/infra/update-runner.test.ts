@@ -190,9 +190,9 @@ describe("runGatewayUpdate", () => {
     onBaseInstall?: () => Promise<CommandResult>;
     onOmitOptionalInstall?: () => Promise<CommandResult>;
   }) {
-    const baseInstallKey = "npm i -g bot@latest --no-fund --no-audit --loglevel=error";
+    const baseInstallKey = "npm i -g @hanzo/bot@latest --no-fund --no-audit --loglevel=error";
     const omitOptionalInstallKey =
-      "npm i -g bot@latest --omit=optional --no-fund --no-audit --loglevel=error";
+      "npm i -g @hanzo/bot@latest --omit=optional --no-fund --no-audit --loglevel=error";
 
     return async (argv: string[]): Promise<CommandResult> => {
       const key = argv.join(" ");
@@ -393,16 +393,16 @@ describe("runGatewayUpdate", () => {
   it.each([
     {
       title: "updates global npm installs when detected",
-      expectedInstallCommand: "npm i -g bot@latest --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: "npm i -g @hanzo/bot@latest --no-fund --no-audit --loglevel=error",
     },
     {
       title: "uses update channel for global npm installs when tag is omitted",
-      expectedInstallCommand: "npm i -g bot@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: "npm i -g @hanzo/bot@beta --no-fund --no-audit --loglevel=error",
       channel: "beta" as const,
     },
     {
       title: "updates global npm installs with tag override",
-      expectedInstallCommand: "npm i -g bot@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: "npm i -g @hanzo/bot@beta --no-fund --no-audit --loglevel=error",
       tag: "beta",
     },
   ])("$title", async ({ expectedInstallCommand, channel, tag }) => {
@@ -422,7 +422,7 @@ describe("runGatewayUpdate", () => {
   it("cleans stale npm rename dirs before global update", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "@hanzo/bot");
-    const staleDir = path.join(nodeModules, ".bot-stale");
+    const staleDir = path.join(path.dirname(pkgRoot), ".bot-stale");
     await fs.mkdir(staleDir, { recursive: true });
     await seedGlobalPackageRoot(pkgRoot);
 
@@ -486,7 +486,7 @@ describe("runGatewayUpdate", () => {
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
-        installCommand: "bun add -g bot@latest",
+        installCommand: "bun add -g @hanzo/bot@latest",
         onInstall: async () => {
           await fs.writeFile(
             path.join(pkgRoot, "package.json"),
@@ -502,7 +502,7 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls.some((call) => call === "bun add -g bot@latest")).toBe(true);
+      expect(calls.some((call) => call === "bun add -g @hanzo/bot@latest")).toBe(true);
     });
   });
 

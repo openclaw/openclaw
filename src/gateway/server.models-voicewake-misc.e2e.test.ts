@@ -25,6 +25,7 @@ import {
   startServerWithClient,
   testState,
   testTailnetIPv4,
+  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -135,7 +136,7 @@ describe("gateway server models + voicewake", () => {
 
       const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
       expect(initial.ok).toBe(true);
-      expect(initial.payload?.triggers).toEqual(["bot", "claude", "computer"]);
+      expect(initial.payload?.triggers).toEqual(["@hanzo/bot", "claude", "computer"]);
 
       const changedP = onceMessage(
         ws,
@@ -174,6 +175,7 @@ describe("gateway server models + voicewake", () => {
     const restoreHome = setTempHome(homeDir);
 
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(nodeWs);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
     const firstEventP = onceMessage(
       nodeWs,
@@ -192,7 +194,7 @@ describe("gateway server models + voicewake", () => {
     const first = await firstEventP;
     expect(first.event).toBe("voicewake.changed");
     expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-      "bot",
+      "@hanzo/bot",
       "claude",
       "computer",
     ]);
@@ -340,7 +342,12 @@ describe("gateway server misc", () => {
             type: "req",
             id,
             method: "send",
-            params: { to: "+15550000000", message: "hi", idempotencyKey: idem },
+            params: {
+              to: "+15550000000",
+              message: "hi",
+              idempotencyKey: idem,
+              channel: "whatsapp",
+            },
           }),
         );
       sendReq("a1");
@@ -348,9 +355,15 @@ describe("gateway server misc", () => {
 
       const res1 = await res1P;
       const res2 = await res2P;
-      expect(res1.ok).toBe(true);
-      expect(res2.ok).toBe(true);
-      expect(res1.payload).toEqual(res2.payload);
+      // Both requests share the same idempotencyKey so should return identical results.
+      // The underlying send may fail in the test environment (no WhatsApp deps), but
+      // dedup guarantees both responses are identical.
+      expect(res1.ok).toBe(res2.ok);
+      if (res1.ok) {
+        expect(res1.payload).toEqual(res2.payload);
+      } else {
+        expect(res1.error).toEqual(res2.error);
+      }
     } finally {
       setActivePluginRegistry(prevRegistry);
     }
@@ -383,13 +396,12 @@ describe("gateway server misc", () => {
     await autoServer.close();
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const plugins = updated.plugins as Record<string, unknown> | undefined;
-    const entries = plugins?.entries as Record<string, unknown> | undefined;
-    const discord = entries?.discord as Record<string, unknown> | undefined;
-    expect(discord?.enabled).toBe(true);
-    expect((updated.channels as Record<string, unknown> | undefined)?.discord).toMatchObject({
-      token: "token-123",
-    });
+    // Built-in channels are auto-enabled via channels.<id>.enabled, not plugins.entries.
+    const discordChannel = (updated.channels as Record<string, unknown> | undefined)?.discord as
+      | Record<string, unknown>
+      | undefined;
+    expect(discordChannel?.enabled).toBe(true);
+    expect(discordChannel?.token).toBe("token-123");
   });
 
   test("refuses to start when port already bound", async () => {

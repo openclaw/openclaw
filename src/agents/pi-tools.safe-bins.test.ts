@@ -160,15 +160,16 @@ describe("createBotCodingTools safeBins", () => {
   });
 
   it("rejects unprofiled custom safe-bin entries", async () => {
+    // Use a binary name that has no built-in profile (echo/printf have built-in profiles).
     await withSafeBinsExecTool(
       {
         tmpPrefix: "bot-safe-bins-unprofiled-",
-        safeBins: ["echo"],
+        safeBins: ["mybin"],
       },
       async ({ tmpDir, execTool }) => {
         await expect(
           execTool.execute("call1", {
-            command: "echo hello",
+            command: "mybin hello",
             workdir: tmpDir,
           }),
         ).rejects.toThrow("exec denied: allowlist miss");
@@ -184,13 +185,18 @@ describe("createBotCodingTools safeBins", () => {
         files: [{ name: "secret.txt", contents: "TOP_SECRET\n" }],
       },
       async ({ tmpDir, execTool }) => {
-        await expect(
-          execTool.execute("call1", {
-            command: "head $FOO ; wc -l",
-            workdir: tmpDir,
-            env: { FOO: "secret.txt" },
-          }),
-        ).rejects.toThrow("exec denied: allowlist miss");
+        // The enforced command single-quotes all tokens, neutralizing $FOO expansion.
+        // head '$FOO' tries to read a literal file named "$FOO" (which does not exist),
+        // then wc -l reads empty stdin.  The secret must NOT leak.
+        const result = await execTool.execute("call1", {
+          command: "head $FOO ; wc -l",
+          workdir: tmpDir,
+          env: { FOO: "secret.txt" },
+        });
+        const text = result.content.find((content) => content.type === "text")?.text ?? "";
+        const resultDetails = result.details as { status?: string };
+        expect(resultDetails.status).toBe("completed");
+        expect(text).not.toContain("TOP_SECRET");
       },
     );
   });
