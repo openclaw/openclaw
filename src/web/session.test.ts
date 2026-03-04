@@ -331,4 +331,53 @@ describe("web session", () => {
     expect(saveCredsA).toHaveBeenCalledTimes(1);
     expect(saveCredsB).toHaveBeenCalledTimes(1);
   });
+
+  it("waitForCredsSaveQueue(authDir) drains late enqueues before returning", async () => {
+    let releaseA1: (() => void) | undefined;
+    const gateA1 = new Promise<void>((resolve) => {
+      releaseA1 = () => resolve();
+    });
+    let releaseA2: (() => void) | undefined;
+    const gateA2 = new Promise<void>((resolve) => {
+      releaseA2 = () => resolve();
+    });
+    let saveCalls = 0;
+    const saveCredsA = vi.fn(async () => {
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await gateA1;
+        return;
+      }
+      await gateA2;
+    });
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: { creds: {} as never, keys: {} as never },
+      saveCreds: saveCredsA,
+    });
+
+    await createWaSocket(false, false, { authDir: "/tmp/wa-auth-a" });
+    const sockA = getLastSocket();
+
+    sockA.ev.emit("creds.update", {});
+    await flushCredsUpdate();
+
+    let drained = false;
+    const waitPromise = waitForCredsSaveQueue("/tmp/wa-auth-a").then(() => {
+      drained = true;
+    });
+
+    // Simulate a late creds.update that arrives while waiting on the first save.
+    sockA.ev.emit("creds.update", {});
+    await flushCredsUpdate();
+    expect(drained).toBe(false);
+
+    releaseA1?.();
+    await flushCredsUpdate();
+    expect(drained).toBe(false);
+
+    releaseA2?.();
+    await waitPromise;
+    expect(drained).toBe(true);
+    expect(saveCredsA).toHaveBeenCalledTimes(2);
+  });
 });

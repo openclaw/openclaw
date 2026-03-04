@@ -32,8 +32,8 @@ export {
 } from "./auth-store.js";
 
 const credsSaveQueues = new Map<string, Promise<void>>();
-function getCredsSaveQueue(authDir: string): Promise<void> {
-  return credsSaveQueues.get(authDir) ?? Promise.resolve();
+function getCredsSaveQueue(authDir: string): Promise<void> | undefined {
+  return credsSaveQueues.get(authDir);
 }
 
 function enqueueSaveCreds(
@@ -41,7 +41,7 @@ function enqueueSaveCreds(
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  const nextQueue = getCredsSaveQueue(authDir)
+  const nextQueue = (getCredsSaveQueue(authDir) ?? Promise.resolve())
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
@@ -96,10 +96,30 @@ async function safeSaveCreds(
 
 export async function waitForCredsSaveQueue(authDir?: string): Promise<void> {
   if (authDir) {
-    await getCredsSaveQueue(authDir);
-    return;
+    while (true) {
+      const queue = getCredsSaveQueue(authDir);
+      if (!queue) {
+        return;
+      }
+      await queue;
+      // Late creds updates can enqueue a newer promise while we were waiting.
+      if (getCredsSaveQueue(authDir) === queue) {
+        return;
+      }
+    }
   }
-  await Promise.all(credsSaveQueues.values());
+
+  while (true) {
+    const snapshot = [...credsSaveQueues.values()];
+    if (snapshot.length === 0) {
+      return;
+    }
+    await Promise.all(snapshot);
+    const current = [...credsSaveQueues.values()];
+    if (current.every((queue) => snapshot.includes(queue))) {
+      return;
+    }
+  }
 }
 
 /**
