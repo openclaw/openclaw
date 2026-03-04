@@ -3,7 +3,7 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/copilot-proxy";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
