@@ -308,7 +308,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const { defaultAccountId, account, enabled, configured, diagnostics } =
+    const { defaultAccountId, enabled, configured, diagnostics } =
       await resolveDefaultChannelAccountContext(plugin, cfg, {
         mode: "read_only",
         commandName: "doctor",
@@ -322,32 +322,53 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!configured) {
       continue;
     }
-    const dmPolicy = plugin.security.resolveDmPolicy?.({
-      cfg,
-      accountId: defaultAccountId,
-      account,
-    });
-    if (dmPolicy) {
-      await warnDmPolicy({
-        label: plugin.meta.label ?? plugin.id,
-        provider: plugin.id,
-        accountId: defaultAccountId,
-        dmPolicy: dmPolicy.policy,
-        allowFrom: dmPolicy.allowFrom,
-        policyPath: dmPolicy.policyPath,
-        allowFromPath: dmPolicy.allowFromPath,
-        approveHint: dmPolicy.approveHint,
-        normalizeEntry: dmPolicy.normalizeEntry,
-      });
-    }
-    if (plugin.security.collectWarnings) {
-      const extra = await plugin.security.collectWarnings({
+
+    const accountIds = plugin.config.listAccountIds(cfg);
+    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+
+    for (const accountId of orderedAccountIds) {
+      const account = plugin.config.resolveAccount(cfg, accountId);
+      const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+      if (!enabled) {
+        continue;
+      }
+      const configured = plugin.config.isConfigured
+        ? await plugin.config.isConfigured(account, cfg)
+        : true;
+      if (!configured) {
+        continue;
+      }
+      const accountLabel =
+        orderedAccountIds.length > 1
+          ? `${plugin.meta.label ?? plugin.id} (${accountId})`
+          : (plugin.meta.label ?? plugin.id);
+      const dmPolicy = plugin.security.resolveDmPolicy?.({
         cfg,
-        accountId: defaultAccountId,
+        accountId,
         account,
       });
-      if (extra?.length) {
-        warnings.push(...extra);
+      if (dmPolicy) {
+        await warnDmPolicy({
+          label: accountLabel,
+          provider: plugin.id,
+          accountId,
+          dmPolicy: dmPolicy.policy,
+          allowFrom: dmPolicy.allowFrom,
+          policyPath: dmPolicy.policyPath,
+          allowFromPath: dmPolicy.allowFromPath,
+          approveHint: dmPolicy.approveHint,
+          normalizeEntry: dmPolicy.normalizeEntry,
+        });
+      }
+      if (plugin.security.collectWarnings) {
+        const extra = await plugin.security.collectWarnings({
+          cfg,
+          accountId,
+          account,
+        });
+        if (extra?.length) {
+          warnings.push(...extra);
+        }
       }
     }
   }
