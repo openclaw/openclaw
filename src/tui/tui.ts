@@ -189,7 +189,7 @@ export function resolveTuiSessionKey(params: {
   currentAgentId: string;
   sessionMainKey: string;
 }) {
-  const trimmed = (params.raw ?? "").trim();
+  const trimmed = (params.raw ?? "").trim().toLowerCase();
   if (!trimmed) {
     if (params.sessionScope === "global") {
       return "global";
