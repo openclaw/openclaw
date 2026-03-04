@@ -499,6 +499,15 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       allowExplicitReplyTagsWhenOff: false,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
+    agentPrompt: {
+      messageToolHints: () => [
+        "",
+        "### Slack Formatting",
+        "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
+        "Do not use Slack mrkdwn syntax directly — OpenClaw converts Markdown to Slack-compatible formatting automatically.",
+        "In particular, do not use single *asterisks* for bold; use double **asterisks**.",
+      ],
+    },
   },
   signal: {
     id: "signal",
