@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
   getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: () => [],
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({

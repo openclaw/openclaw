@@ -47,6 +47,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
   val micEnabled: StateFlow<Boolean> = runtime.micEnabled
+  val micCooldown: StateFlow<Boolean> = runtime.micCooldown
   val micStatusText: StateFlow<String> = runtime.micStatusText
   val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
   val micIsListening: StateFlow<Boolean> = runtime.micIsListening
@@ -54,6 +55,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val micConversation: StateFlow<List<VoiceConversationEntry>> = runtime.micConversation
   val micInputLevel: StateFlow<Float> = runtime.micInputLevel
   val micIsSending: StateFlow<Boolean> = runtime.micIsSending
+  val speakerEnabled: StateFlow<Boolean> = runtime.speakerEnabled
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
@@ -129,8 +131,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setVoiceScreenActive(active: Boolean) {
+    runtime.setVoiceScreenActive(active)
+  }
+
   fun setMicEnabled(enabled: Boolean) {
     runtime.setMicEnabled(enabled)
+  }
+
+  fun setSpeakerEnabled(enabled: Boolean) {
+    runtime.setSpeakerEnabled(enabled)
   }
 
   fun refreshGatewayConnection() {

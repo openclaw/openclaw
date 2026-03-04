@@ -114,6 +114,18 @@ describe("openVerifiedFileSync", () => {
     });
   });
 
+  it("rejects directories by default", () => {
+    withTempDir("openclaw-safe-open-", (root) => {
+      const targetDir = path.join(root, "nested");
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const opened = openVerifiedFileSync({ filePath: targetDir });
+      expect(opened.ok).toBe(false);
+      if (!opened.ok) {
+        expect(opened.reason).toBe("validation");
+      }
+    });
+  });
   it("keeps path classification for expected path errors", () => {
     withTempDir("openclaw-safe-open-", (dir) => {
       const filePath = path.join(dir, "sample.txt");
@@ -202,6 +214,25 @@ describe("openVerifiedFileSync", () => {
         expect(opened.reason).toBe("validation");
       }
       expect(openCalls).toBe(2);
+    });
+  });
+
+  it("accepts directories when allowedType is directory", () => {
+    withTempDir("openclaw-safe-open-", (root) => {
+      const targetDir = path.join(root, "nested");
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const opened = openVerifiedFileSync({
+        filePath: targetDir,
+        allowedType: "directory",
+        rejectHardlinks: true,
+      });
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) {
+        return;
+      }
+      expect(opened.stat.isDirectory()).toBe(true);
+      fs.closeSync(opened.fd);
     });
   });
 });

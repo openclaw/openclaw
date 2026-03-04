@@ -116,3 +116,33 @@ describe("restart sentinel", () => {
     expect(textA).not.toContain('"ts"');
   });
 });
+
+describe("restart sentinel message dedup", () => {
+  it("omits duplicate Reason: line when stats.reason matches message", () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Applying config changes",
+      stats: { mode: "gateway.restart", reason: "Applying config changes" },
+    };
+    const result = formatRestartSentinelMessage(payload);
+    // The message text should appear exactly once, not duplicated as "Reason: ..."
+    const occurrences = result.split("Applying config changes").length - 1;
+    expect(occurrences).toBe(1);
+    expect(result).not.toContain("Reason:");
+  });
+
+  it("keeps Reason: line when stats.reason differs from message", () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Restart requested by /restart",
+      stats: { mode: "gateway.restart", reason: "/restart" },
+    };
+    const result = formatRestartSentinelMessage(payload);
+    expect(result).toContain("Restart requested by /restart");
+    expect(result).toContain("Reason: /restart");
+  });
+});

@@ -1,7 +1,4 @@
 import type { TelegramGroupConfig } from "../config/types.js";
-import { isRecord } from "../utils.js";
-
-const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 export type TelegramGroupMembershipAuditEntry = {
   chatId: string;
@@ -20,9 +17,6 @@ export type TelegramGroupMembershipAudit = {
   groups: TelegramGroupMembershipAuditEntry[];
   elapsedMs: number;
 };
-
-type TelegramApiOk<T> = { ok: true; result: T };
-type TelegramApiErr = { ok: false; description?: string };
 
 export function collectTelegramUnmentionedGroupIds(
   groups: Record<string, TelegramGroupConfig> | undefined,
@@ -65,13 +59,25 @@ export function collectTelegramUnmentionedGroupIds(
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
 
-export async function auditTelegramGroupMembership(params: {
+export type AuditTelegramGroupMembershipParams = {
   token: string;
   botId: number;
   groupIds: string[];
   proxyUrl?: string;
   timeoutMs: number;
-}): Promise<TelegramGroupMembershipAudit> {
+};
+
+let auditMembershipRuntimePromise: Promise<typeof import("./audit-membership-runtime.js")> | null =
+  null;
+
+function loadAuditMembershipRuntime() {
+  auditMembershipRuntimePromise ??= import("./audit-membership-runtime.js");
+  return auditMembershipRuntimePromise;
+}
+
+export async function auditTelegramGroupMembership(
+  params: AuditTelegramGroupMembershipParams,
+): Promise<TelegramGroupMembershipAudit> {
   const started = Date.now();
   const token = params.token?.trim() ?? "";
   if (!token || params.groupIds.length === 0) {
@@ -87,63 +93,13 @@ export async function auditTelegramGroupMembership(params: {
 
   // Lazy import to avoid pulling `undici` (ProxyAgent) into cold-path callers that only need
   // `collectTelegramUnmentionedGroupIds` (e.g. config audits).
-  const fetcher = params.proxyUrl
-    ? (await import("./proxy.js")).makeProxyFetch(params.proxyUrl)
-    : fetch;
-  const { fetchWithTimeout } = await import("../utils/fetch-timeout.js");
-  const base = `${TELEGRAM_API_BASE}/bot${token}`;
-  const groups: TelegramGroupMembershipAuditEntry[] = [];
-
-  for (const chatId of params.groupIds) {
-    try {
-      const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
-      const res = await fetchWithTimeout(url, {}, params.timeoutMs, fetcher);
-      const json = (await res.json()) as TelegramApiOk<{ status?: string }> | TelegramApiErr;
-      if (!res.ok || !isRecord(json) || !json.ok) {
-        const desc =
-          isRecord(json) && !json.ok && typeof json.description === "string"
-            ? json.description
-            : `getChatMember failed (${res.status})`;
-        groups.push({
-          chatId,
-          ok: false,
-          status: null,
-          error: desc,
-          matchKey: chatId,
-          matchSource: "id",
-        });
-        continue;
-      }
-      const status = isRecord((json as TelegramApiOk<unknown>).result)
-        ? ((json as TelegramApiOk<{ status?: string }>).result.status ?? null)
-        : null;
-      const ok = status === "creator" || status === "administrator" || status === "member";
-      groups.push({
-        chatId,
-        ok,
-        status,
-        error: ok ? null : "bot not in group",
-        matchKey: chatId,
-        matchSource: "id",
-      });
-    } catch (err) {
-      groups.push({
-        chatId,
-        ok: false,
-        status: null,
-        error: err instanceof Error ? err.message : String(err),
-        matchKey: chatId,
-        matchSource: "id",
-      });
-    }
-  }
-
+  const { auditTelegramGroupMembershipImpl } = await loadAuditMembershipRuntime();
+  const result = await auditTelegramGroupMembershipImpl({
+    ...params,
+    token,
+  });
   return {
-    ok: groups.every((g) => g.ok),
-    checkedGroups: groups.length,
-    unresolvedGroups: 0,
-    hasWildcardUnmentionedGroups: false,
-    groups,
+    ...result,
     elapsedMs: Date.now() - started,
   };
 }

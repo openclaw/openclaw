@@ -1,13 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "openclaw/plugin-sdk";
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
-  resolveSenderCommandAuthorization,
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
   resolveWebhookPath,
 } from "openclaw/plugin-sdk";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  OutboundReplyPayload,
+} from "openclaw/plugin-sdk/zalo";
+import {
+  resolveDefaultGroupPolicy,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiAbortError,
@@ -21,6 +31,7 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
+import { evaluateZaloGroupAccess } from "./group-access.js";
 import { isZaloSenderAllowed } from "./group-access.js";
 import {
   describeInboundImagePayload,
@@ -31,6 +42,9 @@ import {
   summarizeUnsupportedInbound,
 } from "./inbound-parsing.js";
 import {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget as registerZaloWebhookTargetInternal,
   type ZaloWebhookTarget,
@@ -194,8 +208,31 @@ async function runWithSendRetry<T>(params: {
 }
 
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  return registerZaloWebhookTargetInternal(target);
+  return registerZaloWebhookTargetInternal(target, {
+    route: {
+      auth: "plugin",
+      match: "exact",
+      pluginId: "zalo",
+      source: "zalo-webhook",
+      accountId: target.account.accountId,
+      log: target.runtime.log,
+      handler: async (req, res) => {
+        const handled = await handleZaloWebhookRequest(req, res);
+        if (!handled && !res.headersSent) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Not Found");
+        }
+      },
+    },
+  });
 }
+
+export {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
+};
 
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
@@ -468,16 +505,49 @@ async function enforceInboundDirectAccess(params: {
   const senderId = from.id;
   const senderName = from.name ?? from.display_name;
 
+  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
+  const configuredGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const groupAllowFrom =
+    configuredGroupAllowFrom.length > 0 ? configuredGroupAllowFrom : configAllowFrom;
+
   if (isGroup) {
-    logVerbose(core, runtime, `zalo: drop group ${chatId} (direct-only channel)`);
-    return {
-      allowed: false,
-      isGroup,
-      chatId,
+    const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+    const groupAccess = evaluateZaloGroupAccess({
+      providerConfigPresent: config.channels?.zalo !== undefined,
+      configuredGroupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+      groupAllowFrom,
       senderId,
-      senderName,
-      commandAuthorized: undefined,
-    };
+    });
+
+    warnMissingProviderGroupPolicyFallbackOnce({
+      providerMissingFallbackApplied: groupAccess.providerMissingFallbackApplied,
+      providerKey: "zalo",
+      accountId: account.accountId,
+      log: (message) => logVerbose(core, runtime, message),
+    });
+
+    if (!groupAccess.allowed) {
+      if (groupAccess.reason === "disabled") {
+        logVerbose(core, runtime, `zalo: drop group ${chatId} (groupPolicy=disabled)`);
+      } else if (groupAccess.reason === "empty_allowlist") {
+        logVerbose(
+          core,
+          runtime,
+          `zalo: drop group ${chatId} (groupPolicy=allowlist, no groupAllowFrom)`,
+        );
+      } else if (groupAccess.reason === "sender_not_allowlisted") {
+        logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
+      }
+      return {
+        allowed: false,
+        isGroup,
+        chatId,
+        senderId,
+        senderName,
+        commandAuthorized: undefined,
+      };
+    }
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -493,21 +563,19 @@ async function enforceInboundDirectAccess(params: {
     };
   }
 
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorization({
-    cfg: config,
-    rawBody,
-    isGroup,
-    dmPolicy,
-    configuredAllowFrom: configAllowFrom,
-    senderId,
-    isSenderAllowed: isZaloSenderAllowed,
-    readAllowFromStore: pairing.readAllowFromStore,
-    shouldComputeCommandAuthorized: (body, cfg) =>
-      core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
-    resolveCommandAuthorizedFromAuthorizers: (authParams) =>
-      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(authParams),
-  });
+  const { senderAllowedForCommands, commandAuthorized } =
+    await resolveSenderCommandAuthorizationWithRuntime({
+      cfg: config,
+      rawBody,
+      isGroup,
+      dmPolicy,
+      configuredAllowFrom: configAllowFrom,
+      configuredGroupAllowFrom: groupAllowFrom,
+      senderId,
+      isSenderAllowed: isZaloSenderAllowed,
+      readAllowFromStore: pairing.readAllowFromStore,
+      runtime: core.channel.commands,
+    });
 
   if (dmPolicy === "open") {
     return {
@@ -887,14 +955,16 @@ async function processMessageWithPipeline(params: {
   }
   const { isGroup, chatId, senderId, senderName, commandAuthorized } = access;
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: chatId,
     },
+    runtime: core.channel,
+    sessionStore: config.session?.store,
   });
 
   if (
@@ -907,20 +977,10 @@ async function processMessageWithPipeline(params: {
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 

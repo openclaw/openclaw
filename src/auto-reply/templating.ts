@@ -54,6 +54,11 @@ export type MsgContext = {
   MessageSidFirst?: string;
   MessageSidLast?: string;
   ReplyToId?: string;
+  /**
+   * Root message id for thread reconstruction (used by Feishu for root_id).
+   * When a message is part of a thread, this is the id of the first message.
+   */
+  RootMessageId?: string;
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
@@ -134,6 +139,8 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
+  /** Warning: DM has topics enabled but this message is not in a topic. */
+  TopicRequiredButMissing?: boolean;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

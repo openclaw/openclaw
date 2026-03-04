@@ -248,30 +248,37 @@ private object SystemContactsDataSource : ContactsDataSource {
   }
 
   private fun loadPhones(resolver: ContentResolver, contactId: Long): List<String> {
-    val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
-    resolver.query(
-      ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-      projection,
-      "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID}=?",
-      arrayOf(contactId.toString()),
-      null,
-    ).use { cursor ->
-      if (cursor == null) return emptyList()
-      val out = LinkedHashSet<String>()
-      while (cursor.moveToNext()) {
-        val value = cursor.getString(0)?.trim().orEmpty()
-        if (value.isNotEmpty()) out += value
-      }
-      return out.toList()
-    }
+    return queryContactValues(
+      resolver = resolver,
+      contentUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+      valueColumn = ContactsContract.CommonDataKinds.Phone.NUMBER,
+      contactIdColumn = ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+      contactId = contactId,
+    )
   }
 
   private fun loadEmails(resolver: ContentResolver, contactId: Long): List<String> {
-    val projection = arrayOf(ContactsContract.CommonDataKinds.Email.ADDRESS)
+    return queryContactValues(
+      resolver = resolver,
+      contentUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+      valueColumn = ContactsContract.CommonDataKinds.Email.ADDRESS,
+      contactIdColumn = ContactsContract.CommonDataKinds.Email.CONTACT_ID,
+      contactId = contactId,
+    )
+  }
+
+  private fun queryContactValues(
+    resolver: ContentResolver,
+    contentUri: android.net.Uri,
+    valueColumn: String,
+    contactIdColumn: String,
+    contactId: Long,
+  ): List<String> {
+    val projection = arrayOf(valueColumn)
     resolver.query(
-      ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+      contentUri,
       projection,
-      "${ContactsContract.CommonDataKinds.Email.CONTACT_ID}=?",
+      "$contactIdColumn=?",
       arrayOf(contactId.toString()),
       null,
     ).use { cursor ->
