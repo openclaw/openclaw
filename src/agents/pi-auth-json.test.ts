@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { trackedMkdtemp } from "../../test/test-env.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
 
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
 
 async function createAgentDir() {
-  return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+  return trackedMkdtemp("openclaw-agent-");
 }
 
 function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {

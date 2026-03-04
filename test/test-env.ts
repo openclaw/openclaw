@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 type RestoreEntry = { key: string; value: string | undefined };
+
+// Track temp directories created during tests for cleanup
+const trackedTempDirs: string[] = [];
 
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
@@ -13,6 +17,41 @@ function restoreEnv(entries: RestoreEntry[]): void {
       process.env[key] = value;
     }
   }
+}
+
+/**
+ * Wraps fs.mkdtempSync to track created directories for cleanup.
+ * Use this instead of fs.mkdtempSync when creating temp directories in tests.
+ */
+export function trackedMkdtempSync(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  trackedTempDirs.push(dir);
+  return dir;
+}
+
+/**
+ * Wraps fs.mkdtemp (async) to track created directories for cleanup.
+ * Use this instead of fs.mkdtemp when creating temp directories in tests.
+ */
+export async function trackedMkdtemp(prefix: string): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  trackedTempDirs.push(dir);
+  return dir;
+}
+
+/**
+ * Clean up all tracked temp directories.
+ * Called automatically by installTestEnv().cleanup().
+ */
+export function cleanupTrackedTempDirs(): void {
+  for (const dir of trackedTempDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  trackedTempDirs.length = 0;
 }
 
 function loadProfileEnv(): void {
@@ -132,6 +171,8 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
   const cleanup = () => {
     restoreEnv(restore);
+    // Clean up tracked temp directories created by trackedMkdtempSync/trackedMkdtemp
+    cleanupTrackedTempDirs();
     try {
       fs.rmSync(tempHome, { recursive: true, force: true });
     } catch {
