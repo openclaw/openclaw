@@ -54,8 +54,10 @@ export function isBotMentionedFromTargets(
         return true;
       }
     }
-    // If the message explicitly mentions someone else, do not fall back to regex matches.
-    return false;
+    // JID not found in mentionedJids — fall through to text regex check
+    // rather than returning false. This handles:
+    // 1. Messages where someone else is @mentioned but the bot is addressed by name
+    // 2. WhatsApp LID mismatches where the bot's JID isn't resolved correctly
   } else if (hasMentions && isSelfChat) {
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in group chats triggers the bot.
   }
