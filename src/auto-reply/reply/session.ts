@@ -86,11 +86,9 @@ function recoverSessionEntryFromOtherAgentStores(params: {
   cfg: OpenClawConfig;
   sessionCfg: OpenClawConfig["session"];
   sessionKey: string;
-  currentAgentId: string;
   currentStorePath: string;
 }): SessionEntry | undefined {
   const candidateAgentIds = new Set<string>([
-    params.currentAgentId,
     resolveDefaultAgentId(params.cfg),
     ...listAgentIds(params.cfg),
   ]);
@@ -269,7 +267,6 @@ export async function initSessionState(params: {
       cfg,
       sessionCfg,
       sessionKey,
-      currentAgentId: agentId,
       currentStorePath: storePath,
     });
     if (recoveredEntry) {
