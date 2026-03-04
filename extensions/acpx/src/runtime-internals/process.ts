@@ -4,12 +4,12 @@ import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/acpx";
 import {
   applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgramCandidate,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/acpx";
 
 export type SpawnExit = {
   code: number | null;
