@@ -325,6 +325,7 @@ fi
 ```
 
 Usage:
+
 ```bash
 # Check all project windows
 for win in project-a project-b project-c; do
