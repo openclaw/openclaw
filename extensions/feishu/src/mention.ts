@@ -17,11 +17,13 @@ export function extractMentionTargets(
   botOpenId?: string,
 ): MentionTarget[] {
   const mentions = event.message.mentions ?? [];
+  const isBotMention = (m: (typeof mentions)[number]) =>
+    !!botOpenId && [m.id.open_id, m.id.user_id].includes(botOpenId);
 
   return mentions
     .filter((m) => {
       // Exclude the bot itself
-      if (botOpenId && m.id.open_id === botOpenId) {
+      if (isBotMention(m)) {
         return false;
       }
       // Must have open_id
@@ -45,16 +47,18 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   if (mentions.length === 0) {
     return false;
   }
+  const isBotMention = (m: (typeof mentions)[number]) =>
+    !!botOpenId && [m.id.open_id, m.id.user_id].includes(botOpenId);
 
   const isDirectMessage = event.message.chat_type === "p2p";
-  const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
+  const hasOtherMention = mentions.some((m) => !!m.id.open_id && !isBotMention(m));
 
   if (isDirectMessage) {
     // DM: trigger if any non-bot user is mentioned
     return hasOtherMention;
   } else {
     // Group: need to mention both bot and other users
-    const hasBotMention = mentions.some((m) => m.id.open_id === botOpenId);
+    const hasBotMention = mentions.some((m) => isBotMention(m));
     return hasBotMention && hasOtherMention;
   }
 }
