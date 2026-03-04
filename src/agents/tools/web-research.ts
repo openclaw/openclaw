@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -57,10 +58,14 @@ function resolveResearchConfig(cfg?: OpenClawConfig): WebResearchConfig {
 }
 
 function resolveResearchApiKey(research?: WebResearchConfig): string | undefined {
-  const fromConfig =
-    research && "apiKey" in research && typeof research.apiKey === "string"
-      ? normalizeSecretInput(research.apiKey)
-      : "";
+  const fromConfigRaw =
+    research && "apiKey" in research
+      ? normalizeResolvedSecretInputString({
+          value: research.apiKey,
+          path: "tools.web.research.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.YDC_API_KEY);
   return fromConfig || fromEnv || undefined;
 }

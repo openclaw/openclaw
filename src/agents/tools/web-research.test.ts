@@ -130,7 +130,7 @@ describe("web_research tool execution", () => {
 
     const details = result?.details as {
       content?: string;
-      sources?: Array<{ url: string }>;
+      sources?: Array<{ url: string; title?: string }>;
       effort?: string;
     };
     expect(details.content).toContain("Research result content");

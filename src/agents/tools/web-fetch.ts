@@ -277,7 +277,7 @@ async function tryYouContentsFallback(params: {
       timeoutSeconds: params.youTimeoutSeconds,
     });
     const text = params.extractMode === "text" ? markdownToText(result.text) : result.text;
-    if (!text) {
+    if (!text?.trim()) {
       return null;
     }
     return { text, title: result.title };
