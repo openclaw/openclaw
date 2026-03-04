@@ -228,6 +228,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
             { value: "off", label: "Off" },
             { value: "status", label: "Status" },
             { value: "provider", label: "Provider" },
+            { value: "voice", label: "Voice" },
             { value: "limit", label: "Limit" },
             { value: "summary", label: "Summary" },
             { value: "audio", label: "Audio" },
@@ -249,6 +250,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           "• Off – Disable TTS\n" +
           "• Status – Show current settings\n" +
           "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
+          "• Voice – Set ElevenLabs voice by id or name\n" +
           "• Limit – Set max characters for TTS\n" +
           "• Summary – Toggle AI summary for long texts\n" +
           "• Audio – Generate TTS from custom text\n" +

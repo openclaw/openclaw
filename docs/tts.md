@@ -304,6 +304,7 @@ Stored fields:
 
 - `enabled`
 - `provider`
+- `elevenlabsVoiceId`
 - `maxLength` (summary threshold; default 1500 chars)
 - `summarize` (default `true`)
 
@@ -368,6 +369,7 @@ Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 /tts tagged
 /tts status
 /tts provider openai
+/tts voice pMsXgVXv3BLzUgSXRplE
 /tts limit 2000
 /tts summary off
 /tts audio Hello from OpenClaw
@@ -379,7 +381,21 @@ Notes:
 - `commands.text` or native command registration must be enabled.
 - `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
 - `limit` and `summary` are stored in local prefs, not the main config.
+- `voice` stores a local ElevenLabs voice override (`voiceId`) in local prefs.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
+
+Set/view/reset ElevenLabs voice from chat:
+
+```
+/tts voice
+/tts voice pMsXgVXv3BLzUgSXRplE
+/tts voice Rachel
+/tts voice reset
+```
+
+- `voiceId` is always accepted directly.
+- Voice name lookup (`/tts voice Rachel`) needs an ElevenLabs API key to query your voices.
+- Voice precedence is: `[[tts:voiceId=...]]` directive (single reply) > `/tts voice` local override > `messages.tts.elevenlabs.voiceId` config default.
 
 ## Agent tool
 

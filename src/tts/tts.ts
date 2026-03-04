@@ -42,6 +42,7 @@ import {
   summarizeText,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+export { isValidVoiceId } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -139,6 +140,7 @@ type TtsUserPrefs = {
     auto?: TtsAutoMode;
     enabled?: boolean;
     provider?: TtsProvider;
+    elevenlabsVoiceId?: string;
     maxLength?: number;
     summarize?: boolean;
   };
@@ -457,6 +459,40 @@ export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
   });
 }
 
+export function getTtsElevenLabsVoiceOverride(prefsPath: string): string | undefined {
+  const prefs = readPrefs(prefsPath);
+  const voiceId = prefs.tts?.elevenlabsVoiceId?.trim();
+  if (!voiceId || !isValidVoiceId(voiceId)) {
+    return undefined;
+  }
+  return voiceId;
+}
+
+export function getTtsElevenLabsVoiceId(config: ResolvedTtsConfig, prefsPath: string): string {
+  return getTtsElevenLabsVoiceOverride(prefsPath) ?? config.elevenlabs.voiceId;
+}
+
+export function setTtsElevenLabsVoiceId(prefsPath: string, voiceId: string): void {
+  const normalized = voiceId.trim();
+  if (!isValidVoiceId(normalized)) {
+    throw new Error("Invalid ElevenLabs voiceId format");
+  }
+  updatePrefs(prefsPath, (prefs) => {
+    prefs.tts = { ...prefs.tts, elevenlabsVoiceId: normalized };
+  });
+}
+
+export function clearTtsElevenLabsVoiceId(prefsPath: string): void {
+  updatePrefs(prefsPath, (prefs) => {
+    if (!prefs.tts) {
+      return;
+    }
+    const next = { ...prefs.tts };
+    delete next.elevenlabsVoiceId;
+    prefs.tts = next;
+  });
+}
+
 export function getTtsMaxLength(prefsPath: string): number {
   const prefs = readPrefs(prefsPath);
   return prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH;
@@ -655,6 +691,7 @@ export async function textToSpeech(params: {
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
+        const preferredVoiceId = getTtsElevenLabsVoiceId(config, prefsPath);
         const voiceSettings = {
           ...config.elevenlabs.voiceSettings,
           ...params.overrides?.elevenlabs?.voiceSettings,
@@ -666,7 +703,7 @@ export async function textToSpeech(params: {
           text: params.text,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
-          voiceId: voiceIdOverride ?? config.elevenlabs.voiceId,
+          voiceId: voiceIdOverride ?? preferredVoiceId,
           modelId: modelIdOverride ?? config.elevenlabs.modelId,
           outputFormat: output.elevenlabs,
           seed: seedOverride ?? config.elevenlabs.seed,
@@ -749,11 +786,12 @@ export async function textToSpeechTelephony(params: {
 
       if (provider === "elevenlabs") {
         const output = TELEPHONY_OUTPUT.elevenlabs;
+        const preferredVoiceId = getTtsElevenLabsVoiceId(config, prefsPath);
         const audioBuffer = await elevenLabsTTS({
           text: params.text,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
-          voiceId: config.elevenlabs.voiceId,
+          voiceId: preferredVoiceId,
           modelId: config.elevenlabs.modelId,
           outputFormat: output.format,
           seed: config.elevenlabs.seed,

@@ -40,7 +40,15 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const {
+  _test,
+  resolveTtsConfig,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  getTtsElevenLabsVoiceId,
+  setTtsElevenLabsVoiceId,
+  clearTtsElevenLabsVoiceId,
+} = tts;
 
 const {
   isValidVoiceId,
@@ -434,6 +442,26 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+  });
+
+  describe("getTtsElevenLabsVoiceId", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: { elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" } } },
+    };
+
+    it("uses prefs override and falls back to config default", () => {
+      const config = resolveTtsConfig(cfg);
+      const prefsPath = `/tmp/tts-voice-prefs-${Date.now()}.json`;
+
+      expect(getTtsElevenLabsVoiceId(config, prefsPath)).toBe("pMsXgVXv3BLzUgSXRplE");
+
+      setTtsElevenLabsVoiceId(prefsPath, "21m00Tcm4TlvDq8ikWAM");
+      expect(getTtsElevenLabsVoiceId(config, prefsPath)).toBe("21m00Tcm4TlvDq8ikWAM");
+
+      clearTtsElevenLabsVoiceId(prefsPath);
+      expect(getTtsElevenLabsVoiceId(config, prefsPath)).toBe("pMsXgVXv3BLzUgSXRplE");
     });
   });
 

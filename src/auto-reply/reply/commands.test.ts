@@ -1468,4 +1468,104 @@ describe("handleCommands /tts", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("TTS status");
   });
+
+  it("sets and resets ElevenLabs voice override via /tts voice", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-voice.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        tts: {
+          prefsPath,
+          elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const setParams = buildParams("/tts voice 21m00Tcm4TlvDq8ikWAM", cfg);
+    const setResult = await handleCommands(setParams);
+    expect(setResult.shouldContinue).toBe(false);
+    expect(setResult.reply?.text).toContain("voice set to 21m00Tcm4TlvDq8ikWAM");
+
+    const statusParams = buildParams("/tts status", cfg);
+    const statusResult = await handleCommands(statusParams);
+    expect(statusResult.shouldContinue).toBe(false);
+    expect(statusResult.reply?.text).toContain("ElevenLabs voice: 21m00Tcm4TlvDq8ikWAM (override)");
+
+    const resetParams = buildParams("/tts voice reset", cfg);
+    const resetResult = await handleCommands(resetParams);
+    expect(resetResult.shouldContinue).toBe(false);
+    expect(resetResult.reply?.text).toContain("reset to config default");
+
+    const statusAfterResetParams = buildParams("/tts status", cfg);
+    const statusAfterReset = await handleCommands(statusAfterResetParams);
+    expect(statusAfterReset.shouldContinue).toBe(false);
+    expect(statusAfterReset.reply?.text).toContain(
+      "ElevenLabs voice: pMsXgVXv3BLzUgSXRplE (config)",
+    );
+  });
+
+  it("resolves ElevenLabs voice by name via /tts voice", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-voice-name.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        tts: {
+          prefsPath,
+          elevenlabs: {
+            apiKey: "test-elevenlabs-key",
+            voiceId: "pMsXgVXv3BLzUgSXRplE",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        voices: [{ voice_id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel" }],
+      }),
+    })) as unknown as typeof fetch;
+
+    try {
+      const setParams = buildParams("/tts voice rachel", cfg);
+      const setResult = await handleCommands(setParams);
+      expect(setResult.shouldContinue).toBe(false);
+      expect(setResult.reply?.text).toContain("Rachel (21m00Tcm4TlvDq8ikWAM)");
+
+      const statusParams = buildParams("/tts status", cfg);
+      const statusResult = await handleCommands(statusParams);
+      expect(statusResult.reply?.text).toContain(
+        "ElevenLabs voice: 21m00Tcm4TlvDq8ikWAM (override)",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("parses /tts args from first line only for raw command text", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-voice-multiline.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        tts: {
+          prefsPath,
+          elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const setVoiceParams = buildParams("/tts voice 21m00Tcm4TlvDq8ikWAM\nthanks", cfg);
+    const setVoiceResult = await handleCommands(setVoiceParams);
+    expect(setVoiceResult.shouldContinue).toBe(false);
+    expect(setVoiceResult.reply?.text).toContain("voice set to 21m00Tcm4TlvDq8ikWAM");
+
+    const setProviderParams = buildParams("/tts provider edge\nthanks", cfg);
+    const setProviderResult = await handleCommands(setProviderParams);
+    expect(setProviderResult.shouldContinue).toBe(false);
+    expect(setProviderResult.reply?.text).toContain("provider set to edge");
+  });
 });
