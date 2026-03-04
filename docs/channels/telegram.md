@@ -466,7 +466,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
-    Each topic then has its own session key: `agent:main:telegram:group:-1001234567890:topic:3`
+    Each topic then has its own session key: `agent:zu:telegram:group:-1001234567890:topic:3`
 
     Template context includes:
 
