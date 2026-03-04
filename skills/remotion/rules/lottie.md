@@ -2,7 +2,7 @@
 name: lottie
 description: Embedding Lottie animations in Remotion.
 metadata:
-  category: Animation
+  tags: lottie, animation
 ---
 
 # Using Lottie Animations in Remotion
@@ -40,10 +40,10 @@ export const MyAnimation = () => {
     useState<LottieAnimationData | null>(null);
 
   useEffect(() => {
-    fetch("https://assets4.lottiefiles.com/packages/lf20_zyquagfl.json")
-      .then((data) => data.json())
-      .then((json) => {
-        setAnimationData(json);
+    fetch("https://assets4.lottiefiles.com/packages/lf20_zy.json")
+      .then((res) => res.json())
+      .then((data) => {
+        setAnimationData(data);
         continueRender(handle);
       })
       .catch((err) => {
@@ -55,16 +55,6 @@ export const MyAnimation = () => {
     return null;
   }
 
-  return <Lottie animationData={animationData} />;
+  return <Lottie animationData={animationData} loop animationSpeed={1} />;
 };
-```
-
-## Styling and animating
-
-Lottie supports the `style` prop to allow styles and animations:
-
-```tsx
-return (
-  <Lottie animationData={animationData} style={{ width: 400, height: 400 }} />
-);
 ```
