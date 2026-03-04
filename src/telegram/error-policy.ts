@@ -27,6 +27,13 @@ interface TelegramAccountConfig {
   groups?: Record<string, TelegramGroupConfig>;
 }
 
+interface TelegramChannelConfig {
+  errorPolicy?: TelegramErrorPolicy;
+  errorCooldownMs?: number;
+  groups?: Record<string, TelegramGroupConfig>;
+  accounts?: Record<string, TelegramAccountConfig>;
+}
+
 export function resolveTelegramErrorPolicy(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -39,13 +46,39 @@ export function resolveTelegramErrorPolicy(params: {
 } {
   const { cfg, channel, accountId, chatId, isGroup = false } = params;
 
-  const channelConfig = cfg.channels?.[channel] as TelegramAccountConfig | undefined;
+  const channelConfig = cfg.channels?.[channel] as TelegramChannelConfig | undefined;
 
   if (!channelConfig) {
     return { policy: "always", cooldownMs: DEFAULT_ERROR_COOLDOWN_MS };
   }
 
-  // Check group-specific config first (if in a group and chatId is available)
+  // Check per-account config first (when accountId is provided)
+  const normalizedAccountId = accountId ?? null;
+  if (normalizedAccountId) {
+    const accountConfig = channelConfig.accounts?.[normalizedAccountId];
+    if (accountConfig) {
+      // Check group-specific config within the account
+      if (isGroup && chatId) {
+        const chatIdStr = String(chatId);
+        const groupConfig = accountConfig.groups?.[chatIdStr];
+        if (groupConfig?.errorPolicy) {
+          return {
+            policy: groupConfig.errorPolicy,
+            cooldownMs: groupConfig.errorCooldownMs ?? DEFAULT_ERROR_COOLDOWN_MS,
+          };
+        }
+      }
+      // Fall back to account-level config
+      if (accountConfig.errorPolicy) {
+        return {
+          policy: accountConfig.errorPolicy,
+          cooldownMs: accountConfig.errorCooldownMs ?? DEFAULT_ERROR_COOLDOWN_MS,
+        };
+      }
+    }
+  }
+
+  // Check group-specific config at channel level (for default account)
   if (isGroup && chatId) {
     const chatIdStr = String(chatId);
     const groupConfig = channelConfig.groups?.[chatIdStr];
