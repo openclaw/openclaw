@@ -67,6 +67,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "modelscope"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
