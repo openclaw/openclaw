@@ -16,6 +16,7 @@ import {
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -1433,6 +1434,38 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
 
+  const channelId = rawChannelId || "unknown";
+  const from = isDirectMessage
+    ? `discord:${user.id}`
+    : isGroupDm
+      ? `discord:group:${channelId}`
+      : `discord:channel:${channelId}`;
+  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+    channelConfig,
+    guildInfo,
+    sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    allowNameMatching,
+  });
+  const commandAuthorization = resolveCommandAuthorization({
+    ctx: {
+      Provider: "discord",
+      Surface: "discord",
+      AccountId: accountId,
+      From: from,
+      To: `slash:${user.id}`,
+      SenderId: user.id,
+      ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+      OwnerAllowFrom: ownerAllowFrom,
+    },
+    cfg,
+    commandAuthorized,
+  });
+  if (!commandAuthorization.isAuthorizedSender) {
+    await respond("You are not authorized to use this command.", { ephemeral: true });
+    return;
+  }
+  commandAuthorized = commandAuthorization.isAuthorizedSender;
+
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
@@ -1474,7 +1507,6 @@ async function dispatchDiscordCommandInteraction(params: {
     if (suppressReplies) {
       return;
     }
-    const channelId = rawChannelId || "unknown";
     const pluginReply = await executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -1484,11 +1516,7 @@ async function dispatchDiscordCommandInteraction(params: {
       isAuthorizedSender: commandAuthorized,
       commandBody: prompt,
       config: cfg,
-      from: isDirectMessage
-        ? `discord:${user.id}`
-        : isGroupDm
-          ? `discord:group:${channelId}`
-          : `discord:channel:${channelId}`,
+      from,
       to: `slash:${user.id}`,
       accountId,
     });
@@ -1527,7 +1555,6 @@ async function dispatchDiscordCommandInteraction(params: {
   }
 
   const isGuild = Boolean(interaction.guild);
-  const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
   const route = resolveAgentRoute({
     cfg,
@@ -1552,23 +1579,13 @@ async function dispatchDiscordCommandInteraction(params: {
       }
     : route;
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
-  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
-    channelConfig,
-    guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching,
-  });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,
     BodyForAgent: prompt,
     RawBody: prompt,
     CommandBody: prompt,
     CommandArgs: commandArgs,
-    From: isDirectMessage
-      ? `discord:${user.id}`
-      : isGroupDm
-        ? `discord:group:${channelId}`
-        : `discord:channel:${channelId}`,
+    From: from,
     To: `slash:${user.id}`,
     SessionKey: boundSessionKey ?? `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
     CommandTargetSessionKey: boundSessionKey ?? effectiveRoute.sessionKey,

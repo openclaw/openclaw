@@ -9,8 +9,8 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type MockCommandInteraction = {
   user: { id: string; username: string; globalName: string };
-  channel: { type: ChannelType; id: string };
-  guild: null;
+  channel: { type: ChannelType; id: string; name?: string };
+  guild: { id: string; name: string } | null;
   rawData: { id: string; member: { roles: string[] } };
   options: {
     getString: ReturnType<typeof vi.fn>;
@@ -22,18 +22,25 @@ type MockCommandInteraction = {
   client: object;
 };
 
-function createInteraction(): MockCommandInteraction {
+function createInteraction(params?: {
+  userId?: string;
+  channelType?: ChannelType;
+  channelId?: string;
+  channelName?: string;
+  guild?: { id: string; name: string } | null;
+}): MockCommandInteraction {
   return {
     user: {
-      id: "owner",
+      id: params?.userId ?? "owner",
       username: "tester",
       globalName: "Tester",
     },
     channel: {
-      type: ChannelType.DM,
-      id: "dm-1",
+      type: params?.channelType ?? ChannelType.DM,
+      id: params?.channelId ?? "dm-1",
+      ...(params?.channelName ? { name: params.channelName } : {}),
     },
-    guild: null,
+    guild: params?.guild ?? null,
     rawData: {
       id: "interaction-1",
       member: { roles: [] },
@@ -109,5 +116,54 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: "direct plugin output" }),
     );
+  });
+
+  it("rejects unauthorized slash command users when commands.allowFrom is configured", async () => {
+    const cfg = createConfig();
+    cfg.commands = {
+      allowFrom: {
+        discord: ["allowed-user"],
+      },
+    };
+    const commandSpec: NativeCommandSpec = {
+      name: "status",
+      description: "Show status",
+      acceptsArgs: false,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId: "channel-1",
+      channelName: "general",
+      guild: { id: "guild-1", name: "Guild" },
+      userId: "not-allowed",
+    });
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({} as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    const replies = [...interaction.reply.mock.calls, ...interaction.followUp.mock.calls].map(
+      (call) => call[0] as { content?: string; ephemeral?: boolean },
+    );
+    expect(
+      replies.some(
+        (payload) =>
+          payload.content === "You are not authorized to use this command." &&
+          payload.ephemeral === true,
+      ),
+    ).toBe(true);
   });
 });
