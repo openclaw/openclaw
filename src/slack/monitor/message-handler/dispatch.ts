@@ -11,6 +11,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -30,6 +31,33 @@ import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+const REASONING_PROGRESS_MAX_CHARS = 1200;
+
+function buildSlackReasoningProgressText(text?: string): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.replace(/^reasoning:\s*/i, "");
+  const normalized = withoutPrefix
+    .split("\n")
+    .map((line) => {
+      const stripped = line.trim();
+      if (stripped.startsWith("_") && stripped.endsWith("_") && stripped.length > 1) {
+        return stripped.slice(1, -1);
+      }
+      return stripped;
+    })
+    .join("\n")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const truncated = truncateUtf16Safe(normalized, REASONING_PROGRESS_MAX_CHARS).trimEnd();
+  const ellipsis = normalized.length > truncated.length ? "\n..." : "";
+  return `Status: analyzing\n${truncated}${ellipsis}`;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -414,6 +442,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let appendRenderedText = "";
   let appendSourceText = "";
   let statusUpdateCount = 0;
+  let lastReasoningProgressText = "";
   const updateDraftFromPartial = (text?: string) => {
     const trimmed = text?.trimEnd();
     if (!trimmed) {
@@ -449,6 +478,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     draftStream.update(trimmed);
     hasStreamedMessage = true;
   };
+  const updateDraftFromReasoning = (text?: string) => {
+    const trimmed = text?.trimEnd();
+    if (!trimmed) {
+      return;
+    }
+    if (streamMode === "status_final") {
+      const reasoningProgressText = buildSlackReasoningProgressText(trimmed);
+      if (!reasoningProgressText || reasoningProgressText === lastReasoningProgressText) {
+        return;
+      }
+      lastReasoningProgressText = reasoningProgressText;
+      draftStream.update(reasoningProgressText);
+      hasStreamedMessage = true;
+      return;
+    }
+    updateDraftFromPartial(trimmed);
+  };
   const onDraftBoundary =
     useStreaming || !previewStreamingEnabled
       ? undefined
@@ -459,6 +505,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             appendRenderedText = "";
             appendSourceText = "";
             statusUpdateCount = 0;
+            lastReasoningProgressText = "";
           }
         };
 
@@ -482,6 +529,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ? undefined
           : async (payload) => {
               updateDraftFromPartial(payload.text);
+            },
+      onReasoningStream: useStreaming
+        ? undefined
+        : !previewStreamingEnabled
+          ? undefined
+          : async (payload) => {
+              updateDraftFromReasoning(payload.text);
             },
       onAssistantMessageStart: onDraftBoundary,
       onReasoningEnd: onDraftBoundary,

@@ -27,7 +27,11 @@ else
 fi
 MORPHO_INFRA_DIR="${MORPHO_INFRA_DIR:-/Users/florian/morpho/morpho-infra}"
 MORPHO_INFRA_HELM_DIR="${MORPHO_INFRA_HELM_DIR:-/Users/florian/morpho/morpho-infra-helm}"
-HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/eks/charts/openclaw-sre}"
+DEFAULT_HELM_CHART_DIR="$ROOT_DIR/deploy/eks/charts/openclaw-sre"
+if [[ -d "$MORPHO_INFRA_HELM_DIR/charts/openclaw-sre" ]]; then
+  DEFAULT_HELM_CHART_DIR="$MORPHO_INFRA_HELM_DIR/charts/openclaw-sre"
+fi
+HELM_CHART_DIR="${HELM_CHART_DIR:-$DEFAULT_HELM_CHART_DIR}"
 HELM_RELEASE="${HELM_RELEASE:-openclaw-sre}"
 DEPLOY_REPLICAS="${DEPLOY_REPLICAS:-1}"
 SERVICE_ACCOUNT_NAME="${SERVICE_ACCOUNT_NAME:-incident-readonly-agent}"
@@ -102,6 +106,7 @@ RCA_STAGE_TIMEOUT_MS="${RCA_STAGE_TIMEOUT_MS:-10000}"
 RCA_EVIDENCE_TOTAL_TIMEOUT_MS="${RCA_EVIDENCE_TOTAL_TIMEOUT_MS:-80000}"
 RCA_MIN_RERUN_INTERVAL_S="${RCA_MIN_RERUN_INTERVAL_S:-3600}"
 RCA_CHAIN_COST_ALERT_THRESHOLD="${RCA_CHAIN_COST_ALERT_THRESHOLD:-750}"
+RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS="${RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS:-20}"
 BOT_MODEL_PRIMARY="${BOT_MODEL_PRIMARY:-openai-codex/gpt-5.3-codex}"
 BOT_MODEL_FALLBACKS="${BOT_MODEL_FALLBACKS:-anthropic/claude-opus-4-6}"
 
@@ -131,6 +136,18 @@ require_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+trim_trailing_eol() {
+  printf '%s' "$1" | tr -d '\r'
+}
+
+trim_var_in_place() {
+  local var_name="$1"
+  local raw="${!var_name-}"
+  local trimmed
+  trimmed="$(trim_trailing_eol "$raw")"
+  printf -v "$var_name" '%s' "$trimmed"
 }
 
 require_secret_keys() {
@@ -929,32 +946,32 @@ require_secret_keys carapulse-secrets vault-addr github-app-id github-app-privat
 carapulse_secret_json="$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get secret carapulse-secrets -o json)"
 carapulse_secret_value() {
   local key="$1"
-  printf '%s' "$carapulse_secret_json" | jq -r --arg k "$key" '.data[$k] // empty | @base64d'
+  printf '%s' "$carapulse_secret_json" | jq -r --arg k "$key" '.data[$k] // empty | @base64d' | tr -d '\r'
 }
 
 escape_multiline_value() {
-  printf '%s' "$1" | sed ':a;N;$!ba;s/\r//g;s/\n/\\n/g'
+  printf '%s' "$1" | jq -Rrs 'gsub("\r";"") | gsub("\n"; "\\n")'
 }
 
-CARAPULSE_VAULT_ADDR="$(carapulse_secret_value vault-addr)"
-CARAPULSE_VAULT_TOKEN="$(carapulse_secret_value vault-token | tr -d '\r' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-ARGOCD_BASE_URL_VALUE="$(carapulse_secret_value argocd-base-url)"
-ARGOCD_TOKEN_VALUE="$(carapulse_secret_value argocd-token)"
-GITHUB_APP_ID_VALUE="$(carapulse_secret_value github-app-id)"
-GITHUB_APP_INSTALLATION_ID_VALUE="$(carapulse_secret_value github-app-installation-id)"
-GITHUB_APP_PRIVATE_KEY_VALUE="$(escape_multiline_value "$(carapulse_secret_value github-app-private-key)")"
-CODEX_AUTH_JSON_RAW_VALUE="$(carapulse_secret_value codex-auth-json)"
+CARAPULSE_VAULT_ADDR="$(trim_trailing_eol "$(carapulse_secret_value vault-addr)")"
+CARAPULSE_VAULT_TOKEN="$(carapulse_secret_value vault-token | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+ARGOCD_BASE_URL_VALUE="$(trim_trailing_eol "$(carapulse_secret_value argocd-base-url)")"
+ARGOCD_TOKEN_VALUE="$(trim_trailing_eol "$(carapulse_secret_value argocd-token)")"
+GITHUB_APP_ID_VALUE="$(trim_trailing_eol "$(carapulse_secret_value github-app-id)")"
+GITHUB_APP_INSTALLATION_ID_VALUE="$(trim_trailing_eol "$(carapulse_secret_value github-app-installation-id)")"
+GITHUB_APP_PRIVATE_KEY_VALUE="$(escape_multiline_value "$(trim_trailing_eol "$(carapulse_secret_value github-app-private-key)")")"
+CODEX_AUTH_JSON_RAW_VALUE="$(trim_trailing_eol "$(carapulse_secret_value codex-auth-json)")"
 if [[ -n "$CODEX_AUTH_JSON_RAW_VALUE" ]] && printf '%s' "$CODEX_AUTH_JSON_RAW_VALUE" | jq -e . >/dev/null 2>&1; then
   CODEX_AUTH_JSON_VALUE="$(printf '%s' "$CODEX_AUTH_JSON_RAW_VALUE" | jq -c .)"
 else
   CODEX_AUTH_JSON_VALUE="$(escape_multiline_value "$CODEX_AUTH_JSON_RAW_VALUE")"
 fi
-OPENAI_API_KEY_VALUE="$(carapulse_secret_value openai-api-key)"
-OPENAI_ACCESS_TOKEN_VALUE="$(carapulse_secret_value openai-access-token)"
-OPENAI_AUTH_BOOTSTRAP_TOKEN_VALUE="$(carapulse_secret_value openai-auth-bootstrap-token)"
-OPENAI_MODEL_VALUE="$(carapulse_secret_value openai-model)"
-OPENAI_REASONING_EFFORT_VALUE="$(carapulse_secret_value openai-reasoning-effort)"
-ANTHROPIC_API_KEY_VALUE="$(carapulse_secret_value anthropic-api-key)"
+OPENAI_API_KEY_VALUE="$(trim_trailing_eol "$(carapulse_secret_value openai-api-key)")"
+OPENAI_ACCESS_TOKEN_VALUE="$(trim_trailing_eol "$(carapulse_secret_value openai-access-token)")"
+OPENAI_AUTH_BOOTSTRAP_TOKEN_VALUE="$(trim_trailing_eol "$(carapulse_secret_value openai-auth-bootstrap-token)")"
+OPENAI_MODEL_VALUE="$(trim_trailing_eol "$(carapulse_secret_value openai-model)")"
+OPENAI_REASONING_EFFORT_VALUE="$(trim_trailing_eol "$(carapulse_secret_value openai-reasoning-effort)")"
+ANTHROPIC_API_KEY_VALUE="$(trim_trailing_eol "$(carapulse_secret_value anthropic-api-key)")"
 
 VAULT_ADDR="${VAULT_ADDR:-$CARAPULSE_VAULT_ADDR}"
 VAULT_TOKEN="${VAULT_TOKEN:-$CARAPULSE_VAULT_TOKEN}"
@@ -965,6 +982,58 @@ if [[ -z "$VAULT_ADDR" || -z "$VAULT_TOKEN" ]]; then
   echo "VAULT_ADDR/VAULT_TOKEN missing (set env, ~/.vault-token, or carapulse-secrets vault-addr/vault-token)" >&2
   exit 1
 fi
+
+for var_name in \
+  SLACK_BOT_TOKEN \
+  SLACK_APP_TOKEN \
+  GATEWAY_TOKEN \
+  GRAFANA_BASE_URL \
+  GRAFANA_ALLOWED_HOST \
+  GRAFANA_TOKEN \
+  BETTERSTACK_API_TOKEN \
+  BETTERSTACK_API_BASE \
+  BETTERSTACK_ALLOWED_HOST \
+  BETTERSTACK_TEAM_ID \
+  BETTERSTACK_TEAM_NAME \
+  PROMETHEUS_URL \
+  SCOPE_NAMESPACES \
+  INCIDENT_STATE_DIR \
+  COST_REPORT_TARGET \
+  RCA_MODE \
+  EXEC_ALLOWLIST \
+  GITHUB_REQUIRED_REPO \
+  GITHUB_REQUIRED_ACTIONS_REPO \
+  GITHUB_AUTH_STRICT \
+  SENTINEL_ROUTE_TARGET_CRITICAL \
+  SENTINEL_ROUTE_TARGET_HIGH \
+  SENTINEL_ROUTE_TARGET_MEDIUM \
+  SENTINEL_ROUTE_TARGET_LOW \
+  SENTINEL_ALERT_COOLDOWN_SECONDS \
+  SENTINEL_ALERT_MIN_INTERVAL_SECONDS \
+  RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS \
+  SRE_AUTO_PR_ENABLED \
+  SRE_AUTO_PR_MIN_CONFIDENCE \
+  SRE_AUTO_PR_ALLOWED_REPOS \
+  SRE_AUTO_PR_BRANCH_PREFIX \
+  SRE_AUTO_PR_NOTIFY_ENABLED \
+  SRE_AUTO_PR_NOTIFY_USER_ID \
+  SRE_AUTO_PR_NOTIFY_STRICT \
+  VAULT_ADDR \
+  VAULT_TOKEN \
+  ARGOCD_BASE_URL_VALUE \
+  ARGOCD_TOKEN_VALUE \
+  GITHUB_APP_ID_VALUE \
+  GITHUB_APP_INSTALLATION_ID_VALUE \
+  GITHUB_APP_PRIVATE_KEY_VALUE \
+  CODEX_AUTH_JSON_VALUE \
+  OPENAI_API_KEY_VALUE \
+  OPENAI_ACCESS_TOKEN_VALUE \
+  OPENAI_AUTH_BOOTSTRAP_TOKEN_VALUE \
+  OPENAI_MODEL_VALUE \
+  OPENAI_REASONING_EFFORT_VALUE \
+  ANTHROPIC_API_KEY_VALUE; do
+  trim_var_in_place "$var_name"
+done
 
 vault_payload_file="$TMP_DIR/openclaw-sre-vault-secrets.json"
 jq -n \
@@ -994,6 +1063,7 @@ jq -n \
   --arg ROUTE_TARGET_LOW "$SENTINEL_ROUTE_TARGET_LOW" \
   --arg ALERT_COOLDOWN_SECONDS "$SENTINEL_ALERT_COOLDOWN_SECONDS" \
   --arg ALERT_MIN_INTERVAL_SECONDS "$SENTINEL_ALERT_MIN_INTERVAL_SECONDS" \
+  --arg RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS "$RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS" \
   --arg AUTO_PR_ENABLED "$SRE_AUTO_PR_ENABLED" \
   --arg AUTO_PR_MIN_CONFIDENCE "$SRE_AUTO_PR_MIN_CONFIDENCE" \
   --arg AUTO_PR_ALLOWED_REPOS "$SRE_AUTO_PR_ALLOWED_REPOS" \
@@ -1044,6 +1114,7 @@ jq -n \
       ROUTE_TARGET_LOW: $ROUTE_TARGET_LOW,
       ALERT_COOLDOWN_SECONDS: $ALERT_COOLDOWN_SECONDS,
       ALERT_MIN_INTERVAL_SECONDS: $ALERT_MIN_INTERVAL_SECONDS,
+      RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS: $RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS,
       AUTO_PR_ENABLED: $AUTO_PR_ENABLED,
       AUTO_PR_MIN_CONFIDENCE: $AUTO_PR_MIN_CONFIDENCE,
       AUTO_PR_ALLOWED_REPOS: $AUTO_PR_ALLOWED_REPOS,
@@ -1201,6 +1272,7 @@ helm --kube-context "$CONTEXT" upgrade --install "$HELM_RELEASE" "$HELM_CHART_DI
   --set-string rca.evidenceTotalTimeoutMs="$RCA_EVIDENCE_TOTAL_TIMEOUT_MS" \
   --set-string rca.minRerunIntervalSeconds="$RCA_MIN_RERUN_INTERVAL_S" \
   --set-string rca.chainCostAlertThreshold="$RCA_CHAIN_COST_ALERT_THRESHOLD" \
+  --set-string rca.chainDualMaxReviewRounds="$RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS" \
   --set-string costCron.target="$COST_REPORT_TARGET" \
   --set selfImproveCron.enabled="$SELF_IMPROVE_CRON_ENABLED" \
   --set-string selfImproveCron.schedule="$SELF_IMPROVE_CRON_SCHEDULE" \

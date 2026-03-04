@@ -38,6 +38,18 @@ rca:
   evidenceTotalTimeoutMs: "80000"
   minRerunIntervalSeconds: "3600"
   chainCostAlertThreshold: "750"
+  chainDualMaxReviewRounds: "20"
+
+runtime:
+  nodeOptions: "--max-old-space-size=1024"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1536Mi
 
 persistence:
   enabled: true
@@ -86,6 +98,12 @@ selfImproveCron:
   branchPrefix: "openclaw/sre-self-improve"
 
 probes:
+  startup:
+    enabled: true
+    initialDelaySeconds: 20
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 60
   readiness:
     initialDelaySeconds: 20
     periodSeconds: 10

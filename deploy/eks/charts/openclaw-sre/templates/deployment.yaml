@@ -137,6 +137,26 @@ spec:
           args:
             - |
               set -eu
+              trim_env_var() {
+                var_name="$1"
+                eval "raw_value=\${${var_name}:-}"
+                trimmed_value="$(printf '%s' "$raw_value" | tr -d '\r')"
+                export "${var_name}=${trimmed_value}"
+              }
+              for var in \
+                ARGOCD_BASE_URL \
+                ARGOCD_TOKEN \
+                ARGOCD_AUTH_TOKEN \
+                GITHUB_APP_ID \
+                GITHUB_APP_INSTALLATION_ID \
+                GITHUB_APP_PRIVATE_KEY \
+                GITHUB_REQUIRED_REPO \
+                GITHUB_REQUIRED_ACTIONS_REPO \
+                GITHUB_AUTH_STRICT \
+                GITHUB_TOKEN \
+                GH_TOKEN; do
+                trim_env_var "$var"
+              done
               mkdir -p /home/node/.kube
               cat >/home/node/.kube/config <<EOF
               apiVersion: v1
@@ -531,10 +551,16 @@ spec:
               value: {{ .Values.rca.minRerunIntervalSeconds | quote }}
             - name: RCA_CHAIN_COST_ALERT_THRESHOLD
               value: {{ .Values.rca.chainCostAlertThreshold | quote }}
+            - name: RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS
+              value: {{ .Values.rca.chainDualMaxReviewRounds | quote }}
             - name: RCA_CHAIN_STAGE_E_ENABLED
               value: {{ .Values.rca.chainStageEEnabled | quote }}
             - name: INCIDENT_LEARNING_ENABLED
               value: {{ .Values.rca.incidentLearningEnabled | quote }}
+            {{- if .Values.runtime.nodeOptions }}
+            - name: NODE_OPTIONS
+              value: {{ .Values.runtime.nodeOptions | quote }}
+            {{- end }}
             - name: VAULT_KUBERNETES_AUTH_PATH
               value: kubernetes
             - name: VAULT_KUBERNETES_ROLE
@@ -542,6 +568,16 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
+          {{- if and .Values.probes.startup .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /
@@ -556,6 +592,8 @@ spec:
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: state
               mountPath: /home/node/.openclaw
