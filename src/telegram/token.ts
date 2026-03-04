@@ -26,7 +26,9 @@ function resolveDollarEnvRef(rawToken: string | undefined, env: NodeJS.ProcessEn
     return rawToken;
   }
   const resolved = env[match[1]]?.trim();
-  return resolved && resolved.length > 0 ? resolved : rawToken;
+  // Missing env refs should continue fallback resolution instead of using the
+  // literal "$VAR" token (which causes Telegram 404s).
+  return resolved && resolved.length > 0 ? resolved : undefined;
 }
 
 export function resolveTelegramToken(
