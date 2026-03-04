@@ -97,6 +97,16 @@ openclaw gateway --tailscale serve
 openclaw gateway --tailscale funnel --auth password
 ```
 
+If the gateway is already running on loopback and you only need a fast HTTPS
+Control UI endpoint, you can also use Tailscale directly:
+
+```bash
+tailscale serve --bg http://127.0.0.1:18789
+```
+
+Then open `https://<magicdns>/` for a secure browser context (no
+`allowInsecureAuth` workaround needed).
+
 ## Notes
 
 - Tailscale Serve/Funnel requires the `tailscale` CLI to be installed and logged in.
