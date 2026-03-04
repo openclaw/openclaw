@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
+import { estimateMessagesTokensWithTokenizer, getConfig } from "../infra/tokenizer.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -72,6 +73,15 @@ export function buildCompactionSummarizationInstructions(
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
+
+  // Use tokenizer module if enabled, otherwise use original estimateTokens
+  // This provides accurate token estimation when OPENCLAW_TOKENIZER_ENABLED=1
+  const tokenizerConfig = getConfig();
+  if (tokenizerConfig.enabled) {
+    return estimateMessagesTokensWithTokenizer(safe);
+  }
+
+  // Default: use original estimateTokens (chars * 0.4) for backward compatibility
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
