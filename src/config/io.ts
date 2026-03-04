@@ -1040,7 +1040,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
-      const patch = createMergePatch(snapshot.config, cfg);
+      // Use snapshot.resolved as base to avoid treating runtime defaults as user-deleted fields
+      // snapshot.resolved is the config BEFORE runtime defaults are applied, so it reflects
+      // what the user actually configured. This prevents issues like bindings being deleted
+      // when the user didn't explicitly remove them (issue #34381).
+      const patch = createMergePatch(snapshot.resolved, cfg);
       persistCandidate = applyMergePatch(snapshot.resolved, patch);
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
@@ -1059,7 +1063,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         if (collected.size > 0) {
           envRefMap = collected;
           changedPaths = new Set<string>();
-          collectChangedPaths(snapshot.config, cfg, "", changedPaths);
+          // Use snapshot.resolved for consistent base with createMergePatch (issue #34381)
+          collectChangedPaths(snapshot.resolved, cfg, "", changedPaths);
         }
       } catch {
         envRefMap = null;
