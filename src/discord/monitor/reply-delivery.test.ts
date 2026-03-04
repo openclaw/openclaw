@@ -135,6 +135,45 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
+  it("passes mediaLocalRoots through media sends", async () => {
+    const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "Media reply",
+          mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      mediaLocalRoots,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:654",
+      "Media reply",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/first.png",
+        mediaLocalRoots,
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:654",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/second.png",
+        mediaLocalRoots,
+      }),
+    );
+  });
+
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
     await deliverDiscordReply({
       replies: [
