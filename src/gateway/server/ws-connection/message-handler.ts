@@ -32,7 +32,11 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
-import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
+import {
+  buildDeviceAuthPayload,
+  buildDeviceAuthPayloadV3,
+  normalizeDeviceMetadataForAuth,
+} from "../../device-auth.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -41,9 +45,10 @@ import {
 } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
-import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
 import {
@@ -85,6 +90,10 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+
+export type WsOriginCheckMetrics = {
+  hostHeaderFallbackAccepted: number;
+};
 
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -131,8 +140,97 @@ function shouldAllowSilentLocalPairing(params: {
   );
 }
 
-function normalizeClientMetadataForComparison(value: string | undefined): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+function shouldSkipBackendSelfPairing(params: {
+  connectParams: ConnectParams;
+  isLocalClient: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isGatewayBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isGatewayBackendClient) {
+    return false;
+  }
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return (
+    params.isLocalClient &&
+    !params.hasBrowserOriginHeader &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth
+  );
+}
+
+function resolveDeviceSignaturePayloadVersion(params: {
+  device: {
+    id: string;
+    signature: string;
+    publicKey: string;
+  };
+  connectParams: ConnectParams;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  nonce: string;
+}): "v3" | "v2" | null {
+  const payloadV3 = buildDeviceAuthPayloadV3({
+    deviceId: params.device.id,
+    clientId: params.connectParams.client.id,
+    clientMode: params.connectParams.client.mode,
+    role: params.role,
+    scopes: params.scopes,
+    signedAtMs: params.signedAtMs,
+    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    nonce: params.nonce,
+    platform: params.connectParams.client.platform,
+    deviceFamily: params.connectParams.client.deviceFamily,
+  });
+  if (verifyDeviceSignature(params.device.publicKey, payloadV3, params.device.signature)) {
+    return "v3";
+  }
+
+  const payloadV2 = buildDeviceAuthPayload({
+    deviceId: params.device.id,
+    clientId: params.connectParams.client.id,
+    clientMode: params.connectParams.client.mode,
+    role: params.role,
+    scopes: params.scopes,
+    signedAtMs: params.signedAtMs,
+    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    nonce: params.nonce,
+  });
+  if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
+    return "v2";
+  }
+  return null;
+}
+
+function resolvePinnedClientMetadata(params: {
+  claimedPlatform?: string;
+  claimedDeviceFamily?: string;
+  pairedPlatform?: string;
+  pairedDeviceFamily?: string;
+}): {
+  platformMismatch: boolean;
+  deviceFamilyMismatch: boolean;
+  pinnedPlatform?: string;
+  pinnedDeviceFamily?: string;
+} {
+  const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
+  const claimedDeviceFamily = normalizeDeviceMetadataForAuth(params.claimedDeviceFamily);
+  const pairedPlatform = normalizeDeviceMetadataForAuth(params.pairedPlatform);
+  const pairedDeviceFamily = normalizeDeviceMetadataForAuth(params.pairedDeviceFamily);
+  const hasPinnedPlatform = pairedPlatform !== "";
+  const hasPinnedDeviceFamily = pairedDeviceFamily !== "";
+  const platformMismatch = hasPinnedPlatform && claimedPlatform !== pairedPlatform;
+  const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  return {
+    platformMismatch,
+    deviceFamilyMismatch,
+    pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
+    pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
+  };
 }
 
 export function attachGatewayWsMessageHandler(params: {
@@ -165,6 +263,7 @@ export function attachGatewayWsMessageHandler(params: {
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
+  originCheckMetrics: WsOriginCheckMetrics;
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -197,6 +296,7 @@ export function attachGatewayWsMessageHandler(params: {
     setHandshakeState,
     setCloseCause,
     setLastFrameMeta,
+    originCheckMetrics,
     logGateway,
     logHealth,
     logWsControl,
@@ -397,12 +497,14 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
+          const hostHeaderOriginFallbackEnabled =
+            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
-            allowHostHeaderOriginFallback:
-              configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+            allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
+            isLocalClient,
           });
           if (!originCheck.ok) {
             const errorMessage =
@@ -415,6 +517,17 @@ export function attachGatewayWsMessageHandler(params: {
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
             close(1008, truncateCloseReason(errorMessage));
             return;
+          }
+          if (originCheck.matchedBy === "host-header-fallback") {
+            originCheckMetrics.hostHeaderFallbackAccepted += 1;
+            logWsControl.warn(
+              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+            );
+            if (hostHeaderOriginFallbackEnabled) {
+              logGateway.warn(
+                "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
+              );
+            }
           }
         }
 
@@ -486,7 +599,7 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         const clearUnboundScopes = () => {
-          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass) {
+          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass && !sharedAuthOk) {
             scopes = [];
             connectParams.scopes = scopes;
           }
@@ -559,7 +672,7 @@ export function attachGatewayWsMessageHandler(params: {
               ok: false,
               error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
                 details: {
-                  code: ConnectErrorDetailCodes.DEVICE_AUTH_INVALID,
+                  code: resolveDeviceAuthConnectErrorDetailCode(reason),
                   reason,
                 },
               }),
@@ -588,42 +701,21 @@ export function attachGatewayWsMessageHandler(params: {
             rejectDeviceAuthInvalid("device-nonce-mismatch", "device nonce mismatch");
             return;
           }
-          const payloadV3 = buildDeviceAuthPayloadV3({
-            deviceId: device.id,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
-            role,
-            scopes,
-            signedAtMs: signedAt,
-            token: connectParams.auth?.token ?? connectParams.auth?.deviceToken ?? null,
-            nonce: providedNonce,
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
-          });
-          const payloadV2 = buildDeviceAuthPayload({
-            deviceId: device.id,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
-            role,
-            scopes,
-            signedAtMs: signedAt,
-            token: connectParams.auth?.token ?? connectParams.auth?.deviceToken ?? null,
-            nonce: providedNonce,
-          });
           const rejectDeviceSignatureInvalid = () =>
             rejectDeviceAuthInvalid("device-signature", "device signature invalid");
-          const signatureOkV3 = verifyDeviceSignature(
-            device.publicKey,
-            payloadV3,
-            device.signature,
-          );
-          const signatureOkV2 =
-            !signatureOkV3 && verifyDeviceSignature(device.publicKey, payloadV2, device.signature);
-          if (!signatureOkV3 && !signatureOkV2) {
+          const payloadVersion = resolveDeviceSignaturePayloadVersion({
+            device,
+            connectParams,
+            role,
+            scopes,
+            signedAtMs: signedAt,
+            nonce: providedNonce,
+          });
+          if (!payloadVersion) {
             rejectDeviceSignatureInvalid();
             return;
           }
-          deviceAuthPayloadVersion = signatureOkV3 ? "v3" : "v2";
+          deviceAuthPayloadVersion = payloadVersion;
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
           if (!devicePublicKey) {
             rejectDeviceAuthInvalid("device-public-key", "device public key invalid");
@@ -661,11 +753,14 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
-        const skipPairing = shouldSkipControlUiPairing(
-          controlUiAuthPolicy,
-          sharedAuthOk,
-          trustedProxyAuthOk,
-        );
+        const skipPairing =
+          shouldSkipBackendSelfPairing({
+            connectParams,
+            isLocalClient,
+            hasBrowserOriginHeader,
+            sharedAuthOk,
+            authMethod,
+          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -784,17 +879,13 @@ export function attachGatewayWsMessageHandler(params: {
             const pairedPlatform = paired.platform;
             const claimedDeviceFamily = connectParams.client.deviceFamily;
             const pairedDeviceFamily = paired.deviceFamily;
-            const hasPinnedPlatform = normalizeClientMetadataForComparison(pairedPlatform) !== "";
-            const hasPinnedDeviceFamily =
-              normalizeClientMetadataForComparison(pairedDeviceFamily) !== "";
-            const platformMismatch =
-              hasPinnedPlatform &&
-              normalizeClientMetadataForComparison(claimedPlatform) !==
-                normalizeClientMetadataForComparison(pairedPlatform);
-            const deviceFamilyMismatch =
-              hasPinnedDeviceFamily &&
-              normalizeClientMetadataForComparison(claimedDeviceFamily) !==
-                normalizeClientMetadataForComparison(pairedDeviceFamily);
+            const metadataPinning = resolvePinnedClientMetadata({
+              claimedPlatform,
+              claimedDeviceFamily,
+              pairedPlatform,
+              pairedDeviceFamily,
+            });
+            const { platformMismatch, deviceFamilyMismatch } = metadataPinning;
             if (platformMismatch || deviceFamilyMismatch) {
               logGateway.warn(
                 `security audit: device metadata upgrade requested reason=metadata-upgrade device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} payload=${deviceAuthPayloadVersion ?? "unknown"} claimedPlatform=${claimedPlatform ?? "<none>"} pinnedPlatform=${pairedPlatform ?? "<none>"} claimedDeviceFamily=${claimedDeviceFamily ?? "<none>"} pinnedDeviceFamily=${pairedDeviceFamily ?? "<none>"} client=${connectParams.client.id} conn=${connId}`,
@@ -804,11 +895,11 @@ export function attachGatewayWsMessageHandler(params: {
                 return;
               }
             } else {
-              if (hasPinnedPlatform && pairedPlatform) {
-                connectParams.client.platform = pairedPlatform;
+              if (metadataPinning.pinnedPlatform) {
+                connectParams.client.platform = metadataPinning.pinnedPlatform;
               }
-              if (hasPinnedDeviceFamily) {
-                connectParams.client.deviceFamily = pairedDeviceFamily;
+              if (metadataPinning.pinnedDeviceFamily) {
+                connectParams.client.deviceFamily = metadataPinning.pinnedDeviceFamily;
               }
             }
             const pairedRoles = Array.isArray(paired.roles)
@@ -941,7 +1032,7 @@ export function attachGatewayWsMessageHandler(params: {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
           server: {
-            version: resolveRuntimeServiceVersion(process.env, "dev"),
+            version: resolveRuntimeServiceVersion(process.env),
             connId,
           },
           features: { methods: gatewayMethods, events },
@@ -969,6 +1060,7 @@ export function attachGatewayWsMessageHandler(params: {
           connId,
           presenceKey,
           clientIp: reportedClientIp,
+          canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
         };

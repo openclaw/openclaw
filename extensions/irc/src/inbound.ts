@@ -1,10 +1,12 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  createScopedPairingAccess,
   createNormalizedOutboundDeliverer,
   createReplyPrefixOptions,
   formatTextWithAttachmentLinks,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
   resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -14,7 +16,7 @@ import {
   type OutboundReplyPayload,
   type OpenClawConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -89,6 +91,11 @@ export async function handleIrcInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, connectedNick, statusSink } = params;
   const core = getIrcRuntime();
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+  });
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
@@ -120,10 +127,12 @@ export async function handleIrcInbound(params: {
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    accountId: account.accountId,
+    dmPolicy,
+    readStore: pairing.readStoreForDmPolicy,
+  });
   const storeAllowList = normalizeIrcAllowlist(storeAllowFrom);
 
   const groupMatch = resolveIrcGroupMatch({
@@ -200,8 +209,7 @@ export async function handleIrcInbound(params: {
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: CHANNEL_ID,
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderDisplay.toLowerCase(),
             meta: { name: message.senderNick || undefined },
           });

@@ -5,6 +5,7 @@ import os
 import SwiftUI
 import UIKit
 
+// swiftlint:disable type_body_length
 struct SettingsTab: View {
     private struct FeatureHelp: Identifiable {
         let id = UUID()
@@ -228,7 +229,10 @@ struct SettingsTab: View {
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(10)
-                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .background(
+                                        .thinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    )
                             }
                         }
                     } label: {
@@ -275,7 +279,9 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Allow Camera",
                             isOn: self.$cameraEnabled,
-                            help: "Allows the gateway to request photos or short video clips while OpenClaw is foregrounded.")
+                            help: "Allows the gateway to request photos or short video clips "
+                                + "while OpenClaw is foregrounded."
+                        )
 
                         HStack(spacing: 8) {
                             Text("Location Access")
@@ -283,7 +289,11 @@ struct SettingsTab: View {
                             Button {
                                 self.activeFeatureHelp = FeatureHelp(
                                     title: "Location Access",
-                                    message: "Controls location permissions for OpenClaw. Off disables location tools, While Using enables foreground location, and Always enables background location.")
+                                    message: "Controls location permissions for OpenClaw. "
+                                        + "Off disables location tools, While Using enables "
+                                        + "foreground location, and Always enables "
+                                        + "background location."
+                                )
                             } label: {
                                 Image(systemName: "info.circle")
                                     .foregroundStyle(.secondary)
@@ -313,7 +323,11 @@ struct SettingsTab: View {
                                 LabeledContent(
                                     "API Key",
                                     value: self.appModel.talkMode.gatewayTalkConfigLoaded
-                                        ? (self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured")
+                                        ? (
+                                            self.appModel.talkMode.gatewayTalkApiKeyConfigured
+                                                ? "Configured"
+                                                : "Not configured"
+                                        )
                                         : "Not loaded")
                                 LabeledContent(
                                     "Default Model",
@@ -340,7 +354,9 @@ struct SettingsTab: View {
                                 Button {
                                     self.activeFeatureHelp = FeatureHelp(
                                         title: "Default Share Instruction",
-                                        message: "Appends this instruction when sharing content into OpenClaw from iOS.")
+                                        message: "Appends this instruction when sharing content "
+                                            + "into OpenClaw from iOS."
+                                    )
                                 } label: {
                                     Image(systemName: "info.circle")
                                         .foregroundStyle(.secondary)
@@ -393,7 +409,9 @@ struct SettingsTab: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(
-                    "This will disconnect, clear saved gateway connection + credentials, and reopen the onboarding wizard.")
+                    "This will disconnect, clear saved gateway connection + credentials, "
+                        + "and reopen the onboarding wizard."
+                )
             }
             .alert(item: self.$activeFeatureHelp) { help in
                 Alert(
@@ -701,7 +719,9 @@ struct SettingsTab: View {
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         GatewayDiagnostics.log(
-            "setup code applied host=\(host) port=\(resolvedPort ?? -1) tls=\(self.manualGatewayTLS) token=\(hasToken) password=\(hasPassword)")
+            "setup code applied host=\(host) port=\(resolvedPort ?? -1) "
+                + "tls=\(self.manualGatewayTLS) token=\(hasToken) password=\(hasPassword)"
+        )
         guard let port = resolvedPort else {
             self.setupStatusText = "Failed: invalid port"
             return
@@ -1009,3 +1029,4 @@ struct SettingsTab: View {
         return lines
     }
 }
+// swiftlint:enable type_body_length

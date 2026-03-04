@@ -52,6 +52,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`plugins`](/cli/plugins) (plugin commands)
 - [`channels`](/cli/channels)
 - [`security`](/cli/security)
+- [`secrets`](/cli/secrets)
 - [`skills`](/cli/skills)
 - [`daemon`](/cli/daemon) (legacy alias for gateway service commands)
 - [`clawbot`](/cli/clawbot) (legacy alias namespace)
@@ -104,6 +105,9 @@ openclaw [--dev] [--profile <name>] <command>
   dashboard
   security
     audit
+  secrets
+    reload
+    migrate
   reset
   uninstall
   update
@@ -263,6 +267,13 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 - `openclaw security audit --deep` — best-effort live Gateway probe.
 - `openclaw security audit --fix` — tighten safe defaults and chmod state/config.
 
+## Secrets
+
+- `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
+- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift.
+- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply.
+- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported).
+
 ## Plugins
 
 Manage extensions and their config:
@@ -317,7 +328,8 @@ Interactive wizard to set up gateway, workspace, and skills.
 Options:
 
 - `--workspace <dir>`
-- `--reset` (reset config + credentials + sessions + workspace before wizard)
+- `--reset` (reset config + credentials + sessions before wizard)
+- `--reset-scope <config|config+creds+sessions|full>` (default `config+creds+sessions`; use `full` to also remove workspace)
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
@@ -326,6 +338,7 @@ Options:
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
 - `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
+- `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
 - `--mistral-api-key <key>`
@@ -367,7 +380,7 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
@@ -375,6 +388,9 @@ Subcommands:
 - `config get <path>`: print a config value (dot/bracket path).
 - `config set <path> <value>`: set a value (JSON5 or raw string).
 - `config unset <path>`: remove a value.
+- `config file`: print the active config file path.
+- `config validate`: validate the current config against the schema without starting the gateway.
+- `config validate --json`: emit machine-readable JSON output.
 
 ### `doctor`
 
@@ -812,13 +828,17 @@ Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `bas
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Preferred Anthropic auth (setup-token):
+Anthropic setup-token (supported):
 
 ```bash
 claude setup-token
 openclaw models auth setup-token --provider anthropic
 openclaw models status
 ```
+
+Policy note: this is technical compatibility. Anthropic has blocked some
+subscription usage outside Claude Code in the past; verify current Anthropic
+terms before relying on setup-token in production.
 
 ### `models` (root)
 

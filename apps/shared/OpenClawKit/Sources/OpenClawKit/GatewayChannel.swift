@@ -45,11 +45,7 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.task.sendPing { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
     }
@@ -399,7 +395,7 @@ public actor GatewayChannelActor {
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
         if includeDeviceIdentity, let identity {
-            let payload = buildDeviceAuthPayloadV3(
+            let payload = GatewayDeviceAuthPayload.buildV3(
                 deviceId: identity.deviceId,
                 clientId: clientId,
                 clientMode: clientMode,
@@ -410,15 +406,12 @@ public actor GatewayChannelActor {
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
-            if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-                let device: [String: ProtoAnyCodable] = [
-                    "id": ProtoAnyCodable(identity.deviceId),
-                    "publicKey": ProtoAnyCodable(publicKey),
-                    "signature": ProtoAnyCodable(signature),
-                    "signedAt": ProtoAnyCodable(signedAtMs),
-                    "nonce": ProtoAnyCodable(connectNonce),
-                ]
+            if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
+                payload: payload,
+                identity: identity,
+                signedAtMs: signedAtMs,
+                nonce: connectNonce)
+            {
                 params["device"] = ProtoAnyCodable(device)
             }
         }
@@ -441,44 +434,6 @@ public actor GatewayChannelActor {
             }
             throw error
         }
-    }
-
-    private func buildDeviceAuthPayloadV3(
-        deviceId: String,
-        clientId: String,
-        clientMode: String,
-        role: String,
-        scopes: [String],
-        signedAtMs: Int,
-        token: String?,
-        nonce: String,
-        platform: String?,
-        deviceFamily: String?) -> String
-    {
-        let scopeString = scopes.joined(separator: ",")
-        let authToken = token ?? ""
-        let normalizedPlatform = normalizeMetadataField(platform)
-        let normalizedDeviceFamily = normalizeMetadataField(deviceFamily)
-        return [
-            "v3",
-            deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopeString,
-            String(signedAtMs),
-            authToken,
-            nonce,
-            normalizedPlatform,
-            normalizedDeviceFamily,
-        ].joined(separator: "|")
-    }
-
-    private func normalizeMetadataField(_ value: String?) -> String {
-        guard let value else { return "" }
-        return value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(with: Locale(identifier: "en_US_POSIX"))
     }
 
     private func handleConnectResponse(
@@ -598,8 +553,7 @@ public actor GatewayChannelActor {
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge",
                        let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                       let nonce = payload["nonce"]?.value as? String,
-                       nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
                     {
                         return nonce
                     }

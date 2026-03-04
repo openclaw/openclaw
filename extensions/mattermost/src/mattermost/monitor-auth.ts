@@ -1,4 +1,7 @@
-import { resolveAllowlistMatchSimple, resolveEffectiveAllowFromLists } from "openclaw/plugin-sdk";
+import {
+  resolveAllowlistMatchSimple,
+  resolveEffectiveAllowFromLists,
+} from "openclaw/plugin-sdk/mattermost";
 
 export function normalizeMattermostAllowEntry(entry: string): string {
   const trimmed = entry.trim();
@@ -44,7 +47,7 @@ export function isMattermostSenderAllowed(params: {
   allowFrom: string[];
   allowNameMatching?: boolean;
 }): boolean {
-  const allowFrom = params.allowFrom;
+  const allowFrom = normalizeMattermostAllowList(params.allowFrom);
   if (allowFrom.length === 0) {
     return false;
   }

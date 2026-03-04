@@ -1,4 +1,4 @@
-/**
+﻿/**
  * sender-check.ts — Sender Check + Context Briefing
  *
  * Detects when the message sender is NOT the owner and injects
@@ -313,8 +313,11 @@ export function runSenderCheck(
   const sender = event.senderMetadata;
   if (!sender?.senderE164) {
     // If senderIsOwner is explicitly false (determined by command-auth upstream),
-    // we know it's a real non-owner message without E.164 (e.g. group LID)
-    if (sender?.senderIsOwner === false) {
+    // we know it's a real non-owner message without E.164 (e.g. group LID).
+    // But only if there's actual sender context (name or chatType) — otherwise
+    // it's a system trigger (heartbeat/cron) that sets senderIsOwner:false without
+    // a real person behind it.
+    if (sender?.senderIsOwner === false && (sender.senderName || sender.chatType)) {
       const name = sender.senderName ?? "Desconhecido";
       let alert = unknownTemplate;
       alert = alert.replace(/\{\{senderNumber\}\}/g, "sem número");

@@ -4,6 +4,7 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
@@ -54,6 +55,13 @@ describe("operator scope authorization", () => {
 describe("core gateway method classification", () => {
   it("classifies every exposed core gateway handler method", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
+      (method) => !isGatewayMethodClassified(method),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it("classifies every listed gateway method name", () => {
+    const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toEqual([]);

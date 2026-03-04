@@ -23,29 +23,23 @@ struct WizardCliOptions {
             case "--json":
                 opts.json = true
             case "--url":
-                opts.url = self.nextValue(args, index: &i)
+                opts.url = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--token":
-                opts.token = self.nextValue(args, index: &i)
+                opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
-                opts.password = self.nextValue(args, index: &i)
+                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--mode":
-                if let value = nextValue(args, index: &i) {
+                if let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                     opts.mode = value
                 }
             case "--workspace":
-                opts.workspace = self.nextValue(args, index: &i)
+                opts.workspace = CLIArgParsingSupport.nextValue(args, index: &i)
             default:
                 break
             }
             i += 1
         }
         return opts
-    }
-
-    private static func nextValue(_ args: [String], index: inout Int) -> String? {
-        guard index + 1 < args.count else { return nil }
-        index += 1
-        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -280,7 +274,7 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let payload = buildDeviceAuthPayloadV3(
+        let payload = GatewayDeviceAuthPayload.buildV3(
             deviceId: identity.deviceId,
             clientId: clientId,
             clientMode: clientMode,
@@ -291,16 +285,12 @@ actor GatewayWizardClient {
             nonce: connectNonce,
             platform: platform,
             deviceFamily: "Mac")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
+        if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
+            payload: payload,
+            identity: identity,
+            signedAtMs: signedAtMs,
+            nonce: connectNonce)
         {
-            let device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
-                "nonce": ProtoAnyCodable(connectNonce),
-            ]
             params["device"] = ProtoAnyCodable(device)
         }
 
@@ -327,44 +317,6 @@ actor GatewayWizardClient {
         }
     }
 
-    private func buildDeviceAuthPayloadV3(
-        deviceId: String,
-        clientId: String,
-        clientMode: String,
-        role: String,
-        scopes: [String],
-        signedAtMs: Int,
-        token: String?,
-        nonce: String,
-        platform: String?,
-        deviceFamily: String?) -> String
-    {
-        let scopeString = scopes.joined(separator: ",")
-        let authToken = token ?? ""
-        let normalizedPlatform = normalizeMetadataField(platform)
-        let normalizedDeviceFamily = normalizeMetadataField(deviceFamily)
-        return [
-            "v3",
-            deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopeString,
-            String(signedAtMs),
-            authToken,
-            nonce,
-            normalizedPlatform,
-            normalizedDeviceFamily,
-        ].joined(separator: "|")
-    }
-
-    private func normalizeMetadataField(_ value: String?) -> String {
-        guard let value else { return "" }
-        return value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(with: Locale(identifier: "en_US_POSIX"))
-    }
-
     private func waitForConnectChallenge() async throws -> String {
         guard let task = self.task else { throw ConnectChallengeError.timeout }
         return try await AsyncTimeout.withTimeout(
@@ -376,8 +328,7 @@ actor GatewayWizardClient {
                     let frame = try await self.decodeFrame(message)
                     if case let .event(evt) = frame, evt.event == "connect.challenge",
                        let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                       let nonce = payload["nonce"]?.value as? String,
-                       nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
                     {
                         return nonce
                     }

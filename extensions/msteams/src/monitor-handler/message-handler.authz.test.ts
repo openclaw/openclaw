@@ -1,4 +1,4 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it, vi } from "vitest";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
@@ -90,7 +90,10 @@ describe("msteams monitor handler authz", () => {
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(readAllowFromStore).toHaveBeenCalledWith("msteams");
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "msteams",
+      accountId: "default",
+    });
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
 });

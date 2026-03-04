@@ -4,6 +4,28 @@ import Testing
 
 @Suite
 struct CronModelsTests {
+    private func makeCronJob(
+        name: String,
+        payloadText: String,
+        state: CronJobState = CronJobState()) -> CronJob
+    {
+        CronJob(
+            id: "x",
+            agentId: nil,
+            name: name,
+            description: nil,
+            enabled: true,
+            deleteAfterRun: nil,
+            createdAtMs: 0,
+            updatedAtMs: 0,
+            schedule: .at(at: "2026-02-03T18:00:00Z"),
+            sessionTarget: .main,
+            wakeMode: .now,
+            payload: .systemEvent(text: payloadText),
+            delivery: nil,
+            state: state)
+    }
+
     @Test func scheduleAtEncodesAndDecodes() throws {
         let schedule = CronSchedule.at(at: "2026-02-03T18:00:00Z")
         let data = try JSONEncoder().encode(schedule)
@@ -91,21 +113,7 @@ struct CronModelsTests {
     }
 
     @Test func displayNameTrimsWhitespaceAndFallsBack() {
-        let base = CronJob(
-            id: "x",
-            agentId: nil,
-            name: "  hello  ",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: .at(at: "2026-02-03T18:00:00Z"),
-            sessionTarget: .main,
-            wakeMode: .now,
-            payload: .systemEvent(text: "hi"),
-            delivery: nil,
-            state: CronJobState())
+        let base = makeCronJob(name: "  hello  ", payloadText: "hi")
         #expect(base.displayName == "hello")
 
         var unnamed = base
@@ -114,20 +122,9 @@ struct CronModelsTests {
     }
 
     @Test func nextRunDateAndLastRunDateDeriveFromState() {
-        let job = CronJob(
-            id: "x",
-            agentId: nil,
+        let job = makeCronJob(
             name: "t",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: .at(at: "2026-02-03T18:00:00Z"),
-            sessionTarget: .main,
-            wakeMode: .now,
-            payload: .systemEvent(text: "hi"),
-            delivery: nil,
+            payloadText: "hi",
             state: CronJobState(
                 nextRunAtMs: 1_700_000_000_000,
                 runningAtMs: nil,
