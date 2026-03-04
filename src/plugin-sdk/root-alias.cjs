@@ -89,7 +89,6 @@ function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
-
   const jiti = getJiti();
   for (const candidate of resolveMonolithicCandidates()) {
     try {
