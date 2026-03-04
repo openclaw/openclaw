@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openclaw-sre
+description: OpenClaw SRE workload for EKS
+type: application
+version: 0.1.0
+appVersion: "2026.2.24"

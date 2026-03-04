@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -8,7 +10,7 @@ require_cmd() {
   fi
 }
 
-for cmd in awk cksum date jq kubectl sed sort tr; do
+for cmd in awk cksum date jq kubectl sed shasum sort tr; do
   require_cmd "$cmd"
 done
 
@@ -22,21 +24,40 @@ LOG_SNIPPET_PODS_LIMIT="${LOG_SNIPPET_PODS_LIMIT:-5}"
 LOG_SNIPPET_LINES="${LOG_SNIPPET_LINES:-120}"
 LOG_SNIPPET_ERRORS_PER_CONTAINER="${LOG_SNIPPET_ERRORS_PER_CONTAINER:-3}"
 RESTART_THRESHOLD="${RESTART_THRESHOLD:-3}"
-KUBECTL_TIMEOUT="${KUBECTL_TIMEOUT:-20s}"
+KUBECTL_TIMEOUT="${KUBECTL_TIMEOUT:-90s}"
+K8S_CONTEXT="${K8S_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo in-cluster)}"
 PROMETHEUS_URL="${PROMETHEUS_URL:-http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090}"
-PROMETHEUS_TIMEOUT_SECONDS="${PROMETHEUS_TIMEOUT_SECONDS:-8}"
+PROMETHEUS_TIMEOUT_SECONDS="${PROMETHEUS_TIMEOUT_SECONDS:-120}"
+ARGOCD_BASE_URL="${ARGOCD_BASE_URL:-}"
+ARGOCD_TIMEOUT_SECONDS="${ARGOCD_TIMEOUT_SECONDS:-120}"
 IGNORE_ALERTNAMES="${IGNORE_ALERTNAMES:-Watchdog,CPUThrottlingHigh,KubeControllerManagerDown,KubeSchedulerDown,KubeJobFailed,KubeDeploymentReplicasMismatch,KubeDeploymentRolloutStuck,KubeHpaMaxedOut}"
-RCA_SCRIPT_DIR="${RCA_SCRIPT_DIR:-/home/node/.openclaw/skills/morpho-sre/scripts}"
+RCA_SCRIPT_DIR="${RCA_SCRIPT_DIR:-${SCRIPT_DIR}}"
 INCLUDE_REPO_MAP="${INCLUDE_REPO_MAP:-1}"
 INCLUDE_CI_SIGNAL="${INCLUDE_CI_SIGNAL:-1}"
 INCLUDE_LOG_SNIPPETS="${INCLUDE_LOG_SNIPPETS:-1}"
 INCLUDE_IMAGE_REVISION="${INCLUDE_IMAGE_REVISION:-1}"
+RCA_MODE="${RCA_MODE:-single}"
+RCA_CHAIN_ENABLED="${RCA_CHAIN_ENABLED:-0}"
+SERVICE_CONTEXT_ENABLED="${SERVICE_CONTEXT_ENABLED:-0}"
+INCIDENT_LEARNING_ENABLED="${INCIDENT_LEARNING_ENABLED:-0}"
 RCA_ENRICH_LIMIT="${RCA_ENRICH_LIMIT:-8}"
 CI_REPO_LIMIT="${CI_REPO_LIMIT:-3}"
 CI_RUN_LIMIT="${CI_RUN_LIMIT:-3}"
+LINEAR_MEMORY_LIMIT="${LINEAR_MEMORY_LIMIT:-5}"
 ALERT_COOLDOWN_SECONDS="${ALERT_COOLDOWN_SECONDS:-1800}"
+ALERT_MIN_INTERVAL_SECONDS="${ALERT_MIN_INTERVAL_SECONDS:-3600}"
+RCA_MIN_RERUN_INTERVAL_S="${RCA_MIN_RERUN_INTERVAL_S:-3600}"
+RCA_EVIDENCE_TOTAL_TIMEOUT_MS="${RCA_EVIDENCE_TOTAL_TIMEOUT_MS:-80000}"
 INCIDENT_STATE_DIR="${INCIDENT_STATE_DIR:-/home/node/.openclaw/state/sentinel}"
 INCIDENT_STATE_FILE="${INCIDENT_STATE_FILE:-${INCIDENT_STATE_DIR}/incident-gate.tsv}"
+ACTIVE_INCIDENTS_FILE="${ACTIVE_INCIDENTS_FILE:-${INCIDENT_STATE_DIR}/active-incidents.tsv}"
+RESOLVED_INCIDENTS_FILE="${RESOLVED_INCIDENTS_FILE:-${INCIDENT_STATE_DIR}/resolved-incidents.tsv}"
+INCIDENT_LAST_ACTIVE_FILE="${INCIDENT_LAST_ACTIVE_FILE:-${INCIDENT_STATE_DIR}/last-active-incident-id}"
+BETTERSTACK_INCIDENT_ID="${BETTERSTACK_INCIDENT_ID:-}"
+BETTERSTACK_THREAD_TS="${BETTERSTACK_THREAD_TS:-}"
+BETTERSTACK_CONTEXT="${BETTERSTACK_CONTEXT:-}"
+SPOOL_DIR="${SPOOL_DIR:-${INCIDENT_STATE_DIR}/spool}"
+META_ALERTS_METRICS_FILE="${META_ALERTS_METRICS_FILE:-${INCIDENT_STATE_DIR}/meta-alerts.tsv}"
 SEVERITY_CRITICAL_SCORE="${SEVERITY_CRITICAL_SCORE:-85}"
 SEVERITY_HIGH_SCORE="${SEVERITY_HIGH_SCORE:-60}"
 SEVERITY_MEDIUM_SCORE="${SEVERITY_MEDIUM_SCORE:-30}"
@@ -45,21 +66,220 @@ ROUTE_TARGET_CRITICAL="${ROUTE_TARGET_CRITICAL:-user:U07KE3NALTX}"
 ROUTE_TARGET_HIGH="${ROUTE_TARGET_HIGH:-user:U07KE3NALTX}"
 ROUTE_TARGET_MEDIUM="${ROUTE_TARGET_MEDIUM:-channel:#staging-infra-monitoring}"
 ROUTE_TARGET_LOW="${ROUTE_TARGET_LOW:-channel:#staging-infra-monitoring}"
+STEP_LEASE_TTL_SECONDS="${STEP_LEASE_TTL_SECONDS:-300}"
+STEP_TIMEOUT_POD_DEPLOY_SECONDS="${STEP_TIMEOUT_POD_DEPLOY_SECONDS:-180}"
+STEP_TIMEOUT_EVENTS_ALERTS_SECONDS="${STEP_TIMEOUT_EVENTS_ALERTS_SECONDS:-180}"
+STEP_TIMEOUT_LINEAR_MEMORY_SECONDS="${STEP_TIMEOUT_LINEAR_MEMORY_SECONDS:-180}"
+STEP_TIMEOUT_PROMETHEUS_TRENDS_SECONDS="${STEP_TIMEOUT_PROMETHEUS_TRENDS_SECONDS:-300}"
+STEP_TIMEOUT_ARGOCD_SYNC_SECONDS="${STEP_TIMEOUT_ARGOCD_SYNC_SECONDS:-300}"
+STEP_TIMEOUT_LOG_SIGNALS_SECONDS="${STEP_TIMEOUT_LOG_SIGNALS_SECONDS:-300}"
+STEP_TIMEOUT_CERT_SECRET_HEALTH_SECONDS="${STEP_TIMEOUT_CERT_SECRET_HEALTH_SECONDS:-180}"
+STEP_TIMEOUT_AWS_RESOURCE_SIGNALS_SECONDS="${STEP_TIMEOUT_AWS_RESOURCE_SIGNALS_SECONDS:-180}"
+STEP_TIMEOUT_IMAGE_REPO_SECONDS="${STEP_TIMEOUT_IMAGE_REPO_SECONDS:-300}"
+STEP_TIMEOUT_REVISIONS_SECONDS="${STEP_TIMEOUT_REVISIONS_SECONDS:-300}"
+STEP_TIMEOUT_CI_SIGNALS_SECONDS="${STEP_TIMEOUT_CI_SIGNALS_SECONDS:-300}"
 
+TIMEOUT_IMPL="none"
 if command -v timeout >/dev/null 2>&1; then
-  HAS_TIMEOUT=1
-else
-  HAS_TIMEOUT=0
+  TIMEOUT_IMPL="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_IMPL="gtimeout"
+elif command -v python3 >/dev/null 2>&1; then
+  TIMEOUT_IMPL="python3"
 fi
+
+parse_timeout_seconds() {
+  local raw="${1:-0}"
+  raw="${raw%s}"
+  if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s\n' "$raw"
+    return
+  fi
+  printf '0\n'
+}
 
 run_with_timeout() {
   local timeout_value="$1"
   shift
-  if [[ "$HAS_TIMEOUT" -eq 1 ]]; then
-    timeout "$timeout_value" "$@"
-  else
-    "$@"
+  local timeout_sec
+  timeout_sec="$(parse_timeout_seconds "$timeout_value")"
+  case "$TIMEOUT_IMPL" in
+    timeout)
+      timeout "${timeout_sec}s" "$@"
+      ;;
+    gtimeout)
+      gtimeout "${timeout_sec}s" "$@"
+      ;;
+    python3)
+      python3 - "$timeout_sec" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
+cmd = sys.argv[2:]
+
+if not cmd:
+    sys.exit(2)
+
+try:
+    completed = subprocess.run(cmd, timeout=timeout if timeout > 0 else None)
+    sys.exit(completed.returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+except FileNotFoundError:
+    sys.exit(127)
+PY
+      ;;
+    *)
+      "$@"
+      ;;
+  esac
+}
+
+log() {
+  printf '[sentinel-triage] %s\n' "$*" >&2
+}
+
+now_ms() {
+  local ms
+  ms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "$ms" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$ms"
+    return
   fi
+  printf '%s000\n' "$(date +%s 2>/dev/null || echo 0)"
+}
+
+# --- Per-step timeout infrastructure (Phase 1) ---
+
+run_step() {
+  local step_num="$1" step_name="$2" timeout_sec="$3" required="$4"
+  shift 4
+  local command="$*"
+  local output_var="STEP_OUTPUT_${step_num}"
+  local status_var="STEP_STATUS_${step_num}"
+  local start_ms end_ms elapsed_ms
+  local output=""
+  local exit_code=0
+
+  start_ms="$(now_ms)"
+  output="$(run_with_timeout "${timeout_sec}s" bash -c "$command" 2>&1)" || exit_code=$?
+  end_ms="$(now_ms)"
+  elapsed_ms=$((end_ms - start_ms))
+  if [[ "$elapsed_ms" -lt 0 ]]; then
+    elapsed_ms=0
+  fi
+  local latency_var="STEP_LATENCY_${step_num}"
+  printf -v "$latency_var" '%s' "$elapsed_ms"
+
+  if [[ "$exit_code" -eq 124 ]]; then
+    printf -v "$status_var" '%s' "timeout"
+    printf -v "$output_var" '%s' ""
+    log "Step ${step_num} (${step_name}): TIMEOUT after ${timeout_sec}s"
+    if [[ "$required" == "yes" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    printf -v "$status_var" '%s' "error"
+    printf -v "$output_var" '%s' ""
+    log "Step ${step_num} (${step_name}): ERROR (exit ${exit_code})"
+    if [[ "$required" == "yes" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  printf -v "$status_var" '%s' "ok"
+  printf -v "$output_var" '%s' "$output"
+  return 0
+}
+
+emit_step_var() {
+  local name="$1"
+  local value="${2:-}"
+  local encoded
+  encoded="$(printf '%s' "$value" | jq -Rr '@base64')"
+  printf '__STEPVAR__\t%s\t%s\n' "$name" "$encoded"
+}
+
+apply_step_output() {
+  local step_num="$1"
+  local output_var="STEP_OUTPUT_${step_num}"
+  local raw_output="${!output_var:-}"
+  local filtered_output=""
+  local line marker var_name encoded decoded
+
+  while IFS= read -r line; do
+    if [[ "$line" == "__STEPVAR__"$'\t'* ]]; then
+      IFS=$'\t' read -r marker var_name encoded <<<"$line"
+      if [[ "$var_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        decoded="$(printf '%s' "$encoded" | jq -Rr '@base64d' 2>/dev/null || echo "")"
+        printf -v "$var_name" '%s' "$decoded"
+      fi
+      continue
+    fi
+    filtered_output="${filtered_output}${line}"$'\n'
+  done < <(printf '%s\n' "$raw_output")
+
+  filtered_output="${filtered_output%$'\n'}"
+  printf -v "$output_var" '%s' "$filtered_output"
+}
+
+set_step_skipped() {
+  local step_num="$1"
+  local status_var="STEP_STATUS_${step_num}"
+  local output_var="STEP_OUTPUT_${step_num}"
+  local latency_var="STEP_LATENCY_${step_num}"
+  printf -v "$status_var" '%s' "skipped"
+  printf -v "$output_var" '%s' ""
+  printf -v "$latency_var" '%s' "0"
+}
+
+EVIDENCE_BUDGET_START_MS=0
+EVIDENCE_BUDGET_EXHAUSTED=0
+
+optional_evidence_step_allowed() {
+  local step_num="$1"
+  if [[ "${RCA_CHAIN_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  if ! [[ "${RCA_EVIDENCE_TOTAL_TIMEOUT_MS:-0}" =~ ^[0-9]+$ ]] || [[ "${RCA_EVIDENCE_TOTAL_TIMEOUT_MS:-0}" -le 0 ]]; then
+    return 0
+  fi
+  if [[ "${EVIDENCE_BUDGET_EXHAUSTED:-0}" -eq 1 ]]; then
+    set_step_skipped "$step_num"
+    return 1
+  fi
+
+  local elapsed_ms
+  elapsed_ms=$(( $(now_ms) - EVIDENCE_BUDGET_START_MS ))
+  if (( elapsed_ms >= RCA_EVIDENCE_TOTAL_TIMEOUT_MS )); then
+    EVIDENCE_BUDGET_EXHAUSTED=1
+    log "Evidence budget exhausted (${elapsed_ms}ms >= ${RCA_EVIDENCE_TOTAL_TIMEOUT_MS}ms), skipping remaining optional steps"
+    set_step_skipped "$step_num"
+    return 1
+  fi
+  return 0
+}
+
+step_command() {
+  local fn="$1"
+  local needs=(emit_step_var run_with_timeout kctl sanitize_signal_line count_lines resolve_helper_script extract_image_tag extract_commit_hint_from_tag "$fn")
+  local out="" item
+  for item in "${needs[@]}"; do
+    if declare -F "$item" >/dev/null 2>&1; then
+      out="${out}$(declare -f "$item")"$'\n'
+    fi
+  done
+  out="${out}${fn}"
+  printf '%s' "$out"
+}
+
+kctl() {
+  kubectl --context "$K8S_CONTEXT" "$@"
 }
 
 ensure_positive_int() {
@@ -117,6 +337,12 @@ sanitize_signal_line() {
         | gsub("(?i)github_pat_[A-Za-z0-9_]+"; "<redacted-gh-token>")
         | gsub("AKIA[0-9A-Z]{16}"; "<redacted-aws-key>")
         | gsub("ASIA[0-9A-Z]{16}"; "<redacted-aws-sts-key>")
+        | gsub("(?i)sk-ant-[A-Za-z0-9._=-]+"; "sk-ant-<redacted>")
+        | gsub("(?i)hvs\\.[A-Za-z0-9._=-]+"; "hvs.<redacted>")
+        | gsub("(?i)\\bs\\.[A-Za-z0-9._=-]{8,}\\b"; "s.<redacted>")
+        | gsub("(?i)(\"?(password|secret|token|api_key|aws_secret_access_key|private_key|client_secret)\"?[[:space:]]*[:=][[:space:]]*\")([^\"\\r\\n]{4,})(\")"; "\\1<redacted>\\4")
+        | gsub("(?i)(\"?(password|secret|token|api_key|aws_secret_access_key|private_key|client_secret)\"?[[:space:]]*[:=][[:space:]]*)([^[:space:]\",}{]{4,})"; "\\1<redacted>")
+        | gsub("(?i)((cert|certificate|private[_-]?key|tls\\.crt|tls\\.key)[[:space:]]*[:=][[:space:]]*)([A-Za-z0-9+/=]{40,})"; "\\1<redacted-cert-data>")
         | gsub("[\r\n\t]+"; " ")
         | gsub("[[:space:]]+"; " ")
         | .[0:220]
@@ -174,6 +400,1060 @@ count_tsv_in_namespaces() {
   '
 }
 
+compute_workload_hash8() {
+  local workloads="${1:-}"
+  local hash8
+  hash8="$(printf '%s' "$workloads" | shasum -a 256 | awk '{print substr($1, 1, 8)}')"
+  if [[ -z "$hash8" || "$hash8" == "e3b0c442" ]]; then
+    hash8="empty000"
+  fi
+  printf '%s\n' "$hash8"
+}
+
+compute_dedup_key() {
+  local namespace="${1:-unknown}"
+  local category="${2:-unknown}"
+  local workloads="${3:-}"
+  local workload_hash8
+  workload_hash8="$(compute_workload_hash8 "$workloads")"
+  local minute half hour_bucket key_source
+  minute="$(date -u +%M)"
+  half=0
+  if [[ "$minute" =~ ^[0-9]+$ ]] && [[ "$minute" -ge 30 ]]; then
+    half=30
+  fi
+  hour_bucket="$(date -u +%Y%m%d%H)$(printf '%02d' "$half")"
+  key_source="${namespace}${category}${workload_hash8}${hour_bucket}"
+  printf '%s' "$key_source" | shasum -a 256 | awk '{print $1}'
+}
+
+resolve_helper_script() {
+  local script_name="$1"
+  if [[ -x "${SCRIPT_DIR%/}/${script_name}" ]]; then
+    printf '%s\n' "${SCRIPT_DIR%/}/${script_name}"
+    return 0
+  fi
+  if [[ -x "${RCA_SCRIPT_DIR%/}/${script_name}" ]]; then
+    printf '%s\n' "${RCA_SCRIPT_DIR%/}/${script_name}"
+    return 0
+  fi
+  printf '\n'
+}
+
+sanitize_state_field() {
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$raw" \
+    | sed -E 's/[^A-Za-z0-9_:.|,-]+/_/g; s/^_+|_+$//g; s/_{2,}/_/g'
+}
+
+normalize_pipe_atoms() {
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$raw" \
+    | tr '|, ' '\n\n\n' \
+    | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
+    | awk 'NF > 0 { print }' \
+    | sort -u \
+    | paste -sd'|' -
+}
+
+normalize_csv_atoms() {
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$raw" \
+    | tr '|, ' '\n\n\n' \
+    | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
+    | awk 'NF > 0 { print }' \
+    | sort -u \
+    | paste -sd',' -
+}
+
+split_csv_atoms() {
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$raw" \
+    | tr ',' '\n' \
+    | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
+    | awk 'NF > 0 { print }'
+}
+
+normalize_pod_workload_name() {
+  local pod_name="${1:-}"
+  if [[ -z "$pod_name" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$pod_name" \
+    | sed -E 's/-[a-z0-9]{5}$//; s/-[a-f0-9]{8,10}$//'
+}
+
+derive_step11_workloads() {
+  local deploy_rows_input="${1:-}"
+  local pod_rows_input="${2:-}"
+  {
+    printf '%s\n' "$deploy_rows_input" | awk -F'\t' 'NF >= 2 { print $2 }'
+    while IFS=$'\t' read -r _ns pod_name _rest; do
+      [[ -z "${pod_name:-}" ]] && continue
+      normalize_pod_workload_name "$pod_name"
+    done < <(printf '%s\n' "$pod_rows_input")
+  } \
+    | awk 'NF > 0 { print }' \
+    | sort -u \
+    | tr '\n' '|'
+}
+
+tsv_field() {
+  local row="${1:-}"
+  local index="${2:-1}"
+  printf '%s\n' "$row" | awk -F'\t' -v idx="$index" 'NR == 1 { print $idx }'
+}
+
+fallback_incident_id() {
+  local namespace="${1:-unknown}"
+  local category="${2:-unknown}"
+  local workloads="${3:-}"
+  local fingerprint="${4:-0}"
+  local wl_hash
+  wl_hash="$(compute_workload_hash8 "$workloads")"
+  printf 'hb:%s:%s:fp%s:%s\n' \
+    "$(sanitize_state_field "$namespace")" \
+    "$(sanitize_state_field "$category")" \
+    "$(sanitize_state_field "$fingerprint")" \
+    "$(sanitize_state_field "$wl_hash")"
+}
+
+resolve_rca_mode() {
+  local mode
+  mode="$(printf '%s' "${RCA_MODE:-single}" | tr '[:upper:]' '[:lower:]')"
+  case "$mode" in
+    single|dual|heuristic)
+      printf '%s\n' "$mode"
+      ;;
+    *)
+      printf 'heuristic\n'
+      ;;
+  esac
+}
+
+mark_evidence_step() {
+  local step_num="$1"
+  local applicable="${2:-1}"
+  if [[ "$applicable" != "1" ]]; then
+    return 0
+  fi
+  evidence_applicable_steps=$((evidence_applicable_steps + 1))
+  local status_var="STEP_STATUS_${step_num}"
+  if [[ "${!status_var:-}" == "ok" ]]; then
+    evidence_completed_steps=$((evidence_completed_steps + 1))
+  fi
+}
+
+source_optional_lib() {
+  local lib_name="$1"
+  local flag_name="$2"
+  local lib_path="${SCRIPT_DIR%/}/${lib_name}.sh"
+  local alt_lib_path="${RCA_SCRIPT_DIR%/}/${lib_name}.sh"
+  printf -v "$flag_name" '%s' "0"
+  if [[ -f "$alt_lib_path" ]]; then
+    # shellcheck source=/dev/null
+    source "$alt_lib_path"
+    printf -v "$flag_name" '%s' "1"
+    return 0
+  fi
+  if [[ -f "$lib_path" ]]; then
+    # shellcheck source=/dev/null
+    source "$lib_path"
+    printf -v "$flag_name" '%s' "1"
+    return 0
+  fi
+}
+
+cleanup_spool() {
+  local now ttl max_files
+  now="$(date +%s 2>/dev/null || echo 0)"
+  ttl=86400
+  max_files=100
+  mkdir -p "$SPOOL_DIR" 2>/dev/null || true
+  if [[ ! -d "$SPOOL_DIR" ]]; then
+    return 0
+  fi
+
+  find "$SPOOL_DIR" -maxdepth 1 -type f \( -name "*.ack" -o -name "*.acked" -o -name "*.done" -o -name ".cron-healthcheck-*" \) -mmin +1440 -delete 2>/dev/null || true
+
+  local file mtime age
+  while IFS= read -r -d '' file; do
+    mtime="$(stat -f %m "$file" 2>/dev/null || true)"
+    if ! [[ "$mtime" =~ ^[0-9]+$ ]]; then
+      mtime="$(stat -c %Y "$file" 2>/dev/null || true)"
+    fi
+    if ! [[ "$mtime" =~ ^[0-9]+$ ]]; then
+      mtime="$now"
+    fi
+    age=$((now - mtime))
+    if ((age > ttl)); then
+      mv "$file" "${file}.dead" 2>/dev/null || true
+    fi
+  done < <(find "$SPOOL_DIR" -maxdepth 1 -type f -name "triage-*.json" -print0 2>/dev/null)
+
+  local count
+  count="$(find "$SPOOL_DIR" -maxdepth 1 -type f -name "triage-*.json" | wc -l | tr -d ' ')"
+  if [[ "$count" =~ ^[0-9]+$ ]] && ((count > max_files)); then
+    local trim_count
+    trim_count=$((count - max_files))
+    find "$SPOOL_DIR" -maxdepth 1 -type f -name "triage-*.json" -print \
+      | sort \
+      | head -n "$trim_count" \
+      | while IFS= read -r file; do
+          mv "$file" "${file}.dead" 2>/dev/null || true
+        done
+  fi
+}
+
+coalesce_spool_for_key() {
+  local key="$1"
+  local latest=""
+  local file
+  while IFS= read -r file; do
+    latest="$file"
+  done < <(find "$SPOOL_DIR" -maxdepth 1 -type f -name "triage-${key}-*.json" | sort)
+
+  if [[ -z "$latest" ]]; then
+    printf '\n'
+    return 1
+  fi
+
+  while IFS= read -r file; do
+    [[ "$file" == "$latest" ]] && continue
+    mv "$file" "${file}.acked" 2>/dev/null || true
+  done < <(find "$SPOOL_DIR" -maxdepth 1 -type f -name "triage-${key}-*.json" | sort)
+
+  printf '%s\n' "$latest"
+}
+
+fsync_file() {
+  local file="$1"
+  sync "$file" 2>/dev/null || sync 2>/dev/null || true
+}
+
+LEASE_DIR=""
+
+acquire_lease() {
+  local key="$1"
+  local lease_path="${SPOOL_DIR}/lease-${key}"
+  local done_marker="${SPOOL_DIR}/${key}.done"
+
+  if [[ -f "$done_marker" ]]; then
+    log "Lease: .done exists for key=${key}, skipping"
+    return 1
+  fi
+
+  if mkdir "$lease_path" 2>/dev/null; then
+    printf '%s:%s\n' "$(hostname 2>/dev/null || echo unknown-host)" "$(date +%s 2>/dev/null || echo 0)" > "${lease_path}/owner"
+    LEASE_DIR="$lease_path"
+    return 0
+  fi
+
+  if [[ -f "${lease_path}/owner" ]]; then
+    local owner_ts now
+    owner_ts="$(cut -d: -f2 "${lease_path}/owner" 2>/dev/null || echo 0)"
+    now="$(date +%s 2>/dev/null || echo 0)"
+    if [[ "$owner_ts" =~ ^[0-9]+$ ]] && [[ "$now" =~ ^[0-9]+$ ]] && ((now - owner_ts > STEP_LEASE_TTL_SECONDS)); then
+      log "Lease: reclaim stale lease key=${key} age=$((now - owner_ts))s"
+      rm -f "${lease_path}/owner"
+      rmdir "$lease_path" 2>/dev/null || true
+      if mkdir "$lease_path" 2>/dev/null; then
+        printf '%s:%s\n' "$(hostname 2>/dev/null || echo unknown-host)" "$(date +%s 2>/dev/null || echo 0)" > "${lease_path}/owner"
+        LEASE_DIR="$lease_path"
+        return 0
+      fi
+    fi
+  fi
+
+  log "Lease: already owned for key=${key}, skip Step 11"
+  return 1
+}
+
+release_lease() {
+  local key="$1"
+  local lease_path="${SPOOL_DIR}/lease-${key}"
+  touch "${SPOOL_DIR}/${key}.done" 2>/dev/null || true
+  rm -f "${lease_path}/owner"
+  rmdir "$lease_path" 2>/dev/null || true
+  LEASE_DIR=""
+}
+
+abandon_lease() {
+  local key="$1"
+  local lease_path="${SPOOL_DIR}/lease-${key}"
+  rm -f "${lease_path}/owner"
+  rmdir "$lease_path" 2>/dev/null || true
+  LEASE_DIR=""
+}
+
+write_spool_payload() {
+  local key="$1"
+  local payload="$2"
+  local now_ts spool_file
+  now_ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  spool_file="${SPOOL_DIR}/triage-${key}-${now_ts}.json"
+  printf '%s\n' "$payload" > "$spool_file"
+  fsync_file "$spool_file"
+  printf '%s\n' "$spool_file"
+}
+
+redact_payload_for_sink() {
+  local payload="$1"
+  local sink="$2"
+  if [[ "${HAS_LIB_RCA_SINK:-0}" -eq 1 ]] && declare -F redact_for_sink >/dev/null 2>&1; then
+    redact_for_sink "$payload" "$sink"
+    return $?
+  fi
+  printf '%s\n' "$payload"
+}
+
+rca_cache_file_for_incident() {
+  local incident_id="${1:-}"
+  if [[ -z "$incident_id" ]]; then
+    return 1
+  fi
+  local cache_key
+  cache_key="$(printf '%s' "$incident_id" | shasum -a 256 | awk '{print $1}')"
+  printf '%s\n' "${INCIDENT_STATE_DIR%/}/rca-cache-${cache_key}.json"
+}
+
+rca_cache_read_json() {
+  local incident_id="${1:-}"
+  local cache_file
+  cache_file="$(rca_cache_file_for_incident "$incident_id" 2>/dev/null || true)"
+  [[ -n "$cache_file" && -s "$cache_file" ]] || return 1
+  if ! jq -e . "$cache_file" >/dev/null 2>&1; then
+    return 1
+  fi
+  cat "$cache_file"
+}
+
+rca_cache_write_json() {
+  local incident_id="${1:-}"
+  local evidence_fingerprint="${2:-}"
+  local last_rca_ts="${3:-0}"
+  local rca_json="${4:-}"
+  [[ -n "$incident_id" && -n "$rca_json" ]] || return 1
+  if ! printf '%s\n' "$rca_json" | jq -e . >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local cache_file cache_dir tmp_file payload
+  cache_file="$(rca_cache_file_for_incident "$incident_id" 2>/dev/null || true)"
+  [[ -n "$cache_file" ]] || return 1
+  cache_dir="${cache_file%/*}"
+  mkdir -p "$cache_dir" 2>/dev/null || return 1
+
+  payload="$(jq -cn \
+    --arg incident_id "$incident_id" \
+    --arg evidence_fingerprint "$evidence_fingerprint" \
+    --arg last_rca_ts "$last_rca_ts" \
+    --argjson rca_result_json "$rca_json" \
+    '{
+      incident_id: $incident_id,
+      evidence_fingerprint: $evidence_fingerprint,
+      last_rca_ts: ($last_rca_ts | tonumber? // 0),
+      rca_result_json: $rca_result_json
+    }')"
+
+  tmp_file="${cache_file}.tmp.$$"
+  printf '%s\n' "$payload" >"$tmp_file"
+  mv -f "$tmp_file" "$cache_file"
+}
+
+rca_cache_get_field() {
+  local incident_id="${1:-}"
+  local jq_expr="$2"
+  local fallback="${3:-}"
+  local json
+  json="$(rca_cache_read_json "$incident_id" 2>/dev/null || true)"
+  if [[ -z "$json" ]]; then
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+  printf '%s\n' "$json" | jq -r "$jq_expr" 2>/dev/null || printf '%s\n' "$fallback"
+}
+
+emit_abort_output() {
+  local reason="$1"
+  section "meta"
+  printf 'snapshot_utc\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'context\t%s\n' "$K8S_CONTEXT"
+  printf 'namespace_scope\t%s\n' "${SCOPE_NAMESPACES:-all}"
+  section "health_status"
+  printf 'state\tincident\n'
+  printf 'incident_signals\t0\n'
+  section "incident_gate"
+  printf 'should_alert\tno\n'
+  printf 'gate_reason\tinsufficient-core-signals\n'
+  section "step_status"
+  printf 'step\tstatus\tlatency_ms\n'
+  local step_num status_var latency_var
+  for step_num in 00 01 02 03 04 05 06 07 08 09 10 11; do
+    status_var="STEP_STATUS_${step_num}"
+    latency_var="STEP_LATENCY_${step_num}"
+    printf '%s\t%s\t%s\n' "$step_num" "${!status_var:-skipped}" "${!latency_var:-0}"
+  done
+  section "abort_reason"
+  printf 'reason\t%s\n' "$reason"
+}
+
+step_01_pod_deploy() {
+  local pods_json_local deploys_json_local
+  local pod_rows_local container_state_rows_local deploy_rows_local
+
+  pods_json_local="$(run_with_timeout "$KUBECTL_TIMEOUT" kctl get pods -A -o json 2>/dev/null || printf '{"items":[]}\n')"
+  deploys_json_local="$(run_with_timeout "$KUBECTL_TIMEOUT" kctl get deploy -A -o json 2>/dev/null || printf '{"items":[]}\n')"
+
+  pod_rows_local="$(
+    printf '%s\n' "$pods_json_local" | jq -r \
+      --argjson scopes "$NS_FILTER_JSON" \
+      --argjson restartThreshold "$RESTART_THRESHOLD" '
+      .items[]
+      | .metadata.namespace as $ns
+      | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
+      | .metadata.name as $pod
+      | (.status.phase // "Unknown") as $phase
+      | ([.status.containerStatuses[]?, .status.initContainerStatuses[]?] | map(.restartCount // 0) | add // 0) as $restarts
+      | (
+          [.status.containerStatuses[]?, .status.initContainerStatuses[]?]
+          | map(
+              if (.state.waiting.reason? // "") != "" then .state.waiting.reason
+              elif (.state.terminated.reason? // "") != "" and (.state.terminated.reason != "Completed") then .state.terminated.reason
+              else empty end
+            )
+          | unique
+          | join(",")
+        ) as $reasons
+      | select(
+          ($phase != "Running" and $phase != "Succeeded")
+          or ($restarts >= $restartThreshold)
+          or ($reasons != "")
+        )
+      | [$ns, $pod, $phase, ($restarts | tostring), (if $reasons == "" then "-" else $reasons end)]
+      | @tsv
+    ' | sort
+  )" || pod_rows_local=""
+
+  container_state_rows_local="$(
+    printf '%s\n' "$pods_json_local" | jq -r \
+      --argjson scopes "$NS_FILTER_JSON" \
+      --argjson restartThreshold "$RESTART_THRESHOLD" '
+      .items[]
+      | .metadata.namespace as $ns
+      | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
+      | .metadata.name as $pod
+      | [(.status.containerStatuses[]? | . + {kind: "container"}), (.status.initContainerStatuses[]? | . + {kind: "init"})]
+      | .[]
+      | .name as $container
+      | (.kind // "container") as $kind
+      | (.restartCount // 0) as $restarts
+      | (.state.waiting.reason // "") as $waitingReason
+      | (.state.waiting.message // "") as $waitingMessage
+      | (.state.terminated.reason // "") as $terminatedReason
+      | (.state.terminated.message // "") as $terminatedMessage
+      | (.state.terminated.exitCode // .lastState.terminated.exitCode // -1) as $exitCode
+      | (.lastState.terminated.reason // "") as $lastTerminatedReason
+      | (.lastState.terminated.message // "") as $lastTerminatedMessage
+      | (
+          if $waitingReason != "" then "waiting"
+          elif $terminatedReason != "" then "terminated"
+          elif $lastTerminatedReason != "" then "lastTerminated"
+          else "running"
+          end
+        ) as $stateType
+      | (
+          if $waitingReason != "" then $waitingReason
+          elif $terminatedReason != "" then $terminatedReason
+          elif $lastTerminatedReason != "" then $lastTerminatedReason
+          else ""
+          end
+        ) as $rawReason
+      | (
+          if $stateType == "terminated" and $rawReason == "Completed" then ""
+          else $rawReason
+          end
+        ) as $reason
+      | (
+          if $waitingMessage != "" then $waitingMessage
+          elif $terminatedMessage != "" then $terminatedMessage
+          elif $lastTerminatedMessage != "" then $lastTerminatedMessage
+          else ""
+          end
+        ) as $message
+      | select(
+          ($stateType != "running" and ($reason != "" or $message != ""))
+          or ($restarts >= $restartThreshold and $reason != "Completed")
+          or ($reason == "OOMKilled")
+        )
+      | [
+          $ns,
+          $pod,
+          $container,
+          $kind,
+          ($restarts | tostring),
+          $stateType,
+          (if $reason == "" then "-" else $reason end),
+          (if $exitCode == -1 then "-" else ($exitCode | tostring) end),
+          (
+            if $message == "" then "-"
+            else
+              (
+                $message
+                | gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._=-]+"; "\\1<redacted>")
+                | gsub("(?i)(xox[baprs]-)[A-Za-z0-9-]+"; "\\1<redacted>")
+                | gsub("(?i)(xapp-[0-9]+-)[A-Za-z0-9-]+"; "\\1<redacted>")
+                | gsub("(?i)(gh[pousr]_[A-Za-z0-9_]+)"; "<redacted-gh-token>")
+                | gsub("(?i)github_pat_[A-Za-z0-9_]+"; "<redacted-gh-token>")
+                | gsub("AKIA[0-9A-Z]{16}"; "<redacted-aws-key>")
+                | gsub("ASIA[0-9A-Z]{16}"; "<redacted-aws-sts-key>")
+                | gsub("[\r\n\t]+"; " ")
+                | .[0:220]
+              )
+            end
+          )
+        ]
+      | @tsv
+    ' | sort -u
+  )" || container_state_rows_local=""
+
+  deploy_rows_local="$(
+    printf '%s\n' "$deploys_json_local" | jq -r --argjson scopes "$NS_FILTER_JSON" '
+      .items[]
+      | .metadata.namespace as $ns
+      | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
+      | .metadata.name as $name
+      | (.spec.replicas // 1) as $desired
+      | (.status.availableReplicas // 0) as $available
+      | (.status.updatedReplicas // 0) as $updated
+      | (.status.unavailableReplicas // 0) as $unavailable
+      | select(($available < $desired) or ($unavailable > 0))
+      | [$ns, $name, ($desired | tostring), ($available | tostring), ($updated | tostring), ($unavailable | tostring)]
+      | @tsv
+    ' | sort
+  )" || deploy_rows_local=""
+
+  emit_step_var "pod_rows" "$pod_rows_local"
+  emit_step_var "container_state_rows" "$container_state_rows_local"
+  emit_step_var "deploy_rows" "$deploy_rows_local"
+}
+
+step_02_events_alerts() {
+  local events_json_local alerts_json_local event_rows_local alert_rows_local
+
+  events_json_local="$(run_with_timeout "$KUBECTL_TIMEOUT" kctl get events -A -o json 2>/dev/null || printf '{"items":[]}\n')"
+  alerts_json_local="$(
+    if command -v curl >/dev/null 2>&1; then
+      run_with_timeout "${PROMETHEUS_TIMEOUT_SECONDS}s" \
+        curl -fsS "${PROMETHEUS_URL}/api/v1/alerts" 2>/dev/null || printf '{"status":"error","data":{"alerts":[]}}\n'
+    else
+      printf '{"status":"error","data":{"alerts":[]}}\n'
+    fi
+  )"
+
+  event_rows_local="$(
+    printf '%s\n' "$events_json_local" | jq -r --argjson scopes "$NS_FILTER_JSON" '
+      .items
+      | map(.metadata.namespace as $ns | select(($scopes | length) == 0 or ($scopes | index($ns) != null)))
+      | map(select((.type // "Normal") != "Normal"))
+      | sort_by(.eventTime // .lastTimestamp // .metadata.creationTimestamp // .firstTimestamp // "")
+      | .[]
+      | [
+          (.metadata.namespace // "-"),
+          ((.involvedObject.kind // "-") + "/" + (.involvedObject.name // "-")),
+          (.reason // "-"),
+          (.eventTime // .lastTimestamp // .metadata.creationTimestamp // .firstTimestamp // "-"),
+          (
+            (.message // "-")
+            | gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._=-]+"; "\\1<redacted>")
+            | gsub("(?i)(xox[baprs]-)[A-Za-z0-9-]+"; "\\1<redacted>")
+            | gsub("(?i)(xapp-[0-9]+-)[A-Za-z0-9-]+"; "\\1<redacted>")
+            | gsub("(?i)(gh[pousr]_[A-Za-z0-9_]+)"; "<redacted-gh-token>")
+            | gsub("(?i)github_pat_[A-Za-z0-9_]+"; "<redacted-gh-token>")
+            | gsub("AKIA[0-9A-Z]{16}"; "<redacted-aws-key>")
+            | gsub("ASIA[0-9A-Z]{16}"; "<redacted-aws-sts-key>")
+            | gsub("[\r\n\t]+"; " ")
+            | .[0:220]
+          )
+        ]
+      | @tsv
+    '
+  )" || event_rows_local=""
+
+  alert_rows_local="$(
+    printf '%s\n' "$alerts_json_local" | jq -r --argjson ignored "$IGNORE_ALERTS_JSON" '
+      if .status != "success" then
+        empty
+      else
+        .data.alerts[]
+        | select(.state == "firing")
+        | (.labels.alertname // "") as $alertName
+        | select(($ignored | index($alertName)) == null)
+        | [
+            (.labels.severity // "-"),
+            (.labels.alertname // "-"),
+            (.labels.namespace // "-"),
+            (.labels.pod // "-"),
+            (.labels.job // "-"),
+            (.activeAt // "-")
+          ]
+        | @tsv
+      end
+    ' | sort
+  )" || alert_rows_local=""
+
+  emit_step_var "event_rows" "$event_rows_local"
+  emit_step_var "alert_rows" "$alert_rows_local"
+}
+
+step_00_linear_memory() {
+  local linear_script output_local
+  local linear_query_local linear_limit_local
+  local linear_memory_status_local linear_memory_rows_count_local linear_memory_note_local
+  local linear_memory_output_local
+
+  linear_script="$(resolve_helper_script "linear-memory-lookup.sh")"
+  linear_query_local="${LINEAR_MEMORY_QUERY:-${SCOPE_NAMESPACES}}"
+  linear_limit_local="${LINEAR_MEMORY_LIMIT:-5}"
+
+  if [[ -z "$linear_script" ]]; then
+    emit_step_var "linear_memory_status" "skipped"
+    emit_step_var "linear_memory_rows_count" "0"
+    emit_step_var "linear_memory_note" "script_missing"
+    emit_step_var "linear_memory_output" ""
+    return 0
+  fi
+
+  output_local="$(
+    bash "$linear_script" --query "$linear_query_local" --limit "$linear_limit_local" 2>/dev/null || true
+  )"
+
+  linear_memory_status_local="$(printf '%s\n' "$output_local" | awk -F'\t' '$1=="status" {print $2; exit}')"
+  linear_memory_rows_count_local="$(printf '%s\n' "$output_local" | awk -F'\t' '$1=="status" {print $3; exit}')"
+  linear_memory_note_local="$(printf '%s\n' "$output_local" | awk -F'\t' '$1=="status" {print $3; exit}')"
+  linear_memory_output_local="$(printf '%s\n' "$output_local" | awk 'NR > 1 { print }')"
+
+  if [[ -z "$linear_memory_status_local" ]]; then
+    linear_memory_status_local="skipped"
+  fi
+
+  if ! [[ "$linear_memory_rows_count_local" =~ ^[0-9]+$ ]]; then
+    linear_memory_rows_count_local="$(printf '%s\n' "$linear_memory_output_local" | awk 'NR > 1 && NF > 0 { c++ } END { print c + 0 }')"
+  fi
+
+  if [[ -z "$linear_memory_note_local" ]]; then
+    linear_memory_note_local="none"
+  fi
+
+  emit_step_var "linear_memory_status" "$linear_memory_status_local"
+  emit_step_var "linear_memory_rows_count" "$linear_memory_rows_count_local"
+  emit_step_var "linear_memory_note" "$linear_memory_note_local"
+  emit_step_var "linear_memory_output" "$linear_memory_output_local"
+}
+
+step_03_prometheus_trends() {
+  local trends_script output_local
+  local prom_critical_local prom_warning_local prom_note_local
+
+  trends_script="$(resolve_helper_script "prometheus-trends.sh")"
+  if [[ -z "$trends_script" ]]; then
+    emit_step_var "prom_trend_critical_count" "0"
+    emit_step_var "prom_trend_warning_count" "0"
+    emit_step_var "prom_trend_note" "script_missing"
+    return 0
+  fi
+
+  output_local="$(bash "$trends_script" 2>/dev/null || true)"
+  prom_critical_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($7) == "critical" { c++ } END { print c + 0 }')"
+  prom_warning_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($7) == "warning" { c++ } END { print c + 0 }')"
+  prom_note_local="none"
+  if [[ -z "$output_local" ]]; then
+    prom_note_local="empty_output"
+  fi
+
+  emit_step_var "prom_trend_critical_count" "$prom_critical_local"
+  emit_step_var "prom_trend_warning_count" "$prom_warning_local"
+  emit_step_var "prom_trend_note" "$prom_note_local"
+  printf '%s\n' "$output_local"
+}
+
+step_04_argocd_sync() {
+  local argocd_script output_local
+  local argocd_critical_local argocd_warning_local argocd_note_local
+
+  argocd_script="$(resolve_helper_script "argocd-sync-status.sh")"
+  if [[ -z "$argocd_script" ]]; then
+    emit_step_var "argocd_critical_count" "0"
+    emit_step_var "argocd_warning_count" "0"
+    emit_step_var "argocd_note" "script_missing"
+    return 0
+  fi
+
+  output_local="$(bash "$argocd_script" 2>/dev/null || true)"
+  argocd_critical_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($6) ~ /severity=critical/ { c++ } END { print c + 0 }')"
+  argocd_warning_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($6) ~ /severity=warning/ { c++ } END { print c + 0 }')"
+  argocd_note_local="none"
+  if [[ -z "$output_local" ]]; then
+    argocd_note_local="empty_output"
+  fi
+
+  emit_step_var "argocd_critical_count" "$argocd_critical_local"
+  emit_step_var "argocd_warning_count" "$argocd_warning_local"
+  emit_step_var "argocd_note" "$argocd_note_local"
+  printf '%s\n' "$output_local"
+}
+
+step_06_cert_secret_health() {
+  local cert_script output_local
+  local cert_critical_local cert_warning_local cert_note_local
+
+  cert_script="$(resolve_helper_script "cert-secret-health.sh")"
+  if [[ -z "$cert_script" ]]; then
+    emit_step_var "cert_health_critical_count" "0"
+    emit_step_var "cert_health_warning_count" "0"
+    emit_step_var "cert_health_note" "script_missing"
+    return 0
+  fi
+
+  output_local="$(bash "$cert_script" 2>/dev/null || true)"
+  cert_critical_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($6) == "critical" { c++ } END { print c + 0 }')"
+  cert_warning_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($6) == "warning" { c++ } END { print c + 0 }')"
+  cert_note_local="none"
+  if [[ -z "$output_local" ]]; then
+    cert_note_local="empty_output"
+  fi
+
+  emit_step_var "cert_health_critical_count" "$cert_critical_local"
+  emit_step_var "cert_health_warning_count" "$cert_warning_local"
+  emit_step_var "cert_health_note" "$cert_note_local"
+  printf '%s\n' "$output_local"
+}
+
+step_07_aws_resource_signals() {
+  local aws_script output_local
+  local aws_critical_local aws_warning_local aws_note_local
+
+  aws_script="$(resolve_helper_script "aws-resource-signals.sh")"
+  if [[ -z "$aws_script" ]]; then
+    emit_step_var "aws_signal_critical_count" "0"
+    emit_step_var "aws_signal_warning_count" "0"
+    emit_step_var "aws_signal_note" "script_missing"
+    return 0
+  fi
+
+  output_local="$(bash "$aws_script" 2>/dev/null || true)"
+  aws_critical_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($3) == "critical" { c++ } END { print c + 0 }')"
+  aws_warning_local="$(printf '%s\n' "$output_local" | awk -F'\t' 'NR > 1 && tolower($3) == "warning" { c++ } END { print c + 0 }')"
+  aws_note_local="none"
+  if [[ -z "$output_local" ]]; then
+    aws_note_local="empty_output"
+  fi
+
+  emit_step_var "aws_signal_critical_count" "$aws_critical_local"
+  emit_step_var "aws_signal_warning_count" "$aws_warning_local"
+  emit_step_var "aws_signal_note" "$aws_note_local"
+  printf '%s\n' "$output_local"
+}
+
+step_05_log_signals() {
+  local container_rows_local
+  container_rows_local="${container_state_rows:-}"
+  local log_signal_rows_local="" target_count per_container_count
+  local ns pod container _kind _restarts _state _reason _exit_code _message
+  local current_logs raw_line sanitized_line signal_kind lower_line
+  local log_signal_count_local log_authz_count_local log_network_count_local
+  local log_tls_count_local log_crash_count_local log_oom_count_local
+
+  if [[ "$INCLUDE_LOG_SNIPPETS" == "1" && -n "$container_rows_local" ]]; then
+    target_count=0
+    while IFS=$'\t' read -r ns pod container _kind _restarts _state _reason _exit_code _message; do
+      [[ -z "${ns:-}" || -z "${pod:-}" || -z "${container:-}" ]] && continue
+      if [[ "$target_count" -ge "$LOG_SNIPPET_PODS_LIMIT" ]]; then
+        break
+      fi
+
+      current_logs="$(
+        run_with_timeout "$KUBECTL_TIMEOUT" \
+          kctl -n "$ns" logs "$pod" -c "$container" --tail="$LOG_SNIPPET_LINES" 2>/dev/null || true
+      )"
+      if [[ -z "$current_logs" ]]; then
+        current_logs="$(
+          run_with_timeout "$KUBECTL_TIMEOUT" \
+            kctl -n "$ns" logs "$pod" -c "$container" --previous --tail="$LOG_SNIPPET_LINES" 2>/dev/null || true
+        )"
+      fi
+      [[ -z "$current_logs" ]] && continue
+
+      per_container_count=0
+      while IFS= read -r raw_line; do
+        [[ -z "${raw_line:-}" ]] && continue
+        sanitized_line="$(sanitize_signal_line "$raw_line")"
+        [[ -z "${sanitized_line:-}" ]] && continue
+        signal_kind="runtime-error"
+        lower_line="$(printf '%s' "$sanitized_line" | tr '[:upper:]' '[:lower:]')"
+        case "$lower_line" in
+          *oom*|*"out of memory"*)
+            signal_kind="oom"
+            ;;
+          *"connection refused"*|*"no route to host"*|*"dial tcp"*|*"i/o timeout"*|*timeout*)
+            signal_kind="network"
+            ;;
+          *forbidden*|*"permission denied"*|*unauthorized*|*"access denied"*)
+            signal_kind="authz"
+            ;;
+          *x509*|*tls*|*certificate*)
+            signal_kind="tls"
+            ;;
+          *panic*|*traceback*|*exception*|*"segmentation fault"*)
+            signal_kind="crash"
+            ;;
+        esac
+        log_signal_rows_local="${log_signal_rows_local}${ns}"$'\t'"${pod}"$'\t'"${container}"$'\t'"${signal_kind}"$'\t'"${sanitized_line}"$'\n'
+        per_container_count=$((per_container_count + 1))
+        if [[ "$per_container_count" -ge "$LOG_SNIPPET_ERRORS_PER_CONTAINER" ]]; then
+          break
+        fi
+      done < <(
+        printf '%s\n' "$current_logs" | awk '
+          BEGIN { IGNORECASE=1 }
+          /(error|fatal|panic|exception|traceback|oom|out of memory|backoff|connection refused|no route to host|dial tcp|i\/o timeout|timeout|denied|forbidden|x509|segmentation fault|failed)/ { print }
+        '
+      )
+
+      if [[ "$per_container_count" -gt 0 ]]; then
+        target_count=$((target_count + 1))
+      fi
+    done < <(printf '%s\n' "$container_rows_local")
+  fi
+
+  log_signal_rows_local="$(printf '%s' "$log_signal_rows_local" | awk 'NF > 0 { print }' | sort -u)" || log_signal_rows_local=""
+  log_signal_count_local="$(count_lines "$log_signal_rows_local")"
+  log_authz_count_local="$(printf '%s\n' "$log_signal_rows_local" | awk -F'\t' '$4 == "authz" { c++ } END { print c + 0 }')"
+  log_network_count_local="$(printf '%s\n' "$log_signal_rows_local" | awk -F'\t' '$4 == "network" { c++ } END { print c + 0 }')"
+  log_tls_count_local="$(printf '%s\n' "$log_signal_rows_local" | awk -F'\t' '$4 == "tls" { c++ } END { print c + 0 }')"
+  log_crash_count_local="$(printf '%s\n' "$log_signal_rows_local" | awk -F'\t' '$4 == "crash" { c++ } END { print c + 0 }')"
+  log_oom_count_local="$(printf '%s\n' "$log_signal_rows_local" | awk -F'\t' '$4 == "oom" { c++ } END { print c + 0 }')"
+
+  emit_step_var "log_signal_rows" "$log_signal_rows_local"
+  emit_step_var "log_signal_count" "$log_signal_count_local"
+  emit_step_var "log_authz_count" "$log_authz_count_local"
+  emit_step_var "log_network_count" "$log_network_count_local"
+  emit_step_var "log_tls_count" "$log_tls_count_local"
+  emit_step_var "log_crash_count" "$log_crash_count_local"
+  emit_step_var "log_oom_count" "$log_oom_count_local"
+}
+
+step_08_image_repo() {
+  local pod_rows_local impacted_pod_keys_local
+  local repo_map_rows_local="" repo_map_note_local=""
+  local image_repo_map_script workload_repo_map_file
+  pod_rows_local="${pod_rows:-}"
+
+  impacted_pod_keys_local="$(
+    printf '%s\n' "$pod_rows_local" \
+      | awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }' \
+      | sort -u
+  )" || impacted_pod_keys_local=""
+
+  if [[ "$INCLUDE_REPO_MAP" == "1" ]]; then
+    image_repo_map_script="${RCA_SCRIPT_DIR%/}/image-repo-map.sh"
+    workload_repo_map_file="/tmp/openclaw-image-repo/workload-image-repo.tsv"
+    if [[ ! -f "$image_repo_map_script" ]]; then
+      repo_map_note_local="image repo map script missing: ${image_repo_map_script}"
+    elif [[ -z "$impacted_pod_keys_local" ]]; then
+      repo_map_note_local="no impacted pods to map"
+    elif bash "$image_repo_map_script" >/dev/null 2>&1 && [[ -f "$workload_repo_map_file" ]]; then
+      repo_map_rows_local="$(
+        awk -F'\t' '
+          NR == FNR {
+            if (NF >= 2) {
+              key = $1 "\t" $2
+              wanted[key] = 1
+            }
+            next
+          }
+          FNR == 1 { next }
+          {
+            key = $1 "\t" $2
+            if (wanted[key]) {
+              print $1 "\t" $2 "\t" $3 "\t" $5 "\t" $7 "\t" $8
+            }
+          }
+        ' <(printf '%s\n' "$impacted_pod_keys_local") "$workload_repo_map_file" | sort -u
+      )" || repo_map_rows_local=""
+      if [[ -z "$repo_map_rows_local" ]]; then
+        repo_map_note_local="no repo mapping matches for impacted pods"
+      fi
+    else
+      repo_map_note_local="image repo map execution failed"
+    fi
+  else
+    repo_map_note_local="repo mapping disabled (INCLUDE_REPO_MAP=${INCLUDE_REPO_MAP})"
+  fi
+
+  emit_step_var "impacted_pod_keys" "$impacted_pod_keys_local"
+  emit_step_var "repo_map_rows" "$repo_map_rows_local"
+  emit_step_var "repo_map_note" "$repo_map_note_local"
+}
+
+step_09_revisions() {
+  local repo_map_rows_local
+  repo_map_rows_local="${repo_map_rows:-}"
+  local revision_rows_local="" revision_note_local="" suspect_pr_rows_local=""
+  local suspect_pr_count_local=0 revision_resolved_count_local=0
+  local revision_processed ns pod image repo local_repo_path _mapping_source
+  local image_tag commit_hint commit_resolved commit_time commit_subject
+  local pr_number pr_title pr_state pr_url commit_full commit_subject_raw
+  local pr_row
+
+  if [[ "$INCLUDE_IMAGE_REVISION" == "1" ]]; then
+    if [[ -z "$repo_map_rows_local" ]]; then
+      revision_note_local="no impacted repo mappings for revision lookup"
+    else
+      revision_processed=0
+      while IFS=$'\t' read -r ns pod image repo local_repo_path _mapping_source; do
+        [[ -z "$ns" || -z "$pod" || -z "$image" || -z "$repo" ]] && continue
+        if [[ "$revision_processed" -ge "$RCA_ENRICH_LIMIT" ]]; then
+          break
+        fi
+
+        image_tag="$(extract_image_tag "$image")"
+        commit_hint="$(extract_commit_hint_from_tag "$image_tag")"
+        commit_resolved="-"
+        commit_time="-"
+        commit_subject="-"
+        pr_number="-"
+        pr_title="-"
+        pr_state="-"
+        pr_url="-"
+
+        if [[ -n "$commit_hint" && -n "$local_repo_path" && -d "$local_repo_path/.git" ]]; then
+          commit_full="$(git -C "$local_repo_path" rev-parse --verify "${commit_hint}^{commit}" 2>/dev/null || true)"
+          if [[ -n "$commit_full" ]]; then
+            commit_resolved="$(git -C "$local_repo_path" rev-parse --short=12 "$commit_full" 2>/dev/null || printf '%s' "${commit_full:0:12}")"
+            commit_time="$(git -C "$local_repo_path" show -s --format='%cI' "$commit_full" 2>/dev/null || echo '-')"
+            commit_subject_raw="$(git -C "$local_repo_path" show -s --format='%s' "$commit_full" 2>/dev/null || true)"
+            commit_subject="$(sanitize_signal_line "$commit_subject_raw")"
+            if [[ -z "$commit_subject" ]]; then
+              commit_subject="-"
+            fi
+            revision_resolved_count_local=$((revision_resolved_count_local + 1))
+
+            if command -v gh >/dev/null 2>&1 && { [[ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]] || { [[ -n "${GITHUB_APP_ID:-}" ]] && [[ -n "${GITHUB_APP_PRIVATE_KEY:-}" ]]; }; }; then
+              pr_row="$(
+                gh api "repos/${repo}/commits/${commit_full}/pulls" \
+                  -H "Accept: application/vnd.github+json" \
+                  2>/dev/null \
+                  | jq -r '
+                      if type == "array" and length > 0 then
+                        .[0]
+                        | [
+                            (.number | tostring),
+                            ((.title // "-") | gsub("[\r\n\t]+"; " ")),
+                            (.state // "-"),
+                            (.html_url // "-")
+                          ]
+                        | @tsv
+                      else
+                        empty
+                      end
+                    ' 2>/dev/null || true
+              )"
+              if [[ -n "$pr_row" ]]; then
+                IFS=$'\t' read -r pr_number pr_title pr_state pr_url <<<"$pr_row"
+                pr_title="$(sanitize_signal_line "$pr_title")"
+                if [[ -z "$pr_title" ]]; then
+                  pr_title="-"
+                fi
+                suspect_pr_rows_local="${suspect_pr_rows_local}${repo}"$'\t'"${pr_number}"$'\t'"${pr_title}"$'\t'"${pr_state}"$'\t'"${pr_url}"$'\t'"${ns}"$'\t'"${pod}"$'\n'
+              fi
+            fi
+          fi
+        fi
+
+        revision_rows_local="${revision_rows_local}${ns}"$'\t'"${pod}"$'\t'"${image}"$'\t'"${repo}"$'\t'"${image_tag:--}"$'\t'"${commit_hint:--}"$'\t'"${commit_resolved}"$'\t'"${commit_time}"$'\t'"${commit_subject}"$'\t'"${pr_number}"$'\t'"${pr_title}"$'\t'"${pr_state}"$'\t'"${pr_url}"$'\n'
+        revision_processed=$((revision_processed + 1))
+      done < <(printf '%s\n' "$repo_map_rows_local")
+
+      revision_rows_local="$(printf '%s' "$revision_rows_local" | awk 'NF > 0 { print }')" || revision_rows_local=""
+      suspect_pr_rows_local="$(printf '%s' "$suspect_pr_rows_local" | awk 'NF > 0 { print }' | sort -u)" || suspect_pr_rows_local=""
+      suspect_pr_count_local="$(count_lines "$suspect_pr_rows_local")"
+
+      if [[ -z "$revision_rows_local" ]]; then
+        revision_note_local="unable to resolve image revision signals"
+      elif [[ "$suspect_pr_count_local" -eq 0 ]]; then
+        revision_note_local="no PR association found for resolved image revisions"
+      fi
+    fi
+  else
+    revision_note_local="image revision enrichment disabled (INCLUDE_IMAGE_REVISION=${INCLUDE_IMAGE_REVISION})"
+  fi
+
+  emit_step_var "revision_rows" "$revision_rows_local"
+  emit_step_var "revision_note" "$revision_note_local"
+  emit_step_var "suspect_pr_rows" "$suspect_pr_rows_local"
+  emit_step_var "suspect_pr_count" "$suspect_pr_count_local"
+  emit_step_var "revision_resolved_count" "$revision_resolved_count_local"
+}
+
+step_10_ci_signals() {
+  local repo_map_rows_local
+  repo_map_rows_local="${repo_map_rows:-}"
+  local ci_rows_local="" ci_note_local="" repos_for_ci repo ci_output ci_row
+  local ci_status_script
+
+  if [[ "$INCLUDE_CI_SIGNAL" == "1" ]]; then
+    ci_status_script="${RCA_SCRIPT_DIR%/}/github-ci-status.sh"
+    if [[ ! -f "$ci_status_script" ]]; then
+      ci_note_local="github ci status script missing: ${ci_status_script}"
+    else
+      repos_for_ci="$(
+        printf '%s\n' "$repo_map_rows_local" \
+          | awk -F'\t' 'NF >= 4 && $4 != "" { print $4 }' \
+          | sort -u \
+          | sed -n "1,${CI_REPO_LIMIT}p"
+      )" || repos_for_ci=""
+      if [[ -z "$repos_for_ci" ]]; then
+        ci_note_local="no mapped repos to query"
+      else
+        while IFS= read -r repo; do
+          [[ -z "$repo" ]] && continue
+          ci_output="$(GITHUB_CI_STRICT=0 bash "$ci_status_script" --repo "$repo" --limit "$CI_RUN_LIMIT" 2>/dev/null || true)"
+          ci_row="$(printf '%s\n' "$ci_output" | awk -F'\t' 'NR == 1 { next } NF >= 9 { print; exit }')"
+          if [[ -n "$ci_row" ]]; then
+            ci_rows_local="${ci_rows_local}${ci_row}"$'\n'
+          fi
+        done < <(printf '%s\n' "$repos_for_ci")
+        ci_rows_local="$(printf '%s' "$ci_rows_local" | awk 'NF > 0 { print }')" || ci_rows_local=""
+        if [[ -z "$ci_rows_local" ]]; then
+          ci_note_local="github ci queries returned no rows"
+        fi
+      fi
+    fi
+  else
+    ci_note_local="github ci enrichment disabled (INCLUDE_CI_SIGNAL=${INCLUDE_CI_SIGNAL})"
+  fi
+
+  emit_step_var "ci_rows" "$ci_rows_local"
+  emit_step_var "ci_note" "$ci_note_local"
+}
+
 NS_FILTER_JSON="$(to_json_array "$SCOPE_NAMESPACES")"
 IGNORE_ALERTS_JSON="$(to_json_array "$IGNORE_ALERTNAMES")"
 ensure_positive_int POD_LIMIT 20
@@ -188,201 +1468,126 @@ ensure_positive_int RESTART_THRESHOLD 3
 ensure_positive_int RCA_ENRICH_LIMIT 8
 ensure_positive_int CI_REPO_LIMIT 3
 ensure_positive_int CI_RUN_LIMIT 3
+ensure_positive_int LINEAR_MEMORY_LIMIT 5
+ensure_positive_int PROMETHEUS_TIMEOUT_SECONDS 120
+ensure_positive_int ARGOCD_TIMEOUT_SECONDS 120
+ensure_positive_int STEP_TIMEOUT_POD_DEPLOY_SECONDS 180
+ensure_positive_int STEP_TIMEOUT_EVENTS_ALERTS_SECONDS 180
+ensure_positive_int STEP_TIMEOUT_LINEAR_MEMORY_SECONDS 180
+ensure_positive_int STEP_TIMEOUT_PROMETHEUS_TRENDS_SECONDS 300
+ensure_positive_int STEP_TIMEOUT_ARGOCD_SYNC_SECONDS 300
+ensure_positive_int STEP_TIMEOUT_LOG_SIGNALS_SECONDS 300
+ensure_positive_int STEP_TIMEOUT_CERT_SECRET_HEALTH_SECONDS 180
+ensure_positive_int STEP_TIMEOUT_AWS_RESOURCE_SIGNALS_SECONDS 180
+ensure_positive_int STEP_TIMEOUT_IMAGE_REPO_SECONDS 300
+ensure_positive_int STEP_TIMEOUT_REVISIONS_SECONDS 300
+ensure_positive_int STEP_TIMEOUT_CI_SIGNALS_SECONDS 300
 ensure_non_negative_int ALERT_COOLDOWN_SECONDS 1800
+ensure_non_negative_int ALERT_MIN_INTERVAL_SECONDS 3600
+ensure_non_negative_int RCA_MIN_RERUN_INTERVAL_S 3600
+ensure_non_negative_int RCA_EVIDENCE_TOTAL_TIMEOUT_MS 80000
 ensure_non_negative_int SEVERITY_CRITICAL_SCORE 85
 ensure_non_negative_int SEVERITY_HIGH_SCORE 60
 ensure_non_negative_int SEVERITY_MEDIUM_SCORE 30
 
-pods_json="$(run_with_timeout "$KUBECTL_TIMEOUT" kubectl get pods -A -o json 2>/dev/null || printf '{"items":[]}\n')"
-deploys_json="$(run_with_timeout "$KUBECTL_TIMEOUT" kubectl get deploy -A -o json 2>/dev/null || printf '{"items":[]}\n')"
-events_json="$(run_with_timeout "$KUBECTL_TIMEOUT" kubectl get events -A -o json 2>/dev/null || printf '{"items":[]}\n')"
-alerts_json="$(
-  if command -v curl >/dev/null 2>&1; then
-    run_with_timeout "${PROMETHEUS_TIMEOUT_SECONDS}s" \
-      curl -fsS "${PROMETHEUS_URL}/api/v1/alerts" 2>/dev/null || printf '{"status":"error","data":{"alerts":[]}}\n'
-  else
-    printf '{"status":"error","data":{"alerts":[]}}\n'
-  fi
+mkdir -p "$SPOOL_DIR" 2>/dev/null || true
+cleanup_spool
+
+HAS_LIB_STATE_FILE=0
+HAS_LIB_INCIDENT_ID=0
+HAS_LIB_CONTINUITY_MATCHER=0
+HAS_LIB_LINEAR_PREFLIGHT=0
+HAS_LIB_LINEAR_TICKET=0
+HAS_LIB_OUTBOX=0
+HAS_LIB_RCA_PROMPT=0
+HAS_LIB_RCA_LLM=0
+HAS_LIB_RCA_CROSSREVIEW=0
+HAS_LIB_RCA_SAFETY=0
+HAS_LIB_RCA_CHAIN=0
+HAS_LIB_RCA_SINK=0
+HAS_LIB_THREAD_ARCHIVAL=0
+HAS_LIB_META_ALERTS=0
+HAS_LIB_SERVICE_GRAPH=0
+HAS_LIB_SERVICE_OVERLAY=0
+HAS_LIB_INCIDENT_MEMORY=0
+HAS_LIB_SERVICE_CONTEXT=0
+HAS_LIB_OVERLAY_SUGGESTIONS=0
+
+source_optional_lib "lib-state-file" HAS_LIB_STATE_FILE
+source_optional_lib "lib-incident-id" HAS_LIB_INCIDENT_ID
+source_optional_lib "lib-continuity-matcher" HAS_LIB_CONTINUITY_MATCHER
+source_optional_lib "lib-linear-preflight" HAS_LIB_LINEAR_PREFLIGHT
+source_optional_lib "lib-linear-ticket" HAS_LIB_LINEAR_TICKET
+source_optional_lib "lib-outbox" HAS_LIB_OUTBOX
+source_optional_lib "lib-rca-prompt" HAS_LIB_RCA_PROMPT
+source_optional_lib "lib-rca-llm" HAS_LIB_RCA_LLM
+source_optional_lib "lib-rca-crossreview" HAS_LIB_RCA_CROSSREVIEW
+source_optional_lib "lib-rca-safety" HAS_LIB_RCA_SAFETY
+source_optional_lib "lib-rca-chain" HAS_LIB_RCA_CHAIN
+source_optional_lib "lib-rca-sink" HAS_LIB_RCA_SINK
+source_optional_lib "lib-thread-archival" HAS_LIB_THREAD_ARCHIVAL
+source_optional_lib "lib-meta-alerts" HAS_LIB_META_ALERTS
+source_optional_lib "lib-service-graph" HAS_LIB_SERVICE_GRAPH
+source_optional_lib "lib-service-overlay" HAS_LIB_SERVICE_OVERLAY
+source_optional_lib "lib-incident-memory" HAS_LIB_INCIDENT_MEMORY
+source_optional_lib "lib-service-context" HAS_LIB_SERVICE_CONTEXT
+source_optional_lib "lib-overlay-suggestions" HAS_LIB_OVERLAY_SUGGESTIONS
+
+export KUBECTL_TIMEOUT K8S_CONTEXT PROMETHEUS_TIMEOUT_SECONDS PROMETHEUS_URL
+export ARGOCD_BASE_URL ARGOCD_TIMEOUT_SECONDS
+export NS_FILTER_JSON IGNORE_ALERTS_JSON RESTART_THRESHOLD
+export INCLUDE_LOG_SNIPPETS LOG_SNIPPET_PODS_LIMIT LOG_SNIPPET_LINES LOG_SNIPPET_ERRORS_PER_CONTAINER
+export INCLUDE_REPO_MAP INCLUDE_CI_SIGNAL INCLUDE_IMAGE_REVISION RCA_SCRIPT_DIR RCA_ENRICH_LIMIT CI_REPO_LIMIT CI_RUN_LIMIT
+export SCOPE_NAMESPACES SCRIPT_DIR RCA_MODE LINEAR_MEMORY_LIMIT ACTIVE_INCIDENTS_FILE RESOLVED_INCIDENTS_FILE INCIDENT_LAST_ACTIVE_FILE
+export SERVICE_CONTEXT_ENABLED RCA_CHAIN_ENABLED INCIDENT_LEARNING_ENABLED RCA_EVIDENCE_TOTAL_TIMEOUT_MS RCA_MIN_RERUN_INTERVAL_S
+
+run_step 01 "pod_deploy" "$STEP_TIMEOUT_POD_DEPLOY_SECONDS" yes "$(step_command step_01_pod_deploy)" || {
+  emit_abort_output "Core cluster signals unavailable (Step 1)"
+  exit 0
+}
+apply_step_output 01
+
+run_step 02 "events_alerts" "$STEP_TIMEOUT_EVENTS_ALERTS_SECONDS" yes "$(step_command step_02_events_alerts)" || {
+  emit_abort_output "Core cluster signals unavailable (Step 2)"
+  exit 0
+}
+apply_step_output 02
+EVIDENCE_BUDGET_START_MS="$(now_ms)"
+
+LINEAR_MEMORY_QUERY="$(
+  {
+    printf 'namespaces:%s ' "$SCOPE_NAMESPACES"
+    printf '%s\n' "$pod_rows" | sed -n '1,2p' | awk -F'\t' 'NF >= 2 { print $1 "/" $2 }'
+    printf '%s\n' "$event_rows" | sed -n '1,2p' | awk -F'\t' 'NF >= 3 { print $1 ":" $3 }'
+  } | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ | $//g'
 )"
+export LINEAR_MEMORY_QUERY
+if optional_evidence_step_allowed 00; then
+  run_step 00 "linear_memory" "$STEP_TIMEOUT_LINEAR_MEMORY_SECONDS" no "$(step_command step_00_linear_memory)"
+  apply_step_output 00
+fi
+linear_memory_status="${linear_memory_status:-skipped}"
+linear_memory_rows_count="${linear_memory_rows_count:-0}"
+linear_memory_note="${linear_memory_note:-none}"
+linear_memory_output="${linear_memory_output:-}"
 
-pod_rows="$(
-  printf '%s\n' "$pods_json" | jq -r \
-    --argjson scopes "$NS_FILTER_JSON" \
-    --argjson restartThreshold "$RESTART_THRESHOLD" '
-    .items[]
-    | .metadata.namespace as $ns
-    | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
-    | .metadata.name as $pod
-    | (.status.phase // "Unknown") as $phase
-    | ([.status.containerStatuses[]?, .status.initContainerStatuses[]?] | map(.restartCount // 0) | add // 0) as $restarts
-    | (
-        [.status.containerStatuses[]?, .status.initContainerStatuses[]?]
-        | map(
-            if (.state.waiting.reason? // "") != "" then .state.waiting.reason
-            elif (.state.terminated.reason? // "") != "" and (.state.terminated.reason != "Completed") then .state.terminated.reason
-            else empty end
-          )
-        | unique
-        | join(",")
-      ) as $reasons
-    | select(
-        ($phase != "Running" and $phase != "Succeeded")
-        or ($restarts >= $restartThreshold)
-        or ($reasons != "")
-      )
-    | [$ns, $pod, $phase, ($restarts | tostring), (if $reasons == "" then "-" else $reasons end)]
-    | @tsv
-  ' | sort
-)" || pod_rows=""
+if optional_evidence_step_allowed 03; then
+  run_step 03 "prometheus_trends" "$STEP_TIMEOUT_PROMETHEUS_TRENDS_SECONDS" no "$(step_command step_03_prometheus_trends)"
+  apply_step_output 03
+fi
+prometheus_trends_output="${STEP_OUTPUT_03:-}"
+prom_trend_critical_count="${prom_trend_critical_count:-0}"
+prom_trend_warning_count="${prom_trend_warning_count:-0}"
+prom_trend_note="${prom_trend_note:-none}"
 
-container_state_rows="$(
-  printf '%s\n' "$pods_json" | jq -r \
-    --argjson scopes "$NS_FILTER_JSON" \
-    --argjson restartThreshold "$RESTART_THRESHOLD" '
-    .items[]
-    | .metadata.namespace as $ns
-    | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
-    | .metadata.name as $pod
-    | [(.status.containerStatuses[]? | . + {kind: "container"}), (.status.initContainerStatuses[]? | . + {kind: "init"})]
-    | .[]
-    | .name as $container
-    | (.kind // "container") as $kind
-    | (.restartCount // 0) as $restarts
-    | (.state.waiting.reason // "") as $waitingReason
-    | (.state.waiting.message // "") as $waitingMessage
-    | (.state.terminated.reason // "") as $terminatedReason
-    | (.state.terminated.message // "") as $terminatedMessage
-    | (.state.terminated.exitCode // .lastState.terminated.exitCode // -1) as $exitCode
-    | (.lastState.terminated.reason // "") as $lastTerminatedReason
-    | (.lastState.terminated.message // "") as $lastTerminatedMessage
-    | (
-        if $waitingReason != "" then "waiting"
-        elif $terminatedReason != "" then "terminated"
-        elif $lastTerminatedReason != "" then "lastTerminated"
-        else "running"
-        end
-      ) as $stateType
-    | (
-        if $waitingReason != "" then $waitingReason
-        elif $terminatedReason != "" then $terminatedReason
-        elif $lastTerminatedReason != "" then $lastTerminatedReason
-        else ""
-        end
-      ) as $rawReason
-    | (
-        if $stateType == "terminated" and $rawReason == "Completed" then ""
-        else $rawReason
-        end
-      ) as $reason
-    | (
-        if $waitingMessage != "" then $waitingMessage
-        elif $terminatedMessage != "" then $terminatedMessage
-        elif $lastTerminatedMessage != "" then $lastTerminatedMessage
-        else ""
-        end
-      ) as $message
-    | select(
-        ($stateType != "running" and ($reason != "" or $message != ""))
-        or ($restarts >= $restartThreshold and $reason != "Completed")
-        or ($reason == "OOMKilled")
-      )
-    | [
-        $ns,
-        $pod,
-        $container,
-        $kind,
-        ($restarts | tostring),
-        $stateType,
-        (if $reason == "" then "-" else $reason end),
-        (if $exitCode == -1 then "-" else ($exitCode | tostring) end),
-        (
-          if $message == "" then "-"
-          else
-            (
-              $message
-              | gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._=-]+"; "\\1<redacted>")
-              | gsub("(?i)(xox[baprs]-)[A-Za-z0-9-]+"; "\\1<redacted>")
-              | gsub("(?i)(xapp-[0-9]+-)[A-Za-z0-9-]+"; "\\1<redacted>")
-              | gsub("(?i)(gh[pousr]_[A-Za-z0-9_]+)"; "<redacted-gh-token>")
-              | gsub("(?i)github_pat_[A-Za-z0-9_]+"; "<redacted-gh-token>")
-              | gsub("AKIA[0-9A-Z]{16}"; "<redacted-aws-key>")
-              | gsub("ASIA[0-9A-Z]{16}"; "<redacted-aws-sts-key>")
-              | gsub("[\r\n\t]+"; " ")
-              | .[0:220]
-            )
-          end
-        )
-      ]
-    | @tsv
-  ' | sort -u
-)" || container_state_rows=""
-
-deploy_rows="$(
-  printf '%s\n' "$deploys_json" | jq -r --argjson scopes "$NS_FILTER_JSON" '
-    .items[]
-    | .metadata.namespace as $ns
-    | select(($scopes | length) == 0 or ($scopes | index($ns) != null))
-    | .metadata.name as $name
-    | (.spec.replicas // 1) as $desired
-    | (.status.availableReplicas // 0) as $available
-    | (.status.updatedReplicas // 0) as $updated
-    | (.status.unavailableReplicas // 0) as $unavailable
-    | select(($available < $desired) or ($unavailable > 0))
-    | [$ns, $name, ($desired | tostring), ($available | tostring), ($updated | tostring), ($unavailable | tostring)]
-    | @tsv
-  ' | sort
-)" || deploy_rows=""
-
-event_rows="$(
-  printf '%s\n' "$events_json" | jq -r --argjson scopes "$NS_FILTER_JSON" '
-    .items
-    | map(.metadata.namespace as $ns | select(($scopes | length) == 0 or ($scopes | index($ns) != null)))
-    | map(select((.type // "Normal") != "Normal"))
-    | sort_by(.eventTime // .lastTimestamp // .metadata.creationTimestamp // .firstTimestamp // "")
-    | .[]
-    | [
-        (.metadata.namespace // "-"),
-        ((.involvedObject.kind // "-") + "/" + (.involvedObject.name // "-")),
-        (.reason // "-"),
-        (.eventTime // .lastTimestamp // .metadata.creationTimestamp // .firstTimestamp // "-"),
-        (
-          (.message // "-")
-          | gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._=-]+"; "\\1<redacted>")
-          | gsub("(?i)(xox[baprs]-)[A-Za-z0-9-]+"; "\\1<redacted>")
-          | gsub("(?i)(xapp-[0-9]+-)[A-Za-z0-9-]+"; "\\1<redacted>")
-          | gsub("(?i)(gh[pousr]_[A-Za-z0-9_]+)"; "<redacted-gh-token>")
-          | gsub("(?i)github_pat_[A-Za-z0-9_]+"; "<redacted-gh-token>")
-          | gsub("AKIA[0-9A-Z]{16}"; "<redacted-aws-key>")
-          | gsub("ASIA[0-9A-Z]{16}"; "<redacted-aws-sts-key>")
-          | gsub("[\r\n\t]+"; " ")
-          | .[0:220]
-        )
-      ]
-    | @tsv
-  '
-)" || event_rows=""
-
-alert_rows="$(
-  printf '%s\n' "$alerts_json" | jq -r --argjson ignored "$IGNORE_ALERTS_JSON" '
-    if .status != "success" then
-      empty
-    else
-      .data.alerts[]
-      | select(.state == "firing")
-      | (.labels.alertname // "") as $alertName
-      | select(($ignored | index($alertName)) == null)
-      | [
-          (.labels.severity // "-"),
-          (.labels.alertname // "-"),
-          (.labels.namespace // "-"),
-          (.labels.pod // "-"),
-          (.labels.job // "-"),
-          (.activeAt // "-")
-        ]
-      | @tsv
-    end
-  ' | sort
-)" || alert_rows=""
+if optional_evidence_step_allowed 04; then
+  run_step 04 "argocd_sync" "$STEP_TIMEOUT_ARGOCD_SYNC_SECONDS" no "$(step_command step_04_argocd_sync)"
+  apply_step_output 04
+fi
+argocd_sync_output="${STEP_OUTPUT_04:-}"
+argocd_critical_count="${argocd_critical_count:-0}"
+argocd_warning_count="${argocd_warning_count:-0}"
+argocd_note="${argocd_note:-none}"
 
 pod_issue_count="$(count_lines "$pod_rows")"
 container_failure_count="$(count_lines "$container_state_rows")"
@@ -439,85 +1644,36 @@ nonzero_exit_rows="$(
 )" || nonzero_exit_rows=""
 nonzero_exit_count="$(count_lines "$nonzero_exit_rows")"
 
-log_signal_rows=""
-if [[ "$INCLUDE_LOG_SNIPPETS" == "1" && -n "$container_state_rows" ]]; then
-  target_count=0
-  while IFS=$'\t' read -r ns pod container _kind _restarts _state _reason _exit_code _message; do
-    [[ -z "${ns:-}" || -z "${pod:-}" || -z "${container:-}" ]] && continue
-    if [[ "$target_count" -ge "$LOG_SNIPPET_PODS_LIMIT" ]]; then
-      break
-    fi
-
-    current_logs="$(
-      run_with_timeout "$KUBECTL_TIMEOUT" \
-        kubectl -n "$ns" logs "$pod" -c "$container" --tail="$LOG_SNIPPET_LINES" 2>/dev/null || true
-    )"
-    if [[ -z "$current_logs" ]]; then
-      current_logs="$(
-        run_with_timeout "$KUBECTL_TIMEOUT" \
-          kubectl -n "$ns" logs "$pod" -c "$container" --previous --tail="$LOG_SNIPPET_LINES" 2>/dev/null || true
-      )"
-    fi
-    [[ -z "$current_logs" ]] && continue
-
-    per_container_count=0
-    while IFS= read -r raw_line; do
-      [[ -z "${raw_line:-}" ]] && continue
-      sanitized_line="$(sanitize_signal_line "$raw_line")"
-      [[ -z "${sanitized_line:-}" ]] && continue
-      signal_kind="runtime-error"
-      lower_line="$(printf '%s' "$sanitized_line" | tr '[:upper:]' '[:lower:]')"
-      case "$lower_line" in
-        *oom*|*"out of memory"*)
-          signal_kind="oom"
-          ;;
-        *"connection refused"*|*"no route to host"*|*"dial tcp"*|*"i/o timeout"*|*timeout*)
-          signal_kind="network"
-          ;;
-        *forbidden*|*"permission denied"*|*unauthorized*|*"access denied"*)
-          signal_kind="authz"
-          ;;
-        *x509*|*tls*|*certificate*)
-          signal_kind="tls"
-          ;;
-        *panic*|*traceback*|*exception*|*"segmentation fault"*)
-          signal_kind="crash"
-          ;;
-      esac
-      log_signal_rows="${log_signal_rows}${ns}"$'\t'"${pod}"$'\t'"${container}"$'\t'"${signal_kind}"$'\t'"${sanitized_line}"$'\n'
-      per_container_count=$((per_container_count + 1))
-      if [[ "$per_container_count" -ge "$LOG_SNIPPET_ERRORS_PER_CONTAINER" ]]; then
-        break
-      fi
-    done < <(
-      printf '%s\n' "$current_logs" | awk '
-        BEGIN { IGNORECASE=1 }
-        /(error|fatal|panic|exception|traceback|oom|out of memory|backoff|connection refused|no route to host|dial tcp|i\/o timeout|timeout|denied|forbidden|x509|segmentation fault|failed)/ { print }
-      '
-    )
-
-    if [[ "$per_container_count" -gt 0 ]]; then
-      target_count=$((target_count + 1))
-    fi
-  done < <(printf '%s\n' "$container_state_rows")
+export container_state_rows
+if optional_evidence_step_allowed 05; then
+  run_step 05 "log_signals" "$STEP_TIMEOUT_LOG_SIGNALS_SECONDS" no "$(step_command step_05_log_signals)"
+  apply_step_output 05
 fi
-log_signal_rows="$(printf '%s' "$log_signal_rows" | awk 'NF > 0 { print }' | sort -u)" || log_signal_rows=""
-log_signal_count="$(count_lines "$log_signal_rows")"
-log_authz_count="$(
-  printf '%s\n' "$log_signal_rows" | awk -F'\t' '$4 == "authz" { c++ } END { print c + 0 }'
-)"
-log_network_count="$(
-  printf '%s\n' "$log_signal_rows" | awk -F'\t' '$4 == "network" { c++ } END { print c + 0 }'
-)"
-log_tls_count="$(
-  printf '%s\n' "$log_signal_rows" | awk -F'\t' '$4 == "tls" { c++ } END { print c + 0 }'
-)"
-log_crash_count="$(
-  printf '%s\n' "$log_signal_rows" | awk -F'\t' '$4 == "crash" { c++ } END { print c + 0 }'
-)"
-log_oom_count="$(
-  printf '%s\n' "$log_signal_rows" | awk -F'\t' '$4 == "oom" { c++ } END { print c + 0 }'
-)"
+log_signal_rows="${log_signal_rows:-}"
+log_signal_count="${log_signal_count:-0}"
+log_authz_count="${log_authz_count:-0}"
+log_network_count="${log_network_count:-0}"
+log_tls_count="${log_tls_count:-0}"
+log_crash_count="${log_crash_count:-0}"
+log_oom_count="${log_oom_count:-0}"
+
+if optional_evidence_step_allowed 06; then
+  run_step 06 "cert_secret_health" "$STEP_TIMEOUT_CERT_SECRET_HEALTH_SECONDS" no "$(step_command step_06_cert_secret_health)"
+  apply_step_output 06
+fi
+cert_secret_health_output="${STEP_OUTPUT_06:-}"
+cert_health_critical_count="${cert_health_critical_count:-0}"
+cert_health_warning_count="${cert_health_warning_count:-0}"
+cert_health_note="${cert_health_note:-none}"
+
+if optional_evidence_step_allowed 07; then
+  run_step 07 "aws_resource_signals" "$STEP_TIMEOUT_AWS_RESOURCE_SIGNALS_SECONDS" no "$(step_command step_07_aws_resource_signals)"
+  apply_step_output 07
+fi
+aws_resource_signals_output="${STEP_OUTPUT_07:-}"
+aws_signal_critical_count="${aws_signal_critical_count:-0}"
+aws_signal_warning_count="${aws_signal_warning_count:-0}"
+aws_signal_note="${aws_signal_note:-none}"
 
 hpa_metrics_rows="$(
   printf '%s\n' "$event_rows" \
@@ -618,6 +1774,26 @@ if [[ "$log_signal_points" -gt 16 ]]; then
   log_signal_points=16
 fi
 
+prom_trend_points=$((prom_trend_critical_count * 15 + prom_trend_warning_count * 5))
+if [[ "$prom_trend_points" -gt 30 ]]; then
+  prom_trend_points=30
+fi
+
+argocd_points=$((argocd_critical_count * 12 + argocd_warning_count * 6))
+if [[ "$argocd_points" -gt 24 ]]; then
+  argocd_points=24
+fi
+
+cert_health_points=$((cert_health_critical_count * 10 + cert_health_warning_count * 4))
+if [[ "$cert_health_points" -gt 20 ]]; then
+  cert_health_points=20
+fi
+
+aws_signal_points=$((aws_signal_critical_count * 10 + aws_signal_warning_count * 4))
+if [[ "$aws_signal_points" -gt 20 ]]; then
+  aws_signal_points=20
+fi
+
 severity_score=$(( \
   create_config_count * 35 + \
   missing_secret_count * 25 + \
@@ -633,7 +1809,11 @@ severity_score=$(( \
   finding_cluster_points + \
   event_noise_points + \
   container_failure_points + \
-  log_signal_points \
+  log_signal_points + \
+  prom_trend_points + \
+  argocd_points + \
+  cert_health_points + \
+  aws_signal_points \
 ))
 
 if [[ "$severity_score" -gt 100 ]]; then
@@ -690,173 +1870,33 @@ case "$severity_level" in
     ;;
 esac
 
-impacted_pod_keys="$(
-  printf '%s\n' "$pod_rows" \
-    | awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }' \
-    | sort -u
-)" || impacted_pod_keys=""
-
-repo_map_rows=""
-repo_map_note=""
-if [[ "$INCLUDE_REPO_MAP" == "1" ]]; then
-  image_repo_map_script="${RCA_SCRIPT_DIR%/}/image-repo-map.sh"
-  workload_repo_map_file="/tmp/openclaw-image-repo/workload-image-repo.tsv"
-  if [[ ! -f "$image_repo_map_script" ]]; then
-    repo_map_note="image repo map script missing: ${image_repo_map_script}"
-  elif [[ -z "$impacted_pod_keys" ]]; then
-    repo_map_note="no impacted pods to map"
-  elif bash "$image_repo_map_script" >/dev/null 2>&1 && [[ -f "$workload_repo_map_file" ]]; then
-    repo_map_rows="$(
-      awk -F'\t' '
-        NR == FNR {
-          if (NF >= 2) {
-            key = $1 "\t" $2
-            wanted[key] = 1
-          }
-          next
-        }
-        FNR == 1 { next }
-        {
-          key = $1 "\t" $2
-          if (wanted[key]) {
-            print $1 "\t" $2 "\t" $3 "\t" $5 "\t" $7 "\t" $8
-          }
-        }
-      ' <(printf '%s\n' "$impacted_pod_keys") "$workload_repo_map_file" | sort -u
-    )" || repo_map_rows=""
-    if [[ -z "$repo_map_rows" ]]; then
-      repo_map_note="no repo mapping matches for impacted pods"
-    fi
-  else
-    repo_map_note="image repo map execution failed"
-  fi
-else
-  repo_map_note="repo mapping disabled (INCLUDE_REPO_MAP=${INCLUDE_REPO_MAP})"
+export pod_rows
+if optional_evidence_step_allowed 08; then
+  run_step 08 "image_repo" "$STEP_TIMEOUT_IMAGE_REPO_SECONDS" no "$(step_command step_08_image_repo)"
+  apply_step_output 08
 fi
+impacted_pod_keys="${impacted_pod_keys:-}"
+repo_map_rows="${repo_map_rows:-}"
+repo_map_note="${repo_map_note:-}"
 
-ci_rows=""
-ci_note=""
-if [[ "$INCLUDE_CI_SIGNAL" == "1" ]]; then
-  ci_status_script="${RCA_SCRIPT_DIR%/}/github-ci-status.sh"
-  if [[ ! -f "$ci_status_script" ]]; then
-    ci_note="github ci status script missing: ${ci_status_script}"
-  else
-    repos_for_ci="$(
-      printf '%s\n' "$repo_map_rows" \
-        | awk -F'\t' 'NF >= 4 && $4 != "" { print $4 }' \
-        | sort -u \
-        | sed -n "1,${CI_REPO_LIMIT}p"
-    )" || repos_for_ci=""
-    if [[ -z "$repos_for_ci" ]]; then
-      ci_note="no mapped repos to query"
-    else
-      while IFS= read -r repo; do
-        [[ -z "$repo" ]] && continue
-        ci_output="$(GITHUB_CI_STRICT=0 bash "$ci_status_script" --repo "$repo" --limit "$CI_RUN_LIMIT" 2>/dev/null || true)"
-        ci_row="$(printf '%s\n' "$ci_output" | awk -F'\t' 'NR == 1 { next } NF >= 9 { print; exit }')"
-        if [[ -n "$ci_row" ]]; then
-          ci_rows="${ci_rows}${ci_row}"$'\n'
-        fi
-      done < <(printf '%s\n' "$repos_for_ci")
-      ci_rows="$(printf '%s' "$ci_rows" | awk 'NF > 0 { print }')" || ci_rows=""
-      if [[ -z "$ci_rows" ]]; then
-        ci_note="github ci queries returned no rows"
-      fi
-    fi
-  fi
-else
-  ci_note="github ci enrichment disabled (INCLUDE_CI_SIGNAL=${INCLUDE_CI_SIGNAL})"
+export repo_map_rows
+if optional_evidence_step_allowed 09; then
+  run_step 09 "revisions" "$STEP_TIMEOUT_REVISIONS_SECONDS" no "$(step_command step_09_revisions)"
+  apply_step_output 09
 fi
+revision_rows="${revision_rows:-}"
+revision_note="${revision_note:-}"
+suspect_pr_rows="${suspect_pr_rows:-}"
+suspect_pr_count="${suspect_pr_count:-0}"
+revision_resolved_count="${revision_resolved_count:-0}"
 
-revision_rows=""
-revision_note=""
-suspect_pr_rows=""
-suspect_pr_count=0
-revision_resolved_count=0
-if [[ "$INCLUDE_IMAGE_REVISION" == "1" ]]; then
-  if [[ -z "$repo_map_rows" ]]; then
-    revision_note="no impacted repo mappings for revision lookup"
-  else
-    revision_processed=0
-    while IFS=$'\t' read -r ns pod image repo local_repo_path _mapping_source; do
-      [[ -z "$ns" || -z "$pod" || -z "$image" || -z "$repo" ]] && continue
-      if [[ "$revision_processed" -ge "$RCA_ENRICH_LIMIT" ]]; then
-        break
-      fi
-
-      image_tag="$(extract_image_tag "$image")"
-      commit_hint="$(extract_commit_hint_from_tag "$image_tag")"
-      commit_resolved="-"
-      commit_time="-"
-      commit_subject="-"
-      pr_number="-"
-      pr_title="-"
-      pr_state="-"
-      pr_url="-"
-
-      if [[ -n "$commit_hint" && -n "$local_repo_path" && -d "$local_repo_path/.git" ]]; then
-        commit_full="$(git -C "$local_repo_path" rev-parse --verify "${commit_hint}^{commit}" 2>/dev/null || true)"
-        if [[ -n "$commit_full" ]]; then
-          commit_resolved="$(
-            git -C "$local_repo_path" rev-parse --short=12 "$commit_full" 2>/dev/null || printf '%s' "${commit_full:0:12}"
-          )"
-          commit_time="$(git -C "$local_repo_path" show -s --format='%cI' "$commit_full" 2>/dev/null || echo '-')"
-          commit_subject_raw="$(git -C "$local_repo_path" show -s --format='%s' "$commit_full" 2>/dev/null || true)"
-          commit_subject="$(sanitize_signal_line "$commit_subject_raw")"
-          if [[ -z "$commit_subject" ]]; then
-            commit_subject="-"
-          fi
-          revision_resolved_count=$((revision_resolved_count + 1))
-
-          if command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]]; then
-            pr_row="$(
-              gh api "repos/${repo}/commits/${commit_full}/pulls" \
-                -H "Accept: application/vnd.github+json" \
-                2>/dev/null \
-                | jq -r '
-                    if type == "array" and length > 0 then
-                      .[0]
-                      | [
-                          (.number | tostring),
-                          ((.title // "-") | gsub("[\r\n\t]+"; " ")),
-                          (.state // "-"),
-                          (.html_url // "-")
-                        ]
-                      | @tsv
-                    else
-                      empty
-                    end
-                  ' 2>/dev/null || true
-            )"
-            if [[ -n "$pr_row" ]]; then
-              IFS=$'\t' read -r pr_number pr_title pr_state pr_url <<<"$pr_row"
-              pr_title="$(sanitize_signal_line "$pr_title")"
-              if [[ -z "$pr_title" ]]; then
-                pr_title="-"
-              fi
-              suspect_pr_rows="${suspect_pr_rows}${repo}"$'\t'"${pr_number}"$'\t'"${pr_title}"$'\t'"${pr_state}"$'\t'"${pr_url}"$'\t'"${ns}"$'\t'"${pod}"$'\n'
-            fi
-          fi
-        fi
-      fi
-
-      revision_rows="${revision_rows}${ns}"$'\t'"${pod}"$'\t'"${image}"$'\t'"${repo}"$'\t'"${image_tag:--}"$'\t'"${commit_hint:--}"$'\t'"${commit_resolved}"$'\t'"${commit_time}"$'\t'"${commit_subject}"$'\t'"${pr_number}"$'\t'"${pr_title}"$'\t'"${pr_state}"$'\t'"${pr_url}"$'\n'
-      revision_processed=$((revision_processed + 1))
-    done < <(printf '%s\n' "$repo_map_rows")
-
-    revision_rows="$(printf '%s' "$revision_rows" | awk 'NF > 0 { print }')" || revision_rows=""
-    suspect_pr_rows="$(printf '%s' "$suspect_pr_rows" | awk 'NF > 0 { print }' | sort -u)" || suspect_pr_rows=""
-    suspect_pr_count="$(count_lines "$suspect_pr_rows")"
-
-    if [[ -z "$revision_rows" ]]; then
-      revision_note="unable to resolve image revision signals"
-    elif [[ "$suspect_pr_count" -eq 0 ]]; then
-      revision_note="no PR association found for resolved image revisions"
-    fi
-  fi
-else
-  revision_note="image revision enrichment disabled (INCLUDE_IMAGE_REVISION=${INCLUDE_IMAGE_REVISION})"
+export repo_map_rows
+if optional_evidence_step_allowed 10; then
+  run_step 10 "ci_signals" "$STEP_TIMEOUT_CI_SIGNALS_SECONDS" no "$(step_command step_10_ci_signals)"
+  apply_step_output 10
 fi
+ci_rows="${ci_rows:-}"
+ci_note="${ci_note:-}"
 
 pr_candidate_rows=""
 add_pr_candidate() {
@@ -930,6 +1970,39 @@ if [[ "$suspect_pr_count" -gt 0 ]]; then
   done < <(printf '%s\n' "$suspect_pr_rows")
 fi
 
+step11_dedup_namespace="$(printf '%s' "$SCOPE_NAMESPACES" | awk -F',' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print ($1 == "" ? "unknown" : $1)}')"
+step11_dedup_category="$(printf '%s' "${severity_reason:-unknown}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-')"
+if [[ -z "$step11_dedup_category" ]]; then
+  step11_dedup_category="unknown"
+fi
+step11_workloads="$(derive_step11_workloads "${deploy_rows:-}" "${pod_rows:-}" 2>/dev/null || true)"
+step11_primary_service="$(printf '%s\n' "${step11_workloads:-}" | awk -F'|' 'NF > 0 && $1 != "" { print $1; exit }')"
+if [[ -z "$step11_primary_service" ]]; then
+  step11_primary_service="unknown"
+fi
+step11_dedup_key="$(compute_dedup_key "$step11_dedup_namespace" "$step11_dedup_category" "$step11_workloads")"
+step11_lease_acquired=0
+if [[ ! -f "${SPOOL_DIR}/${step11_dedup_key}.ack" ]]; then
+  if acquire_lease "$step11_dedup_key"; then
+    step11_lease_acquired=1
+  fi
+fi
+
+if [[ "${SERVICE_CONTEXT_ENABLED:-0}" == "1" && "$HAS_LIB_SERVICE_GRAPH" -eq 1 ]] && declare -F discover_service_graph >/dev/null 2>&1; then
+  service_graph_namespaces=()
+  while IFS= read -r ns; do
+    [[ -z "$ns" ]] && continue
+    service_graph_namespaces+=("$ns")
+  done < <(split_csv_atoms "$SCOPE_NAMESPACES")
+  if [[ "${#service_graph_namespaces[@]}" -eq 0 ]]; then
+    service_graph_namespaces=("unknown")
+  fi
+  service_graph_output="$(discover_service_graph "${service_graph_namespaces[@]}" 2>/dev/null || true)"
+  if [[ -n "$service_graph_output" ]] && declare -F write_service_graph >/dev/null 2>&1; then
+    write_service_graph "$service_graph_output" >/dev/null 2>&1 || true
+  fi
+fi
+
 declare -a HYPOTHESES=()
 HYP_SEP=$'\x1f'
 
@@ -949,7 +2022,7 @@ if [[ "$missing_secret_count" -gt 0 || "$create_config_count" -gt 0 ]]; then
     "high" \
     "Missing secret/config reference" \
     "pod CreateContainerConfigError=${create_config_count}, missing secret events=${missing_secret_count}" \
-    "kubectl -n <ns> describe pod <pod>; kubectl -n <ns> get deploy <name> -o yaml | rg -n 'secret|configMap'" \
+    "kubectl --context <context> -n <ns> describe pod <pod>; kubectl --context <context> -n <ns> get deploy <name> -o yaml | rg -n 'secret|configMap'" \
     "Restore previous secretRef/configMapRef and rollout previous manifest"
 fi
 
@@ -959,7 +2032,7 @@ if [[ "$image_pull_count" -gt 0 ]]; then
     "high" \
     "Image pull failure (registry/tag/auth)" \
     "pods with ImagePullBackOff/ErrImagePull=${image_pull_count}" \
-    "kubectl -n <ns> describe pod <pod>; check image tag and imagePullSecrets; verify ECR/GHCR auth" \
+    "kubectl --context <context> -n <ns> describe pod <pod>; check image tag and imagePullSecrets; verify ECR/GHCR auth" \
     "Rollback deployment to last known-good image tag"
 fi
 
@@ -969,7 +2042,7 @@ if [[ "$crashloop_count" -gt 0 ]]; then
     "high" \
     "Application runtime crash or bad startup config" \
     "pods with CrashLoop/OOM signatures=${crashloop_count}" \
-    "kubectl -n <ns> logs <pod> --previous --tail=200; compare env/config delta vs last good release" \
+    "kubectl --context <context> -n <ns> logs <pod> --previous --tail=200; compare env/config delta vs last good release" \
     "Rollback deployment/canary to previous revision"
 fi
 
@@ -989,7 +2062,7 @@ if [[ "$oom_killed_count" -gt 0 ]]; then
     "high" \
     "Container OOMKilled under current limits" \
     "containers with OOMKilled=${oom_killed_count}" \
-    "kubectl -n <ns> top pod <pod>; kubectl -n <ns> get deploy <name> -o yaml | rg -n 'resources:'" \
+    "kubectl --context <context> -n <ns> top pod <pod>; kubectl --context <context> -n <ns> get deploy <name> -o yaml | rg -n 'resources:'" \
     "Temporarily increase limits/requests or rollback to previous resource profile"
 fi
 
@@ -999,7 +2072,7 @@ if [[ "$log_authz_count" -gt 0 ]]; then
     "high" \
     "Runtime authorization failure (RBAC/credentials) seen in container logs" \
     "authz log signals=${log_authz_count}" \
-    "kubectl -n <ns> logs <pod> -c <container> --previous --tail=200; verify serviceAccount RBAC, Vault/Argo token scopes, and mounted credentials" \
+    "kubectl --context <context> -n <ns> logs <pod> -c <container> --previous --tail=200; verify serviceAccount RBAC, Vault/Argo token scopes, and mounted credentials" \
     "Revert credential/role changes; roll back to last known-good secret or service account mapping"
 fi
 
@@ -1009,7 +2082,7 @@ if [[ "$log_network_count" -gt 0 || "$log_tls_count" -gt 0 ]]; then
     "medium" \
     "Network/TLS dependency failure surfaced in application logs" \
     "network log signals=${log_network_count}, tls log signals=${log_tls_count}" \
-    "kubectl -n <ns> logs <pod> -c <container> --tail=200; check Service/Endpoint DNS, NetworkPolicy, and cert trust chain" \
+    "kubectl --context <context> -n <ns> logs <pod> -c <container> --tail=200; check Service/Endpoint DNS, NetworkPolicy, and cert trust chain" \
     "Route traffic to healthy backend, revert cert/config rollout, or rollback release"
 fi
 
@@ -1029,7 +2102,7 @@ if [[ "$deploy_gap_count" -gt 0 ]]; then
     "medium" \
     "Deployment rollout stuck or unavailable replicas" \
     "deployments with readiness gaps=${deploy_gap_count}" \
-    "kubectl -n <ns> rollout status deploy/<name>; kubectl -n <ns> describe deploy/<name>" \
+    "kubectl --context <context> -n <ns> rollout status deploy/<name>; kubectl --context <context> -n <ns> describe deploy/<name>" \
     "Rollback rollout history to previous revision"
 fi
 
@@ -1039,7 +2112,7 @@ if [[ "$hpa_metrics_count" -gt 0 ]]; then
     "medium" \
     "Metrics API unavailable for HPA" \
     "HPA events with pods.metrics.k8s.io missing=${hpa_metrics_count}" \
-    "kubectl get apiservice | rg metrics.k8s.io; kubectl -n kube-system get pods | rg metrics-server" \
+    "kubectl --context <context> get apiservice | rg metrics.k8s.io; kubectl --context <context> -n kube-system get pods | rg metrics-server" \
     "Disable impacted HPA or pin replicas until metrics API recovers"
 fi
 
@@ -1049,7 +2122,7 @@ if [[ "$finding_cluster_count" -gt 0 ]]; then
     "medium" \
     "Stale CNPG backup resources target unknown cluster" \
     "FindingCluster unknown-cluster events=${finding_cluster_count}" \
-    "kubectl -n <ns> get backup,scheduledbackup | rg <cluster-name>" \
+    "kubectl --context <context> -n <ns> get backup,scheduledbackup | rg <cluster-name>" \
     "Remove/update stale backup CRs for deleted cluster"
 fi
 
@@ -1064,7 +2137,7 @@ if [[ "$critical_alert_count" -gt 0 ]]; then
 fi
 
 incident=0
-if [[ "$pod_issue_count" -gt 0 || "$deploy_gap_count" -gt 0 || "$critical_alert_count" -gt 0 || "$image_pull_count" -gt 0 || "$create_config_count" -gt 0 || "$log_authz_count" -gt 0 || "$log_crash_count" -gt 0 ]]; then
+if [[ "$pod_issue_count" -gt 0 || "$deploy_gap_count" -gt 0 || "$critical_alert_count" -gt 0 || "$image_pull_count" -gt 0 || "$create_config_count" -gt 0 || "$log_authz_count" -gt 0 || "$log_crash_count" -gt 0 || "$prom_trend_critical_count" -gt 0 || "$argocd_critical_count" -gt 0 || "$cert_health_critical_count" -gt 0 || "$aws_signal_critical_count" -gt 0 ]]; then
   incident=1
 fi
 
@@ -1196,6 +2269,15 @@ if [[ "$incident" -eq 1 ]]; then
     gate_reason="incident-changed"
   fi
 
+  if [[ "$should_alert" == "yes" && "$ALERT_MIN_INTERVAL_SECONDS" -gt 0 && "$now_ts" =~ ^[0-9]+$ && "$last_alert_ts" -gt 0 ]]; then
+    elapsed_seconds=$((now_ts - last_alert_ts))
+    if [[ "$elapsed_seconds" -lt "$ALERT_MIN_INTERVAL_SECONDS" ]]; then
+      should_alert="no"
+      gate_reason="min-interval-active"
+      cooldown_remaining_seconds=$((ALERT_MIN_INTERVAL_SECONDS - elapsed_seconds))
+    fi
+  fi
+
   if [[ "$should_alert" == "yes" && "$state_store_ready" -eq 1 ]]; then
     {
       printf 'fingerprint\t%s\n' "$incident_fingerprint"
@@ -1206,10 +2288,623 @@ if [[ "$incident" -eq 1 ]]; then
   fi
 fi
 
+incident_id=""
+incident_state_status="disabled"
+incident_state_row=""
+incident_rca_version="1"
+resolved_incident_id=""
+resolved_ticket_id=""
+resolved_thread_ts=""
+thread_archival_status="not_applicable"
+
+if [[ "$HAS_LIB_STATE_FILE" -eq 1 ]] && declare -F state_init >/dev/null 2>&1; then
+  mkdir -p "$INCIDENT_STATE_DIR" 2>/dev/null || true
+  state_init "$ACTIVE_INCIDENTS_FILE" >/dev/null 2>&1 || true
+  if declare -F _state_archive_init >/dev/null 2>&1; then
+    _state_archive_init "$RESOLVED_INCIDENTS_FILE" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ "$incident" -eq 1 ]]; then
+  betterstack_alias=""
+  if [[ -n "${BETTERSTACK_INCIDENT_ID}${BETTERSTACK_THREAD_TS}${BETTERSTACK_CONTEXT}" ]]; then
+    if [[ "$HAS_LIB_INCIDENT_ID" -eq 1 ]] && declare -F generate_incident_id >/dev/null 2>&1; then
+      betterstack_alias="$(generate_incident_id betterstack "$BETTERSTACK_INCIDENT_ID" "$BETTERSTACK_THREAD_TS" "$BETTERSTACK_CONTEXT" 2>/dev/null || true)"
+    fi
+    if [[ -z "$betterstack_alias" && -n "$BETTERSTACK_INCIDENT_ID" ]]; then
+      betterstack_alias="bs:${BETTERSTACK_INCIDENT_ID}"
+    fi
+    betterstack_alias="$(sanitize_state_field "$betterstack_alias")"
+  fi
+
+  if [[ "$HAS_LIB_INCIDENT_ID" -eq 1 ]] && declare -F generate_incident_id >/dev/null 2>&1; then
+    incident_id="$(generate_incident_id heartbeat "$step11_dedup_namespace" "$step11_dedup_category" "fp${incident_fingerprint}" "$step11_workloads" 2>/dev/null || true)"
+  fi
+  if [[ -z "$incident_id" ]]; then
+    incident_id="$(fallback_incident_id "$step11_dedup_namespace" "$step11_dedup_category" "$step11_workloads" "$incident_fingerprint")"
+  fi
+  incident_id="$(sanitize_state_field "$incident_id")"
+
+  if [[ -n "$betterstack_alias" && "$HAS_LIB_STATE_FILE" -eq 1 ]] && declare -F state_read_all >/dev/null 2>&1; then
+    bs_reconcile_row="$(state_read_all "$ACTIVE_INCIDENTS_FILE" 2>/dev/null | awk -F'\t' -v alias="$betterstack_alias" 'NF >= 19 && $19 == alias { print; exit }')"
+    bs_reconcile_incident_id="$(sanitize_state_field "$(tsv_field "$bs_reconcile_row" 1)")"
+    if [[ -n "$bs_reconcile_incident_id" ]]; then
+      incident_id="$bs_reconcile_incident_id"
+      gate_reason="${gate_reason}+bs-alias-reconciled"
+    fi
+  fi
+
+  if [[ "$HAS_LIB_STATE_FILE" -eq 1 ]] && declare -F state_init >/dev/null 2>&1 && declare -F state_write_row >/dev/null 2>&1; then
+    current_epoch="$(date +%s 2>/dev/null || echo 0)"
+    mkdir -p "$INCIDENT_STATE_DIR" 2>/dev/null || true
+    if state_init "$ACTIVE_INCIDENTS_FILE" >/dev/null 2>&1; then
+      incident_state_status="ready"
+    else
+      incident_state_status="init_error"
+    fi
+
+    incident_state_row="$(state_read_incident "$incident_id" "$ACTIVE_INCIDENTS_FILE" 2>/dev/null || true)"
+    existing_first_seen="$(tsv_field "$incident_state_row" 4)"
+    existing_last_nonempty_ts="$(tsv_field "$incident_state_row" 6)"
+    existing_rca_version="$(tsv_field "$incident_state_row" 7)"
+    existing_fingerprint="$(sanitize_state_field "$(tsv_field "$incident_state_row" 8)")"
+    existing_linear_ticket_id="$(sanitize_state_field "$(tsv_field "$incident_state_row" 10)")"
+    existing_slack_thread_ts="$(sanitize_state_field "$(tsv_field "$incident_state_row" 11)")"
+    existing_category_drift="$(sanitize_state_field "$(tsv_field "$incident_state_row" 13)")"
+    existing_slack_post_status="$(sanitize_state_field "$(tsv_field "$incident_state_row" 14)")"
+    existing_slack_post_attempts="$(tsv_field "$incident_state_row" 15)"
+    existing_linear_post_status="$(sanitize_state_field "$(tsv_field "$incident_state_row" 16)")"
+    existing_linear_post_attempts="$(tsv_field "$incident_state_row" 17)"
+    existing_linear_reservation="$(sanitize_state_field "$(tsv_field "$incident_state_row" 18)")"
+    existing_bs_alias="$(sanitize_state_field "$(tsv_field "$incident_state_row" 19)")"
+    existing_last_primary_ts="$(tsv_field "$incident_state_row" 20)"
+    existing_non_primary_streak="$(tsv_field "$incident_state_row" 21)"
+    existing_category="$(sanitize_state_field "$(tsv_field "$incident_state_row" 3)")"
+
+    if [[ "$existing_first_seen" =~ ^[0-9]+$ ]]; then
+      first_seen_ts="$existing_first_seen"
+    else
+      first_seen_ts="$current_epoch"
+    fi
+    last_seen_ts="$current_epoch"
+
+    affected_workloads="$(sanitize_state_field "$(normalize_pipe_atoms "$step11_workloads")")"
+    if [[ -n "$affected_workloads" ]]; then
+      last_nonempty_ts="$current_epoch"
+    elif [[ "$existing_last_nonempty_ts" =~ ^[0-9]+$ ]]; then
+      last_nonempty_ts="$existing_last_nonempty_ts"
+    else
+      last_nonempty_ts="$current_epoch"
+    fi
+
+    if [[ "$existing_rca_version" =~ ^[0-9]+$ ]]; then
+      incident_rca_version="$existing_rca_version"
+    else
+      incident_rca_version="1"
+    fi
+    if [[ -n "$existing_fingerprint" && "$existing_fingerprint" != "$incident_fingerprint" ]]; then
+      incident_rca_version="$((incident_rca_version + 1))"
+    fi
+
+    evidence_signal_keys_raw=""
+    [[ "$pod_issue_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}pod_issue|"
+    [[ "$deploy_gap_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}deploy_gap|"
+    [[ "$critical_alert_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}critical_alert|"
+    [[ "$log_signal_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}log_signal|"
+    [[ "$prom_trend_critical_count" -gt 0 || "$prom_trend_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}prometheus_trends|"
+    [[ "$argocd_critical_count" -gt 0 || "$argocd_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}argocd_sync|"
+    [[ "$cert_health_critical_count" -gt 0 || "$cert_health_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}cert_secret_health|"
+    [[ "$aws_signal_critical_count" -gt 0 || "$aws_signal_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}aws_resource_signals|"
+    evidence_signal_keys="$(sanitize_state_field "$(normalize_pipe_atoms "${evidence_signal_keys_raw%|}")")"
+
+    category_drift_log="$existing_category_drift"
+    if [[ -n "$existing_category" && "$existing_category" != "$step11_dedup_category" ]]; then
+      category_drift_log="$(sanitize_state_field "$(normalize_csv_atoms "${existing_category_drift},${existing_category},${step11_dedup_category}")")"
+    fi
+
+    if [[ "$existing_slack_post_attempts" =~ ^[0-9]+$ ]]; then
+      slack_post_attempts="$existing_slack_post_attempts"
+    else
+      slack_post_attempts=0
+    fi
+    if [[ "$existing_linear_post_attempts" =~ ^[0-9]+$ ]]; then
+      linear_post_attempts="$existing_linear_post_attempts"
+    else
+      linear_post_attempts=0
+    fi
+    if [[ "$existing_non_primary_streak" =~ ^[0-9]+$ ]]; then
+      non_primary_streak="$existing_non_primary_streak"
+    else
+      non_primary_streak=0
+    fi
+    if [[ "$primary_impact_signals" -eq 0 ]]; then
+      non_primary_streak=$((non_primary_streak + 1))
+    else
+      non_primary_streak=0
+    fi
+
+    if [[ "$existing_last_primary_ts" =~ ^[0-9]+$ ]]; then
+      last_primary_ts="$existing_last_primary_ts"
+    else
+      last_primary_ts=0
+    fi
+    if [[ "$primary_impact_signals" -gt 0 ]]; then
+      last_primary_ts="$current_epoch"
+    fi
+
+    bs_alias_value="$existing_bs_alias"
+    if [[ -n "$betterstack_alias" ]]; then
+      bs_alias_value="$betterstack_alias"
+    fi
+
+    incident_state_row="$(
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$incident_id" \
+        "$(sanitize_state_field "$step11_dedup_namespace")" \
+        "$(sanitize_state_field "$step11_dedup_category")" \
+        "$first_seen_ts" \
+        "$last_seen_ts" \
+        "$last_nonempty_ts" \
+        "$incident_rca_version" \
+        "$(sanitize_state_field "$incident_fingerprint")" \
+        "$evidence_signal_keys" \
+        "$existing_linear_ticket_id" \
+        "$existing_slack_thread_ts" \
+        "$affected_workloads" \
+        "$category_drift_log" \
+        "$existing_slack_post_status" \
+        "$slack_post_attempts" \
+        "$existing_linear_post_status" \
+        "$linear_post_attempts" \
+        "$existing_linear_reservation" \
+        "$bs_alias_value" \
+        "$last_primary_ts" \
+        "$non_primary_streak"
+    )"
+
+    if state_write_row "$incident_id" "$incident_state_row" "$ACTIVE_INCIDENTS_FILE" >/dev/null 2>&1; then
+      incident_state_status="updated"
+    else
+      incident_state_status="write_error"
+    fi
+  fi
+
+  if [[ -n "$incident_id" ]]; then
+    if mkdir -p "$INCIDENT_STATE_DIR" 2>/dev/null && [[ -d "$INCIDENT_STATE_DIR" ]]; then
+      printf '%s\n' "$incident_id" >"$INCIDENT_LAST_ACTIVE_FILE" 2>/dev/null || true
+    fi
+  fi
+else
+  if [[ -f "$INCIDENT_LAST_ACTIVE_FILE" ]]; then
+    resolved_incident_id="$(head -n1 "$INCIDENT_LAST_ACTIVE_FILE" 2>/dev/null || true)"
+    resolved_incident_id="$(sanitize_state_field "$resolved_incident_id")"
+  fi
+  if [[ -n "$resolved_incident_id" ]]; then
+    resolved_namespace=""
+    resolved_workloads=""
+    resolved_primary_service="unknown"
+    if [[ "$HAS_LIB_STATE_FILE" -eq 1 ]] && declare -F state_read_incident >/dev/null 2>&1; then
+      resolved_row="$(state_read_incident "$resolved_incident_id" "$ACTIVE_INCIDENTS_FILE" 2>/dev/null || true)"
+      resolved_ticket_id="$(sanitize_state_field "$(tsv_field "$resolved_row" 10)")"
+      resolved_thread_ts="$(sanitize_state_field "$(tsv_field "$resolved_row" 11)")"
+      resolved_namespace="$(sanitize_state_field "$(tsv_field "$resolved_row" 2)")"
+      resolved_workloads="$(sanitize_state_field "$(tsv_field "$resolved_row" 12)")"
+      resolved_primary_service="$(printf '%s\n' "${resolved_workloads:-}" | awk -F'|' 'NF > 0 && $1 != "" { print $1; exit }')"
+      if [[ -z "$resolved_primary_service" ]]; then
+        resolved_primary_service="unknown"
+      fi
+      if declare -F state_archive_row >/dev/null 2>&1; then
+        state_archive_row "$resolved_incident_id" "resolved_heartbeat" "$ACTIVE_INCIDENTS_FILE" "$RESOLVED_INCIDENTS_FILE" >/dev/null 2>&1 || true
+      fi
+    fi
+    if [[ "$HAS_LIB_THREAD_ARCHIVAL" -eq 1 ]] && declare -F archive_thread >/dev/null 2>&1; then
+      thread_archival_status="$(archive_thread "$resolved_thread_ts" "$resolved_incident_id" "$resolved_ticket_id" "final" 2>/dev/null | tail -n1 || true)"
+      if [[ -z "$thread_archival_status" ]]; then
+        thread_archival_status="archive_attempted"
+      fi
+    fi
+    if [[ "${INCIDENT_LEARNING_ENABLED:-0}" == "1" && "$HAS_LIB_INCIDENT_MEMORY" -eq 1 ]] \
+      && declare -F extract_incident_card >/dev/null 2>&1 \
+      && declare -F memory_write_card >/dev/null 2>&1; then
+      resolved_rca_json="$(rca_cache_get_field "$resolved_incident_id" '.rca_result_json // empty' "")"
+      if [[ -n "$resolved_rca_json" && "$resolved_rca_json" != "null" ]]; then
+        has_real_hypothesis="$(
+          printf '%s\n' "$resolved_rca_json" \
+            | jq -r '(.hypotheses // []) | map(select((.hypothesis_id // "") != "" and .hypothesis_id != "unknown:insufficient_evidence")) | length > 0' 2>/dev/null \
+            || echo "false"
+        )"
+        if [[ "$has_real_hypothesis" == "true" ]]; then
+          card_payload="$(CLUSTER="${K8S_CONTEXT:-unknown}" \
+            NAMESPACE="${resolved_namespace:-unknown}" \
+            SERVICE="${resolved_primary_service:-unknown}" \
+            TRIAGE_INCIDENT_ID="$resolved_incident_id" \
+            extract_incident_card "$resolved_rca_json" 2>/dev/null || true)"
+          if [[ -n "$card_payload" ]]; then
+            memory_write_card "$card_payload" >/dev/null 2>&1 || true
+          fi
+        fi
+      fi
+    fi
+    rm -f "$INCIDENT_LAST_ACTIVE_FILE" 2>/dev/null || true
+  fi
+fi
+
+top_hypothesis_score=""
+top_hypothesis_confidence=""
+top_hypothesis_title=""
+top_hypothesis_evidence=""
+if [[ "${#HYPOTHESES[@]}" -gt 0 ]]; then
+  top_hypothesis_line="$(printf '%s\n' "${HYPOTHESES[@]}" | sort -t "$HYP_SEP" -k1,1nr | head -n1 || true)"
+  IFS="$HYP_SEP" read -r top_hypothesis_score top_hypothesis_confidence top_hypothesis_title top_hypothesis_evidence _top_check _top_rollback <<<"$top_hypothesis_line"
+fi
+if ! [[ "${top_hypothesis_score:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  top_hypothesis_score="40"
+fi
+if [[ -z "$top_hypothesis_title" ]]; then
+  top_hypothesis_title="No ranked hypothesis available"
+fi
+if [[ -z "$top_hypothesis_evidence" ]]; then
+  top_hypothesis_evidence="[NEEDS REVIEW]"
+fi
+
+rca_mode_requested="$(resolve_rca_mode)"
+rca_mode_effective="$rca_mode_requested"
+if [[ "$rca_mode_effective" == "dual" && "$HAS_LIB_RCA_SAFETY" -eq 1 ]] && declare -F rca_safety_effective_mode >/dev/null 2>&1; then
+  rca_mode_effective="$(rca_safety_effective_mode "$rca_mode_effective" "$severity_level" "$(date +%s 2>/dev/null || echo 0)" 2>/dev/null || echo "$rca_mode_effective")"
+  if [[ "$rca_mode_effective" == "dual_probe" ]]; then
+    rca_mode_effective="dual"
+  fi
+fi
+
+STEP_STATUS_11="skipped"
+STEP_LATENCY_11=0
+rca_result_source="ranked_hypotheses"
+rca_result_status="fallback"
+rca_review_rounds=0
+rca_agreement_score="0"
+rca_confidence="$top_hypothesis_score"
+rca_summary="$(sanitize_signal_line "$top_hypothesis_title")"
+rca_root_cause="$(sanitize_signal_line "$top_hypothesis_evidence")"
+rca_degradation_note="Using ranked_hypotheses fallback"
+sink_quarantine_status="none"
+rca_result_json="$(
+  jq -nc \
+    --arg mode "heuristic" \
+    --arg summary "$rca_summary" \
+    --arg root_cause "$rca_root_cause" \
+    --arg note "$rca_degradation_note" \
+    --arg confidence "$rca_confidence" \
+    '{
+      mode: $mode,
+      summary: $summary,
+      root_cause: $root_cause,
+      degradation_note: $note,
+      hypotheses: [
+        {
+          canonical_category: "unknown",
+          hypothesis_id: "unknown:insufficient_evidence",
+          confidence: ($confidence | tonumber),
+          description: $root_cause,
+          evidence_keys: []
+        }
+      ]
+    }'
+)"
+
+rca_skip=0
+if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11 >/dev/null 2>&1; then
+  step11_start_ms="$(now_ms)"
+  evidence_raw=""
+  for step_n in 00 01 02 03 04 05 06 07 08 09 10; do
+    output_var="STEP_OUTPUT_${step_n}"
+    status_var="STEP_STATUS_${step_n}"
+    raw_output="${!output_var:-}"
+    raw_status="${!status_var:-skipped}"
+    if [[ -z "$raw_output" || "$raw_status" != "ok" ]]; then
+      continue
+    fi
+    if declare -F _rca_prompt_scrub >/dev/null 2>&1; then
+      raw_output="$(_rca_prompt_scrub "$raw_output")"
+    fi
+    if declare -F _strip_instruction_tokens >/dev/null 2>&1; then
+      raw_output="$(_strip_instruction_tokens "$raw_output")"
+    fi
+    if declare -F truncate_step_output >/dev/null 2>&1; then
+      raw_output="$(truncate_step_output "$raw_output" 4096)"
+    fi
+    evidence_raw="${evidence_raw}--- Step ${step_n} output ---"$'\n'"${raw_output}"$'\n\n'
+  done
+
+  evidence_bundle="$(
+    {
+      printf 'incident_id\t%s\n' "${incident_id:-unknown}"
+      printf 'incident_fingerprint\t%s\n' "$incident_fingerprint"
+      printf 'severity_level\t%s\n' "$severity_level"
+      printf 'severity_reason\t%s\n' "$severity_reason"
+      printf 'namespace_scope\t%s\n' "$SCOPE_NAMESPACES"
+      printf 'signal\tpod_issues\t%s\n' "$pod_issue_count"
+      printf 'signal\tdeploy_gaps\t%s\n' "$deploy_gap_count"
+      printf 'signal\tcritical_alerts\t%s\n' "$critical_alert_count"
+      printf 'signal\tlog_signals\t%s\n' "$log_signal_count"
+      printf 'signal\tprom_critical\t%s\n' "$prom_trend_critical_count"
+      printf 'signal\targocd_critical\t%s\n' "$argocd_critical_count"
+      printf 'signal\tcert_critical\t%s\n' "$cert_health_critical_count"
+      printf 'signal\taws_critical\t%s\n' "$aws_signal_critical_count"
+      if [[ -n "$linear_memory_output" ]]; then
+        printf 'linear_memory\n%s\n' "$linear_memory_output"
+      fi
+      printf 'raw_step_outputs\n'
+      if [[ -n "$evidence_raw" ]]; then
+        printf '%s\n' "$evidence_raw"
+      else
+        printf 'none\n'
+      fi
+    } | awk 'NF > 0 { print }'
+  )"
+
+  llm_result_json=""
+  cache_fingerprint="$(rca_cache_get_field "${incident_id:-}" '.evidence_fingerprint // empty' "")"
+  cache_rca_ts="$(rca_cache_get_field "${incident_id:-}" '.last_rca_ts // 0' "0")"
+  cache_rca_json="$(rca_cache_get_field "${incident_id:-}" '.rca_result_json // empty' "")"
+  if ! [[ "$cache_rca_ts" =~ ^[0-9]+$ ]]; then
+    cache_rca_ts=0
+  fi
+  now_epoch="$(date +%s 2>/dev/null || echo 0)"
+  interval_elapsed=1
+  if [[ "$now_epoch" =~ ^[0-9]+$ && "$cache_rca_ts" -gt 0 ]]; then
+    if (( now_epoch - cache_rca_ts < RCA_MIN_RERUN_INTERVAL_S )); then
+      interval_elapsed=0
+    fi
+  fi
+  if [[ -n "$cache_fingerprint" && "$cache_fingerprint" == "$incident_fingerprint" && "$interval_elapsed" -eq 0 && -n "$cache_rca_json" && "$cache_rca_json" != "null" ]]; then
+    rca_skip=1
+    llm_result_json="$(printf '%s\n' "$cache_rca_json" | jq -c '.' 2>/dev/null || true)"
+    log "RCA skip: fingerprint unchanged and interval not elapsed (${RCA_MIN_RERUN_INTERVAL_S}s)"
+  fi
+
+  if [[ "$rca_skip" -eq 0 ]]; then
+    if [[ "$rca_mode_effective" == "dual" && "${RCA_CHAIN_ENABLED:-0}" != "1" ]]; then
+      rca_dual_a="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" 2>/dev/null || true)"
+      rca_dual_b="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" 2>/dev/null || true)"
+      llm_result_json="$rca_dual_a"
+      if [[ -n "$rca_dual_a" && -n "$rca_dual_b" && "$HAS_LIB_RCA_CROSSREVIEW" -eq 1 ]] && declare -F run_cross_review >/dev/null 2>&1; then
+        cross_a="$rca_dual_a"
+        cross_b="$rca_dual_b"
+        cross_final=""
+        for cross_round in 0 1 2; do
+          cross_output="$(run_cross_review "$cross_round" "$cross_a" "$cross_b" "$evidence_bundle" 2>/dev/null || true)"
+          [[ -z "$cross_output" ]] && continue
+          if printf '%s\n' "$cross_output" | jq -e '.converged == false and .next_a != null and .next_b != null' >/dev/null 2>&1; then
+            cross_a="$(printf '%s\n' "$cross_output" | jq -c '.next_a // {}' 2>/dev/null || printf '%s' "$cross_a")"
+            cross_b="$(printf '%s\n' "$cross_output" | jq -c '.next_b // {}' 2>/dev/null || printf '%s' "$cross_b")"
+            rca_review_rounds=$((cross_round + 1))
+            continue
+          fi
+          cross_final="$cross_output"
+          break
+        done
+        if [[ -z "$cross_final" ]]; then
+          cross_final="$cross_a"
+        fi
+        if printf '%s\n' "$cross_final" | jq -e '.next_a != null and .next_b != null' >/dev/null 2>&1; then
+          cross_final="$(printf '%s\n' "$cross_final" | jq -c '.next_a // {}' 2>/dev/null || printf '%s' "$cross_a")"
+        fi
+        llm_result_json="$cross_final"
+        if [[ "$HAS_LIB_RCA_SAFETY" -eq 1 ]] && declare -F rca_safety_record_outcome >/dev/null 2>&1; then
+          rca_convergence_outcome="not_converged"
+          if printf '%s\n' "$llm_result_json" | jq -e '(.agreement_score // 0) > 0' >/dev/null 2>&1; then
+            rca_convergence_outcome="converged"
+          fi
+          rca_safety_record_outcome "$(date +%s 2>/dev/null || echo 0)" "$rca_convergence_outcome" >/dev/null 2>&1 || true
+        fi
+      fi
+    else
+      llm_result_json="$(run_step_11 "$evidence_bundle" "$rca_mode_effective" "incident" "$linear_memory_output" "" 2>/dev/null || true)"
+    fi
+  fi
+
+  step11_end_ms="$(now_ms)"
+  STEP_LATENCY_11=$((step11_end_ms - step11_start_ms))
+  if [[ "$STEP_LATENCY_11" -lt 0 || "$rca_skip" -eq 1 ]]; then
+    STEP_LATENCY_11=0
+  fi
+
+  if [[ -n "$llm_result_json" ]] && printf '%s\n' "$llm_result_json" | jq -e . >/dev/null 2>&1; then
+    if [[ "$rca_skip" -eq 1 ]]; then
+      STEP_STATUS_11="skipped"
+      rca_result_source="cache"
+      rca_result_status="cached"
+    else
+      STEP_STATUS_11="ok"
+      rca_result_source="llm"
+      rca_result_status="ok"
+    fi
+    rca_result_json="$(printf '%s\n' "$llm_result_json" | jq -c '.')"
+    rca_confidence="$(printf '%s\n' "$rca_result_json" | jq -r '.merged_confidence // .hypotheses[0].confidence // .confidence // 40')"
+    if ! [[ "$rca_confidence" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      rca_confidence="$top_hypothesis_score"
+    fi
+    rca_summary="$(sanitize_signal_line "$(printf '%s\n' "$rca_result_json" | jq -r '.summary // .brief_description // .hypotheses[0].description // empty')")"
+    rca_root_cause="$(sanitize_signal_line "$(printf '%s\n' "$rca_result_json" | jq -r '.root_cause // .hypotheses[0].description // empty')")"
+    rca_degradation_note="$(sanitize_signal_line "$(printf '%s\n' "$rca_result_json" | jq -r '.degradation_note // empty')")"
+    rca_agreement_score="$(printf '%s\n' "$rca_result_json" | jq -r '.agreement_score // 0')"
+    if ! [[ "$rca_agreement_score" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      rca_agreement_score="0"
+    fi
+    parsed_review_rounds="$(printf '%s\n' "$rca_result_json" | jq -r '.review_rounds // empty' 2>/dev/null || true)"
+    if [[ "$parsed_review_rounds" =~ ^[0-9]+$ ]]; then
+      rca_review_rounds="$parsed_review_rounds"
+    fi
+    if [[ "$rca_skip" -eq 0 && "$rca_mode_effective" == "dual" && "${RCA_CHAIN_ENABLED:-0}" == "1" ]] \
+      && [[ "$HAS_LIB_RCA_SAFETY" -eq 1 ]] \
+      && declare -F rca_safety_record_outcome >/dev/null 2>&1; then
+      rca_convergence_outcome="not_converged"
+      if printf '%s\n' "$rca_result_json" | jq -e '(.agreement_score // 0) > 0' >/dev/null 2>&1; then
+        rca_convergence_outcome="converged"
+      fi
+      rca_safety_record_outcome "$(date +%s 2>/dev/null || echo 0)" "$rca_convergence_outcome" >/dev/null 2>&1 || true
+    fi
+    if [[ "$rca_skip" -eq 0 ]]; then
+      rca_cache_write_json "${incident_id:-}" "$incident_fingerprint" "$now_epoch" "$rca_result_json" >/dev/null 2>&1 || true
+    fi
+  else
+    STEP_STATUS_11="error"
+    rca_result_status="fallback"
+    rca_result_source="ranked_hypotheses"
+    rca_degradation_note="LLM unavailable or invalid output; ranked_hypotheses fallback"
+    rca_result_json="$(printf '%s\n' "$rca_result_json" | jq -c --arg note "$rca_degradation_note" '.degradation_note = $note')"
+  fi
+fi
+
+evidence_applicable_steps=0
+evidence_completed_steps=0
+mark_evidence_step 01 1
+mark_evidence_step 02 1
+mark_evidence_step 05 1
+linear_memory_applicable=0
+[[ -n "$(resolve_helper_script "linear-memory-lookup.sh")" ]] && linear_memory_applicable=1
+mark_evidence_step 00 "$linear_memory_applicable"
+prometheus_applicable=0
+[[ -n "$(resolve_helper_script "prometheus-trends.sh")" && -n "${PROMETHEUS_URL:-}" ]] && prometheus_applicable=1
+mark_evidence_step 03 "$prometheus_applicable"
+argocd_applicable=0
+[[ -n "$(resolve_helper_script "argocd-sync-status.sh")" && -n "${ARGOCD_BASE_URL:-}" ]] && argocd_applicable=1
+mark_evidence_step 04 "$argocd_applicable"
+cert_applicable=0
+[[ -n "$(resolve_helper_script "cert-secret-health.sh")" ]] && cert_applicable=1
+mark_evidence_step 06 "$cert_applicable"
+aws_applicable=0
+[[ -n "$(resolve_helper_script "aws-resource-signals.sh")" ]] && aws_applicable=1
+mark_evidence_step 07 "$aws_applicable"
+mark_evidence_step 08 "$INCLUDE_REPO_MAP"
+mark_evidence_step 09 "$INCLUDE_IMAGE_REVISION"
+mark_evidence_step 10 "$INCLUDE_CI_SIGNAL"
+
+if [[ "$evidence_applicable_steps" -gt 0 ]]; then
+  evidence_completeness_pct="$(awk -v c="$evidence_completed_steps" -v a="$evidence_applicable_steps" 'BEGIN { printf "%.1f", (c * 100.0) / a }')"
+  evidence_completeness_ratio="$(awk -v c="$evidence_completed_steps" -v a="$evidence_applicable_steps" 'BEGIN { printf "%.3f", c / a }')"
+else
+  evidence_completeness_pct="0.0"
+  evidence_completeness_ratio="0.000"
+fi
+
+if awk -v p="$evidence_completeness_pct" 'BEGIN { exit (p < 60 ? 0 : 1) }' && awk -v c="$rca_confidence" 'BEGIN { exit (c > 50 ? 0 : 1) }'; then
+  rca_confidence="50"
+  rca_result_json="$(
+    printf '%s\n' "$rca_result_json" | jq -c --argjson confidence 50 --arg note "Evidence completeness below 60%; confidence capped at 50" '
+      .merged_confidence = $confidence
+      | .degradation_note = (if (.degradation_note // "") == "" then $note else (.degradation_note + "; " + $note) end)
+      | if (.hypotheses // [] | length) > 0 then .hypotheses[0].confidence = $confidence else . end
+    ' 2>/dev/null || printf '%s\n' "$rca_result_json"
+  )"
+  rca_degradation_note="$(sanitize_signal_line "$(printf '%s\n' "$rca_result_json" | jq -r '.degradation_note // empty')")"
+fi
+
+step_timeout_count=0
+step_error_count=0
+step_ok_count=0
+step_skipped_count=0
+for step_num in 00 01 02 03 04 05 06 07 08 09 10 11; do
+  status_var="STEP_STATUS_${step_num}"
+  step_status_value="${!status_var:-skipped}"
+  case "$step_status_value" in
+    timeout) step_timeout_count=$((step_timeout_count + 1)) ;;
+    error) step_error_count=$((step_error_count + 1)) ;;
+    ok) step_ok_count=$((step_ok_count + 1)) ;;
+    *) step_skipped_count=$((step_skipped_count + 1)) ;;
+  esac
+done
+total_step_count=$((step_timeout_count + step_error_count + step_ok_count + step_skipped_count))
+if [[ "$total_step_count" -gt 0 ]]; then
+  step_timeout_rate_pct="$(awk -v t="$step_timeout_count" -v n="$total_step_count" 'BEGIN { printf "%.1f", (t * 100.0) / n }')"
+else
+  step_timeout_rate_pct="0.0"
+fi
+
+meta_alert_rows=""
+if [[ "$HAS_LIB_META_ALERTS" -eq 1 ]] && declare -F meta_alerts_evaluate >/dev/null 2>&1; then
+  export META_STEP_TIMEOUT_RATE="$step_timeout_rate_pct"
+  if awk -v p="$evidence_completeness_pct" 'BEGIN { exit (p < 60 ? 0 : 1) }'; then
+    export META_CONSEC_LOW_COMPLETENESS=5
+  else
+    export META_CONSEC_LOW_COMPLETENESS=0
+  fi
+  if [[ -f "$META_ALERTS_METRICS_FILE" ]] && declare -F meta_alerts_from_file >/dev/null 2>&1; then
+    meta_alert_rows="$(meta_alerts_from_file "$META_ALERTS_METRICS_FILE" 2>/dev/null || true)"
+  else
+    meta_alert_rows="$(meta_alerts_evaluate 2>/dev/null || true)"
+  fi
+fi
+
+if [[ "${step11_lease_acquired:-0}" -eq 1 ]]; then
+  step11_payload="$(
+    jq -nc \
+      --arg snapshot_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg dedup_key "$step11_dedup_key" \
+      --arg incident_id "${incident_id:-}" \
+      --arg namespace "$step11_dedup_namespace" \
+      --arg primary_category "$step11_dedup_category" \
+      --arg severity_level "$severity_level" \
+      --arg severity_reason "$severity_reason" \
+      --arg should_alert "$should_alert" \
+      --arg gate_reason "$gate_reason" \
+      --arg incident_fingerprint "$incident_fingerprint" \
+      --arg rca_mode "$rca_mode_effective" \
+      --arg evidence_completeness_pct "$evidence_completeness_pct" \
+      --arg incident_rca_version "$incident_rca_version" \
+      --argjson hypothesis_count "${#HYPOTHESES[@]}" \
+      '{
+        snapshot_utc: $snapshot_utc,
+        dedup_key: $dedup_key,
+        incident_id: $incident_id,
+        namespace: $namespace,
+        primary_category: $primary_category,
+        severity_level: $severity_level,
+        severity_reason: $severity_reason,
+        should_alert: $should_alert,
+        gate_reason: $gate_reason,
+        incident_fingerprint: $incident_fingerprint,
+        rca_mode: $rca_mode,
+        evidence_completeness_pct: $evidence_completeness_pct,
+        rca_version: $incident_rca_version,
+        hypothesis_count: $hypothesis_count
+      }'
+  )"
+  spool_payload="$step11_payload"
+  redact_failed_sink=""
+  for sink_name in slack linear webhook; do
+    if ! spool_payload="$(redact_payload_for_sink "$spool_payload" "$sink_name" 2>/dev/null)"; then
+      redact_failed_sink="$sink_name"
+      break
+    fi
+  done
+  if [[ -n "$redact_failed_sink" ]]; then
+    sink_quarantine_status="quarantined:${redact_failed_sink}"
+    log "WARN: sink payload quarantined for ${redact_failed_sink}; suppressing outbound spool write"
+    release_lease "$step11_dedup_key"
+  elif write_spool_payload "$step11_dedup_key" "$spool_payload" >/dev/null 2>&1; then
+    coalesce_spool_for_key "$step11_dedup_key" >/dev/null 2>&1 || true
+    release_lease "$step11_dedup_key"
+  else
+    sink_quarantine_status="spool_write_failed"
+    abandon_lease "$step11_dedup_key"
+  fi
+fi
+
 section "meta"
 printf 'snapshot_utc\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf 'context\t%s\n' "$(kubectl config current-context 2>/dev/null || echo unknown)"
+printf 'context\t%s\n' "$K8S_CONTEXT"
 printf 'namespace_scope\t%s\n' "${SCOPE_NAMESPACES:-all}"
+printf 'incident_id\t%s\n' "${incident_id:-none}"
+printf 'incident_state\t%s\n' "$incident_state_status"
+
+section "step_status"
+printf 'step\tstatus\tlatency_ms\n'
+for step_num in 00 01 02 03 04 05 06 07 08 09 10 11; do
+  status_var="STEP_STATUS_${step_num}"
+  latency_var="STEP_LATENCY_${step_num}"
+  printf '%s\t%s\t%s\n' "$step_num" "${!status_var:-skipped}" "${!latency_var:-0}"
+done
 
 section "health_status"
 if [[ "$incident" -eq 1 ]]; then
@@ -1217,13 +2912,16 @@ if [[ "$incident" -eq 1 ]]; then
 else
 printf 'state\tok\n'
 fi
-printf 'incident_signals\t%s\n' "$((pod_issue_count + deploy_gap_count + critical_alert_count + image_pull_count + create_config_count + log_signal_count))"
+printf 'incident_signals\t%s\n' "$((pod_issue_count + deploy_gap_count + critical_alert_count + image_pull_count + create_config_count + log_signal_count + prom_trend_critical_count + argocd_critical_count + cert_health_critical_count + aws_signal_critical_count))"
 
 section "incident_gate"
 printf 'should_alert\t%s\n' "$should_alert"
 printf 'gate_reason\t%s\n' "$gate_reason"
+printf 'incident_id\t%s\n' "${incident_id:-none}"
+printf 'rca_version\t%s\n' "$incident_rca_version"
 printf 'incident_fingerprint\t%s\n' "$incident_fingerprint"
 printf 'cooldown_seconds\t%s\n' "$ALERT_COOLDOWN_SECONDS"
+printf 'alert_min_interval_seconds\t%s\n' "$ALERT_MIN_INTERVAL_SECONDS"
 printf 'cooldown_remaining_seconds\t%s\n' "$cooldown_remaining_seconds"
 
 section "incident_routing"
@@ -1260,6 +2958,15 @@ printf 'deploy_readiness_gaps\t%s\n' "$deploy_gap_count"
 printf 'warning_events\t%s\n' "$event_count"
 printf 'firing_alerts_filtered\t%s\n' "$alert_count"
 printf 'critical_alerts_filtered\t%s\n' "$critical_alert_count"
+printf 'prometheus_trend_critical\t%s\n' "$prom_trend_critical_count"
+printf 'prometheus_trend_warning\t%s\n' "$prom_trend_warning_count"
+printf 'argocd_sync_critical\t%s\n' "$argocd_critical_count"
+printf 'argocd_sync_warning\t%s\n' "$argocd_warning_count"
+printf 'cert_health_critical\t%s\n' "$cert_health_critical_count"
+printf 'cert_health_warning\t%s\n' "$cert_health_warning_count"
+printf 'aws_signal_critical\t%s\n' "$aws_signal_critical_count"
+printf 'aws_signal_warning\t%s\n' "$aws_signal_warning_count"
+printf 'linear_memory_matches\t%s\n' "$linear_memory_rows_count"
 printf 'resolved_image_revisions\t%s\n' "$revision_resolved_count"
 printf 'suspect_prs\t%s\n' "$suspect_pr_count"
 printf 'missing_secret_events\t%s\n' "$missing_secret_count"
@@ -1271,6 +2978,106 @@ printf 'oom_killed\t%s\n' "$oom_killed_count"
 printf 'nonzero_exit\t%s\n' "$nonzero_exit_count"
 printf 'hpa_metrics_api_errors\t%s\n' "$hpa_metrics_count"
 printf 'cnpg_unknown_cluster_events\t%s\n' "$finding_cluster_count"
+
+section "linear_incident_memory"
+printf 'status\t%s\n' "$linear_memory_status"
+printf 'rows\t%s\n' "$linear_memory_rows_count"
+printf 'note\t%s\n' "$linear_memory_note"
+if [[ -n "$linear_memory_output" ]]; then
+  printf '%s\n' "$linear_memory_output"
+else
+  echo "none"
+fi
+
+section "prometheus_trends"
+printf 'step_status\t%s\n' "${STEP_STATUS_03:-skipped}"
+printf 'critical\t%s\n' "$prom_trend_critical_count"
+printf 'warning\t%s\n' "$prom_trend_warning_count"
+if [[ -n "$prometheus_trends_output" ]]; then
+  printf '%s\n' "$prometheus_trends_output"
+else
+  echo "none"
+  printf 'note\t%s\n' "$prom_trend_note"
+fi
+
+section "argocd_sync"
+printf 'step_status\t%s\n' "${STEP_STATUS_04:-skipped}"
+printf 'critical\t%s\n' "$argocd_critical_count"
+printf 'warning\t%s\n' "$argocd_warning_count"
+if [[ -n "$argocd_sync_output" ]]; then
+  printf '%s\n' "$argocd_sync_output"
+else
+  echo "none"
+  printf 'note\t%s\n' "$argocd_note"
+fi
+
+section "cert_secret_health"
+printf 'step_status\t%s\n' "${STEP_STATUS_06:-skipped}"
+printf 'critical\t%s\n' "$cert_health_critical_count"
+printf 'warning\t%s\n' "$cert_health_warning_count"
+if [[ -n "$cert_secret_health_output" ]]; then
+  printf '%s\n' "$cert_secret_health_output"
+else
+  echo "none"
+  printf 'note\t%s\n' "$cert_health_note"
+fi
+
+section "aws_resource_signals"
+printf 'step_status\t%s\n' "${STEP_STATUS_07:-skipped}"
+printf 'critical\t%s\n' "$aws_signal_critical_count"
+printf 'warning\t%s\n' "$aws_signal_warning_count"
+if [[ -n "$aws_resource_signals_output" ]]; then
+  printf '%s\n' "$aws_resource_signals_output"
+else
+  echo "none"
+  printf 'note\t%s\n' "$aws_signal_note"
+fi
+
+section "rca_result"
+printf 'status\t%s\n' "$rca_result_status"
+printf 'source\t%s\n' "$rca_result_source"
+printf 'mode_requested\t%s\n' "$rca_mode_requested"
+printf 'mode_effective\t%s\n' "$rca_mode_effective"
+printf 'confidence\t%s\n' "$rca_confidence"
+printf 'agreement_score\t%s\n' "$rca_agreement_score"
+printf 'review_rounds\t%s\n' "$rca_review_rounds"
+printf 'summary\t%s\n' "$rca_summary"
+printf 'root_cause\t%s\n' "$rca_root_cause"
+printf 'degradation_note\t%s\n' "${rca_degradation_note:-none}"
+if [[ -n "$rca_result_json" ]]; then
+  printf '%s\n' "$rca_result_json"
+else
+  echo "none"
+fi
+
+section "triage_metrics"
+printf 'incident_id\t%s\n' "${incident_id:-none}"
+printf 'mode\t%s\n' "$rca_mode_effective"
+printf 'evidence_completed_steps\t%s\n' "$evidence_completed_steps"
+printf 'evidence_applicable_steps\t%s\n' "$evidence_applicable_steps"
+printf 'evidence_completeness_pct\t%s\n' "$evidence_completeness_pct"
+printf 'evidence_completeness_ratio\t%s\n' "$evidence_completeness_ratio"
+printf 'step_ok\t%s\n' "$step_ok_count"
+printf 'step_timeouts\t%s\n' "$step_timeout_count"
+printf 'step_errors\t%s\n' "$step_error_count"
+printf 'step_skips\t%s\n' "$step_skipped_count"
+printf 'step_timeout_rate_pct\t%s\n' "$step_timeout_rate_pct"
+printf 'linear_memory_status\t%s\n' "$linear_memory_status"
+printf 'incident_state_status\t%s\n' "$incident_state_status"
+printf 'thread_archival_status\t%s\n' "$thread_archival_status"
+printf 'rca_skip\t%s\n' "$rca_skip"
+printf 'sink_quarantine_status\t%s\n' "$sink_quarantine_status"
+
+section "meta_alerts"
+if [[ "$HAS_LIB_META_ALERTS" -eq 1 ]]; then
+  if [[ -n "$meta_alert_rows" ]]; then
+    printf '%s\n' "$meta_alert_rows"
+  else
+    echo "none"
+  fi
+else
+  echo "disabled"
+fi
 
 section "top_pod_issues"
 printf 'namespace\tpod\tphase\trestarts\treasons\n'
@@ -1386,11 +3193,11 @@ else
 fi
 
 section "next_checks"
-echo "1) kubectl -n <ns> describe pod <pod>"
-echo "2) kubectl -n <ns> get events --sort-by=.lastTimestamp | tail -n 50"
-echo "3) kubectl -n <ns> get deploy <name> -o yaml | rg -n 'image|secret|configMap|envFrom'"
+echo "1) kubectl --context <context> -n <ns> describe pod <pod>"
+echo "2) kubectl --context <context> -n <ns> get events --sort-by=.lastTimestamp | tail -n 50"
+echo "3) kubectl --context <context> -n <ns> get deploy <name> -o yaml | rg -n 'image|secret|configMap|envFrom'"
 echo "4) /home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh --image <workload-or-image>"
 echo "5) /home/node/.openclaw/skills/morpho-sre/scripts/repo-clone.sh --image <workload-or-image>"
 echo "6) /home/node/.openclaw/skills/morpho-sre/scripts/github-ci-status.sh --image <workload-or-image> --limit 5"
-echo "7) kubectl -n <ns> logs <pod> -c <container> --tail=200 --previous"
+echo "7) kubectl --context <context> -n <ns> logs <pod> -c <container> --tail=200 --previous"
 echo "8) gh pr view <pr-number> -R <owner/repo> --json number,title,state,mergedAt,author,url"

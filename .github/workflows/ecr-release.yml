@@ -1,0 +1,143 @@
+name: ECR Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.mdx"
+      - ".agents/**"
+      - "skills/**"
+  workflow_dispatch:
+    inputs:
+      update_infra:
+        description: "Trigger morpho-infra-helm image update"
+        required: false
+        type: boolean
+        default: true
+      environment:
+        description: "Infra environment(s) to update"
+        required: false
+        type: choice
+        options:
+          - dev
+          - prd
+          - both
+        default: dev
+
+concurrency:
+  group: ecr-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-3' }}
+  ECR_REPOSITORY: openclaw-sre
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.INFRA_DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.INFRA_DEPLOYER_SECRET_KEY }}
+          owner: morpho-org
+
+      - name: Checkout morpho-infra
+        uses: actions/checkout@v4
+        with:
+          repository: morpho-org/morpho-infra
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          path: .build-context/morpho-infra
+
+      - name: Checkout morpho-infra-helm
+        uses: actions/checkout@v4
+        with:
+          repository: morpho-org/morpho-infra-helm
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          path: .build-context/morpho-infra-helm
+
+      - name: Build local OpenClaw package
+        run: |
+          set -euo pipefail
+          mkdir -p .build-context
+          cp deploy/eks/Dockerfile.runtime .build-context/Dockerfile
+
+          pack_output="$(npm pack --silent --pack-destination .build-context)"
+          pack_file="$(printf '%s\n' "$pack_output" | tail -n1)"
+          if [[ -z "$pack_file" || ! -f ".build-context/$pack_file" ]]; then
+            echo "::error::Failed to create package tarball"
+            exit 1
+          fi
+
+          mv ".build-context/$pack_file" .build-context/openclaw-local.tgz
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTION_ROLE }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Resolve image URI
+        id: image
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push runtime image
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            --build-arg OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz \
+            -t "${{ steps.image.outputs.uri }}" \
+            .build-context
+          docker push "${{ steps.image.outputs.uri }}"
+
+      - name: Resolve infra update environments
+        id: infra
+        run: |
+          set -euo pipefail
+          envs="dev"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.environment }}" in
+              dev) envs="dev" ;;
+              prd) envs="prd" ;;
+              both) envs="dev,prd" ;;
+              *) echo "::error::Invalid environment selection: ${{ inputs.environment }}"; exit 1 ;;
+            esac
+          fi
+          echo "environments=$envs" >> "$GITHUB_OUTPUT"
+
+      - name: Update morpho-infra-helm image tag
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.update_infra == true }}
+        uses: morpho-org/update-infra-image-tag@v4
+        with:
+          app_id: ${{ secrets.INFRA_DEPLOYER_APP_ID }}
+          app_private_key: ${{ secrets.INFRA_DEPLOYER_SECRET_KEY }}
+          environments: ${{ steps.infra.outputs.environments }}

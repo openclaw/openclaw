@@ -1,0 +1,145 @@
+{{- $imageUri := required "values.image.uri is required" .Values.image.uri -}}
+{{- if .Values.cron.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.deploymentName }}-heartbeat-cron
+  labels:
+    app: {{ .Values.appLabel }}
+    component: heartbeat-cron
+spec:
+  schedule: {{ .Values.cron.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.cron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cron.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.cron.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            app: {{ .Values.appLabel }}
+            component: heartbeat-cron
+        spec:
+          serviceAccountName: {{ .Values.serviceAccountName }}
+          restartPolicy: Never
+{{- if .Values.cron.nodeAffinity }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app: {{ .Values.appLabel }}
+                  topologyKey: kubernetes.io/hostname
+{{- end }}
+          containers:
+            - name: heartbeat-cron
+              image: {{ $imageUri | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - -lc
+              args:
+                - |
+                  set -eu
+
+                  hash256() {
+                    if command -v sha256sum >/dev/null 2>&1; then
+                      sha256sum | awk '{print $1}'
+                    elif command -v shasum >/dev/null 2>&1; then
+                      shasum -a 256 | awk '{print $1}'
+                    else
+                      cksum | awk '{print $1}'
+                    fi
+                  }
+
+                  INCIDENT_STATE_DIR="${INCIDENT_STATE_DIR:-/home/node/.openclaw/state/sentinel}"
+                  SPOOL_DIR="${INCIDENT_STATE_DIR}/spool"
+                  mkdir -p "$SPOOL_DIR"
+
+                  if [ -x /home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh ]; then
+                    output="$(/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh 2>/dev/null || true)"
+                  else
+                    output=""
+                  fi
+
+                  if [ -z "$output" ]; then
+                    output="triage_output\tunavailable"
+                  fi
+
+                  ns="$(printf '%s\n' "$output" | awk -F'\t' '/^namespace_scope\t/ { print $2; exit }')"
+                  if [ -z "$ns" ]; then
+                    ns="$(printf '%s' "${SCOPE_NAMESPACES:-unknown}" | awk -F',' '{print $1}')"
+                  fi
+
+                  primary_category="$(printf '%s\n' "$output" | awk -F'\t' '
+                    BEGIN { section=0 }
+                    $0 == "=== ranked_hypotheses ===" { section=1; next }
+                    section == 1 && /^===/ { exit }
+                    section == 1 && $0 !~ /^rank\t/ && NF > 0 {
+                      if ($3 != "") { print $3 } else { print $1 }
+                      exit
+                    }
+                  ')"
+                  if [ -z "$primary_category" ]; then
+                    primary_category="unknown"
+                  fi
+
+                  pods="$(printf '%s\n' "$output" | awk -F'\t' '
+                    BEGIN { section=0 }
+                    $0 == "=== top_pod_issues ===" { section=1; next }
+                    section == 1 && /^===/ { exit }
+                    section == 1 && $0 !~ /^namespace\t/ && NF > 1 { print $2 }
+                  ' | sed '/^$/d' | sort -u | tr '\n' '|')"
+
+                  if [ -n "$pods" ]; then
+                    workload_hash8="$(printf '%s' "$pods" | hash256 | cut -c1-8)"
+                  else
+                    workload_hash8="empty000"
+                  fi
+
+                  minute="$(date -u +%M)"
+                  if [ "$minute" -lt 30 ]; then
+                    half="00"
+                  else
+                    half="30"
+                  fi
+                  date_hour_half="$(date -u +%Y%m%d%H)${half}"
+
+                  dedup_key="$(printf '%s' "${ns}${primary_category}${workload_hash8}${date_hour_half}" | hash256 | cut -c1-64)"
+                  if [ -f "${SPOOL_DIR}/${dedup_key}.ack" ]; then
+                    echo "heartbeat-cron: dedup ack exists (${dedup_key})"
+                    exit 0
+                  fi
+
+                  ts="$(date -u +%Y%m%dT%H%M%S)"
+                  spool_file="${SPOOL_DIR}/triage-${dedup_key}-${ts}.json"
+                  printf '%s\n' "$output" > "$spool_file"
+                  touch "${INCIDENT_STATE_DIR}/.cron-healthcheck-${ts}"
+                  echo "heartbeat-cron: wrote ${spool_file}"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.vault.secretName }}
+              env:
+                - name: HOME
+                  value: /home/node
+                - name: OPENCLAW_STATE_DIR
+                  value: /home/node/.openclaw
+                - name: AWS_REGION
+                  value: {{ .Values.aws.region | quote }}
+                - name: AWS_DEFAULT_REGION
+                  value: {{ .Values.aws.region | quote }}
+                - name: SCOPE_NAMESPACES
+                  value: {{ .Values.signals.scopeNamespaces | quote }}
+                - name: PROMETHEUS_URL
+                  value: {{ .Values.prometheus.url | quote }}
+                - name: INCIDENT_STATE_DIR
+                  value: {{ .Values.incidentState.dir | quote }}
+              volumeMounts:
+                - name: state
+                  mountPath: /home/node/.openclaw
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: {{ .Values.persistence.claimName }}
+{{- end }}

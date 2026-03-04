@@ -1,4 +1,81 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-readonly-agent
+  namespace: monitoring
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::537124939463:role/dev-incident-readonly-agent-role
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openclaw-sre-vault-secret
+  namespace: monitoring
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openclaw-sre-vault-secret
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openclaw-sre-vault-secret
+subjects:
+  - kind: ServiceAccount
+    name: incident-readonly-agent
+    namespace: monitoring
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openclaw-sre-vault-secret-creator
+  namespace: monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "incident-readonly-agent"
+        vault.hashicorp.com/agent-inject-secret-secrets: "secret/data/openclaw-sre/all-secrets"
+        vault.hashicorp.com/agent-inject-template-secrets: |
+          {{- with secret "secret/data/openclaw-sre/all-secrets" -}}
+          {{- range $key, $value := .Data.data -}}
+          {{ $key }}={{ $value }}
+          {{ end -}}
+          {{- end }}
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+    spec:
+      serviceAccountName: incident-readonly-agent
+      restartPolicy: OnFailure
+      containers:
+        - name: secret-creator
+          image: alpine/k8s:1.31.0
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              timeout=60
+              count=0
+              while [ ! -f /vault/secrets/secrets ] && [ $count -lt $timeout ]; do
+                sleep 2
+                count=$((count + 2))
+              done
+              test -s /vault/secrets/secrets
+              kubectl create secret generic openclaw-sre-vault-secrets \
+                --namespace=monitoring \
+                --from-env-file=/vault/secrets/secrets \
+                --dry-run=client -o yaml | kubectl apply -f -
+              kubectl get secret openclaw-sre-vault-secrets -n monitoring
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: openclaw-sre-state
@@ -51,13 +128,76 @@ spec:
               cp /seed-skills/repo-clone.sh /state/skills/morpho-sre/scripts/repo-clone.sh
               cp /seed-skills/github-ci-status.sh /state/skills/morpho-sre/scripts/github-ci-status.sh
               cp /seed-skills/sentinel-triage.sh /state/skills/morpho-sre/scripts/sentinel-triage.sh
+              cp /seed-skills/prometheus-trends.sh /state/skills/morpho-sre/scripts/prometheus-trends.sh
+              cp /seed-skills/argocd-sync-status.sh /state/skills/morpho-sre/scripts/argocd-sync-status.sh
+              cp /seed-skills/cert-secret-health.sh /state/skills/morpho-sre/scripts/cert-secret-health.sh
+              cp /seed-skills/aws-resource-signals.sh /state/skills/morpho-sre/scripts/aws-resource-signals.sh
+              cp /seed-skills/aws-cost-report.sh /state/skills/morpho-sre/scripts/aws-cost-report.sh
+              cp /seed-skills/self-improve-pr.sh /state/skills/morpho-sre/scripts/self-improve-pr.sh
               cp /seed-skills/sentinel-snapshot.sh /state/skills/morpho-sre/scripts/sentinel-snapshot.sh
+              cp /seed-skills/lib-incident-id.sh /state/skills/morpho-sre/scripts/lib-incident-id.sh
+              cp /seed-skills/lib-state-file.sh /state/skills/morpho-sre/scripts/lib-state-file.sh
+              cp /seed-skills/lib-continuity-matcher.sh /state/skills/morpho-sre/scripts/lib-continuity-matcher.sh
+              cp /seed-skills/lib-outbox.sh /state/skills/morpho-sre/scripts/lib-outbox.sh
+              cp /seed-skills/lib-linear-preflight.sh /state/skills/morpho-sre/scripts/lib-linear-preflight.sh
+              cp /seed-skills/lib-linear-ticket.sh /state/skills/morpho-sre/scripts/lib-linear-ticket.sh
+              cp /seed-skills/lib-rca-prompt.sh /state/skills/morpho-sre/scripts/lib-rca-prompt.sh
+              cp /seed-skills/lib-rca-llm.sh /state/skills/morpho-sre/scripts/lib-rca-llm.sh
+              cp /seed-skills/lib-rca-crossreview.sh /state/skills/morpho-sre/scripts/lib-rca-crossreview.sh
+              cp /seed-skills/lib-rca-safety.sh /state/skills/morpho-sre/scripts/lib-rca-safety.sh
+              cp /seed-skills/lib-thread-archival.sh /state/skills/morpho-sre/scripts/lib-thread-archival.sh
+              cp /seed-skills/lib-meta-alerts.sh /state/skills/morpho-sre/scripts/lib-meta-alerts.sh
+              cp /seed-skills/linear-memory-lookup.sh /state/skills/morpho-sre/scripts/linear-memory-lookup.sh
+              cp /seed-skills/lib-service-graph.sh /state/skills/morpho-sre/scripts/lib-service-graph.sh
+              if [ -f /seed-skills/relationship-knowledge-build.sh ]; then
+                cp /seed-skills/relationship-knowledge-build.sh /state/skills/morpho-sre/scripts/relationship-knowledge-build.sh
+              fi
+              cp /seed-skills/lib-service-overlay.sh /state/skills/morpho-sre/scripts/lib-service-overlay.sh
+              cp /seed-skills/lib-incident-memory.sh /state/skills/morpho-sre/scripts/lib-incident-memory.sh
+              cp /seed-skills/lib-service-context.sh /state/skills/morpho-sre/scripts/lib-service-context.sh
+              cp /seed-skills/lib-rca-chain.sh /state/skills/morpho-sre/scripts/lib-rca-chain.sh
+              cp /seed-skills/lib-rca-sink.sh /state/skills/morpho-sre/scripts/lib-rca-sink.sh
+              cp /seed-skills/lib-overlay-suggestions.sh /state/skills/morpho-sre/scripts/lib-overlay-suggestions.sh
+              cp /seed-skills/rca_hypothesis_ids.v1.json /state/skills/morpho-sre/rca_hypothesis_ids.v1.json
               chmod +x /state/skills/morpho-sre/scripts/image-repo-map.sh
               chmod +x /state/skills/morpho-sre/scripts/grafana-api.sh
               chmod +x /state/skills/morpho-sre/scripts/repo-clone.sh
               chmod +x /state/skills/morpho-sre/scripts/github-ci-status.sh
               chmod +x /state/skills/morpho-sre/scripts/sentinel-triage.sh
+              chmod +x /state/skills/morpho-sre/scripts/prometheus-trends.sh
+              chmod +x /state/skills/morpho-sre/scripts/argocd-sync-status.sh
+              chmod +x /state/skills/morpho-sre/scripts/cert-secret-health.sh
+              chmod +x /state/skills/morpho-sre/scripts/aws-resource-signals.sh
+              chmod +x /state/skills/morpho-sre/scripts/aws-cost-report.sh
+              chmod +x /state/skills/morpho-sre/scripts/self-improve-pr.sh
               chmod +x /state/skills/morpho-sre/scripts/sentinel-snapshot.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-incident-id.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-state-file.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-continuity-matcher.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-outbox.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-linear-preflight.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-linear-ticket.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-prompt.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-llm.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-crossreview.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-safety.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-thread-archival.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-meta-alerts.sh
+              chmod +x /state/skills/morpho-sre/scripts/linear-memory-lookup.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-service-graph.sh
+              if [ -f /state/skills/morpho-sre/scripts/relationship-knowledge-build.sh ]; then
+                chmod +x /state/skills/morpho-sre/scripts/relationship-knowledge-build.sh
+              fi
+              chmod +x /state/skills/morpho-sre/scripts/lib-service-overlay.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-incident-memory.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-service-context.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-chain.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-rca-sink.sh
+              chmod +x /state/skills/morpho-sre/scripts/lib-overlay-suggestions.sh
+              if [ -f /seed-skills/autofix-pr.sh ]; then
+                cp /seed-skills/autofix-pr.sh /state/skills/morpho-sre/scripts/autofix-pr.sh
+                chmod +x /state/skills/morpho-sre/scripts/autofix-pr.sh
+              fi
               cp /seed-skills/safety.md /state/skills/morpho-sre/references/safety.md
               if [ -f /seed-skills/skills-bundle.tar.gz ]; then
                 tar -xzf /seed-skills/skills-bundle.tar.gz -C /state
@@ -314,10 +454,131 @@ spec:
               rm -f /tmp/github-preflight.ok
               github_preflight_log "start"
               github_preflight
+              bootstrap_github_cli_wrappers() {
+                wrapper_dir="/home/node/.openclaw/bin"
+                mkdir -p "$wrapper_dir"
+
+                cat >"${wrapper_dir}/github-app-token.sh" <<'EOF'
+              #!/bin/sh
+              set -eu
+
+              cache_file="${GITHUB_APP_TOKEN_CACHE:-/tmp/openclaw-github-app-token.json}"
+              now_epoch="$(date +%s)"
+
+              if [ -f "$cache_file" ]; then
+                cached_token="$(jq -r '.token // empty' "$cache_file" 2>/dev/null || true)"
+                cached_expiry="$(jq -r '.expires_at // 0' "$cache_file" 2>/dev/null || echo 0)"
+                case "$cached_expiry" in
+                  ''|*[!0-9]*) cached_expiry=0 ;;
+                esac
+                if [ -n "$cached_token" ] && [ "$cached_expiry" -gt $((now_epoch + 120)) ]; then
+                  printf '%s\n' "$cached_token"
+                  exit 0
+                fi
+              fi
+
+              if [ -z "${GITHUB_APP_ID:-}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY:-}" ]; then
+                exit 1
+              fi
+
+              app_jwt="$(
+                GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" node - <<'NODE'
+              const crypto = require('crypto');
+              const appId = process.env.GITHUB_APP_ID;
+              const keyRaw = process.env.GITHUB_APP_PRIVATE_KEY || '';
+              const key = keyRaw.replace(/\\n/g, '\n');
+              const now = Math.floor(Date.now() / 1000);
+              const header = { alg: 'RS256', typ: 'JWT' };
+              const payload = { iat: now - 60, exp: now + 540, iss: appId };
+              const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+              const input = `${b64(header)}.${b64(payload)}`;
+              const signature = crypto.createSign('RSA-SHA256').update(input).sign(key, 'base64url');
+              process.stdout.write(`${input}.${signature}`);
+              NODE
+              )" || exit 1
+
+              installation_id="${GITHUB_APP_INSTALLATION_ID:-}"
+              if [ -z "$installation_id" ]; then
+                install_json="$(mktemp)"
+                install_code="$(curl -sS -o "$install_json" -w '%{http_code}' \
+                  -H "Authorization: Bearer ${app_jwt}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/app/installations" || true)"
+                if [ "$install_code" != "200" ]; then
+                  rm -f "$install_json"
+                  exit 1
+                fi
+                installation_id="$(jq -r '.[] | select(.account.login=="morpho-org") | .id' "$install_json" | head -n1)"
+                rm -f "$install_json"
+              fi
+              if [ -z "$installation_id" ]; then
+                exit 1
+              fi
+
+              token_json="$(mktemp)"
+              token_code="$(curl -sS -o "$token_json" -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer ${app_jwt}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/app/installations/${installation_id}/access_tokens" || true)"
+              if [ "$token_code" != "201" ] && [ "$token_code" != "200" ]; then
+                rm -f "$token_json"
+                exit 1
+              fi
+
+              token="$(jq -r '.token // empty' "$token_json")"
+              expires_at_iso="$(jq -r '.expires_at // empty' "$token_json")"
+              rm -f "$token_json"
+              if [ -z "$token" ] || [ -z "$expires_at_iso" ]; then
+                exit 1
+              fi
+
+              expires_epoch="$(
+                node -e 'const iso = process.argv[1]; const t = Date.parse(iso); if (!Number.isFinite(t)) process.exit(1); process.stdout.write(String(Math.floor(t / 1000)));' "$expires_at_iso"
+              )" || exit 1
+
+              jq -n --arg token "$token" --argjson expires_at "$expires_epoch" \
+                '{token:$token,expires_at:$expires_at}' >"$cache_file"
+              chmod 600 "$cache_file"
+
+              printf '%s\n' "$token"
+              EOF
+                chmod +x "${wrapper_dir}/github-app-token.sh"
+
+                cat >"${wrapper_dir}/gh" <<'EOF'
+              #!/bin/sh
+              set -eu
+              if token="$(/home/node/.openclaw/bin/github-app-token.sh 2>/dev/null)"; then
+                export GH_TOKEN="$token"
+                export GITHUB_TOKEN="$token"
+              fi
+              exec /usr/bin/gh "$@"
+              EOF
+                chmod +x "${wrapper_dir}/gh"
+
+                cat >"${wrapper_dir}/git" <<'EOF'
+              #!/bin/sh
+              set -eu
+              if token="$(/home/node/.openclaw/bin/github-app-token.sh 2>/dev/null)"; then
+                git_auth_basic="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+                exec /usr/bin/git \
+                  -c credential.helper= \
+                  -c core.askPass= \
+                  -c "http.https://github.com/.extraHeader=Authorization: Basic ${git_auth_basic}" \
+                  "$@"
+              fi
+              exec /usr/bin/git "$@"
+              EOF
+                chmod +x "${wrapper_dir}/git"
+
+                export PATH="${wrapper_dir}:${PATH}"
+                echo "github-cli-wrappers:ok"
+              }
+              bootstrap_github_cli_wrappers
               exec openclaw gateway --bind lan --port 18789 --allow-unconfigured
           envFrom:
             - secretRef:
-                name: openclaw-sre-env
+                name: openclaw-sre-vault-secrets
           env:
             - name: HOME
               value: /home/node
@@ -333,94 +594,36 @@ spec:
               value: eu-west-3
             - name: AWS_DEFAULT_REGION
               value: eu-west-3
+            - name: SCOPE_NAMESPACES
+              value: morpho-dev,monitoring
+            - name: PROMETHEUS_URL
+              value: http://prometheus-stack-kube-prom-prometheus.monitoring:9090
+            - name: INCIDENT_STATE_DIR
+              value: /home/node/.openclaw/state/sentinel
+            - name: RCA_MODE
+              value: single
+            - name: SERVICE_CONTEXT_ENABLED
+              value: "1"
+            - name: RCA_CHAIN_ENABLED
+              value: "1"
+            - name: RCA_CHAIN_TOTAL_TIMEOUT_MS
+              value: "60000"
+            - name: RCA_STAGE_TIMEOUT_MS
+              value: "10000"
+            - name: RCA_EVIDENCE_TOTAL_TIMEOUT_MS
+              value: "80000"
+            - name: RCA_MIN_RERUN_INTERVAL_S
+              value: "3600"
+            - name: RCA_CHAIN_COST_ALERT_THRESHOLD
+              value: "750"
+            - name: RCA_CHAIN_STAGE_E_ENABLED
+              value: "1"
+            - name: INCIDENT_LEARNING_ENABLED
+              value: "1"
             - name: VAULT_KUBERNETES_AUTH_PATH
               value: kubernetes
             - name: VAULT_KUBERNETES_ROLE
               value: incident-readonly-agent
-            - name: VAULT_ADDR
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: vault-addr
-                  optional: true
-            - name: VAULT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: vault-token
-                  optional: true
-            - name: ARGOCD_BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: argocd-base-url
-                  optional: true
-            - name: ARGOCD_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: argocd-token
-                  optional: true
-            - name: ARGOCD_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: argocd-token
-                  optional: true
-            - name: GITHUB_APP_ID
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: github-app-id
-                  optional: true
-            - name: GITHUB_APP_INSTALLATION_ID
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: github-app-installation-id
-                  optional: true
-            - name: GITHUB_APP_PRIVATE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: github-app-private-key
-                  optional: true
-            - name: CODEX_AUTH_JSON
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: codex-auth-json
-                  optional: true
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: openai-api-key
-                  optional: true
-            - name: OPENAI_ACCESS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: openai-access-token
-                  optional: true
-            - name: OPENAI_AUTH_BOOTSTRAP_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: openai-auth-bootstrap-token
-                  optional: true
-            - name: OPENAI_MODEL
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: openai-model
-                  optional: true
-            - name: OPENAI_REASONING_EFFORT
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: openai-reasoning-effort
-                  optional: true
           ports:
             - name: http
               containerPort: 18789
