@@ -18,6 +18,32 @@ const GUARD_TRUNCATION_SUFFIX =
   "Use offset/limit parameters or request specific sections for large content.]";
 
 /**
+ * Ensure every content block with `type: "text"` has a string `text` property.
+ * Malformed blocks (e.g. `{type: "text"}` with no `text` key) crash downstream
+ * code that assumes `block.text` is always a string when `type === "text"`.
+ */
+function sanitizeToolResultContentBlocks(msg: AgentMessage): AgentMessage {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return msg;
+  }
+  let changed = false;
+  const sanitized = content.map((block: unknown) => {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text !== "string"
+    ) {
+      changed = true;
+      return { ...(block as Record<string, unknown>), text: "" };
+    }
+    return block;
+  });
+  return changed ? ({ ...msg, content: sanitized } as AgentMessage) : msg;
+}
+
+/**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
@@ -26,7 +52,8 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, HARD_MAX_TOOL_RESULT_CHARS, {
+  const sanitized = sanitizeToolResultContentBlocks(msg);
+  return truncateToolResultMessage(sanitized, HARD_MAX_TOOL_RESULT_CHARS, {
     suffix: GUARD_TRUNCATION_SUFFIX,
     minKeepChars: 2_000,
   });
