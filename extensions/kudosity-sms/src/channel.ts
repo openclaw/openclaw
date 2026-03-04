@@ -15,7 +15,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/kudosity-sms";
 import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
 import { kudositySmsOnboarding } from "./onboarding.js";
 import { getKudositySmsRuntime } from "./runtime.js";
