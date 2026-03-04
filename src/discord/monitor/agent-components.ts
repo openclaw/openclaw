@@ -954,7 +954,12 @@ async function dispatchDiscordComponentEvent(params: {
               }
             : undefined,
         }
-      : undefined,
+      : {
+          sessionKey: ctxPayload.SessionKey ?? sessionKey,
+          channel: "discord",
+          to: `channel:${interactionCtx.channelId}`,
+          accountId,
+        },
     onRecordError: (err) => {
       logVerbose(`discord: failed updating component session meta: ${String(err)}`);
     },

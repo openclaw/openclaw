@@ -499,6 +499,36 @@ describe("discord component interactions", () => {
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
   });
+
+  it("records guild channel lastRoute so async agent sends can deliver to the channel", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry()],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: "interaction-guild-btn-20437",
+        member: { roles: [] },
+      } as unknown as ButtonInteraction["rawData"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    const callParams = recordInboundSessionMock.mock.calls[0]?.[0] as {
+      updateLastRoute?: { channel?: string; to?: string; accountId?: string };
+    };
+    expect(callParams?.updateLastRoute).toBeDefined();
+    expect(callParams?.updateLastRoute).toMatchObject({
+      channel: "discord",
+      to: "channel:guild-channel",
+      accountId: "default",
+    });
+  });
 });
 
 describe("resolveDiscordOwnerAllowFrom", () => {
