@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackMessageHandler } from "./message-handler.js";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
+const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
@@ -10,6 +11,7 @@ vi.mock("../../auto-reply/inbound-debounce.js", () => ({
   resolveInboundDebounceMs: () => 10,
   createInboundDebouncer: () => ({
     enqueue: (entry: unknown) => enqueueMock(entry),
+    flushKey: (key: string) => flushKeyMock(key),
   }),
 }));
 
@@ -34,9 +36,22 @@ function createContext(overrides?: {
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
+function createHandlerWithTracker(overrides?: {
+  markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+}) {
+  const trackEvent = vi.fn();
+  const handler = createSlackMessageHandler({
+    ctx: createContext(overrides),
+    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
+    trackEvent,
+  });
+  return { handler, trackEvent };
+}
+
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
+    flushKeyMock.mockClear();
     resolveThreadTsMock.mockClear();
   });
 
@@ -65,14 +80,7 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("does not track duplicate messages that are already seen", async () => {
-    const trackEvent = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext({ markMessageSeen: () => true }),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-      trackEvent,
-    });
+    const { handler, trackEvent } = createHandlerWithTracker({ markMessageSeen: () => true });
 
     await handler(
       {
@@ -90,14 +98,7 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("tracks accepted non-duplicate messages", async () => {
-    const trackEvent = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-      trackEvent,
-    });
+    const { handler, trackEvent } = createHandlerWithTracker();
 
     await handler(
       {
@@ -112,5 +113,39 @@ describe("createSlackMessageHandler", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000100",
+        text: "first buffered text",
+      } as never,
+      { source: "message" },
+    );
+    await handler(
+      {
+        type: "message",
+        subtype: "file_share",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000200",
+        text: "file follows",
+        files: [{ id: "F1" }],
+      } as never,
+      { source: "message" },
+    );
+
+    expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 });

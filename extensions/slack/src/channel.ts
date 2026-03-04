@@ -29,7 +29,7 @@ import {
   SlackConfigSchema,
   type ChannelPlugin,
   type ResolvedSlackAccount,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/slack";
 import { getSlackRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("slack");
@@ -63,10 +63,29 @@ function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
   return Boolean(account.appToken?.trim());
 }
 
+type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendMessageSlack"];
+
+function resolveSlackSendContext(params: {
+  cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
+  accountId?: string;
+  deps?: { sendSlack?: SlackSendFn };
+  replyToId?: string | number | null;
+  threadId?: string | number | null;
+}) {
+  const send = params.deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const token = getTokenForOperation(account, "write");
+  const botToken = account.botToken?.trim();
+  const tokenOverride = token && token !== botToken ? token : undefined;
+  const threadTsValue = params.replyToId ?? params.threadId;
+  return { send, threadTsValue, tokenOverride };
+}
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
     ...meta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: slackOnboardingAdapter,
   pairing: {
@@ -338,28 +357,43 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     chunker: null,
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
-      const send = deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
-      const account = resolveSlackAccount({ cfg, accountId });
-      const token = getTokenForOperation(account, "write");
-      const botToken = account.botToken?.trim();
-      const tokenOverride = token && token !== botToken ? token : undefined;
-      const threadTsValue = replyToId ?? threadId;
+      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+        cfg,
+        accountId: accountId ?? undefined,
+        deps,
+        replyToId,
+        threadId,
+      });
       const result = await send(to, text, {
+        cfg,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
       return { channel: "slack", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, cfg }) => {
-      const send = deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
-      const account = resolveSlackAccount({ cfg, accountId });
-      const token = getTokenForOperation(account, "write");
-      const botToken = account.botToken?.trim();
-      const tokenOverride = token && token !== botToken ? token : undefined;
-      const threadTsValue = replyToId ?? threadId;
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      cfg,
+    }) => {
+      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+        cfg,
+        accountId: accountId ?? undefined,
+        deps,
+        replyToId,
+        threadId,
+      });
       const result = await send(to, text, {
+        cfg,
         mediaUrl,
+        mediaLocalRoots,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),

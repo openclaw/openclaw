@@ -31,10 +31,10 @@ describe("createDiffsHttpHandler", () => {
     const handler = createDiffsHttpHandler({ store });
     const res = createMockServerResponse();
     const handled = await handler(
-      {
+      localReq({
         method: "GET",
         url: artifact.viewerPath,
-      } as IncomingMessage,
+      }),
       res,
     );
 
@@ -55,10 +55,10 @@ describe("createDiffsHttpHandler", () => {
     const handler = createDiffsHttpHandler({ store });
     const res = createMockServerResponse();
     const handled = await handler(
-      {
+      localReq({
         method: "GET",
         url: artifact.viewerPath.replace(artifact.token, "bad-token"),
-      } as IncomingMessage,
+      }),
       res,
     );
 
@@ -70,10 +70,10 @@ describe("createDiffsHttpHandler", () => {
     const handler = createDiffsHttpHandler({ store });
     const res = createMockServerResponse();
     const handled = await handler(
-      {
+      localReq({
         method: "GET",
         url: "/plugins/diffs/view/not-a-real-id/not-a-real-token",
-      } as IncomingMessage,
+      }),
       res,
     );
 
@@ -85,10 +85,10 @@ describe("createDiffsHttpHandler", () => {
     const handler = createDiffsHttpHandler({ store });
     const res = createMockServerResponse();
     const handled = await handler(
-      {
+      localReq({
         method: "GET",
         url: "/plugins/diffs/assets/viewer.js",
-      } as IncomingMessage,
+      }),
       res,
     );
 
@@ -101,10 +101,10 @@ describe("createDiffsHttpHandler", () => {
     const handler = createDiffsHttpHandler({ store });
     const res = createMockServerResponse();
     const handled = await handler(
-      {
+      localReq({
         method: "GET",
         url: "/plugins/diffs/assets/viewer-runtime.js",
-      } as IncomingMessage,
+      }),
       res,
     );
 
@@ -112,4 +112,89 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("openclawDiffsReady");
   });
+
+  it("blocks non-loopback viewer access by default", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>viewer</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const handler = createDiffsHttpHandler({ store });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      remoteReq({
+        method: "GET",
+        url: artifact.viewerPath,
+      }),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("allows remote access when allowRemoteViewer is enabled", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>viewer</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+    const res = createMockServerResponse();
+    const handled = await handler(
+      remoteReq({
+        method: "GET",
+        url: artifact.viewerPath,
+      }),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("<html>viewer</html>");
+  });
+
+  it("rate-limits repeated remote misses", async () => {
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+
+    for (let i = 0; i < 40; i++) {
+      const miss = createMockServerResponse();
+      await handler(
+        remoteReq({
+          method: "GET",
+          url: "/plugins/diffs/view/aaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }),
+        miss,
+      );
+      expect(miss.statusCode).toBe(404);
+    }
+
+    const limited = createMockServerResponse();
+    await handler(
+      remoteReq({
+        method: "GET",
+        url: "/plugins/diffs/view/aaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
+      limited,
+    );
+    expect(limited.statusCode).toBe(429);
+  });
 });
+
+function localReq(input: { method: string; url: string }): IncomingMessage {
+  return {
+    ...input,
+    socket: { remoteAddress: "127.0.0.1" },
+  } as unknown as IncomingMessage;
+}
+
+function remoteReq(input: { method: string; url: string }): IncomingMessage {
+  return {
+    ...input,
+    socket: { remoteAddress: "203.0.113.10" },
+  } as unknown as IncomingMessage;
+}

@@ -8,6 +8,7 @@ export type AcpRuntimeAdapterContractParams = {
   agentId?: string;
   successPrompt?: string;
   errorPrompt?: string;
+  includeControlChecks?: boolean;
   assertSuccessEvents?: (events: AcpRuntimeEvent[]) => void | Promise<void>;
   assertErrorOutcome?: (params: {
     events: AcpRuntimeEvent[];
@@ -51,23 +52,25 @@ export async function runAcpRuntimeAdapterContract(
   ).toBe(true);
   await params.assertSuccessEvents?.(successEvents);
 
-  if (runtime.getStatus) {
-    const status = await runtime.getStatus({ handle });
-    expect(status).toBeDefined();
-    expect(typeof status).toBe("object");
-  }
-  if (runtime.setMode) {
-    await runtime.setMode({
-      handle,
-      mode: "contract",
-    });
-  }
-  if (runtime.setConfigOption) {
-    await runtime.setConfigOption({
-      handle,
-      key: "contract_key",
-      value: "contract_value",
-    });
+  if (params.includeControlChecks ?? true) {
+    if (runtime.getStatus) {
+      const status = await runtime.getStatus({ handle });
+      expect(status).toBeDefined();
+      expect(typeof status).toBe("object");
+    }
+    if (runtime.setMode) {
+      await runtime.setMode({
+        handle,
+        mode: "contract",
+      });
+    }
+    if (runtime.setConfigOption) {
+      await runtime.setConfigOption({
+        handle,
+        key: "contract_key",
+        value: "contract_value",
+      });
+    }
   }
 
   let errorThrown: unknown = null;

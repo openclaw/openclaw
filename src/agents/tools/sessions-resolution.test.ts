@@ -31,6 +31,19 @@ describe("resolveMainSessionAlias", () => {
       scope: "per-sender",
     });
   });
+
+  it("uses session.mainKey over any legacy routing sessions key", () => {
+    const cfg = {
+      session: { mainKey: "  work ", scope: "per-sender" },
+      routing: { sessions: { mainKey: "legacy-main" } },
+    } as OpenClawConfig;
+
+    expect(resolveMainSessionAlias(cfg)).toEqual({
+      mainKey: "work",
+      alias: "work",
+      scope: "per-sender",
+    });
+  });
 });
 
 describe("session key display/internal mapping", () => {
