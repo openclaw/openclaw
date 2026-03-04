@@ -187,10 +187,12 @@ export async function resolveCanvasNodeIds(
   const withCanvas = nodes.filter((n) =>
     Array.isArray(n.caps) ? n.caps.includes("canvas") : true,
   );
-  // Prefer connected nodes; fall back to all candidates when the connected
-  // field is missing (pair-list fallback does not populate it).
+  // Prefer connected nodes; fall back to all candidates only when no node
+  // has a `connected` field at all (pair-list fallback does not populate it).
+  // When nodes explicitly report `connected: false`, respect that.
+  const hasConnectedField = withCanvas.some((n) => typeof n.connected === "boolean");
   const connected = withCanvas.filter((n) => n.connected);
-  const candidates = connected.length > 0 ? connected : withCanvas;
+  const candidates = hasConnectedField ? connected : withCanvas;
   if (candidates.length === 0) {
     throw new Error("no connected canvas-capable nodes");
   }
