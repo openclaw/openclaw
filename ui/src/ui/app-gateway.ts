@@ -266,7 +266,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
         const text = extractText(last);
         if (text) {
           void import("./services/voice.ts").then((m) => {
-            void m.playTTS(text, host.client);
+            m.playTTS(text);
           });
         }
       });

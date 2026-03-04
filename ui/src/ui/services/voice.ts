@@ -1,7 +1,5 @@
 // simple voice helper for browser recording and TTS playback
 
-import type { GatewayBrowserClient } from "../gateway.ts";
-
 // Minimal interface for SpeechRecognition (not yet in all TypeScript DOM libs)
 interface SpeechRecognitionLike extends EventTarget {
   continuous: boolean;
@@ -110,37 +108,19 @@ export function primeSpeechSynthesis(): void {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
     return;
   }
-  // Speak an empty utterance to unlock the audio context
-  const utter = new SpeechSynthesisUtterance("");
+  // Use a short silent-sounding utterance; empty strings are ignored by Chrome.
+  const utter = new SpeechSynthesisUtterance(" ");
+  utter.volume = 0;
   window.speechSynthesis.speak(utter);
 }
 
 /**
- * Play text via TTS. Prefer gateway server conversion, fall back to browser speechSynthesis.
+ * Play text via browser speechSynthesis.
  */
-export async function playTTS(text: string, client?: GatewayBrowserClient | null): Promise<void> {
-  if (!text) {
+export function playTTS(text: string): void {
+  if (!text || typeof window === "undefined" || !("speechSynthesis" in window)) {
     return;
   }
-  // try server-side TTS first
-  if (client) {
-    try {
-      const res = await client.request<{ audioPath: string }>("tts.convert", { text });
-      if (res && typeof res.audioPath === "string") {
-        const audio = new Audio(res.audioPath);
-        await audio.play().catch((err) => {
-          console.warn("audio playback failed", err);
-        });
-        return;
-      }
-    } catch (err) {
-      console.warn("tts.convert failed", err);
-    }
-  }
-
-  // fallback to built-in speechSynthesis
-  if (typeof window !== "undefined" && "speechSynthesis" in window) {
-    const utter = new SpeechSynthesisUtterance(text);
-    window.speechSynthesis.speak(utter);
-  }
+  const utter = new SpeechSynthesisUtterance(text);
+  window.speechSynthesis.speak(utter);
 }
