@@ -296,7 +296,7 @@ export const DEFAULT_CONFIG: LLMGatewayConfig = {
     dailyBudgetLimit: 50,
     killSwitchEnabled: false,
     blockedPatterns: [],
-    allowedModels: [],
+    allowedModels: ["*"],
   },
   routing: {
     strategy: "cascade",

@@ -16,6 +16,9 @@ class VectorStore {
   private entries: Array<{ key: string; embedding: number[]; value: GatewayResponse }> = [];
 
   add(key: string, embedding: number[], value: GatewayResponse): void {
+    if (this.entries.length >= this.maxSize) {
+      this.entries.shift();
+    }
     this.entries.push({ key, embedding, value });
   }
 
@@ -29,13 +32,13 @@ class VectorStore {
     for (const entry of this.entries) {
       const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
       if (similarity >= threshold) {
-        results.push({ entry, _similarity });
+        results.push({ entry, similarity: _similarity });
       }
     }
 
     results.sort((a, b) => b.similarity - a.similarity);
 
-    return results.slice(0, maxResults).map(({ entry, _similarity }) => ({
+    return results.slice(0, maxResults).map(({ entry, similarity: _similarity }) => ({
       key: entry.key,
       value: entry.value,
       embedding: entry.embedding,

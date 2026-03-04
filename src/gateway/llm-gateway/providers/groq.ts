@@ -12,7 +12,7 @@ import type {
   AnthropicConfig,
   TokenUsage,
   ToolCall,
-} from "./types.js";
+} from "../types.js";
 
 /**
  * Base provider class
@@ -248,7 +248,6 @@ export class AnthropicProvider extends BaseProvider {
         "Content-Type": "application/json",
         "x-api-key": this.config.apiKey || "",
         "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
         model: request.model || this.config.defaultModel,
@@ -319,7 +318,6 @@ export class AnthropicProvider extends BaseProvider {
         "Content-Type": "application/json",
         "x-api-key": this.config.apiKey || "",
         "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
         model: request.model || this.config.defaultModel,
@@ -448,7 +446,7 @@ export class AnthropicProvider extends BaseProvider {
         });
       } else {
         anthropicMessages.push({
-          role: msg.role as "user" | "assistant",
+          role: msg.role,
           content,
         });
       }
