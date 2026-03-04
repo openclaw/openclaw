@@ -417,6 +417,12 @@
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-q5qw-h33p-qvwr",
+        "GHSA-wc8c-qw6v-h7f6"
+      ]
+    },
     "overrides": {
       "hono": "4.11.10",
       "fast-xml-parser": "5.3.8",
