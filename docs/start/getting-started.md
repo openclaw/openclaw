@@ -41,6 +41,12 @@ Check your Node version with `node --version` if you are unsure.
 />
       </Tab>
       <Tab title="Windows (PowerShell)">
+        <Note>
+        For best stability and feature compatibility on Windows, we strongly recommend
+        installing OpenClaw inside WSL2. See [Windows (WSL2)](/platforms/windows).
+        The native PowerShell path works, but may have more platform-specific limitations.
+        </Note>
+
         ```powershell
         iwr -useb https://openclaw.ai/install.ps1 | iex
         ```
