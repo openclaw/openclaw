@@ -94,6 +94,7 @@ export type HeartbeatSummary = {
   prompt: string;
   target: string;
   model?: string;
+  jitter?: string;
   ackMaxChars: number;
 };
 
@@ -175,6 +176,7 @@ export function resolveHeartbeatSummaryForAgent(
   const target =
     merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
   const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const jitter = merged?.jitter ?? defaults?.jitter ?? overrides?.jitter;
   const ackMaxChars = Math.max(
     0,
     merged?.ackMaxChars ??
@@ -190,6 +192,7 @@ export function resolveHeartbeatSummaryForAgent(
     prompt,
     target,
     model,
+    jitter,
     ackMaxChars,
   };
 }
