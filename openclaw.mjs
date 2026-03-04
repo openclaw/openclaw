@@ -1,39 +1,88 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import module from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 12;
-const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
-  return {
-    major: Number(majorRaw),
-    minor: Number(minorRaw),
-  };
-};
-
-const isSupportedNodeVersion = (version) =>
-  version.major > MIN_NODE_MAJOR ||
-  (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
-
-const ensureSupportedNodeVersion = () => {
-  if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
-    return;
+// Node runtime guard - must run before ANY execution
+// This ensures all invocations fail on unsupported Node versions
+const MIN_NODE_VERSION = [22, 12, 0];
+function checkNodeVersion() {
+  const parts = process.versions.node.split(".").map(Number);
+  for (let i = 0; i < MIN_NODE_VERSION.length; i++) {
+    if ((parts[i] || 0) < MIN_NODE_VERSION[i]) {
+      return false;
+    }
+    if ((parts[i] || 0) > MIN_NODE_VERSION[i]) {
+      return true;
+    }
   }
+  return true;
+}
 
-  process.stderr.write(
-    `openclaw: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
-      "If you use nvm, run:\n" +
-      "  nvm install 22\n" +
-      "  nvm use 22\n" +
-      "  nvm alias default 22\n",
-  );
+if (!checkNodeVersion()) {
+  console.error(`openclaw requires Node >= ${MIN_NODE_VERSION.join(".")}`);
   process.exit(1);
-};
+}
 
-ensureSupportedNodeVersion();
+// Fast path for --version/-V: exit before loading heavy modules (~100x faster)
+// Only trigger for root invocations, not subcommands (mirrors src/cli/argv.ts)
+const VERSION_FLAGS = new Set(["-V", "--version"]);
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+
+function isRootVersionInvocation(argv) {
+  const args = argv.slice(2);
+  let hasVersion = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === "--") {
+      break;
+    }
+    if (VERSION_FLAGS.has(arg)) {
+      hasVersion = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      // Validate that value after = is non-empty
+      const value = arg.split("=", 2)[1];
+      if (!value || value.startsWith("-")) {
+        return false;
+      }
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      // Reject missing value for --profile/--log-level
+      if (!next || next.startsWith("-")) {
+        return false;
+      }
+      i++;
+      continue;
+    }
+    return false; // Unknown flag or subcommand
+  }
+  return hasVersion;
+}
+
+if (isRootVersionInvocation(process.argv)) {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
+    console.log(pkg.version);
+  } catch {
+    console.log("unknown");
+  }
+  process.exit(0);
+}
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
