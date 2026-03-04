@@ -109,6 +109,7 @@ export function deriveInboundMessageHookContext(
     channelName: ctx.GroupChannel,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
+    sessionKey: ctx.SessionKey,
   };
 }
 
