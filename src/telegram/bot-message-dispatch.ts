@@ -40,6 +40,7 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { isSilentErrorPolicy, resolveTelegramErrorPolicy, shouldSuppressTelegramError } from "./error-policy.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -616,6 +617,23 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onError: (err, info) => {
+          const errorPolicy = resolveTelegramErrorPolicy({
+            cfg,
+            channel: "telegram",
+            accountId: route.accountId,
+            chatId: chatId,
+            isGroup,
+          });
+          if (isSilentErrorPolicy(errorPolicy.policy)) {
+            return;
+          }
+          if (shouldSuppressTelegramError({
+            chatId,
+            cooldownMs: errorPolicy.cooldownMs,
+            errorMessage: String(err),
+          })) {
+            return;
+          }
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
