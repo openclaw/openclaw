@@ -74,6 +74,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
       sendChatActionHandler,
+      disableChatActions: telegramCfg.disableChatActions,
     });
     if (!context) {
       return;

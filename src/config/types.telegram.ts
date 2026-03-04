@@ -139,6 +139,8 @@ export type TelegramAccountConfig = {
   webhookPort?: number;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Disable typing / record_voice chat action indicators entirely (default: false). */
+  disableChatActions?: boolean;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions

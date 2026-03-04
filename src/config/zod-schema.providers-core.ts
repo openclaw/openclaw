@@ -236,6 +236,7 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    disableChatActions: z.boolean().optional(),
   })
   .strict();
 

@@ -139,6 +139,8 @@ export type BuildTelegramMessageContextParams = {
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
+  /** When true, suppress all sendChatAction calls (typing/record_voice). */
+  disableChatActions?: boolean;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -181,6 +183,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
   sendChatActionHandler,
+  disableChatActions,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
@@ -330,6 +333,9 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
+    if (disableChatActions) {
+      return;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
       fn: () =>
@@ -342,6 +348,9 @@ export const buildTelegramMessageContext = async ({
   };
 
   const sendRecordVoice = async () => {
+    if (disableChatActions) {
+      return;
+    }
     try {
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
