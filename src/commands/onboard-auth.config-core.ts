@@ -8,6 +8,7 @@ import {
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  buildModelScopeProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   MODELSCOPE_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
@@ -305,47 +306,16 @@ export function applyModelScopeProviderConfig(cfg: OpenClawConfig): OpenClawConf
     ...models[MODELSCOPE_DEFAULT_MODEL_REF],
     alias: models[MODELSCOPE_DEFAULT_MODEL_REF]?.alias ?? "ModelScope",
   };
-
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers.modelscope;
   const defaultProvider = buildModelScopeProvider();
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModels = defaultProvider.models ?? [];
-  const hasDefaultModel = existingModels.some((model) => model.id === MODELSCOPE_DEFAULT_MODEL_ID);
-  const mergedModels =
-    existingModels.length > 0
-      ? hasDefaultModel
-        ? existingModels
-        : [...existingModels, ...defaultModels]
-      : defaultModels;
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers.modelscope = {
-    ...existingProviderRest,
+  const resolvedApi = defaultProvider.api ?? "openai-completions";
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "modelscope",
+    api: resolvedApi,
     baseUrl: defaultProvider.baseUrl,
-    api: defaultProvider.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
-  };
+    defaultModels: defaultProvider.models ?? [],
+    defaultModelId: MODELSCOPE_DEFAULT_MODEL_ID,
+  });
 }
 
 export function applyModelScopeConfig(cfg: OpenClawConfig): OpenClawConfig {
