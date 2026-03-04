@@ -142,7 +142,8 @@ export async function geminiAnalyzePdf(params: {
     "",
   );
   // Avoid duplicating /v1beta in URL path - only append if baseUrl doesn't already include it
-  const versionSegment = baseUrl.match(/\/v1beta$/i) || baseUrl.match(/\/v1$/i) ? "" : "/v1beta";
+  const hasVersionSegment = /\/v1beta$/i.test(baseUrl) || /\/v1$/i.test(baseUrl);
+  const versionSegment = hasVersionSegment ? "" : "/v1beta";
   const url = `${baseUrl}${versionSegment}/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
