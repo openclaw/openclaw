@@ -143,7 +143,9 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  // Concatenate both fields to ensure stdout is never shadowed by synthetic stderr
+  // (e.g., when execFileUtf8 falls back to e.message for empty stderr)
+  return `${result.stderr} ${result.stdout}`.trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
