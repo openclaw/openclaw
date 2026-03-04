@@ -38,8 +38,8 @@ cd openclaw
 # Create a new Fly app (pick your own name)
 fly apps create my-openclaw
 
-# Create a persistent volume (1GB is usually enough)
-fly volumes create openclaw_data --size 1 --region iad
+# Create a persistent volume (1GB is usually enough, replace with your own app name)
+fly volumes create openclaw_data --size 1 --region iad --app my-openclaw
 ```
 
 **提示：** 选择离你近的区域。常见选项：`lhr`（伦敦）、`iad`（弗吉尼亚）、`sjc`（圣何塞）。
