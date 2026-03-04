@@ -254,14 +254,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {
-        const streamThreadTs = replyPlan.nextThreadTs();
+        // Use reply plan first; when replyToMode=all and DM, fall back to streamThreadHint
+        // so we still thread (streamThreadHint was already used to enable streaming).
+        const streamThreadTs = replyPlan.nextThreadTs() ?? streamThreadHint;
         plannedThreadTs = streamThreadTs;
         if (!streamThreadTs) {
           logVerbose(
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload);
+          await deliverNormally(payload, streamThreadHint);
           return;
         }
 
