@@ -97,7 +97,25 @@ function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: params.userTimezone,
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+  const dateStr = formatter.format(now);
+  return [
+    "## Current Date & Time",
+    `Current date and time: ${dateStr}`,
+    `Time zone: ${params.userTimezone}`,
+    "",
+  ];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
