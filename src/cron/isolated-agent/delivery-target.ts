@@ -36,6 +36,31 @@ export type DeliveryTargetResolution =
       error: Error;
     };
 
+/**
+ * Strips leading channel and chat-type prefixes from a stored target identifier
+ * so that values like `"telegram:-1003597428309"` and `"-1003597428309"` compare
+ * equal when checking whether a delivery target matches the session's lastTo.
+ *
+ * Channel outbound-session resolvers store `to` as `"<channel>:<id>"` or
+ * `"<channel>:<type>:<id>"` (e.g. `"telegram:group:-1003597428309"`), whereas
+ * explicit cron delivery.to values use the bare identifier.  Without this
+ * normalisation the strict-equality check drops lastThreadId for Telegram
+ * forum-topic groups, causing cron announces to land in the base group chat
+ * instead of the correct topic thread.
+ */
+function normalizeToForRecipientMatch(to: string | undefined): string {
+  if (!to) {
+    return "";
+  }
+  // Strip a leading word-colon prefix and an optional sub-type prefix.
+  // Matches patterns like:
+  //   "telegram:-100XXX"          → "-100XXX"
+  //   "telegram:group:-100XXX"    → "-100XXX"
+  //   "signal:+15551234567"       → "+15551234567"
+  //   "discord:channel:12345"     → "12345"
+  return to.replace(/^[a-z][a-z0-9-]*:(group:|channel:|direct:|room:)?/i, "");
+}
+
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
@@ -128,9 +153,17 @@ export async function resolveDeliveryTarget(
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
+  //
+  // NOTE: Session-stored `lastTo` values carry a channel prefix
+  // (e.g. "telegram:-1003597428309") while explicit delivery.to values are bare
+  // identifiers ("-1003597428309"). Normalise both before comparing so that a
+  // Telegram forum-topic session correctly carries its lastThreadId forward
+  // even when the cron job's delivery.to omits the channel prefix.
+  const normalizedTo = normalizeToForRecipientMatch(resolved.to);
+  const normalizedLastTo = normalizeToForRecipientMatch(resolved.lastTo);
+  const sameRecipient = Boolean(normalizedTo && normalizedTo === normalizedLastTo);
   const threadId =
-    resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
+    resolved.threadId && (resolved.threadIdExplicit || sameRecipient)
       ? resolved.threadId
       : undefined;
 

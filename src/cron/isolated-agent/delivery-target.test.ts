@@ -216,6 +216,43 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
+  describe("Telegram topic threadId preservation", () => {
+    it("preserves lastThreadId when session lastTo has telegram: prefix but explicit delivery.to is bare chatId", async () => {
+      // Regression test for #15787: Telegram inbound sessions store lastTo as
+      // "telegram:-1003597428309" (with channel prefix) but cron delivery.to is
+      // the bare chat ID "-1003597428309". The strict equality check
+      // `resolved.to === resolved.lastTo` fails on this format mismatch, causing
+      // threadId to be dropped — so forum-topic announces land in the base group.
+      setMainSessionEntry({
+        sessionId: "sess-topic-1",
+        updatedAt: 1000,
+        lastChannel: "telegram",
+        lastTo: "telegram:123456", // real inbound session format
+        lastThreadId: 462,
+      });
+
+      const result = await resolveForAgent({ cfg: makeCfg({ bindings: [] }) });
+      // delivery.to = "123456" (DEFAULT_TARGET.to) should match "telegram:123456"
+      // and threadId 462 should be preserved.
+      expect(result.ok).toBe(true);
+      expect(result.threadId).toBe(462);
+    });
+
+    it("still drops threadId when explicit delivery.to targets a different chat", async () => {
+      setMainSessionEntry({
+        sessionId: "sess-topic-2",
+        updatedAt: 1000,
+        lastChannel: "telegram",
+        lastTo: "telegram:999999", // different chat
+        lastThreadId: 462,
+      });
+
+      const result = await resolveForAgent({ cfg: makeCfg({ bindings: [] }) });
+      // delivery.to = "123456" (DEFAULT_TARGET.to) — different from 999999
+      expect(result.threadId).toBeUndefined();
+    });
+  });
+
   it("uses single configured channel when neither explicit nor session channel exists", async () => {
     setMainSessionEntry(undefined);
 
