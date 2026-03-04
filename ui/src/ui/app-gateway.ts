@@ -229,6 +229,9 @@ function handleTerminalChatEvent(
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return;
   }
+  // Clear abort-pending state when we get confirmation the run ended.
+  (host as unknown as OpenClawApp).chatAbortPending = false;
+  (host as unknown as OpenClawApp).chatAbortPendingSince = null;
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
