@@ -286,6 +286,87 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 
 ---
 
+## Multi-project Management
+
+When managing multiple coding agent sessions across different projects simultaneously, use tmux for session isolation and a task queue for coordination.
+
+### tmux Multi-window Setup
+
+Create a dedicated tmux session with one window per project:
+
+```bash
+# Create session with project windows
+tmux new-session -d -s coding -n project-a -c ~/Projects/project-a
+tmux new-window -t coding -n project-b -c ~/Projects/project-b
+tmux new-window -t coding -n project-c -c ~/Projects/project-c
+
+# Launch agents in each window (background, with PTY)
+bash pty:true background:true command:"tmux send-keys -t coding:project-a 'codex exec \"Fix auth bug\"' Enter"
+bash pty:true background:true command:"tmux send-keys -t coding:project-b 'codex exec \"Add API tests\"' Enter"
+```
+
+### Status Detection
+
+Monitor agent status across all windows using a status check script:
+
+```bash
+#!/bin/bash
+# codex-status.sh — Check if a Codex session is idle or working
+TARGET="${1:-coding:0}"
+PANE_OUTPUT=$(tmux capture-pane -t "$TARGET" -p | tail -20)
+
+if echo "$PANE_OUTPUT" | grep -qE '(>\s*$|Idle|waiting for input|\$\s*$)'; then
+  echo "idle"
+elif echo "$PANE_OUTPUT" | grep -qE '(Running|Thinking|Executing|reading|writing)'; then
+  echo "working"
+else
+  echo "unknown"
+fi
+```
+
+Usage:
+```bash
+# Check all project windows
+for win in project-a project-b project-c; do
+  STATUS=$(bash codex-status.sh "coding:$win")
+  echo "$win: $STATUS"
+done
+```
+
+### Task Queue
+
+For sequential task execution, use a simple file-based queue:
+
+```bash
+# Add tasks to queue
+echo "project-a|Fix login timeout bug" >> ~/.coding-task-queue
+echo "project-b|Add pagination to API" >> ~/.coding-task-queue
+
+# Queue consumer (run in a loop or via cron)
+while IFS='|' read -r project task; do
+  STATUS=$(bash codex-status.sh "coding:$project")
+  if [ "$STATUS" = "idle" ]; then
+    tmux send-keys -t "coding:$project" "codex exec '$task'" Enter
+    sed -i '' "1d" ~/.coding-task-queue  # Remove consumed task
+    break  # Process one task per cycle
+  fi
+done < ~/.coding-task-queue
+```
+
+### Scaling with codex-autopilot
+
+For production-grade multi-project orchestration (auto-nudging, permission handling, log rotation, Discord/Telegram notifications, and scheduled task dispatch), see the **[codex-autopilot](https://github.com/imwyvern/AIWorkFlowSkill)** skill. It provides:
+
+- **Watchdog loop**: Monitors all tmux Codex sessions, detects idle/stuck states
+- **Auto-nudge**: Sends follow-up prompts when agents stall
+- **Permission handling**: Auto-approves safe operations, alerts on risky ones
+- **Task queue dispatch**: Automatically assigns queued tasks to idle agents
+- **Notifications**: Push results to Discord channels and Telegram
+
+Install: `clawhub install codex-autopilot` or `git clone https://github.com/imwyvern/AIWorkFlowSkill.git ~/.autopilot`
+
+---
+
 ## Learnings (Jan 2026)
 
 - **PTY is essential:** Coding agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
