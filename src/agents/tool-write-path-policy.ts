@@ -55,7 +55,7 @@ function matchPattern(patterns: string[] | undefined, targetPath: string, worksp
   }
   for (const pattern of patterns) {
     const resolvedPattern = resolvePattern(pattern, workspaceRoot);
-    if (matchesExecAllowlistPattern(resolvedPattern, targetPath)) {
+    if (matchesExecAllowlistPattern(resolvedPattern, targetPath, { caseSensitive: true })) {
       return pattern;
     }
   }
@@ -145,7 +145,10 @@ export function assertToolWritePathAllowed(params: {
     return;
   }
   const workspaceRoot = resolveCanonicalPathIfPossible(path.resolve(params.workspaceRoot));
-  const resolvedTargetPath = resolvePathFromInput(params.candidatePath, params.cwd ?? workspaceRoot);
+  const resolvedTargetPath = resolvePathFromInput(
+    params.candidatePath,
+    params.cwd ?? workspaceRoot,
+  );
   const targetPath = resolveCanonicalWriteTarget(resolvedTargetPath);
   const displayPath = formatPathForError(targetPath, workspaceRoot);
   assertNoHardlinkedTarget(targetPath, displayPath);

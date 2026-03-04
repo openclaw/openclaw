@@ -4,12 +4,19 @@ import { expandHomePrefix } from "./home-dir.js";
 const GLOB_REGEX_CACHE_LIMIT = 512;
 const globRegexCache = new Map<string, RegExp>();
 
-function normalizeMatchTarget(value: string): string {
+type MatchTargetOptions = {
+  caseSensitive?: boolean;
+};
+
+function normalizeMatchTarget(value: string, options: MatchTargetOptions = {}): string {
+  const caseSensitive = options.caseSensitive === true;
   if (process.platform === "win32") {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return stripped.replace(/\\/g, "/").toLowerCase();
+    const normalized = stripped.replace(/\\/g, "/");
+    return caseSensitive ? normalized : normalized.toLowerCase();
   }
-  return value.replace(/\\\\/g, "/").toLowerCase();
+  const normalized = value.replace(/\\\\/g, "/");
+  return caseSensitive ? normalized : normalized.toLowerCase();
 }
 
 function tryRealpath(value: string): string | null {
@@ -24,8 +31,14 @@ function escapeRegExpLiteral(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function compileGlobRegex(pattern: string): RegExp {
-  const cached = globRegexCache.get(pattern);
+type CompileGlobRegexOptions = {
+  caseSensitive?: boolean;
+};
+
+function compileGlobRegex(pattern: string, options: CompileGlobRegexOptions = {}): RegExp {
+  const caseSensitive = options.caseSensitive === true;
+  const cacheKey = `${caseSensitive ? "cs" : "ci"}:${pattern}`;
+  const cached = globRegexCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -55,19 +68,28 @@ function compileGlobRegex(pattern: string): RegExp {
   }
   regex += "$";
 
-  const compiled = new RegExp(regex, "i");
+  const compiled = new RegExp(regex, caseSensitive ? "" : "i");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
-  globRegexCache.set(pattern, compiled);
+  globRegexCache.set(cacheKey, compiled);
   return compiled;
 }
 
-export function matchesExecAllowlistPattern(pattern: string, target: string): boolean {
+type MatchExecAllowlistPatternOptions = {
+  caseSensitive?: boolean;
+};
+
+export function matchesExecAllowlistPattern(
+  pattern: string,
+  target: string,
+  options: MatchExecAllowlistPatternOptions = {},
+): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {
     return false;
   }
+  const caseSensitive = options.caseSensitive === true;
 
   const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
@@ -77,7 +99,7 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
     normalizedPattern = tryRealpath(expanded) ?? expanded;
     normalizedTarget = tryRealpath(target) ?? target;
   }
-  normalizedPattern = normalizeMatchTarget(normalizedPattern);
-  normalizedTarget = normalizeMatchTarget(normalizedTarget);
-  return compileGlobRegex(normalizedPattern).test(normalizedTarget);
+  normalizedPattern = normalizeMatchTarget(normalizedPattern, { caseSensitive });
+  normalizedTarget = normalizeMatchTarget(normalizedTarget, { caseSensitive });
+  return compileGlobRegex(normalizedPattern, { caseSensitive }).test(normalizedTarget);
 }

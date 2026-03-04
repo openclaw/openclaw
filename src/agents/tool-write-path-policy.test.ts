@@ -71,6 +71,25 @@ describe("assertToolWritePathAllowed", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "matches payload.paths patterns case-sensitively",
+    async () => {
+      await withTempDir(async (workspaceRoot) => {
+        await fs.mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
+        const mixedCasePath = path.join(workspaceRoot, "Notes", "new.txt");
+
+        expect(() =>
+          assertToolWritePathAllowed({
+            policy: { allow: ["notes/**"] },
+            workspaceRoot,
+            candidatePath: mixedCasePath,
+            cwd: workspaceRoot,
+          }),
+        ).toThrow(/not allowed by cron payload\.paths\.allow/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects existing symlink file targets outside allow patterns",
     async () => {
       await withTempDir(async (workspaceRoot) => {
