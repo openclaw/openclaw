@@ -5,7 +5,6 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { SYSTEM_KEYCHAIN_PROVIDERS } from "../model-auth.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -22,22 +21,6 @@ type InlineProviderConfig = {
 };
 
 export { buildModelAliasLines };
-
-// The pi-ai catalog has stale/incorrect pricing for Claude Opus 4.5 and 4.6
-// (listed at $5/$25/$0.50/$6.25 per million vs actual $15/$75/$1.50/$18.75).
-// Apply corrections so cost tracking reflects actual Anthropic billing.
-// Dot-notation aliases (e.g. claude-opus-4.5) also have zero cost in the
-// catalog and are corrected here. Remove entries when upstream is fixed.
-const ANTHROPIC_CATALOG_COST_CORRECTIONS: Record<
-  string,
-  { input: number; output: number; cacheRead: number; cacheWrite: number }
-> = {
-  "claude-opus-4-5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  "claude-opus-4-5-20251101": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  "claude-opus-4-6": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  "claude-opus-4.5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-  "claude-opus-4.6": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-};
 
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
@@ -70,34 +53,6 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-
-  // claude-personal runs via the claude-sdk subprocess; resolve model
-  // metadata from the anthropic catalog for cost tracking and context budgeting,
-  // then preserve the provider so downstream routing still works.
-  // Falls back to the forward-compat path for model IDs not yet in the catalog.
-  if (SYSTEM_KEYCHAIN_PROVIDERS.has(provider)) {
-    const catalogModel = modelRegistry.find("anthropic", modelId) as Model<Api> | null;
-    if (catalogModel) {
-      const costOverride = ANTHROPIC_CATALOG_COST_CORRECTIONS[modelId];
-      const model = costOverride
-        ? { ...catalogModel, provider, cost: costOverride }
-        : { ...catalogModel, provider };
-      return { model, authStorage, modelRegistry };
-    }
-    const forwardCompat = resolveForwardCompatModel("anthropic", modelId, modelRegistry);
-    if (forwardCompat) {
-      const costOverride = ANTHROPIC_CATALOG_COST_CORRECTIONS[modelId];
-      const model = costOverride
-        ? { ...forwardCompat, provider, cost: costOverride }
-        : { ...forwardCompat, provider };
-      return { model, authStorage, modelRegistry };
-    }
-    return {
-      error: buildUnknownModelError(provider, modelId),
-      authStorage,
-      modelRegistry,
-    };
-  }
 
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 

@@ -721,17 +721,6 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
-    thinkingDefault: z
-      .union([
-        z.literal("off"),
-        z.literal("minimal"),
-        z.literal("low"),
-        z.literal("medium"),
-        z.literal("high"),
-        z.literal("xhigh"),
-        z.literal("adaptive"),
-      ])
-      .optional(),
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

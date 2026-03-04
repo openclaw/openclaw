@@ -501,26 +501,6 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
     });
 
-    it("prefers per-agent thinkingDefault over global thinkingDefault", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            thinkingDefault: "low",
-          },
-        },
-      } as OpenClawConfig;
-
-      expect(
-        resolveThinkingDefault({
-          cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          catalog: ANTHROPIC_OPUS_CATALOG,
-          agentThinkingDefault: "adaptive",
-        }),
-      ).toBe("adaptive");
-    });
-
     it("accepts per-model params.thinking=adaptive", () => {
       const cfg = {
         agents: {

@@ -20,17 +20,11 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
-/**
- * Providers that authenticate via implicit system keychain (e.g. ~/.claude/ OAuth)
- * and bypass the conventional API-key / profile auth flow entirely.
- */
-export const SYSTEM_KEYCHAIN_PROVIDERS = new Set(["claude-personal"]);
-
 export function isSystemKeychainProvider(provider: string | undefined): boolean {
   if (typeof provider !== "string" || provider.trim().length === 0) {
     return false;
   }
-  return SYSTEM_KEYCHAIN_PROVIDERS.has(normalizeProviderId(provider));
+  return normalizeProviderId(provider) === "claude-personal";
 }
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";

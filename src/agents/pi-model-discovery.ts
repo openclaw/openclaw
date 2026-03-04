@@ -146,6 +146,44 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
+// The pi-ai catalog has stale/incorrect pricing for Claude Opus 4.5 and 4.6
+// (listed at $5/$25/$0.50/$6.25 per million vs actual $15/$75/$1.50/$18.75).
+// Apply corrections so cost tracking reflects actual Anthropic billing.
+// Dot-notation aliases (e.g. claude-opus-4.5) also have zero cost in the
+// catalog and are corrected here. Remove entries when upstream is fixed.
+const ANTHROPIC_CATALOG_COST_CORRECTIONS: Record<
+  string,
+  { input: number; output: number; cacheRead: number; cacheWrite: number }
+> = {
+  "claude-opus-4-5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-opus-4-5-20251101": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-opus-4-6": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-opus-4.5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  "claude-opus-4.6": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+};
+
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  const registry = new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+
+  // Augment the loaded registry models
+  const models = registry.getAll();
+  const claudePersonalModels = [];
+
+  for (const m of models) {
+    if (m.provider === "anthropic") {
+      const correction = ANTHROPIC_CATALOG_COST_CORRECTIONS[m.id];
+      if (correction) {
+        m.cost = correction;
+      }
+      claudePersonalModels.push({
+        ...m,
+        provider: "claude-personal",
+      });
+    }
+  }
+
+  // Register claude-personal models which clone the anthropic models
+  models.push(...claudePersonalModels);
+
+  return registry;
 }

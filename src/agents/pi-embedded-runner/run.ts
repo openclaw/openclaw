@@ -27,12 +27,7 @@ import {
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import {
-  ensureAuthProfileStore,
-  getApiKeyForModel,
-  resolveAuthProfileOrder,
-  type ResolvedProviderAuth,
-} from "../model-auth.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../model-auth.js";
 import { normalizeProviderId, resolveThinkingDefault } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -399,12 +394,6 @@ export async function runEmbeddedPiAgent(
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
-          : [undefined];
-      let profileIndex = 0;
 
       const initialThinkLevel =
         params.thinkLevel ??

@@ -190,7 +190,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
-  "acp.runthttps://github.com/dgarson/clawdbot/pull/214/conflict?name=src%252Fauto-reply%252Freply%252Fmodel-selection.ts&ancestor_oid=1b666b6ded5812a2d944677f73d5cb08845513fd&base_oid=13ef94dbd3fd085926a6009dcac5baa57e512db3&head_oid=0a911d7e07d1c3c53092cf0fe2287ba988a8ffccime.ttlMinutes":
+  "acp.runtime.ttlMinutes":
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",

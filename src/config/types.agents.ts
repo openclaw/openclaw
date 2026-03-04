@@ -22,8 +22,6 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
-  /** Per-agent default thinking level override. */
-  thinkingDefault?: AgentDefaultsConfig["thinkingDefault"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
