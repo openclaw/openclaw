@@ -66,10 +66,15 @@ Authoritative list lives in `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 
 - `pnpm protocol:gen`
   - writes JSON Schema (draft‑07) to `dist/protocol.schema.json`
+- `pnpm protocol:gen:proto`
+  - writes protobuf mirror schema to `dist/protocol.proto`
+- `pnpm protocol:gen:connectors`
+  - attempts connector generation from `dist/protocol.proto` (language/tooling dependent)
+  - writes generation report to `dist/connectors/README.md`
 - `pnpm protocol:gen:swift`
   - generates Swift gateway models
 - `pnpm protocol:check`
-  - runs both generators and verifies the output is committed
+  - runs core generators and verifies committed artifacts
 
 ## How the schemas are used at runtime
 
