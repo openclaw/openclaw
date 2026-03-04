@@ -4,7 +4,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 

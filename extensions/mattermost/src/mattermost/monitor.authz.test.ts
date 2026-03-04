@@ -1,4 +1,4 @@
-import { resolveControlCommandGate } from "openclaw/plugin-sdk";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/compat";
 import { describe, expect, it } from "vitest";
 import { resolveMattermostEffectiveAllowFromLists } from "./monitor-auth.js";
 
