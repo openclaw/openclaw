@@ -39,6 +39,8 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  abortPending?: boolean;
+  abortPendingSince?: number | null;
   compactionStatus?: CompactionIndicatorStatus | null;
   fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
@@ -74,6 +76,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
+  onForceClear?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onOpenSidebar?: (content: string) => void;
@@ -458,13 +461,27 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
-            <button
-              class="btn"
-              ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
-            >
-              ${canAbort ? "Stop" : "New session"}
-            </button>
+            ${
+              canAbort &&
+              props.abortPending &&
+              props.abortPendingSince &&
+              Date.now() - props.abortPendingSince > 3000 &&
+              props.onForceClear
+                ? html`<button
+                  class="btn danger"
+                  @click=${props.onForceClear}
+                  title="Force-clear the stuck session state"
+                >
+                  Force clear
+                </button>`
+                : html`<button
+                  class="btn"
+                  ?disabled=${!props.connected || (!canAbort && props.sending) || (canAbort && props.abortPending)}
+                  @click=${canAbort ? props.onAbort : props.onNewSession}
+                >
+                  ${canAbort ? (props.abortPending ? "Stopping…" : "Stop") : "New session"}
+                </button>`
+            }
             <button
               class="btn primary"
               ?disabled=${!props.connected}

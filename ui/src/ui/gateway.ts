@@ -334,14 +334,39 @@ export class GatewayBrowserClient {
     }
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number },
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      const timer =
+        timeoutMs > 0
+          ? window.setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
+            }, timeoutMs)
+          : null;
+      this.pending.set(id, {
+        resolve: (v) => {
+          if (timer !== null) {
+            window.clearTimeout(timer);
+          }
+          resolve(v as T);
+        },
+        reject: (err) => {
+          if (timer !== null) {
+            window.clearTimeout(timer);
+          }
+          reject(err);
+        },
+      });
     });
     this.ws.send(JSON.stringify(frame));
     return p;
