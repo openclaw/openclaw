@@ -119,6 +119,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
+  setStatus,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
@@ -729,6 +730,11 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) {
         return;
       }
+      // Refresh liveness timestamp so reaction-only traffic is not mistaken for a stale socket.
+      if (setStatus) {
+        const at = Date.now();
+        setStatus({ lastEventAt: at, lastInboundAt: at });
+      }
 
       const chatId = reaction.chat.id;
       const messageId = reaction.message_id;
@@ -1036,6 +1042,11 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    // Refresh liveness timestamp so callback-only traffic is not mistaken for a stale socket.
+    if (setStatus) {
+      const at = Date.now();
+      setStatus({ lastEventAt: at, lastInboundAt: at });
+    }
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
         ? () => ctx.answerCallbackQuery()
@@ -1324,6 +1335,11 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) {
         return;
       }
+      // Refresh liveness timestamp so migration events keep the socket alive.
+      if (setStatus) {
+        const at = Date.now();
+        setStatus({ lastEventAt: at, lastInboundAt: at });
+      }
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
@@ -1386,6 +1402,13 @@ export const registerTelegramHandlers = ({
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
+      }
+      // Wire up event liveness tracking: update lastEventAt on every inbound event
+      // so the health monitor can detect "half-dead" sockets that pass health checks
+      // but silently stop delivering events.
+      if (setStatus) {
+        const at = Date.now();
+        setStatus({ lastEventAt: at, lastInboundAt: at });
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,

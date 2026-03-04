@@ -112,6 +112,7 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  setStatus?: (patch: { lastEventAt?: number | null; lastInboundAt?: number | null }) => void;
 };
 
 type RegisterTelegramNativeCommandsParams = {

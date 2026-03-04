@@ -56,6 +56,7 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  setStatus?: (patch: { lastEventAt?: number | null; lastInboundAt?: number | null }) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -377,6 +378,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     shouldSkipUpdate,
     processMessage,
     logger,
+    setStatus: opts.setStatus,
   });
 
   return bot;
