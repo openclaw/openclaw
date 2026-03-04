@@ -326,11 +326,24 @@ export async function restartSystemdService({
 export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
-  await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
-  return res.code === 0;
+  if (res.code === 0) {
+    return true;
+  }
+  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  if (
+    detail.includes("not found") ||
+    detail.includes("could not be found") ||
+    detail.includes("no such file") ||
+    detail.includes("disabled") ||
+    detail.includes("failed to connect") ||
+    detail.includes("no bus")
+  ) {
+    return false;
+  }
+  throw new Error(`systemctl is-enabled unavailable: ${res.stderr || res.stdout}`.trim());
 }
 
 export async function readSystemdServiceRuntime(
