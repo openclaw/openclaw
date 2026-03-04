@@ -29,6 +29,10 @@ describe("parseTelegramReplyToMessageId", () => {
   it("returns undefined for a string with mixed digits and letters", () => {
     expect(parseTelegramReplyToMessageId("123abc")).toBeUndefined();
   });
+
+  it("returns undefined for integers above Number.MAX_SAFE_INTEGER", () => {
+    expect(parseTelegramReplyToMessageId("9007199254740993")).toBeUndefined();
+  });
 });
 
 describe("parseTelegramThreadId", () => {
@@ -42,6 +46,14 @@ describe("parseTelegramThreadId", () => {
 
   it("extracts thread id from scoped format", () => {
     expect(parseTelegramThreadId("-100123:456")).toBe(456);
+  });
+
+  it("returns undefined for string thread ids above Number.MAX_SAFE_INTEGER", () => {
+    expect(parseTelegramThreadId("9007199254740993")).toBeUndefined();
+  });
+
+  it("returns undefined for number thread ids above Number.MAX_SAFE_INTEGER", () => {
+    expect(parseTelegramThreadId(9007199254740994)).toBeUndefined();
   });
 
   it("returns undefined for null", () => {

@@ -11,7 +11,7 @@ function parseIntegerId(value: string): number | undefined {
     return undefined;
   }
   const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {
@@ -19,7 +19,11 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
     return undefined;
   }
   if (typeof threadId === "number") {
-    return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
+    if (!Number.isFinite(threadId)) {
+      return undefined;
+    }
+    const normalized = Math.trunc(threadId);
+    return Number.isSafeInteger(normalized) ? normalized : undefined;
   }
   const trimmed = threadId.trim();
   if (!trimmed) {
