@@ -41,6 +41,15 @@ export async function removeReactionDiscord(
   opts: DiscordReactOpts = {},
 ) {
   const cfg = opts.cfg ?? loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "discord", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { ok: true };
+  }
   const { rest } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
   await rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encoded));
@@ -53,6 +62,15 @@ export async function removeOwnReactionsDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<{ ok: true; removed: string[] }> {
   const cfg = opts.cfg ?? loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "discord", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { ok: true, removed: [] };
+  }
   const { rest } = createDiscordClient(opts, cfg);
   const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;

@@ -1,5 +1,7 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -82,6 +84,8 @@ type SupersededTelegramPreview = {
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
+  cfg?: OpenClawConfig;
+  accountId?: string;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
@@ -96,6 +100,7 @@ export function createTelegramDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
+  const cfg = params.cfg ?? loadConfig();
   const maxChars = Math.min(
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
     TELEGRAM_STREAM_MAX_CHARS,
@@ -144,6 +149,15 @@ export function createTelegramDraftStream(params: {
     renderedParseMode: "HTML" | undefined;
     fallbackWarnMessage: string;
   }) => {
+    if (
+      !guardWrite(
+        "draft-preview",
+        { channel: "telegram", to: String(chatId), accountId: params.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return;
+    }
     const sendParams = sendArgs.renderedParseMode
       ? {
           ...replyParams,
@@ -176,6 +190,15 @@ export function createTelegramDraftStream(params: {
     renderedParseMode,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
+    if (
+      !guardWrite(
+        "draft-preview",
+        { channel: "telegram", to: String(chatId), accountId: params.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return false;
+    }
     if (typeof streamMessageId === "number") {
       if (renderedParseMode) {
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
@@ -325,6 +348,15 @@ export function createTelegramDraftStream(params: {
     isValidMessageId: (value): value is number =>
       typeof value === "number" && Number.isFinite(value),
     deleteMessage: async (messageId) => {
+      if (
+        !guardWrite(
+          "draft-preview",
+          { channel: "telegram", to: String(chatId), accountId: params.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        return;
+      }
       await params.api.deleteMessage(chatId, messageId);
     },
     onDeleteSuccess: (messageId) => {

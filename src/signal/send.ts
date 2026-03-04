@@ -250,7 +250,21 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const cfg = loadConfig();
+  const accountInfo = resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  if (
+    !guardWrite(
+      "read-receipt",
+      { channel: "signal", to, accountId: accountInfo.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return false;
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
   });

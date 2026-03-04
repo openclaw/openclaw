@@ -84,6 +84,16 @@ export async function reactSlackMessage(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
+  const cfg = loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "slack", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const client = await getClient(opts);
   await client.reactions.add({
     channel: channelId,
@@ -98,6 +108,16 @@ export async function removeSlackReaction(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
+  const cfg = loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "slack", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const client = await getClient(opts);
   await client.reactions.remove({
     channel: channelId,
@@ -111,6 +131,16 @@ export async function removeOwnSlackReactions(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ): Promise<string[]> {
+  const cfg = loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "slack", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return [];
+  }
   const client = await getClient(opts);
   const userId = await resolveBotUserId(client);
   const reactions = await listSlackReactions(channelId, messageId, { client });

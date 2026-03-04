@@ -644,6 +644,15 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       }
 
       try {
+        if (
+          !guardWrite(
+            "edit",
+            { channel: "slack", to: channelId, accountId: ctx.accountId },
+            getProtectedDestinationMap(ctx.cfg),
+          )
+        ) {
+          return;
+        }
         await ctx.app.client.chat.update({
           channel: channelId,
           ts: messageTs,

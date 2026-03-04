@@ -241,8 +241,19 @@ export async function sendReadReceiptMatrix(
   roomId: string,
   eventId: string,
   client?: MatrixClient,
+  accountId?: string,
 ): Promise<void> {
   if (!eventId?.trim()) {
+    return;
+  }
+  const cfg = getCore().config.loadConfig();
+  if (
+    !guardWrite(
+      "read-receipt",
+      { channel: "matrix", to: roomId, accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
     return;
   }
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
@@ -263,9 +274,20 @@ export async function reactMatrixMessage(
   messageId: string,
   emoji: string,
   client?: MatrixClient,
+  accountId?: string,
 ): Promise<void> {
   if (!emoji.trim()) {
     throw new Error("Matrix reaction requires an emoji");
+  }
+  const cfg = getCore().config.loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "matrix", to: roomId, accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
   }
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
