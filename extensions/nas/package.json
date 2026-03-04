@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/nas",
+  "version": "2026.3.4",
+  "description": "NAS access tools for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

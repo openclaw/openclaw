@@ -1,0 +1,27 @@
+{
+  "id": "nas",
+  "name": "NAS",
+  "description": "Safe NAS browsing and reading tools under a configured mount path.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "root": {
+        "type": "string",
+        "description": "NAS root path. Default: /mnt/nas"
+      },
+      "maxReadBytes": {
+        "type": "number",
+        "description": "Max bytes for nas_read. Default: 200000"
+      },
+      "maxListEntries": {
+        "type": "number",
+        "description": "Max entries for nas_list. Default: 200"
+      },
+      "maxSearchResults": {
+        "type": "number",
+        "description": "Max matches for nas_search. Default: 50"
+      }
+    }
+  }
+}
