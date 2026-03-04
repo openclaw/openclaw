@@ -387,11 +387,7 @@ export function resolveChannelGroupRequireMention(params: {
   }
   // When groupPolicy is "open", default to not requiring mentions — the user
   // explicitly opted into processing all group messages.
-  const groupPolicy = resolveChannelGroupPolicyMode(
-    params.cfg,
-    params.channel,
-    params.accountId,
-  );
+  const groupPolicy = resolveChannelGroupPolicyMode(params.cfg, params.channel, params.accountId);
   if (groupPolicy === "open") {
     return false;
   }
