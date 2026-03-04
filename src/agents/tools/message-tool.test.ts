@@ -139,7 +139,7 @@ describe("message tool schema scoping", () => {
     label: "Telegram",
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
-    actions: ["send", "react"],
+    actions: ["send", "react", "poll"],
     supportsButtons: true,
   });
 
@@ -161,6 +161,7 @@ describe("message tool schema scoping", () => {
       expectComponents: false,
       expectButtons: true,
       expectButtonStyle: true,
+      expectTelegramPollExtras: true,
       expectedActions: ["send", "react", "poll", "poll-vote"],
     },
     {
@@ -168,11 +169,19 @@ describe("message tool schema scoping", () => {
       expectComponents: true,
       expectButtons: false,
       expectButtonStyle: false,
+      expectTelegramPollExtras: false,
       expectedActions: ["send", "poll", "poll-vote", "react"],
     },
   ])(
     "scopes schema fields for $provider",
-    ({ provider, expectComponents, expectButtons, expectButtonStyle, expectedActions }) => {
+    ({
+      provider,
+      expectComponents,
+      expectButtons,
+      expectButtonStyle,
+      expectTelegramPollExtras,
+      expectedActions,
+    }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
@@ -209,11 +218,34 @@ describe("message tool schema scoping", () => {
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
+      if (expectTelegramPollExtras) {
+        expect(properties.pollDurationSeconds).toBeDefined();
+        expect(properties.pollAnonymous).toBeDefined();
+        expect(properties.pollPublic).toBeDefined();
+      } else {
+        expect(properties.pollDurationSeconds).toBeUndefined();
+        expect(properties.pollAnonymous).toBeUndefined();
+        expect(properties.pollPublic).toBeUndefined();
+      }
       expect(properties.pollId).toBeDefined();
       expect(properties.pollOptionIndex).toBeDefined();
       expect(properties.pollOptionId).toBeDefined();
     },
   );
+
+  it("includes poll in the action enum when the current channel supports poll actions", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const actionEnum = getActionEnum(getToolProperties(tool));
+
+    expect(actionEnum).toContain("poll");
+  });
 });
 
 describe("message tool description", () => {
