@@ -199,13 +199,14 @@ export function resolveTuiSessionKey(params: {
       mainKey: params.sessionMainKey,
     });
   }
-  if (trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed;
+    return lowered;
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${lowered}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {

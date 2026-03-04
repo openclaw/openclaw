@@ -74,6 +74,34 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:ops:incident");
   });
+
+  it("canonicalizes uppercase session keys to lowercase (regression #33866)", () => {
+    // Session keys should be lowercase to match gateway's resolveSessionStoreKey
+    expect(
+      resolveTuiSessionKey({
+        raw: "Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:ops:UPPER",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:ops:upper");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
