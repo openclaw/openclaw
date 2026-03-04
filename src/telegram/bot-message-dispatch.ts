@@ -303,6 +303,10 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
+    // Suppress NO_REPLY streaming fragments (e.g., "NO", "NO_", "NO_RE", "NO_REPLY")
+    if (text === "NO_REPLY" || text.startsWith("NO_REPLY")) {
+      return;
+    }
     if (text === lane.lastPartialText) {
       return;
     }
