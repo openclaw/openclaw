@@ -310,14 +310,17 @@ export async function runAgentTurnWithFallback(params: {
 
               return result;
             } catch (err) {
-              // When the codex CLI backend was auto-selected (not explicitly configured
-              // by the user) and the CLI binary is unavailable or fails to launch,
-              // fall through to the embedded runner instead of surfacing an error.
+              // The user explicitly configured a codex-cli backend, but the model
+              // was auto-routed to it based on API detection (isCodexAutoFallback).
+              // When the CLI binary is unavailable or fails to launch, fall through
+              // to the embedded runner. Warn at error level since the embedded runner
+              // does not support tool calls for codex models — the user will get
+              // text-only output, which is a visible degradation.
               // Emit a terminal lifecycle error for the CLI run so downstream
               // consumers don't stall on the open "start" event from line 250.
               if (isCodexAutoFallback) {
-                defaultRuntime.log(
-                  `Codex CLI backend unavailable, falling back to embedded runner: ${String(err)}`,
+                defaultRuntime.error(
+                  `Codex CLI backend failed, falling back to embedded runner (tool calls will be unavailable): ${String(err)}`,
                 );
                 // Close the CLI lifecycle so downstream consumers don't stall on an
                 // open "start" event. The embedded runner will emit its own lifecycle.
