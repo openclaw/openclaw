@@ -85,6 +85,21 @@ function clearContinuationGeneration(sessionKey: string): void {
   continuationGenerations.delete(sessionKey);
 }
 
+/**
+ * Cancel any pending continuation timer for the given session.
+ * Call this from early-return paths (inline actions, slash commands) that
+ * bypass runReplyAgent but still represent real user input that should
+ * preempt a running continuation chain.
+ *
+ * We only bump (not clear) to avoid generation reuse: if we cleared the map
+ * entry, a subsequent chain could reuse a generation value that matches a
+ * stale in-flight timer callback. The bump alone invalidates all pending
+ * callbacks without creating a reuse window.
+ */
+export function cancelContinuationTimer(sessionKey: string): void {
+  bumpContinuationGeneration(sessionKey);
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;

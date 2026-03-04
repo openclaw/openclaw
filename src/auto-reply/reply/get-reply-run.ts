@@ -34,6 +34,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { cancelContinuationTimer } from "./agent-runner.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
@@ -284,6 +285,10 @@ export async function runPreparedReply(
     !baseBodyTrimmedRaw &&
     hasControlCommand(commandSource, cfg)
   ) {
+    // Unauthorized command still represents user input — cancel pending timers.
+    if (sessionKey && !isHeartbeat) {
+      cancelContinuationTimer(sessionKey);
+    }
     typing.cleanup();
     return undefined;
   }
