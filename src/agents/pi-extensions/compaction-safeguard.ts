@@ -191,6 +191,22 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+
+    // Skip compaction on idle sessions that have no real (user/assistant) messages.
+    // This avoids unnecessary LLM API calls on sessions that only contain system messages
+    // (e.g. idle cron sessions). See #34935.
+    const allMessages = [
+      ...preparation.messagesToSummarize,
+      ...(preparation.turnPrefixMessages ?? []),
+    ];
+    const hasRealMessages = allMessages.some(
+      (msg) => msg && typeof msg === "object" && (msg.role === "user" || msg.role === "assistant"),
+    );
+    if (!hasRealMessages) {
+      log.info("Skipping compaction: session has no user/assistant messages (idle session).");
+      return { cancel: true };
+    }
+
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
