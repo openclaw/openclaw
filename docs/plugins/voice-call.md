@@ -86,7 +86,7 @@ Set config under `plugins.entries.voice-call.config`:
 
           vonage: {
             applicationId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-            privateKeyPath: "/path/to/private.key", // or privateKey: "-----BEGIN PRIVATE KEY-----..."
+            privateKeyPath: "/path/to/private.key", // or privateKey: "<pem-content>"
             signatureSecret: "...",
           },
 

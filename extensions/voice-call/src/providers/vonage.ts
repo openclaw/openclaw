@@ -3,6 +3,8 @@ import fs from "node:fs";
 import type { VonageConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -583,5 +585,37 @@ export class VonageProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // No dedicated stop endpoint for NCCO input actions.
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const terminalStatuses = new Set([
+      "completed",
+      "busy",
+      "failed",
+      "cancelled",
+      "rejected",
+      "timeout",
+      "unanswered",
+    ]);
+
+    try {
+      const data = await this.apiRequest<{ status?: string; call_status?: string }>({
+        method: "GET",
+        endpoint: `/calls/${encodeURIComponent(input.providerCallId)}`,
+        allowNotFound: true,
+      });
+
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const status = (data.status ?? data.call_status ?? "unknown").toLowerCase();
+      return {
+        status,
+        isTerminal: terminalStatuses.has(status),
+      };
+    } catch {
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
   }
 }
