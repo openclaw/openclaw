@@ -8,6 +8,8 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  getProtectedDestinationMap,
+  guardWrite,
   resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
@@ -136,17 +138,30 @@ function resolveGroupRequireMention(params: {
 }
 
 async function sendZalouserDeliveryAcks(params: {
+  config: OpenClawConfig;
+  threadId: string;
   profile: string;
   isGroup: boolean;
   message: NonNullable<ZaloInboundMessage["eventMessage"]>;
 }): Promise<void> {
+  if (
+    !guardWrite(
+      "read-receipt",
+      { channel: "zalouser", to: params.threadId, accountId: params.profile },
+      getProtectedDestinationMap(params.config),
+    )
+  ) {
+    return;
+  }
   await sendDeliveredZalouser({
+    threadId: params.threadId,
     profile: params.profile,
     isGroup: params.isGroup,
     message: params.message,
     isSeen: true,
   });
   await sendSeenZalouser({
+    threadId: params.threadId,
     profile: params.profile,
     isGroup: params.isGroup,
     message: params.message,
@@ -198,6 +213,8 @@ async function processMessage(
   if (message.eventMessage) {
     try {
       await sendZalouserDeliveryAcks({
+        config,
+        threadId: chatId,
         profile: account.profile,
         isGroup,
         message: message.eventMessage,

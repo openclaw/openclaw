@@ -1,6 +1,8 @@
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
+  getProtectedDestinationMap,
+  guardWrite,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -53,6 +55,17 @@ export function createMSTeamsReplyDispatcher(params: {
    * the stored conversation reference so the user still sees the "…" bubble.
    */
   const sendTypingIndicator = async () => {
+    const conversationId = params.conversationRef.conversation?.id;
+    if (
+      conversationId &&
+      !guardWrite(
+        "typing",
+        { channel: "msteams", to: conversationId, accountId: params.accountId },
+        getProtectedDestinationMap(params.cfg),
+      )
+    ) {
+      return;
+    }
     await withRevokedProxyFallback({
       run: async () => {
         await params.context.sendActivity({ type: "typing" });

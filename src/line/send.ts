@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import type { LineSendResult } from "./types.js";
@@ -36,6 +37,7 @@ interface LineSendOpts {
 
 type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
 type LinePushOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId" | "verbose">;
+type LineReplyOpts = LinePushOpts & { chatId?: string };
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -192,9 +194,19 @@ async function pushLineMessages(
 async function replyLineMessages(
   replyToken: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LineReplyOpts = {},
   behavior: LineReplyBehavior = {},
 ): Promise<void> {
+  if (
+    opts.chatId &&
+    !guardWrite(
+      "pairing",
+      { channel: "line", to: opts.chatId, accountId: opts.accountId },
+      getProtectedDestinationMap(loadConfig()),
+    )
+  ) {
+    return;
+  }
   const { account, client } = createLineMessagingClient(opts);
 
   await client.replyMessage({
@@ -237,9 +249,14 @@ export async function sendMessageLine(
 
   // Use reply if we have a reply token, otherwise push
   if (opts.replyToken) {
-    await replyLineMessages(opts.replyToken, messages, opts, {
-      verboseMessage: () => `line: replied to ${chatId}`,
-    });
+    await replyLineMessages(
+      opts.replyToken,
+      messages,
+      { ...opts, chatId },
+      {
+        verboseMessage: () => `line: replied to ${chatId}`,
+      },
+    );
 
     return {
       messageId: "reply",
@@ -258,6 +275,16 @@ export async function pushMessageLine(
   text: string,
   opts: LineSendOpts = {},
 ): Promise<LineSendResult> {
+  const chatId = normalizeTarget(to);
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "line", to: chatId, accountId: opts.accountId },
+      getProtectedDestinationMap(loadConfig()),
+    )
+  ) {
+    return { messageId: "suppressed", chatId };
+  }
   // Force push (no reply token)
   return sendMessageLine(to, text, { ...opts, replyToken: undefined });
 }
@@ -265,7 +292,7 @@ export async function pushMessageLine(
 export async function replyMessageLine(
   replyToken: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LineReplyOpts = {},
 ): Promise<void> {
   await replyLineMessages(replyToken, messages, opts);
 }
@@ -409,11 +436,21 @@ export async function showLoadingAnimation(
   chatId: string,
   opts: { channelAccessToken?: string; accountId?: string; loadingSeconds?: number } = {},
 ): Promise<void> {
+  const normalizedChatId = normalizeTarget(chatId);
+  if (
+    !guardWrite(
+      "loading-animation",
+      { channel: "line", to: normalizedChatId, accountId: opts.accountId },
+      getProtectedDestinationMap(loadConfig()),
+    )
+  ) {
+    return;
+  }
   const { client } = createLineMessagingClient(opts);
 
   try {
     await client.showLoadingAnimation({
-      chatId: normalizeTarget(chatId),
+      chatId: normalizedChatId,
       loadingSeconds: opts.loadingSeconds ?? 20,
     });
     logVerbose(`line: showing loading animation to ${chatId}`);

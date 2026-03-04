@@ -31,6 +31,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { getChildLogger } from "../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
@@ -205,6 +206,15 @@ async function resolveTelegramCommandAuth(params: {
   const senderUsername = msg.from?.username ?? "";
 
   const sendAuthMessage = async (text: string) => {
+    if (
+      !guardWrite(
+        "pairing",
+        { channel: "telegram", to: String(chatId), accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return null;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () => bot.api.sendMessage(chatId, text),

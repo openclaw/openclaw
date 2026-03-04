@@ -43,6 +43,7 @@ import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matc
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -1250,6 +1251,17 @@ async function dispatchDiscordCommandInteraction(params: {
     suppressReplies,
   } = params;
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
+    const channelId = interaction.channel?.id;
+    if (
+      channelId &&
+      !guardWrite(
+        "access-control",
+        { channel: "discord", to: channelId, accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return;
+    }
     const payload = {
       content,
       ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),

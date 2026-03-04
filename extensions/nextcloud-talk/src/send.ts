@@ -1,3 +1,4 @@
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
@@ -71,6 +72,15 @@ export async function sendMessageNextcloudTalk(
     account,
   );
   const roomToken = normalizeRoomToken(to);
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "nextcloud-talk", to: roomToken, accountId: account.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed", roomToken };
+  }
 
   if (!text?.trim()) {
     throw new Error("Message must be non-empty for Nextcloud Talk sends");

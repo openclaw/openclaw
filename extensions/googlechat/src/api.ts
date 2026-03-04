@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/googlechat";
+import { fetchWithSsrFGuard, getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/googlechat";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
+import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
@@ -13,6 +14,15 @@ const headersToObject = (headers?: HeadersInit): Record<string, string> =>
     : Array.isArray(headers)
       ? Object.fromEntries(headers)
       : headers || {};
+
+function resolveGoogleChatSpaceFromMessageName(messageName: string): string {
+  const marker = "/messages/";
+  const idx = messageName.indexOf(marker);
+  if (idx <= 0) {
+    return messageName;
+  }
+  return messageName.slice(0, idx);
+}
 
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
@@ -139,6 +149,19 @@ export async function sendGoogleChatMessage(params: {
   thread?: string;
   attachments?: Array<{ attachmentUploadToken: string; contentName?: string }>;
 }): Promise<{ messageName?: string } | null> {
+  if (
+    !guardWrite(
+      "pairing",
+      {
+        channel: "googlechat",
+        to: params.space,
+        accountId: params.account.accountId,
+      },
+      getProtectedDestinationMap(getGoogleChatRuntime().config.loadConfig()),
+    )
+  ) {
+    return { messageName: "suppressed" };
+  }
   const { account, space, text, thread, attachments } = params;
   const body: Record<string, unknown> = {};
   if (text) {
@@ -170,6 +193,19 @@ export async function updateGoogleChatMessage(params: {
   messageName: string;
   text: string;
 }): Promise<{ messageName?: string }> {
+  if (
+    !guardWrite(
+      "draft-preview",
+      {
+        channel: "googlechat",
+        to: resolveGoogleChatSpaceFromMessageName(params.messageName),
+        accountId: params.account.accountId,
+      },
+      getProtectedDestinationMap(getGoogleChatRuntime().config.loadConfig()),
+    )
+  ) {
+    return { messageName: "suppressed" };
+  }
   const { account, messageName, text } = params;
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=text`;
   const result = await fetchJson<{ name?: string }>(account, url, {
@@ -183,6 +219,19 @@ export async function deleteGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   messageName: string;
 }): Promise<void> {
+  if (
+    !guardWrite(
+      "draft-preview",
+      {
+        channel: "googlechat",
+        to: resolveGoogleChatSpaceFromMessageName(params.messageName),
+        accountId: params.account.accountId,
+      },
+      getProtectedDestinationMap(getGoogleChatRuntime().config.loadConfig()),
+    )
+  ) {
+    return;
+  }
   const { account, messageName } = params;
   const url = `${CHAT_API_BASE}/${messageName}`;
   await fetchOk(account, url, { method: "DELETE" });

@@ -5,6 +5,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import {
@@ -181,6 +182,20 @@ export async function checkInboundAccessControl(params: {
           logVerbose(
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );
+          if (
+            !guardWrite(
+              "access-control",
+              { channel: "whatsapp", to: candidate, accountId: account.accountId },
+              getProtectedDestinationMap(cfg),
+            )
+          ) {
+            return {
+              allowed: false,
+              shouldMarkRead: false,
+              isSelfChat,
+              resolvedAccountId: account.accountId,
+            };
+          }
           try {
             await params.sock.sendMessage(params.remoteJid, {
               text: buildPairingReply({

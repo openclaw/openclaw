@@ -12,6 +12,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -268,6 +269,15 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "slack", to, accountId: account.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed", channelId: "" };
+  }
   const token = resolveToken({
     explicit: opts.token,
     accountId: account.accountId,

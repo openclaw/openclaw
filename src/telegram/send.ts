@@ -11,6 +11,7 @@ import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -464,6 +465,15 @@ export async function sendMessageTelegram(
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "telegram", to, accountId: account.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed", chatId: to };
+  }
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,

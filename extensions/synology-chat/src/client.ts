@@ -5,6 +5,8 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
+import { getSynologyRuntime } from "./runtime.js";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
@@ -31,6 +33,14 @@ type ChatUserCacheEntry = {
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+function resolveProtectedDestinationMapSafe() {
+  try {
+    return getProtectedDestinationMap(getSynologyRuntime().config.loadConfig());
+  } catch {
+    return getProtectedDestinationMap({});
+  }
+}
+
 /**
  * Send a text message to Synology Chat via the incoming webhook.
  *
@@ -45,6 +55,12 @@ export async function sendMessage(
   userId?: string | number,
   allowInsecureSsl = true,
 ): Promise<boolean> {
+  const to = typeof userId === "number" ? String(userId) : userId?.trim() || incomingUrl;
+  if (
+    !guardWrite("pairing", { channel: "synology-chat", to }, resolveProtectedDestinationMapSafe())
+  ) {
+    return true;
+  }
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
   const payloadObj: Record<string, any> = { text };

@@ -1,3 +1,6 @@
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
+import { getZaloRuntime } from "./runtime.js";
+
 /**
  * Zalo Bot API client
  * @see https://bot.zaloplatforms.com/docs
@@ -147,6 +150,15 @@ export async function sendMessage(
   params: ZaloSendMessageParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "zalo", to: params.chat_id },
+      getProtectedDestinationMap(getZaloRuntime().config.loadConfig()),
+    )
+  ) {
+    return { ok: true };
+  }
   return callZaloApi<ZaloMessage>("sendMessage", token, params, { fetch: fetcher });
 }
 

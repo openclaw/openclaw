@@ -1,5 +1,6 @@
 import { Routes } from "discord-api-types/v10";
 import { loadConfig } from "../config/config.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import {
   buildReactionIdentifier,
   createDiscordClient,
@@ -15,6 +16,15 @@ export async function reactMessageDiscord(
   opts: DiscordReactOpts = {},
 ) {
   const cfg = opts.cfg ?? loadConfig();
+  if (
+    !guardWrite(
+      "status-reaction",
+      { channel: "discord", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { ok: true };
+  }
   const { rest, request } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
   await request(

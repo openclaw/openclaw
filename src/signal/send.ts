@@ -1,5 +1,6 @@
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveSignalAccount } from "./accounts.js";
@@ -106,6 +107,15 @@ export async function sendMessageSignal(
     cfg,
     accountId: opts.accountId,
   });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "signal", to, accountId: accountInfo.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed" };
+  }
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   let message = text ?? "";
@@ -196,7 +206,21 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean } = {},
 ): Promise<boolean> {
-  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const cfg = loadConfig();
+  const accountInfo = resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  if (
+    !guardWrite(
+      "typing",
+      { channel: "signal", to, accountId: accountInfo.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return false;
+  }
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
     group: true,

@@ -7,6 +7,7 @@ import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
@@ -139,6 +140,15 @@ export async function sendMessageDiscord(
     cfg,
     accountId: opts.accountId,
   });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "discord", to, accountId: accountInfo.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return { messageId: "suppressed", channelId: to };
+  }
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",

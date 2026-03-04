@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
-import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
+import { getProtectedDestinationMap, guardWrite, stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
@@ -373,6 +373,15 @@ export async function sendMessageBlueBubbles(
     cfg: opts.cfg ?? {},
     accountId: opts.accountId,
   });
+  if (
+    !guardWrite(
+      "pairing",
+      { channel: "bluebubbles", to, accountId: account.accountId },
+      getProtectedDestinationMap(opts.cfg ?? {}),
+    )
+  ) {
+    return { messageId: "suppressed" };
+  }
   const baseUrl =
     normalizeSecretInputString(opts.serverUrl) ||
     normalizeSecretInputString(account.config.serverUrl);

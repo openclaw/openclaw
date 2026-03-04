@@ -32,6 +32,7 @@ import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -529,6 +530,17 @@ async function ensureDmComponentAuthorized(params: {
       },
     });
     try {
+      const channelId = interaction.channel?.id;
+      if (
+        channelId &&
+        !guardWrite(
+          "pairing",
+          { channel: "discord", to: channelId, accountId: ctx.accountId },
+          getProtectedDestinationMap(ctx.cfg),
+        )
+      ) {
+        return false;
+      }
       await interaction.reply({
         content: created
           ? buildPairingReply({
@@ -547,6 +559,17 @@ async function ensureDmComponentAuthorized(params: {
 
   logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
   try {
+    const channelId = interaction.channel?.id;
+    if (
+      channelId &&
+      !guardWrite(
+        "access-control",
+        { channel: "discord", to: channelId, accountId: ctx.accountId },
+        getProtectedDestinationMap(ctx.cfg),
+      )
+    ) {
+      return false;
+    }
     await interaction.reply({
       content: `You are not authorized to use this ${componentLabel}.`,
       ...replyOpts,

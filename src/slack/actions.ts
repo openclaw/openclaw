@@ -1,6 +1,7 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
@@ -179,6 +180,16 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
+  const cfg = loadConfig();
+  if (
+    !guardWrite(
+      "draft-preview",
+      { channel: "slack", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const client = await getClient(opts);
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
@@ -195,6 +206,16 @@ export async function deleteSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
+  const cfg = loadConfig();
+  if (
+    !guardWrite(
+      "draft-preview",
+      { channel: "slack", to: channelId, accountId: opts.accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const client = await getClient(opts);
   await client.chat.delete({
     channel: channelId,

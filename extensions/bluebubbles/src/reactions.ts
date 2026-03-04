@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
@@ -140,6 +141,19 @@ export async function sendBlueBubblesReaction(params: {
   partIndex?: number;
   opts?: BlueBubblesReactionOpts;
 }): Promise<void> {
+  if (
+    !guardWrite(
+      "ack-reaction",
+      {
+        channel: "bluebubbles",
+        to: params.chatGuid,
+        accountId: params.opts?.accountId,
+      },
+      getProtectedDestinationMap(params.opts?.cfg ?? {}),
+    )
+  ) {
+    return;
+  }
   const chatGuid = params.chatGuid.trim();
   const messageGuid = params.messageGuid.trim();
   if (!chatGuid) {

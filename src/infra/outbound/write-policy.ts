@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeDeliverableOutboundChannel } from "./channel-resolution.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 const WILDCARD = "*";
+const writePolicyLog = createSubsystemLogger("outbound/write-policy");
 
 export type RelayTarget = {
   channel: string;
@@ -111,8 +113,11 @@ function canonicalizeDestination(params: {
   accountId?: string;
   cfg?: OpenClawConfig;
 }): CanonicalDestination | null {
-  const channel = normalizeDeliverableOutboundChannel(params.channel);
-  if (!channel) {
+  const normalizedChannel =
+    normalizeDeliverableOutboundChannel(params.channel) ??
+    normalizeMessageChannel(params.channel) ??
+    params.channel.trim().toLowerCase();
+  if (!normalizedChannel) {
     return null;
   }
 
@@ -123,18 +128,22 @@ function canonicalizeDestination(params: {
 
   const accountId = normalizeAccountComponent(params.accountId, "default");
   const resolved = resolveOutboundTarget({
-    channel,
+    channel: normalizedChannel,
     to: rawTo,
     accountId,
     cfg: params.cfg,
     mode: "explicit",
   });
-  if (!resolved.ok) {
-    return null;
+  if (resolved.ok) {
+    return {
+      channel: normalizedChannel,
+      to: resolved.to,
+      accountId,
+    };
   }
   return {
-    channel,
-    to: resolved.to,
+    channel: normalizedChannel,
+    to: rawTo,
     accountId,
   };
 }
@@ -384,4 +393,35 @@ export function decideWrite(
     kind: "deny",
     reason: policy.denyReason ?? "Protected destination has no relay target.",
   };
+}
+
+/**
+ * Runtime guard for helper-level side effects that should be blocked for protected destinations.
+ */
+export function guardWrite(
+  action: string,
+  destination: { channel: string; to: string; accountId?: string },
+  protectedMap: ProtectedDestinationMap,
+): boolean {
+  const decision = decideWrite(action, destination, protectedMap);
+  switch (decision.kind) {
+    case "allow":
+      return true;
+    case "suppress":
+      return false;
+    case "redirect":
+      writePolicyLog.warn("write-policy: redirect at helper level; suppressing boundary bypass", {
+        action,
+        destination,
+        target: decision.target,
+      });
+      return false;
+    case "deny":
+      writePolicyLog.error("write-policy: denied", {
+        action,
+        destination,
+        reason: decision.reason,
+      });
+      return false;
+  }
 }

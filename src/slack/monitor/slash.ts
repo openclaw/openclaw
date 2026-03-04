@@ -7,6 +7,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../../infra/outbound/write-policy.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
@@ -306,6 +307,18 @@ export async function registerSlackMonitorSlashCommands(params: {
     commandDefinition?: ChatCommandDefinition;
   }) => {
     const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const guardedRespond = async (payload: Parameters<typeof respond>[0]) => {
+      if (
+        !guardWrite(
+          "ephemeral-response",
+          { channel: "slack", to: command.channel_id, accountId: ctx.accountId },
+          getProtectedDestinationMap(cfg),
+        )
+      ) {
+        return;
+      }
+      await respond(payload);
+    };
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -343,7 +356,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           channelType,
         })
       ) {
-        await respond({
+        await guardedRespond({
           text: "This channel is not allowed.",
           response_type: "ephemeral",
         });
@@ -369,13 +382,13 @@ export async function registerSlackMonitorSlashCommands(params: {
           allowFromLower: effectiveAllowFromLower,
           resolveSenderName: ctx.resolveUserName,
           sendPairingReply: async (text) => {
-            await respond({
+            await guardedRespond({
               text,
               response_type: "ephemeral",
             });
           },
           onDisabled: async () => {
-            await respond({
+            await guardedRespond({
               text: "Slack DMs are disabled.",
               response_type: "ephemeral",
             });
@@ -384,7 +397,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             logVerbose(
               `slack: blocked slash sender ${command.user_id} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
             );
-            await respond({
+            await guardedRespond({
               text: "You are not authorized to use this command.",
               response_type: "ephemeral",
             });
@@ -414,7 +427,7 @@ export async function registerSlackMonitorSlashCommands(params: {
               channelAllowed,
             })
           ) {
-            await respond({
+            await guardedRespond({
               text: "This channel is not allowed.",
               response_type: "ephemeral",
             });
@@ -425,7 +438,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           // config (matchSource undefined) should be allowed under open policy.
           const hasExplicitConfig = Boolean(channelConfig?.matchSource);
           if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
-            await respond({
+            await guardedRespond({
               text: "This channel is not allowed.",
               response_type: "ephemeral",
             });
@@ -447,7 +460,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           })
         : false;
       if (channelUsersAllowlistConfigured && !channelUserAllowed) {
-        await respond({
+        await guardedRespond({
           text: "You are not authorized to use this command here.",
           response_type: "ephemeral",
         });
@@ -477,7 +490,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           modeWhenAccessGroupsOff: "configured",
         });
         if (ctx.useAccessGroups && !commandAuthorized) {
-          await respond({
+          await guardedRespond({
             text: "You are not authorized to use this command.",
             response_type: "ephemeral",
           });
@@ -506,7 +519,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             createExternalMenuToken: (choices) =>
               storeSlackExternalArgMenu({ choices, userId: command.user_id }),
           });
-          await respond({
+          await guardedRespond({
             text: title,
             blocks,
             response_type: "ephemeral",
@@ -647,7 +660,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
-      await respond({
+      await guardedRespond({
         text: "Sorry, something went wrong handling that command.",
         response_type: "ephemeral",
       });

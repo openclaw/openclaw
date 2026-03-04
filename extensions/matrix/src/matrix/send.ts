@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PollInput } from "openclaw/plugin-sdk/matrix";
+import { getProtectedDestinationMap, guardWrite, type PollInput } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { enqueueSend } from "./send-queue.js";
@@ -51,6 +51,16 @@ export async function sendMessageMatrix(
   });
   const cfg = opts.cfg ?? getCore().config.loadConfig();
   try {
+    const cfg = getCore().config.loadConfig();
+    if (
+      !guardWrite(
+        "pairing",
+        { channel: "matrix", to, accountId: opts.accountId },
+        getProtectedDestinationMap(cfg),
+      )
+    ) {
+      return { messageId: "suppressed", roomId: to };
+    }
     const roomId = await resolveMatrixRoomId(client, to);
     return await enqueueSend(roomId, async () => {
       const tableMode = getCore().channel.text.resolveMarkdownTableMode({
@@ -201,7 +211,18 @@ export async function sendTypingMatrix(
   typing: boolean,
   timeoutMs?: number,
   client?: MatrixClient,
+  accountId?: string,
 ): Promise<void> {
+  const cfg = getCore().config.loadConfig();
+  if (
+    !guardWrite(
+      "typing",
+      { channel: "matrix", to: roomId, accountId },
+      getProtectedDestinationMap(cfg),
+    )
+  ) {
+    return;
+  }
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
     timeoutMs,

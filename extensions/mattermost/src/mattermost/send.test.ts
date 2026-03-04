@@ -19,6 +19,8 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/mattermost", () => ({
+  getProtectedDestinationMap: () => new Map(),
+  guardWrite: () => true,
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 

@@ -5,6 +5,7 @@ import {
   buildProtectedDestinationMap,
   decideWrite,
   getProtectedDestinationMap,
+  guardWrite,
   resetProtectedDestinationMapCacheForTests,
 } from "./write-policy.js";
 
@@ -368,5 +369,74 @@ describe("write policy", () => {
     );
 
     expect(decision.kind).toBe("redirect");
+  });
+
+  it("guardWrite returns true when action is allowed", () => {
+    const cfg: OpenClawConfig = {};
+    const allowed = guardWrite(
+      "typing",
+      {
+        channel: "whatsapp",
+        to: "+15559870000",
+      },
+      buildProtectedDestinationMap(cfg),
+    );
+    expect(allowed).toBe(true);
+  });
+
+  it("guardWrite suppresses protected side-effect writes", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "telegram", to: "123456789" },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "ops",
+              match: { channel: "whatsapp", chatId: "+15551230000" },
+            },
+          ],
+        },
+      },
+    };
+    const allowed = guardWrite(
+      "typing",
+      {
+        channel: "whatsapp",
+        to: "+15551230000",
+      },
+      buildProtectedDestinationMap(cfg),
+    );
+    expect(allowed).toBe(false);
+  });
+
+  it("guardWrite blocks redirect decisions at helper level", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "telegram", to: "123456789" },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "ops",
+              match: { channel: "whatsapp", chatId: "+15551230000" },
+            },
+          ],
+        },
+      },
+    };
+    const allowed = guardWrite(
+      "send",
+      {
+        channel: "whatsapp",
+        to: "+15551230000",
+      },
+      buildProtectedDestinationMap(cfg),
+    );
+    expect(allowed).toBe(false);
   });
 });

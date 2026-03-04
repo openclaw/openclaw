@@ -1,5 +1,6 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import { getProtectedDestinationMap, guardWrite } from "../../../infra/outbound/write-policy.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -535,6 +536,16 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           `slack:interaction drop action=${actionId} user=${userId} channel=${channelId ?? "unknown"} reason=${auth.reason ?? "unauthorized"}`,
         );
         if (respond) {
+          if (
+            channelId &&
+            !guardWrite(
+              "access-control",
+              { channel: "slack", to: channelId, accountId: ctx.accountId },
+              getProtectedDestinationMap(ctx.cfg),
+            )
+          ) {
+            return;
+          }
           try {
             await respond({
               text: "You are not authorized to use this control.",
@@ -642,6 +653,15 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       } catch {
         // If update fails, fallback to ephemeral confirmation for immediate UX feedback.
         if (!respond) {
+          return;
+        }
+        if (
+          !guardWrite(
+            "ephemeral-response",
+            { channel: "slack", to: channelId, accountId: ctx.accountId },
+            getProtectedDestinationMap(ctx.cfg),
+          )
+        ) {
           return;
         }
         try {

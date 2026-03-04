@@ -1,7 +1,9 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
+import { loadConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
 import { logVerbose } from "../globals.js";
+import { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -93,6 +95,15 @@ export async function enforceTelegramDmAccess(params: {
           },
           "telegram pairing request",
         );
+        if (
+          !guardWrite(
+            "pairing",
+            { channel: "telegram", to: String(chatId), accountId },
+            getProtectedDestinationMap(loadConfig()),
+          )
+        ) {
+          return false;
+        }
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
           fn: () =>
