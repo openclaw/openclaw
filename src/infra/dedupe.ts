@@ -3,6 +3,8 @@ import { pruneMapToMaxSize } from "./map-size.js";
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
   peek: (key: string | undefined | null, now?: number) => boolean;
+  /** Remove a key from the cache (e.g. to rollback a claim on failure). */
+  remove: (key: string) => void;
   clear: () => void;
   size: () => number;
 };
@@ -70,6 +72,9 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
         return false;
       }
       return hasUnexpired(key, now, false);
+    },
+    remove: (key: string) => {
+      cache.delete(key);
     },
     clear: () => {
       cache.clear();

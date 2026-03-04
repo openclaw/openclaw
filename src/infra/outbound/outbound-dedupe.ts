@@ -27,10 +27,32 @@ export type OutboundDedupeKeyParams = {
 };
 
 /**
+ * Recursively serialize an object with sorted keys for stable fingerprinting.
+ * Unlike `JSON.stringify(obj, sortedTopLevelKeys)`, this correctly handles
+ * nested objects by sorting keys at every depth level.
+ */
+function stableStringify(obj: unknown): string {
+  if (obj === null || obj === undefined) {
+    return JSON.stringify(obj);
+  }
+  if (typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return `[${obj.map(stableStringify).join(",")}]`;
+  }
+  const sorted = Object.keys(obj as Record<string, unknown>).toSorted();
+  const entries = sorted.map(
+    (k) => `${JSON.stringify(k)}:${stableStringify((obj as Record<string, unknown>)[k])}`,
+  );
+  return `{${entries.join(",")}}`;
+}
+
+/**
  * Build a deduplication key for an outbound payload.
  *
  * Returns null when the payload is empty (nothing to deduplicate).
- * The key is a JSON array of [channel, account, to, thread, normalizedText,
+ * The key is a JSON array of [channel, account, to, thread, effectiveText,
  * sortedMediaUrls, resolvedReplyToId, channelDataFingerprint] to avoid
  * ambiguity from delimiter collisions. `audioAsVoice` is intentionally
  * excluded so that voice/audio variants of the same content are
@@ -50,6 +72,9 @@ export function buildOutboundDedupeKey(params: OutboundDedupeKeyParams): string 
   }
 
   const normalizedText = rawText ? normalizeTextForComparison(rawText) : "";
+  // Fallback to trimmed raw text when normalization produces empty string
+  // (e.g. emoji-only messages where normalizeTextForComparison strips all emoji).
+  const effectiveText = normalizedText || rawText.trim();
   const sortedMediaUrls = mediaUrls.toSorted().join(",");
   // Use the resolved replyToId (payload-level takes precedence, then dispatch-level fallback).
   const replyTo = payload.replyToId ?? resolvedReplyToId ?? "";
@@ -57,9 +82,8 @@ export function buildOutboundDedupeKey(params: OutboundDedupeKeyParams): string 
   const account = accountId ?? "";
   // Include channelData fingerprint so distinct structured payloads are not
   // collapsed into the same key (e.g. different Telegram flex layouts).
-  const channelDataFp = hasChannelData
-    ? JSON.stringify(payload.channelData, Object.keys(payload.channelData!).sort())
-    : "";
+  // Uses recursive stable stringify to correctly handle nested objects.
+  const channelDataFp = hasChannelData ? stableStringify(payload.channelData) : "";
 
   // Use JSON array serialization to avoid delimiter collision issues.
   return JSON.stringify([
@@ -68,11 +92,45 @@ export function buildOutboundDedupeKey(params: OutboundDedupeKeyParams): string 
     account,
     to,
     thread,
-    normalizedText,
+    effectiveText,
     sortedMediaUrls,
     replyTo,
     channelDataFp,
   ]);
+}
+
+/**
+ * Atomically claim a dedup slot before delivery. Returns the key string
+ * as a claim token if the payload is new, or null if it is a duplicate
+ * (or an empty payload with nothing to deduplicate).
+ *
+ * This immediately registers the key in the cache so that concurrent
+ * deliveries of the same payload will see the claim and be skipped.
+ * On delivery failure, call `rollbackOutboundClaim(key)` to remove
+ * the claim and allow retry.
+ */
+export function claimOutboundDelivery(
+  params: OutboundDedupeKeyParams,
+  now?: number,
+): string | null {
+  const key = buildOutboundDedupeKey(params);
+  if (!key) {
+    return null;
+  }
+  // `check()` returns true if the key already exists (duplicate), false if new (and registers it).
+  const isDuplicate = dedupeCache.check(key, now);
+  if (isDuplicate) {
+    return null;
+  }
+  return key;
+}
+
+/**
+ * Rollback a previously claimed dedup key (e.g. when delivery fails).
+ * This allows the same payload to be retried.
+ */
+export function rollbackOutboundClaim(key: string): void {
+  dedupeCache.remove(key);
 }
 
 /**

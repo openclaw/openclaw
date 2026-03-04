@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOutboundDedupeKey,
+  claimOutboundDelivery,
   isOutboundDuplicate,
   registerOutboundDelivered,
   resetOutboundDedupe,
+  rollbackOutboundClaim,
 } from "./outbound-dedupe.js";
 import type { OutboundDedupeKeyParams } from "./outbound-dedupe.js";
 
@@ -82,9 +84,33 @@ describe("buildOutboundDedupeKey", () => {
     expect(key1).not.toBe(key2);
   });
 
+  it("differentiates nested channelData payloads", () => {
+    const key1 = buildOutboundDedupeKey(
+      makeParams({
+        payload: { channelData: { template: { type: "carousel", items: [1, 2, 3] } } },
+      }),
+    );
+    const key2 = buildOutboundDedupeKey(
+      makeParams({
+        payload: { channelData: { template: { type: "bubble", items: [4, 5, 6] } } },
+      }),
+    );
+    expect(key1).not.toBe(key2);
+  });
+
   it("produces same key for identical channelData regardless of insertion order", () => {
     const key1 = buildOutboundDedupeKey(makeParams({ payload: { channelData: { a: 1, b: 2 } } }));
     const key2 = buildOutboundDedupeKey(makeParams({ payload: { channelData: { b: 2, a: 1 } } }));
+    expect(key1).toBe(key2);
+  });
+
+  it("produces same key for deeply nested channelData regardless of insertion order", () => {
+    const key1 = buildOutboundDedupeKey(
+      makeParams({ payload: { channelData: { outer: { z: 3, a: 1 } } } }),
+    );
+    const key2 = buildOutboundDedupeKey(
+      makeParams({ payload: { channelData: { outer: { a: 1, z: 3 } } } }),
+    );
     expect(key1).toBe(key2);
   });
 
@@ -115,7 +141,6 @@ describe("buildOutboundDedupeKey", () => {
   });
 
   it("handles field values containing special characters without collision", () => {
-    // Ensure JSON serialization prevents delimiter-based collisions
     const key1 = buildOutboundDedupeKey(
       makeParams({ to: "a|b", threadId: "", payload: { text: "hi" } }),
     );
@@ -131,6 +156,17 @@ describe("buildOutboundDedupeKey", () => {
       makeParams({ payload: { text: "hi", mediaUrls: ["a.jpg"] } }),
     );
     expect(key1).toBe(key2);
+  });
+
+  it("differentiates distinct emoji-only messages", () => {
+    const key1 = buildOutboundDedupeKey(makeParams({ payload: { text: "\u{1F600}" } }));
+    const key2 = buildOutboundDedupeKey(makeParams({ payload: { text: "\u{1F622}" } }));
+    expect(key1).not.toBe(key2);
+  });
+
+  it("returns non-null key for emoji-only text", () => {
+    const key = buildOutboundDedupeKey(makeParams({ payload: { text: "\u{1F600}" } }));
+    expect(key).not.toBeNull();
   });
 });
 
@@ -152,7 +188,6 @@ describe("isOutboundDuplicate / registerOutboundDelivered", () => {
   it("returns false after TTL expires", () => {
     const now = Date.now();
     registerOutboundDelivered(makeParams(), now);
-    // TTL is 30s, check at 31s
     expect(isOutboundDuplicate(makeParams(), now + 31_000)).toBe(false);
   });
 
@@ -170,15 +205,58 @@ describe("isOutboundDuplicate / registerOutboundDelivered", () => {
 
   it("does not register on peek (isOutboundDuplicate)", () => {
     const now = Date.now();
-    // Peek only — should not register
     isOutboundDuplicate(makeParams(), now);
-    // Should still be false since peek doesn't register
     expect(isOutboundDuplicate(makeParams(), now + 100)).toBe(false);
   });
 
   it("handles empty payload gracefully", () => {
     expect(isOutboundDuplicate(makeParams({ payload: {} }))).toBe(false);
-    // Should not throw
     registerOutboundDelivered(makeParams({ payload: {} }));
+  });
+});
+
+describe("claimOutboundDelivery / rollbackOutboundClaim", () => {
+  afterEach(() => {
+    resetOutboundDedupe();
+  });
+
+  it("returns key string on first claim", () => {
+    const key = claimOutboundDelivery(makeParams());
+    expect(key).not.toBeNull();
+    expect(typeof key).toBe("string");
+  });
+
+  it("returns null on second claim (duplicate)", () => {
+    claimOutboundDelivery(makeParams());
+    const second = claimOutboundDelivery(makeParams());
+    expect(second).toBeNull();
+  });
+
+  it("returns null for empty payload", () => {
+    const key = claimOutboundDelivery(makeParams({ payload: {} }));
+    expect(key).toBeNull();
+  });
+
+  it("allows retry after rollback", () => {
+    const key = claimOutboundDelivery(makeParams());
+    expect(key).not.toBeNull();
+    rollbackOutboundClaim(key!);
+    const retry = claimOutboundDelivery(makeParams());
+    expect(retry).not.toBeNull();
+  });
+
+  it("blocks concurrent claims for same payload", () => {
+    const now = Date.now();
+    const key1 = claimOutboundDelivery(makeParams(), now);
+    const key2 = claimOutboundDelivery(makeParams(), now + 1);
+    expect(key1).not.toBeNull();
+    expect(key2).toBeNull();
+  });
+
+  it("allows claims for different recipients", () => {
+    const key1 = claimOutboundDelivery(makeParams({ to: "123" }));
+    const key2 = claimOutboundDelivery(makeParams({ to: "456" }));
+    expect(key1).not.toBeNull();
+    expect(key2).not.toBeNull();
   });
 });
