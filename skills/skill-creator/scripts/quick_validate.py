@@ -117,15 +117,10 @@ def validate_skill(skill_path):
     name = name.strip()
     if not name:
         return False, "Name cannot be empty"
-    if not re.match(r"^[a-z0-9-]+$", name):
+    if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", name):
         return (
             False,
-            f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)",
-        )
-    if name.startswith("-") or name.endswith("-") or "--" in name:
-        return (
-            False,
-            f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens",
+            f"Name '{name}' should be kebab-case (lowercase letters/digits, hyphens between words, no leading/trailing/consecutive hyphens)",
         )
     if len(name) > MAX_SKILL_NAME_LENGTH:
         return (
