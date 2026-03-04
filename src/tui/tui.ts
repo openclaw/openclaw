@@ -199,13 +199,15 @@ export function resolveTuiSessionKey(params: {
       mainKey: params.sessionMainKey,
     });
   }
-  if (trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
+  // Normalize to lowercase to match Gateway's resolveSessionStoreKey behavior
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
   }
-  if (trimmed.startsWith("agent:")) {
-    return trimmed;
+  if (lowered.startsWith("agent:")) {
+    return lowered;
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId.toLowerCase()}:${lowered}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {

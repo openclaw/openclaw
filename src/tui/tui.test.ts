@@ -74,6 +74,36 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:ops:incident");
   });
+
+  it("normalizes session keys to lowercase to match Gateway behavior", () => {
+    // Fixes #33866 - TUI real-time events dropped for uppercase session names
+    expect(
+      resolveTuiSessionKey({
+        raw: "Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+
+    expect(
+      resolveTuiSessionKey({
+        raw: "UPPERCASE",
+        sessionScope: "global",
+        currentAgentId: "MyAgent",
+        sessionMainKey: "agent:myagent:main",
+      }),
+    ).toBe("agent:myagent:uppercase");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
