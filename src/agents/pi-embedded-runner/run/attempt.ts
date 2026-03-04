@@ -1599,10 +1599,13 @@ export async function runEmbeddedAttempt(
                     hookCtx,
                   )
                   .then((result) => {
-                    if (!result || (!result.block && !result.toolCalls)) {
+                    if (!params.sessionId) {
                       return;
                     }
-                    if (!params.sessionId) {
+                    // If hook returned no filter/block, clear any stale gate from
+                    // a previous message_end in the same turn (multi-step tool loops).
+                    if (!result || (!result.block && !result.toolCalls)) {
+                      clearAfterLlmCallGate(params.sessionId);
                       return;
                     }
                     // Guard against stale results: if the iteration has advanced
@@ -1973,6 +1976,10 @@ export async function runEmbeddedAttempt(
               } else {
                 assistantTexts.push(modifiedContent);
               }
+              // Refresh messagesSnapshot so downstream consumers (agent_end,
+              // llm_output, cache trace) see the post-redaction content, not
+              // the original pre-hook text.
+              messagesSnapshot = activeSession.messages.slice();
             }
           } catch (err) {
             log.warn(`before_response_emit hook failed: ${String(err)}`);
