@@ -88,11 +88,15 @@ async function postSlackMessageBestEffort(params: {
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
+    ...(params.unfurlLinks !== undefined ? { unfurl_links: params.unfurlLinks } : {}),
+    ...(params.unfurlMedia !== undefined ? { unfurl_media: params.unfurlMedia } : {}),
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
   try {
@@ -249,6 +253,8 @@ export async function sendMessageSlack(
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
+  const unfurlLinks = account.config.unfurlLinks;
+  const unfurlMedia = account.config.unfurlMedia;
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
@@ -261,6 +267,8 @@ export async function sendMessageSlack(
       threadTs: opts.threadTs,
       identity: opts.identity,
       blocks,
+      unfurlLinks,
+      unfurlMedia,
     });
     return {
       messageId: response.ts ?? "unknown",
@@ -309,6 +317,8 @@ export async function sendMessageSlack(
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        unfurlLinks,
+        unfurlMedia,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
@@ -320,6 +330,8 @@ export async function sendMessageSlack(
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        unfurlLinks,
+        unfurlMedia,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }

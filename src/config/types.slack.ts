@@ -149,6 +149,10 @@ export type SlackAccountConfig = {
   /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
   streamMode?: SlackLegacyStreamMode;
   mediaMaxMb?: number;
+  /** If false, suppress Slack link previews for text-based content in outbound messages. Default: true. */
+  unfurlLinks?: boolean;
+  /** If false, suppress Slack link previews for media content in outbound messages. Default: true. */
+  unfurlMedia?: boolean;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
