@@ -436,13 +436,43 @@ export function createExecTool(
       });
       if (gatewayInterceptResult) {
         const text = gatewayInterceptResult.content.find((part) => part.type === "text")?.text;
-        if (text) {
-          return {
-            ...gatewayInterceptResult,
-            content: [{ type: "text", text: `${getWarningText()}${text}` }],
-          };
+        if (!text || warnings.length === 0) {
+          return gatewayInterceptResult;
         }
-        return gatewayInterceptResult;
+
+        // Preserve `--json` machine-readable outputs by attaching warnings inside the JSON
+        // payload rather than prefixing extra text that breaks parsing.
+        const trimmed = text.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              const existingWarnings = (parsed as { warnings?: unknown }).warnings;
+              const mergedWarnings = Array.isArray(existingWarnings)
+                ? [...existingWarnings, ...warnings]
+                : warnings;
+              const payload = { ...(parsed as Record<string, unknown>), warnings: mergedWarnings };
+              const jsonText = JSON.stringify(payload, null, 2);
+              const updatedDetails =
+                gatewayInterceptResult.details.status === "completed" ||
+                gatewayInterceptResult.details.status === "failed"
+                  ? { ...gatewayInterceptResult.details, aggregated: jsonText }
+                  : gatewayInterceptResult.details;
+              return {
+                ...gatewayInterceptResult,
+                content: [{ type: "text", text: jsonText }],
+                details: updatedDetails,
+              };
+            }
+          } catch {
+            // Fall through to prefix warnings.
+          }
+        }
+
+        return {
+          ...gatewayInterceptResult,
+          content: [{ type: "text", text: `${getWarningText()}${text}` }],
+        };
       }
 
       if (host === "gateway" && !bypassApprovals) {

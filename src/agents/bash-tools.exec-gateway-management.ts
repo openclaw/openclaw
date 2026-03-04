@@ -78,6 +78,15 @@ const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--test-pattern",
   "--workspace-concurrency",
 ]);
+const NPM_EXEC_BOOLEAN_OPTIONS = new Set(["--include-workspace-root", "--workspaces"]);
+const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
+  "-c",
+  "--call",
+  "-p",
+  "--package",
+  "-w",
+  "--workspace",
+]);
 const CLI_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-v", "--version"]);
 const GATEWAY_SERVICE_BOOLEAN_FLAGS = new Set(["--json"]);
 const GATEWAY_RESTART_EXTRA_FLAGS = new Set(["--hard"]);
@@ -415,6 +424,66 @@ function consumePnpmOption(argv: string[], idx: number): number | null {
   return null;
 }
 
+function consumeNpmExecOption(
+  argv: string[],
+  idx: number,
+): {
+  consumed: number;
+  call?: string;
+} | null {
+  const token = argv[idx]?.trim() ?? "";
+  if (!token.startsWith("-")) {
+    return { consumed: 0 };
+  }
+
+  if (token.startsWith("--")) {
+    const equalsIdx = token.indexOf("=");
+    const rawFlag = equalsIdx === -1 ? token : token.slice(0, equalsIdx);
+    const flag = rawFlag.toLowerCase();
+    const hasInlineValue = equalsIdx !== -1;
+    const inlineValue = hasInlineValue ? token.slice(equalsIdx + 1).trim() : "";
+
+    if (NPM_EXEC_BOOLEAN_OPTIONS.has(flag)) {
+      return hasInlineValue ? null : { consumed: 1 };
+    }
+    if (!NPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+      return null;
+    }
+    if (hasInlineValue) {
+      if (!inlineValue) {
+        return null;
+      }
+      return flag === "--call" ? { consumed: 1, call: inlineValue } : { consumed: 1 };
+    }
+    const next = argv[idx + 1]?.trim() ?? "";
+    if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
+      return null;
+    }
+    return flag === "--call" ? { consumed: 2, call: next } : { consumed: 2 };
+  }
+
+  const shortFlag = token.slice(0, 2).toLowerCase();
+  const hasInlineValue = token.length > 2;
+  if (NPM_EXEC_BOOLEAN_OPTIONS.has(shortFlag)) {
+    return hasInlineValue ? null : { consumed: 1 };
+  }
+  if (!NPM_EXEC_OPTIONS_WITH_VALUE.has(shortFlag)) {
+    return null;
+  }
+  const inlineValue = hasInlineValue ? token.slice(2).trim() : "";
+  if (hasInlineValue) {
+    if (!inlineValue) {
+      return null;
+    }
+    return shortFlag === "-c" ? { consumed: 1, call: inlineValue } : { consumed: 1 };
+  }
+  const next = argv[idx + 1]?.trim() ?? "";
+  if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
+    return null;
+  }
+  return shortFlag === "-c" ? { consumed: 2, call: next } : { consumed: 2 };
+}
+
 function readPnpmCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
   if (second && normalizeExecutableToken(second) === "openclaw") {
@@ -483,6 +552,59 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
   return null;
 }
 
+function readNpmExecLikeCliArgv(argv: string[], startIdx: number): string[] | null {
+  let idx = startIdx;
+  let call: string | null = null;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      if (call) {
+        return null;
+      }
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-")) {
+      const consumed = consumeNpmExecOption(argv, idx);
+      if (!consumed) {
+        return null;
+      }
+      if (consumed.call !== undefined) {
+        if (call) {
+          return null;
+        }
+        call = consumed.call;
+      }
+      idx += consumed.consumed;
+      continue;
+    }
+    if (call) {
+      return null;
+    }
+    break;
+  }
+
+  if (call) {
+    const callArgv = splitShellArgs(call);
+    if (!callArgv || callArgv.length === 0) {
+      return null;
+    }
+    if (normalizeExecutableToken(callArgv[0] ?? "") !== "openclaw") {
+      return null;
+    }
+    return callArgv.slice(1);
+  }
+
+  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+    return argv.slice(idx + 1);
+  }
+  return null;
+}
+
 function readCliArgv(argv: string[]): string[] | null {
   if (argv.length === 0) {
     return null;
@@ -496,6 +618,9 @@ function readCliArgv(argv: string[]): string[] | null {
   if (RUNNER_BINS.has(first)) {
     if (first === "pnpm") {
       return readPnpmCliArgv(argv);
+    }
+    if (first === "npx") {
+      return readNpmExecLikeCliArgv(argv, 1);
     }
 
     let idx = 1;
@@ -521,28 +646,11 @@ function readCliArgv(argv: string[]): string[] | null {
   }
 
   if (first === "npm") {
-    if ((argv[1]?.trim() ?? "").toLowerCase() !== "exec") {
+    const second = normalizeLower(argv[1]);
+    if (second !== "exec" && second !== "x") {
       return null;
     }
-    let idx = 2;
-    while (idx < argv.length) {
-      const token = argv[idx]?.trim();
-      if (!token) {
-        idx += 1;
-        continue;
-      }
-      if (token === "--") {
-        idx += 1;
-        break;
-      }
-      if (token.startsWith("-")) {
-        return null;
-      }
-      break;
-    }
-    if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
-      return argv.slice(idx + 1);
-    }
+    return readNpmExecLikeCliArgv(argv, 2);
   }
 
   return null;

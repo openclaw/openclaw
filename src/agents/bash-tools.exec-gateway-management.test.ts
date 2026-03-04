@@ -288,6 +288,51 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects npm exec wrapped restart commands with package option", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "npm exec --package=openclaw -- openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects npm exec wrapped restart commands with call option", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'npm exec -c "openclaw gateway restart"',
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects npx wrapped restart commands with call option", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'npx -c "openclaw gateway restart"',
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("marks chained restart commands as complex", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw gateway restart && echo ok",
@@ -884,6 +929,29 @@ describe("exec gateway management interception", () => {
       result: "restarted",
       service: { loaded: true },
     });
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "exec:gateway-restart" }),
+    );
+  });
+
+  it("keeps intercepted gateway restart --json parseable when warnings are present", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute("call1-json-warnings", {
+      command: "openclaw gateway restart --json",
+      background: true,
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const payload = JSON.parse(text) as { warnings?: unknown };
+    expect(payload.warnings).toEqual([
+      "Warning: background execution is disabled; running synchronously.",
+    ]);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "exec:gateway-restart" }),
     );
