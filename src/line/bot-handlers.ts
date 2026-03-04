@@ -9,6 +9,7 @@ import type {
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -222,6 +223,32 @@ function resolveLineGroupConfig(params: {
   return groups["*"];
 }
 
+function resolveLineMentionFlags(event: MessageEvent | PostbackEvent): {
+  wasMentioned: boolean;
+  hasAnyMention: boolean;
+  canDetectMention: boolean;
+} {
+  if (event.type !== "message" || event.message.type !== "text") {
+    return { wasMentioned: false, hasAnyMention: false, canDetectMention: false };
+  }
+
+  const canDetectMention = true;
+  const mentionRaw = (event.message as MessageEvent["message"] & { mention?: unknown }).mention;
+  const mentionees = (
+    mentionRaw as
+      | {
+          mentionees?: unknown;
+        }
+      | undefined
+  )?.mentionees;
+  const hasAnyMention = Array.isArray(mentionees) && mentionees.length > 0;
+  return {
+    wasMentioned: Boolean(hasAnyMention),
+    hasAnyMention: Boolean(hasAnyMention),
+    canDetectMention,
+  };
+}
+
 async function sendLinePairingReply(params: {
   senderId: string;
   replyToken?: string;
@@ -360,6 +387,22 @@ async function shouldProcessLineEvent(
       allowTextCommands: true,
       hasControlCommand: hasControlCommand(rawText, cfg),
     });
+    const mentionFlags = resolveLineMentionFlags(event);
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup,
+      requireMention: Boolean(groupConfig?.requireMention),
+      canDetectMention: mentionFlags.canDetectMention,
+      wasMentioned: mentionFlags.wasMentioned,
+      implicitMention: false,
+      hasAnyMention: mentionFlags.hasAnyMention,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommand(rawText, cfg),
+      commandAuthorized: commandGate.commandAuthorized,
+    });
+    if (groupConfig?.requireMention && mentionGate.shouldSkip) {
+      logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (requireMention: true)`);
+      return denied;
+    }
     return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
   }
 

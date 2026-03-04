@@ -183,6 +183,83 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks group message when requireMention is true and no one is mentioned", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m3x", type: "text", text: "hello", mention: { mentionees: [] } },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-3x",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+        },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("allows group message when requireMention is true and bot was mentioned", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: {
+        id: "m3y",
+        type: "text",
+        text: "hello @bot",
+        mention: { mentionees: [{ userId: "bot-user" }] },
+      },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-3y",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+        },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
     readAllowFromStoreMock.mockResolvedValueOnce(["user-store"]);
     const processMessage = vi.fn();
