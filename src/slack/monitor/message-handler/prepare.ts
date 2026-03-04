@@ -471,7 +471,7 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
+  const slackTo = isDirectMessage ? `channel:${message.channel}` : `channel:${message.channel}`;
 
   const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
