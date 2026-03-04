@@ -393,9 +393,8 @@ export async function runConfigRestore(opts: {
     }
 
     // Validate backup is parseable before overwriting anything
-    let backupContent: string;
     try {
-      backupContent = fs.readFileSync(restorePath, "utf8");
+      const backupContent = fs.readFileSync(restorePath, "utf8");
       JSON5.parse(backupContent);
     } catch (e) {
       runtime.error(danger(`Backup file is not valid JSON5 and cannot be restored: ${restorePath}`));
@@ -416,8 +415,12 @@ export async function runConfigRestore(opts: {
 
     // Restore
     fs.copyFileSync(restorePath, configPath);
-    runtime.log(success(`Config restored from ${shortenHomePath(restorePath)}`));
-    runtime.log(info("Run \`openclaw gateway restart\` to apply."));
+    if (opts.json) {
+      runtime.log(JSON.stringify({ ok: true, restored: restorePath }));
+    } else {
+      runtime.log(success(`Config restored from ${shortenHomePath(restorePath)}`));
+      runtime.log(info("Run \`openclaw gateway restart\` to apply."));
+    }
   } catch (err) {
     runtime.error(danger(`Restore failed: ${String(err)}`));
     runtime.exit(1);
@@ -507,3 +510,4 @@ export function registerConfigCli(program: Command) {
       });
     });
 }
+
