@@ -1025,7 +1025,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.smartReset.prompt":
     "Custom review instruction passed to before_reset hooks in smart mode, such as summarizing key decisions and todo items. Defaults to a built-in memory-focused prompt when omitted.",
   "session.smartReset.wait":
-    "When true, block reset completion until the smart review hook finishes; when false, run review in the background. Use true for deterministic capture and false for lower perceived latency.",
+    "When true, block reset completion until the smart review hook finishes; when false, run review in the background. Use true when downstream hooks must finish before reset returns, and false for lower perceived latency.",
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.typingIntervalSeconds":

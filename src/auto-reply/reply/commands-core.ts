@@ -119,6 +119,8 @@ export async function emitResetCommandHooks(params: {
     const sessionFile = prevEntry?.sessionFile;
     const smartReset = resolveSmartResetReviewConfig(params.cfg);
     const runBeforeReset = async () => {
+      const runMode = smartReset.enabled && smartReset.wait ? "sync" : "async";
+      logVerbose(`before_reset: enter (${runMode})`);
       try {
         const messages: unknown[] = [];
         if (sessionFile) {
@@ -153,6 +155,7 @@ export async function emitResetCommandHooks(params: {
             workspaceDir: params.workspaceDir,
           },
         );
+        logVerbose("before_reset: complete");
       } catch (err: unknown) {
         logVerbose(`before_reset hook failed: ${String(err)}`);
       }
