@@ -78,6 +78,7 @@ export type CreateSandboxBackendParams = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  browserPortPublishing?: Array<{ containerPort: number }>;
 };
 
 export type SandboxBackendFactory = (

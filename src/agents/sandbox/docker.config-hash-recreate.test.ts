@@ -126,6 +126,7 @@ function createSandboxConfig(
       headless: true,
       enableNoVnc: false,
       allowHostControl: false,
+      shareNetworkNamespace: false,
       autoStart: false,
       autoStartTimeoutMs: 5000,
     },
