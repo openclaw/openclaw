@@ -385,7 +385,9 @@ describe("sanitizeFileNameForUpload", () => {
 
   it("preserves Chinese characters", () => {
     expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
-    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe("武汉15座山登山信息汇总.csv");
+    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
+      "武汉15座山登山信息汇总.csv",
+    );
   });
 
   it("preserves em-dash and full-width brackets", () => {
