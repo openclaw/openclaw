@@ -1472,6 +1472,27 @@ export function createWebSearchTool(options?: {
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");
+
+      if (domainFilter && domainFilter.length > 0) {
+        const hasDenylist = domainFilter.some((d) => d.startsWith("-"));
+        const hasAllowlist = domainFilter.some((d) => !d.startsWith("-"));
+        if (hasDenylist && hasAllowlist) {
+          return jsonResult({
+            error: "invalid_domain_filter",
+            message:
+              "domain_filter cannot mix allowlist and denylist entries. Use either all positive entries (allowlist) or all entries prefixed with '-' (denylist).",
+            docs: "https://docs.openclaw.ai/tools/web",
+          });
+        }
+        if (domainFilter.length > 20) {
+          return jsonResult({
+            error: "invalid_domain_filter",
+            message: "domain_filter supports a maximum of 20 domains.",
+            docs: "https://docs.openclaw.ai/tools/web",
+          });
+        }
+      }
+
       const maxTokens = readNumberParam(params, "max_tokens", { integer: true });
       const maxTokensPerPage = readNumberParam(params, "max_tokens_per_page", { integer: true });
 
