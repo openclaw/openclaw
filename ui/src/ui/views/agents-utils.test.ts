@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildModelOptions,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +97,31 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("buildModelOptions", () => {
+  it("marks the current model option as selected in option bindings", () => {
+    const configForm = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5-mini": { alias: "fast" },
+            "openai/gpt-5.3-codex": { alias: "primary" },
+          },
+        },
+      },
+    } as Record<string, unknown>;
+
+    const options = buildModelOptions(configForm, "openai/gpt-5.3-codex") as Array<{
+      strings: readonly string[];
+      values: readonly unknown[];
+    }>;
+
+    expect(Array.isArray(options)).toBe(true);
+    const selected = options.find((option) => option.values[0] === "openai/gpt-5.3-codex");
+    const unselected = options.find((option) => option.values[0] === "openai/gpt-5-mini");
+    expect(selected?.values[1]).toBe(true);
+    expect(unselected?.values[1]).toBe(false);
   });
 });
