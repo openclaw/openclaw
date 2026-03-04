@@ -160,6 +160,19 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("calls triggerOpenClawRestart on win32 with OPENCLAW_SERVICE_KIND (gateway.cmd)", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "schtasks" });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+    expect(result.mode).toBe("supervised");
+  });
+
   it("does not kickstart on win32 with only OPENCLAW_TASK_SCRIPT (script-only install)", () => {
     clearSupervisorHints();
     setPlatform("win32");

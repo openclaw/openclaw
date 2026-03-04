@@ -37,7 +37,11 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // the supervised service to bypass restart delays.
     const shouldKickstart =
       (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) ||
-      (process.platform === "win32" && !!process.env.OPENCLAW_WINDOWS_TASK_NAME?.trim());
+      (process.platform === "win32" &&
+        !!(
+          process.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+          process.env.OPENCLAW_SERVICE_KIND?.trim()
+        ));
     if (shouldKickstart) {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
