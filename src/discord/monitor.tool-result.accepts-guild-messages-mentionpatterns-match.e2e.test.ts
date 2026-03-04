@@ -299,6 +299,7 @@ describe("discord tool result dispatch", () => {
         client,
       );
 
+      await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(sendMock).toHaveBeenCalledTimes(1);
     },
@@ -394,6 +395,7 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const payload = dispatchMock.mock.calls[0]?.[0]?.ctx as Record<string, unknown>;
     expect(payload.WasMentioned).toBe(true);
@@ -407,6 +409,7 @@ describe("discord tool result dispatch", () => {
     const client = createThreadClient();
     await handler(createThreadEvent("m4", threadChannel), client);
 
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
@@ -471,6 +474,7 @@ describe("discord tool result dispatch", () => {
     const client = createThreadClient({ fetchChannel, restGet });
     await handler(createThreadEvent("m6"), client);
 
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:forum-1");
@@ -497,6 +501,7 @@ describe("discord tool result dispatch", () => {
     const client = createThreadClient();
     await handler(createThreadEvent("m5", threadChannel), client);
 
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:support:discord:channel:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:support:discord:channel:p1");
