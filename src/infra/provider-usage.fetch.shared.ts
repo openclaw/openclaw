@@ -65,11 +65,7 @@ export async function fetchJsonWithRetry(
     providerErr,
     onRetry ? (attempt, max, delayMs) => onRetry(attempt, max, delayMs) : undefined,
   ).catch((err: unknown) => {
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "httpStatus" in err
-    ) {
+    if (typeof err === "object" && err !== null && "httpStatus" in err) {
       return lastFailedRes;
     }
     throw err;
