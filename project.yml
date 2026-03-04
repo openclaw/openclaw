@@ -1,0 +1,11 @@
+# Deployment project configuration (used when building/deploying this repo).
+# The build system discovers actions from packages (e.g. clawdbot/index, clawdbot/scripts,
+# clawdbot/package). The "package" action corresponds to the package manifest; without
+# an explicit runtime it fails with "runtime type could not be determined".
+# This file defines runtime for those actions so the build succeeds.
+
+actions:
+  clawdbot/package:
+    runtime: node
+  moltbot/package:
+    runtime: node
