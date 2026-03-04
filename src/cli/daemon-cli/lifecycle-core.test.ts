@@ -123,4 +123,27 @@ describe("runServiceRestart token drift", () => {
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
   });
+
+  it("blocks systemd restarts from agent exec sessions", async () => {
+    const previousLabel = service.label;
+    service.label = "systemd";
+    vi.stubEnv("OPENCLAW_SHELL", "exec");
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { error?: string; hints?: string[] };
+    expect(payload.error).toContain("blocked from agent exec sessions on systemd");
+    expect(payload.hints?.[0]).toContain("outside agent exec sessions");
+
+    service.label = previousLabel;
+  });
 });

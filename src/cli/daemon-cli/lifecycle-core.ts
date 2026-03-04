@@ -8,6 +8,7 @@ import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   buildDaemonServiceSnapshot,
   createNullWriter,
@@ -36,6 +37,17 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
     return hints;
   }
   return [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
+}
+
+function shouldBlockSystemdRestartFromAgentExec(params: {
+  service: GatewayService;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const serviceLabel = params.service.label.trim().toLowerCase();
+  if (serviceLabel !== "systemd") {
+    return false;
+  }
+  return params.env.OPENCLAW_SHELL?.trim().toLowerCase() === "exec";
 }
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {
@@ -271,6 +283,20 @@ export async function runServiceRestart(params: {
       json,
       emit,
     });
+    return false;
+  }
+
+  if (shouldBlockSystemdRestartFromAgentExec({ service: params.service, env: process.env })) {
+    const hints = [
+      "Run this restart command from a normal shell outside agent exec sessions.",
+      params.serviceNoun.trim().toLowerCase() === "gateway"
+        ? `Gateway-specific: ${formatCliCommand("openclaw gateway restart")}`
+        : "A systemd restart from inside an agent exec session can terminate that same session.",
+    ];
+    fail(
+      `${params.serviceNoun} restart is blocked from agent exec sessions on systemd to avoid SIGTERMing the active session and triggering restart loops.`,
+      hints,
+    );
     return false;
   }
 
