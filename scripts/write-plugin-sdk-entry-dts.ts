@@ -9,6 +9,7 @@ import path from "node:path";
 const entrypoints = [
   "index",
   "core",
+  "compat",
   "telegram",
   "discord",
   "slack",
