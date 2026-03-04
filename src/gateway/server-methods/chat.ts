@@ -876,7 +876,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         CHANNEL_SCOPED_SESSION_SHAPES.has(part),
       );
       const hasLegacyChannelPeerShape =
-        !isChannelScopedSession && typeof sessionScopeParts[1] === "string";
+        !isChannelScopedSession &&
+        typeof sessionScopeParts[1] === "string" &&
+        sessionChannelHint === routeChannelCandidate;
       // Only inherit prior external route metadata for channel-scoped sessions.
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
