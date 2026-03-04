@@ -2233,6 +2233,11 @@ main() {
         exit 1
     fi
 
+    # Step 3: Git (required for all install methods)
+    if ! check_git; then
+        install_git
+    fi
+
     ui_stage "Installing OpenClaw"
 
     local final_git_dir=""
