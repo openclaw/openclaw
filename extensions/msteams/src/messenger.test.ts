@@ -1,12 +1,9 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  SILENT_REPLY_TOKEN,
-  type PluginRuntime,
-} from "openclaw/plugin-sdk/msteams";
-import { buildRandomTempFilePath } from "../../../src/plugin-sdk/temp-path.js";
+import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { buildRandomTempFilePath } from "../../../src/plugin-sdk/temp-path.js";
 import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
