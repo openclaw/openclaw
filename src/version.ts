@@ -107,12 +107,13 @@ export function resolveRuntimeServiceVersion(
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+  const serviceVersion = resolveUsableRuntimeVersion(env["OPENCLAW_SERVICE_VERSION"]);
 
   return (
     firstNonEmpty(
-      env["OPENCLAW_VERSION"],
+      serviceVersion,
       runtimeVersion,
-      env["OPENCLAW_SERVICE_VERSION"],
+      env["OPENCLAW_VERSION"],
       env["npm_package_version"],
     ) ?? fallback
   );
