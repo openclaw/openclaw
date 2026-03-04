@@ -849,6 +849,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
+  it("queues reasoning-end split decisions behind queued reasoning deltas", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Simulate fire-and-forget upstream ordering: reasoning_end arrives
+        // before the queued reasoning delta callback has finished.
+        const firstReasoningPromise = replyOptions?.onReasoningStream?.({
+          text: "Reasoning:\n_first block_",
+        });
+        await replyOptions?.onReasoningEnd?.();
+        await firstReasoningPromise;
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_second block_" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+    expect(reasoningDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans superseded reasoning previews after lane rotation", async () => {
     let reasoningDraftParams:
       | {

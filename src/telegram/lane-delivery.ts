@@ -309,7 +309,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     // Send the replacement message first, then clean up the old preview.
     // This avoids the visual "disappear then reappear" flash.
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-    if (archivedPreview.deleteIfUnused !== false) {
+    // Once this archived preview is consumed by a fallback final send, delete it
+    // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
+    if (delivered || archivedPreview.deleteIfUnused !== false) {
       try {
         await params.deletePreviewMessage(archivedPreview.messageId);
       } catch (err) {

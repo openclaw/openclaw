@@ -651,10 +651,11 @@ export const dispatchTelegramMessage = async ({
               })
           : undefined,
         onReasoningEnd: reasoningLane.stream
-          ? () => {
-              // Split when/if a later reasoning block begins.
-              splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-            }
+          ? () =>
+              enqueueDraftLaneEvent(async () => {
+                // Split when/if a later reasoning block begins.
+                splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+              })
           : undefined,
         onToolStart: statusReactionController
           ? async (payload) => {
