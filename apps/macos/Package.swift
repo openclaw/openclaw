@@ -22,6 +22,7 @@ let package = Package(
         .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../../Swabble"),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.12.0"),
     ],
     targets: [
         .target(
@@ -54,6 +55,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "PeekabooBridge", package: "Peekaboo"),
                 .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
+                .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             exclude: [
                 "Resources/Info.plist",

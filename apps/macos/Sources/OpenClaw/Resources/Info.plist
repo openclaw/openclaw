@@ -57,6 +57,8 @@
 	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>OpenClaw reads your calendar to detect upcoming meetings for live transcription.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
 

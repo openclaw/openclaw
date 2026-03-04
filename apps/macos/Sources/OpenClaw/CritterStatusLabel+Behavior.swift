@@ -63,6 +63,7 @@ extension CritterStatusLabel {
                     .frame(width: 6, height: 6)
                     .padding(1)
             }
+
         }
         .frame(width: 18, height: 18)
     }
@@ -112,12 +113,14 @@ extension CritterStatusLabel {
             nil
         }
 
+        let recording = self.isMeetingRecording
+
         if self.isPaused {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil))
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil, recordingDot: recording))
         }
 
         if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil))
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil, recordingDot: recording))
         }
 
         return Image(nsImage: CritterIconRenderer.makeIcon(
@@ -126,7 +129,8 @@ extension CritterStatusLabel {
             earWiggle: self.earWiggle,
             earScale: self.earBoostActive ? 1.9 : 1.0,
             earHoles: self.earBoostActive,
-            badge: badge))
+            badge: badge,
+            recordingDot: recording))
     }
 
     private func resetMotion() {
