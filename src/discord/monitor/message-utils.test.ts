@@ -30,6 +30,22 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+const DISCORD_CDN_HOSTNAMES = [
+  "cdn.discordapp.com",
+  "media.discordapp.net",
+  "*.discordapp.com",
+  "*.discordapp.net",
+];
+
+function expectDiscordCdnSsrFPolicy(policy: unknown) {
+  expect(policy).toEqual(
+    expect.objectContaining({
+      allowRfc2544BenchmarkRange: true,
+      hostnameAllowlist: expect.arrayContaining(DISCORD_CDN_HOSTNAMES),
+    }),
+  );
+}
+
 function expectSinglePngDownload(params: {
   result: unknown;
   expectedUrl: string;
@@ -38,13 +54,20 @@ function expectSinglePngDownload(params: {
   placeholder: "<media:image>" | "<media:sticker>";
 }) {
   expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-  expect(fetchRemoteMedia).toHaveBeenCalledWith({
+  const call = fetchRemoteMedia.mock.calls[0]?.[0] as {
+    url?: string;
+    filePathHint?: string;
+    maxBytes?: number;
+    fetchImpl?: unknown;
+    ssrfPolicy?: unknown;
+  };
+  expect(call).toMatchObject({
     url: params.expectedUrl,
     filePathHint: params.filePathHint,
     maxBytes: 512,
     fetchImpl: undefined,
-    ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
   });
+  expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
   expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
   expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
   expect(params.result).toEqual([
@@ -151,13 +174,20 @@ describe("resolveForwardedMediaList", () => {
     );
 
     expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    const call = fetchRemoteMedia.mock.calls[0]?.[0] as {
+      url?: string;
+      filePathHint?: string;
+      maxBytes?: number;
+      fetchImpl?: unknown;
+      ssrfPolicy?: unknown;
+    };
+    expect(call).toMatchObject({
       url: attachment.url,
       filePathHint: attachment.filename,
       maxBytes: 512,
       fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
+    expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
     expect(result).toEqual([
@@ -471,7 +501,7 @@ describe("Discord media SSRF policy", () => {
     saveMediaBuffer.mockClear();
   });
 
-  it("passes ssrfPolicy with Discord CDN allowedHostnames and allowRfc2544BenchmarkRange", async () => {
+  it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -488,11 +518,42 @@ describe("Discord media SSRF policy", () => {
       1024,
     );
 
-    const policy = fetchRemoteMedia.mock.calls[0][0].ssrfPolicy;
-    expect(policy).toEqual({
-      allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
-      allowRfc2544BenchmarkRange: true,
+    const policy = fetchRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy;
+    expectDiscordCdnSsrFPolicy(policy);
+  });
+
+  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
     });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/b.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [{ id: "b1", url: "https://cdn.discordapp.com/b.png", filename: "b.png" }],
+      }),
+      1024,
+      undefined,
+      {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["assets.example.com"],
+        allowedHostnames: ["assets.example.com"],
+      },
+    );
+
+    const policy = fetchRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy;
+    expect(policy).toEqual(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
+        allowedHostnames: expect.arrayContaining(["assets.example.com"]),
+        hostnameAllowlist: expect.arrayContaining(["assets.example.com", ...DISCORD_CDN_HOSTNAMES]),
+      }),
+    );
   });
 });
 

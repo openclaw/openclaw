@@ -192,6 +192,7 @@ async function sendAdditionalDiscordMedia(params: {
   rest?: RequestClient;
   accountId?: string;
   mediaUrls: string[];
+  mediaLocalRoots?: readonly string[];
   resolveReplyTo: () => string | undefined;
   retryConfig: ResolvedRetryConfig;
 }) {
@@ -204,6 +205,7 @@ async function sendAdditionalDiscordMedia(params: {
           rest: params.rest,
           mediaUrl,
           accountId: params.accountId,
+          mediaLocalRoots: params.mediaLocalRoots,
           replyTo,
         }),
       params.retryConfig,
@@ -226,6 +228,7 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
+  mediaLocalRoots?: readonly string[];
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
@@ -341,6 +344,7 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         accountId: params.accountId,
         mediaUrls: mediaList.slice(1),
+        mediaLocalRoots: params.mediaLocalRoots,
         resolveReplyTo,
         retryConfig,
       });
@@ -353,6 +357,7 @@ export async function deliverDiscordReply(params: {
       rest: params.rest,
       mediaUrl: firstMedia,
       accountId: params.accountId,
+      mediaLocalRoots: params.mediaLocalRoots,
       replyTo,
     });
     deliveredAny = true;
@@ -362,6 +367,7 @@ export async function deliverDiscordReply(params: {
       rest: params.rest,
       accountId: params.accountId,
       mediaUrls: mediaList.slice(1),
+      mediaLocalRoots: params.mediaLocalRoots,
       resolveReplyTo,
       retryConfig,
     });

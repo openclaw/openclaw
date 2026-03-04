@@ -46,6 +46,7 @@ import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
@@ -210,6 +211,19 @@ function isDiscordUnknownInteraction(error: unknown): boolean {
     return true;
   }
   if (/Unknown interaction/i.test(err.rawBody?.message ?? "")) {
+    return true;
+  }
+  return false;
+}
+
+function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
+  if ((payload.text ?? "").trim()) {
+    return true;
+  }
+  if ((payload.mediaUrl ?? "").trim()) {
+    return true;
+  }
+  if (payload.mediaUrls?.some((entry) => entry.trim())) {
     return true;
   }
   return false;
@@ -1455,6 +1469,46 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
 
+  const pluginMatch = matchPluginCommand(prompt);
+  if (pluginMatch) {
+    if (suppressReplies) {
+      return;
+    }
+    const channelId = rawChannelId || "unknown";
+    const pluginReply = await executePluginCommand({
+      command: pluginMatch.command,
+      args: pluginMatch.args,
+      senderId: sender.id,
+      channel: "discord",
+      channelId,
+      isAuthorizedSender: commandAuthorized,
+      commandBody: prompt,
+      config: cfg,
+      from: isDirectMessage
+        ? `discord:${user.id}`
+        : isGroupDm
+          ? `discord:group:${channelId}`
+          : `discord:channel:${channelId}`,
+      to: `slash:${user.id}`,
+      accountId,
+    });
+    if (!hasRenderableReplyPayload(pluginReply)) {
+      await respond("Done.");
+      return;
+    }
+    await deliverDiscordInteractionReply({
+      interaction,
+      payload: pluginReply,
+      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+        fallbackLimit: 2000,
+      }),
+      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+      preferFollowUp,
+      chunkMode: resolveChunkMode(cfg, "discord", accountId),
+    });
+    return;
+  }
+
   const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
     command,
     commandArgs,
@@ -1571,7 +1625,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
 
   let didReply = false;
-  await dispatchReplyWithDispatcher({
+  const dispatchResult = await dispatchReplyWithDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
@@ -1616,6 +1670,29 @@ async function dispatchDiscordCommandInteraction(params: {
       onModelSelected,
     },
   });
+
+  // Fallback: if the agent turn produced no deliverable replies (for example,
+  // a skill only used message.send side effects), close the interaction with
+  // a minimal acknowledgment so Discord does not stay in a pending state.
+  if (
+    !suppressReplies &&
+    !didReply &&
+    dispatchResult.counts.final === 0 &&
+    dispatchResult.counts.block === 0 &&
+    dispatchResult.counts.tool === 0
+  ) {
+    await safeDiscordInteractionCall("interaction empty fallback", async () => {
+      const payload = {
+        content: "✅ Done.",
+        ephemeral: true,
+      };
+      if (preferFollowUp) {
+        await interaction.followUp(payload);
+        return;
+      }
+      await interaction.reply(payload);
+    });
+  }
 }
 
 async function deliverDiscordInteractionReply(params: {

@@ -68,6 +68,10 @@ export type {
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
+function isPreflightAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
+}
+
 function isBoundThreadBotSystemMessage(params: {
   isBoundThreadSession: boolean;
   isBotAuthor: boolean;
@@ -124,6 +128,9 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const logger = getChildLogger({ module: "discord-auto-reply" });
   const message = params.data.message;
   const author = params.data.author;
@@ -139,7 +146,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const allowBots = params.discordConfig?.allowBots ?? false;
+  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsMode =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;
@@ -155,6 +164,9 @@ export async function preflightDiscordMessage(
         messageId: message.id,
         config: pluralkitConfig,
       });
+      if (isPreflightAborted(params.abortSignal)) {
+        return null;
+      }
     } catch (err) {
       logVerbose(`discord: pluralkit lookup failed for ${message.id}: ${String(err)}`);
     }
@@ -166,7 +178,7 @@ export async function preflightDiscordMessage(
   });
 
   if (author.bot) {
-    if (!allowBots && !sender.isPluralKit) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
@@ -174,6 +186,9 @@ export async function preflightDiscordMessage(
 
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
   logDebug(
@@ -211,6 +226,9 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       useAccessGroups,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     commandAuthorized = dmAccess.commandAuthorized;
     if (dmAccess.decision !== "allow") {
       const allowMatchMeta = formatAllowlistMatchMeta(
@@ -263,6 +281,14 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+
+  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
+  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
+  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
+    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
+    return null;
+  }
+
   recordChannelActivity({
     channel: "discord",
     accountId: params.accountId,
@@ -290,6 +316,9 @@ export async function preflightDiscordMessage(
       threadChannel: earlyThreadChannel,
       channelInfo,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     earlyThreadParentId = parentInfo.id;
     earlyThreadParentName = parentInfo.name;
     earlyThreadParentType = parentInfo.type;
@@ -538,7 +567,11 @@ export async function preflightDiscordMessage(
       shouldRequireMention,
       mentionRegexes,
       cfg: params.cfg,
+      abortSignal: params.abortSignal,
     });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
 
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
@@ -648,6 +681,15 @@ export async function preflightDiscordMessage(
     }
   }
 
+  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    if (!botMentioned) {
+      logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
+      logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
+  }
+
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
   if (
@@ -708,6 +750,7 @@ export async function preflightDiscordMessage(
     token: params.token,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    abortSignal: params.abortSignal,
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,
     mediaMaxBytes: params.mediaMaxBytes,

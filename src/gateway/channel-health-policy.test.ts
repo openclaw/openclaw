@@ -36,6 +36,68 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it("treats active runs as busy even when disconnected", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        activeRuns: 1,
+        lastRunActivityAt: now - 30_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("flags stale busy channels as stuck when run activity is too old", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        activeRuns: 1,
+        lastRunActivityAt: now - 26 * 60_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("ignores inherited busy flags until current lifecycle reports run activity", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 30_000,
+        busy: true,
+        activeRuns: 1,
+        lastRunActivityAt: now - 31_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
   it("flags stale sockets when no events arrive beyond threshold", () => {
     const evaluation = evaluateChannelHealth(
       {
