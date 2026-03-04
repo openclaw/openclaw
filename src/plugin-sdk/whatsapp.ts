@@ -24,6 +24,7 @@ export {
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigAllowSendTo,
   resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 export {
