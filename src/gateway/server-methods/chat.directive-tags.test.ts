@@ -570,7 +570,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-custom-no-cross-route",
-      sessionKey: "agent:main:work",
+      sessionKey: "agent:main:work:ticket-123",
       expectBroadcast: false,
     });
 
