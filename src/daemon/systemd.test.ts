@@ -90,6 +90,21 @@ describe("isSystemdServiceEnabled", () => {
       "systemctl is-enabled unavailable: Failed to connect to bus",
     );
   });
+
+  it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
+      // code 4 and prints "not-found" to stdout when the unit doesn't exist.
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 4;
+      cb(err, "not-found\n", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {

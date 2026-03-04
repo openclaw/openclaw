@@ -3,7 +3,11 @@ import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-sessio
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import {
+  __testing as beforeToolCallTesting,
+  consumeAdjustedParamsForToolCall,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 
 vi.mock("../plugins/hook-runner-global.js");
 
@@ -37,6 +41,7 @@ describe("before_tool_call hook integration", () => {
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
+    beforeToolCallTesting.adjustedParamsByToolCallId.clear();
     hookRunner = installMockHookRunner();
   });
 
@@ -122,6 +127,8 @@ describe("before_tool_call hook integration", () => {
     const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
       agentId: "main",
       sessionKey: "main",
+      sessionId: "ephemeral-main",
+      runId: "run-main",
     });
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -131,13 +138,50 @@ describe("before_tool_call hook integration", () => {
       {
         toolName: "read",
         params: {},
+        runId: "run-main",
+        toolCallId: "call-5",
       },
       {
         toolName: "read",
         agentId: "main",
         sessionKey: "main",
+        sessionId: "ephemeral-main",
+        runId: "run-main",
+        toolCallId: "call-5",
       },
     );
+  });
+
+  it("keeps adjusted params isolated per run when toolCallId collides", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall
+      .mockResolvedValueOnce({ params: { marker: "A" } })
+      .mockResolvedValueOnce({ params: { marker: "B" } });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const toolA = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
+      runId: "run-a",
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const toolB = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
+      runId: "run-b",
+    });
+    const extensionContextA = {} as Parameters<typeof toolA.execute>[3];
+    const extensionContextB = {} as Parameters<typeof toolB.execute>[3];
+    const sharedToolCallId = "shared-call";
+
+    await toolA.execute(sharedToolCallId, { path: "/tmp/a.txt" }, undefined, extensionContextA);
+    await toolB.execute(sharedToolCallId, { path: "/tmp/b.txt" }, undefined, extensionContextB);
+
+    expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toEqual({
+      path: "/tmp/a.txt",
+      marker: "A",
+    });
+    expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-b")).toEqual({
+      path: "/tmp/b.txt",
+      marker: "B",
+    });
+    expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toBeUndefined();
   });
 });
 

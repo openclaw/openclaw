@@ -1,4 +1,4 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -7,6 +7,7 @@ import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.j
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export type MSTeamsAccessTokenProvider = {
@@ -146,10 +147,19 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Send invoke response IMMEDIATELY to prevent Teams timeout
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
 
-        // Handle file upload asynchronously (don't await)
-        handleFileConsentInvoke(ctx, deps.log).catch((err) => {
+        try {
+          await withRevokedProxyFallback({
+            run: async () => await handleFileConsentInvoke(ctx, deps.log),
+            onRevoked: async () => true,
+            onRevokedLog: () => {
+              deps.log.debug?.(
+                "turn context revoked during file consent invoke; skipping delayed response",
+              );
+            },
+          });
+        } catch (err) {
           deps.log.debug?.("file consent handler error", { error: String(err) });
-        });
+        }
         return;
       }
       return originalRun.call(handler, context);

@@ -44,5 +44,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   failureAlertCooldownSeconds: "3600",
   failureAlertChannel: "last",
   failureAlertTo: "",
+  failureAlertDeliveryMode: "announce",
+  failureAlertAccountId: "",
   timeoutSeconds: "",
 };

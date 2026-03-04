@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -31,6 +32,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
+  hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
@@ -437,7 +439,9 @@ export async function runMemoryFlushIfNeeded(params: {
         reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
         softThresholdTokens: memoryFlushSettings.softThresholdTokens,
       })) ||
-    shouldForceFlushByTranscriptSize;
+    (shouldForceFlushByTranscriptSize &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
     return entry ?? params.sessionEntry;
@@ -449,6 +453,10 @@ export async function runMemoryFlushIfNeeded(params: {
 
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
+  let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    activeSessionEntry?.systemPromptReport ??
+      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
+  );
   const flushRunId = crypto.randomUUID();
   if (params.sessionKey) {
     registerAgentRunContext(flushRunId, {
@@ -466,7 +474,7 @@ export async function runMemoryFlushIfNeeded(params: {
   try {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
-      run: (provider, model) => {
+      run: async (provider, model) => {
         const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,
@@ -480,15 +488,19 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           authProfile,
         });
-        return runEmbeddedPiAgent({
+        const result = await runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          trigger: "memory",
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
           }),
           extraSystemPrompt: flushSystemPrompt,
+          bootstrapPromptWarningSignaturesSeen,
+          bootstrapPromptWarningSignature:
+            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
@@ -498,6 +510,10 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+          result.meta?.systemPromptReport,
+        );
+        return result;
       },
     });
     let memoryFlushCompactionCount =

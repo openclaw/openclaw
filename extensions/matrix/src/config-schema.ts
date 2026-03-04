@@ -1,5 +1,6 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/matrix";
 import { z } from "zod";
+import { buildSecretInputSchema } from "./secret-input.js";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
 
@@ -43,7 +44,7 @@ export const MatrixConfigSchema = z.object({
   homeserver: z.string().optional(),
   userId: z.string().optional(),
   accessToken: z.string().optional(),
-  password: z.string().optional(),
+  password: buildSecretInputSchema().optional(),
   deviceName: z.string().optional(),
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),

@@ -10,7 +10,7 @@ read_when:
 
 # Diffs
 
-`diffs` is an optional plugin tool that turns change content into a read-only diff artifact for agents.
+`diffs` is an optional plugin tool and companion skill that turns change content into a read-only diff artifact for agents.
 
 It accepts either:
 
@@ -105,6 +105,11 @@ Validation and limits:
 - `title` max 1024 bytes.
 - Patch complexity cap: max 128 files and 120000 total lines.
 - `patch` and `before` or `after` together are rejected.
+- Rendered file safety limits (apply to PNG and PDF):
+  - `fileQuality: "standard"`: max 8 MP (8,000,000 rendered pixels).
+  - `fileQuality: "hq"`: max 14 MP (14,000,000 rendered pixels).
+  - `fileQuality: "print"`: max 24 MP (24,000,000 rendered pixels).
+  - PDF also has a max of 50 pages.
 
 ## Output details contract
 

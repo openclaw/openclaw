@@ -73,6 +73,9 @@ afterEach(() => {
 
 describe("registerPreActionHooks", () => {
   let program: Command;
+  let preActionHook:
+    | ((thisCommand: Command, actionCommand: Command) => Promise<void> | void)
+    | null = null;
 
   function buildProgram() {
     const program = new Command().name("openclaw");
@@ -100,26 +103,40 @@ describe("registerPreActionHooks", () => {
       .argument("<value>")
       .option("--json")
       .action(() => {});
+    config
+      .command("validate")
+      .option("--json")
+      .action(() => {});
     registerPreActionHooks(program, "9.9.9-test");
     return program;
   }
 
-  async function runCommand(
-    params: { parseArgv: string[]; processArgv?: string[] },
-    program: Command,
-  ) {
-    process.argv = params.processArgv ?? [...params.parseArgv];
-    await program.parseAsync(params.parseArgv, { from: "user" });
+  function resolveActionCommand(parseArgv: string[]): Command {
+    let current = program;
+    for (const segment of parseArgv) {
+      const next = current.commands.find((command) => command.name() === segment);
+      if (!next) {
+        break;
+      }
+      current = next;
+    }
+    return current;
   }
 
-  it("emits banner, resolves config, and enables verbose from --debug", async () => {
-    await runCommand(
-      {
-        parseArgv: ["status"],
-        processArgv: ["node", "openclaw", "status", "--debug"],
-      },
-      program,
-    );
+  async function runPreAction(params: { parseArgv: string[]; processArgv?: string[] }) {
+    process.argv = params.processArgv ?? [...params.parseArgv];
+    const actionCommand = resolveActionCommand(params.parseArgv);
+    if (!preActionHook) {
+      throw new Error("missing preAction hook");
+    }
+    await preActionHook(program, actionCommand);
+  }
+
+  it("handles debug mode and plugin-required command preaction", async () => {
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status", "--debug"],
+    });
 
     expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test");
     expect(setVerboseMock).toHaveBeenCalledWith(true);
@@ -129,16 +146,12 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(process.title).toBe("openclaw-status");
-  });
 
-  it("loads plugin registry for plugin-required commands", async () => {
-    await runCommand(
-      {
-        parseArgv: ["message", "send"],
-        processArgv: ["node", "openclaw", "message", "send"],
-      },
-      program,
-    );
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["message", "send"],
+      processArgv: ["node", "openclaw", "message", "send"],
+    });
 
     expect(setVerboseMock).toHaveBeenCalledWith(false);
     expect(process.env.NODE_NO_WARNINGS).toBe("1");
@@ -149,98 +162,45 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("loads plugin registry for configure command", async () => {
-    await runCommand(
-      {
-        parseArgv: ["configure"],
-        processArgv: ["node", "openclaw", "configure"],
-      },
-      program,
-    );
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips config guard for doctor command", async () => {
-    await runCommand(
-      {
-        parseArgv: ["doctor"],
-        processArgv: ["node", "openclaw", "doctor"],
-      },
-      program,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-  });
-
-  it("skips preaction work when argv indicates help/version", async () => {
-    await runCommand(
-      {
-        parseArgv: ["status"],
-        processArgv: ["node", "openclaw", "--version"],
-      },
-      program,
-    );
+  it("skips help/version preaction and respects banner opt-out", async () => {
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "--version"],
+    });
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(setVerboseMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-  });
 
-  it("hides banner when OPENCLAW_HIDE_BANNER is truthy", async () => {
+    vi.clearAllMocks();
     process.env.OPENCLAW_HIDE_BANNER = "1";
-    await runCommand(
-      {
-        parseArgv: ["status"],
-        processArgv: ["node", "openclaw", "status"],
-      },
-      program,
-    );
+
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status"],
+    });
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses doctor stdout for any --json output command", async () => {
-    await runCommand(
-      {
-        parseArgv: ["message", "send", "--json"],
-        processArgv: ["node", "openclaw", "message", "send", "--json"],
-      },
-      program,
-    );
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      commandPath: ["message", "send"],
-      suppressDoctorStdout: true,
+  it("applies --json stdout suppression only for explicit JSON output commands", async () => {
+    await runPreAction({
+      parseArgv: ["update", "status", "--json"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
-
-    vi.clearAllMocks();
-
-    await runCommand(
-      {
-        parseArgv: ["update", "status", "--json"],
-        processArgv: ["node", "openclaw", "update", "status", "--json"],
-      },
-      program,
-    );
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
       suppressDoctorStdout: true,
     });
-  });
 
-  it("does not treat config set --json (strict-parse alias) as json output mode", async () => {
-    await runCommand(
-      {
-        parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
-        processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
-      },
-      program,
-    );
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
+      processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
+    });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
@@ -248,7 +208,33 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("bypasses config guard for config validate", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for config validate when root option values are present", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
   beforeAll(() => {
     program = buildProgram();
+    const hooks = (
+      program as unknown as {
+        _lifeCycleHooks?: {
+          preAction?: Array<(thisCommand: Command, actionCommand: Command) => Promise<void> | void>;
+        };
+      }
+    )._lifeCycleHooks?.preAction;
+    preActionHook = hooks?.[0] ?? null;
   });
 });

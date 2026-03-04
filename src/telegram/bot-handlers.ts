@@ -1,6 +1,5 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -13,6 +12,7 @@ import {
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
@@ -63,6 +63,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -205,14 +206,20 @@ export const registerTelegramHandlers = ({
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      const hasText = text.trim().length > 0;
-      if (hasText && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
+      const hasDebounceableText = shouldDebounceTextInbound({
+        text,
+        cfg,
+        commandOptions: { botUsername: entry.botUsername },
+      });
+      if (entry.debounceLane === "forward") {
+        // Forwarded bursts often split text + media into adjacent updates.
+        // Debounce media-only forward entries too so they can coalesce.
+        return hasDebounceableText || entry.allMedia.length > 0;
+      }
+      if (!hasDebounceableText) {
         return false;
       }
-      if (entry.debounceLane === "forward") {
-        return true;
-      }
-      return entry.allMedia.length === 0 && hasText;
+      return entry.allMedia.length === 0;
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -1141,10 +1148,10 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg) || undefined;
+        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg);
         const skillCommands = listSkillCommandsForAgents({
           cfg,
-          agentIds: agentId ? [agentId] : undefined,
+          agentIds: [agentId],
         });
         const result = buildCommandsMessagePaginated(cfg, skillCommands, {
           page,
@@ -1260,12 +1267,28 @@ export const registerTelegramHandlers = ({
         }
 
         if (modelCallback.type === "select") {
-          const { provider, model } = modelCallback;
+          const selection = resolveModelSelection({
+            callback: modelCallback,
+            providers,
+            byProvider,
+          });
+          if (selection.kind !== "resolved") {
+            const providerInfos: ProviderInfo[] = providers.map((p) => ({
+              id: p,
+              count: byProvider.get(p)?.size ?? 0,
+            }));
+            const buttons = buildProviderKeyboard(providerInfos);
+            await editMessageWithButtons(
+              `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
+              buttons,
+            );
+            return;
+          }
           // Process model selection as a synthetic message with /model command
           const syntheticMessage = buildSyntheticTextMessage({
             base: callbackMessage,
             from: callback.from,
-            text: `/model ${provider}/${model}`,
+            text: `/model ${selection.provider}/${selection.model}`,
           });
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,

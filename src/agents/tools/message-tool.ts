@@ -242,14 +242,14 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
-          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
@@ -277,6 +277,34 @@ function buildPollSchema() {
     pollOption: Type.Optional(Type.Array(Type.String())),
     pollDurationHours: Type.Optional(Type.Number()),
     pollMulti: Type.Optional(Type.Boolean()),
+    pollId: Type.Optional(Type.String()),
+    pollOptionId: Type.Optional(
+      Type.String({
+        description: "Poll answer id to vote for. Use when the channel exposes stable answer ids.",
+      }),
+    ),
+    pollOptionIds: Type.Optional(
+      Type.Array(
+        Type.String({
+          description:
+            "Poll answer ids to vote for in a multiselect poll. Use when the channel exposes stable answer ids.",
+        }),
+      ),
+    ),
+    pollOptionIndex: Type.Optional(
+      Type.Number({
+        description:
+          "1-based poll option number to vote for, matching the rendered numbered poll choices.",
+      }),
+    ),
+    pollOptionIndexes: Type.Optional(
+      Type.Array(
+        Type.Number({
+          description:
+            "1-based poll option numbers to vote for in a multiselect poll, matching the rendered numbered poll choices.",
+        }),
+      ),
+    ),
   };
 }
 
