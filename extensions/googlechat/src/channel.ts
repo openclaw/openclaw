@@ -452,10 +452,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.media.loadWebMedia(mediaUrl, {
-        maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-        localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-      });
+      const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
+      const loaded = /^https?:\/\//i.test(mediaUrl)
+        ? await runtime.channel.media.fetchRemoteMedia({
+            url: mediaUrl,
+            maxBytes: effectiveMaxBytes,
+          })
+        : await runtime.media.loadWebMedia(mediaUrl, {
+            maxBytes: effectiveMaxBytes,
+            localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+          });
       const upload = await uploadGoogleChatAttachment({
         account,
         space,
