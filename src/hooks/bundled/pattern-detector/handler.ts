@@ -153,12 +153,18 @@ export function runPatternMatching(
   // Strip bracket metadata only for inbound (envelope headers, structural markers)
   let body = directionFilter === "inbound" ? text.replace(/\[[^\]]+\]\s*/g, "") : text;
 
-  // Strip WhatsApp LID references (not real phone numbers) to avoid false positives
-  // LID format: digits followed by @lid (e.g. "133436211732579@lid")
+  // Strip inbound metadata noise to avoid false positive pattern detection
   if (directionFilter === "inbound") {
+    // Strip WhatsApp LID references (digits@lid)
     body = body.replace(/\d+@lid\b/g, "");
-    // Strip JSON code blocks (reply context metadata contains IDs that aren't phone numbers)
-    body = body.replace(/```json[\s\S]*?```/g, "");
+    // Strip entire lines containing @lid (catches formatted/partial references)
+    body = body.replace(/^.*@lid.*$/gm, "");
+    // Strip JSON/markdown code blocks entirely (reply context, conversation metadata)
+    body = body.replace(/```[\s\S]*?```/g, "");
+    // Strip "Replied message" sections (untrusted metadata with internal IDs)
+    body = body.replace(/Replied message[\s\S]*?(?=\n[A-Z]|\n\n\S|$)/g, "");
+    // Strip Sender/Conversation info metadata blocks
+    body = body.replace(/(?:Sender|Conversation info) \(untrusted[\s\S]*?(?=\n\n\S|$)/g, "");
     // Strip previous pattern detector output to avoid feedback loops
     body = body.replace(/Numero detectado:\s*\d+/g, "");
   }
