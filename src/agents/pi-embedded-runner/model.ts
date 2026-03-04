@@ -53,7 +53,10 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  // Treat registry entries without an `api` field as not found so the
+  // fallback paths below can construct a complete model (fixes #28022).
+  const registryModel = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  const model = registryModel?.api ? registryModel : null;
 
   if (!model) {
     const providers = cfg?.models?.providers ?? {};

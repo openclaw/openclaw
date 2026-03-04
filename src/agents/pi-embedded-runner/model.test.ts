@@ -379,4 +379,33 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+
+  it("falls back to openrouter default when registry entry has no api field (#28022)", () => {
+    // Simulate a registry entry that was discovered without an api field.
+    // Without the fix, model.api would be undefined and streamSimple would
+    // throw "No API provider registered for api: undefined".
+    mockDiscoveredModel({
+      provider: "openrouter",
+      modelId: "google/gemini-3.1-pro",
+      templateModel: {
+        id: "google/gemini-3.1-pro",
+        name: "google/gemini-3.1-pro",
+        provider: "openrouter",
+        // api intentionally omitted
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      },
+    });
+
+    const result = resolveModel("openrouter", "google/gemini-3.1-pro", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toBeDefined();
+    expect(result.model?.api).toBe("openai-completions");
+    expect(result.model?.provider).toBe("openrouter");
+    expect(result.model?.id).toBe("google/gemini-3.1-pro");
+  });
 });
