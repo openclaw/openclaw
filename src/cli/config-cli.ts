@@ -403,11 +403,15 @@ export async function runConfigRestore(opts: {
     }
 
     // Preserve the current (possibly broken) config as a safety copy
+    let safetyCopy: string | null = null;
     if (snapshot.exists) {
       const safetyPath = `${configPath}.bak.broken`;
       try {
         fs.copyFileSync(configPath, safetyPath);
-        runtime.log(info(`Current config saved to ${shortenHomePath(safetyPath)}`));
+        safetyCopy = safetyPath;
+        if (!opts.json) {
+          runtime.log(info(`Current config saved to ${shortenHomePath(safetyPath)}`));
+        }
       } catch {
         // best-effort
       }
@@ -416,7 +420,7 @@ export async function runConfigRestore(opts: {
     // Restore
     fs.copyFileSync(restorePath, configPath);
     if (opts.json) {
-      runtime.log(JSON.stringify({ ok: true, restored: restorePath }));
+      runtime.log(JSON.stringify({ ok: true, restored: restorePath, safety_copy: safetyCopy }));
     } else {
       runtime.log(success(`Config restored from ${shortenHomePath(restorePath)}`));
       runtime.log(info("Run \`openclaw gateway restart\` to apply."));
