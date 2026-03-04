@@ -439,6 +439,45 @@ xurl auth default prod alice           # prod app, alice user
 xurl --app staging /2/users/me         # one-off request against staging
 ```
 
+### Create a thread
+
+```bash
+# 1. Post the thread opener
+xurl post "🧵 Thread: 5 AI video tools you should try in 2026..."
+# 2. Parse data.id from the JSON response
+# 3. Reply to the first post for each thread item
+xurl reply FIRST_POST_ID "1/ Veo 3 — Google's flagship, incredible realism"
+xurl reply FIRST_POST_ID "2/ Kling 3.0 — best for character animation"
+xurl reply FIRST_POST_ID "3/ Sora 2 Pro — OpenAI's pro-tier model"
+xurl reply FIRST_POST_ID "4/ Runway Gen-4.5 — industry standard for creators"
+xurl reply FIRST_POST_ID "5/ Try them all at kubrix.co — one platform, all models 🚀"
+```
+
+### Post with video
+
+```bash
+# 1. Upload video (may need processing time)
+xurl media upload demo.mp4
+# 2. Check if processing is complete
+xurl media status MEDIA_ID --wait
+# 3. Post when ready
+xurl post "AI-generated video demo 🎬" --media-id MEDIA_ID
+```
+
+### Monitor brand mentions
+
+```bash
+# Search for your brand (with or without @)
+xurl search "yourbrand OR @yourhandle OR yourproduct" -n 20
+
+# Check recent mentions
+xurl mentions -n 20
+
+# Like and reply to positive mentions
+xurl like POST_ID
+xurl reply POST_ID "Thanks for the mention! 🙏"
+```
+
 ---
 
 ## Error Handling

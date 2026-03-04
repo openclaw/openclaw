@@ -145,9 +145,78 @@ done
 tmux send-keys -t worker-4 "Fix the bug in auth.js" Enter
 ```
 
+## Long-Running Coding Agent Workflow
+
+For coding tasks that may take minutes (Claude Code, Codex, Aider), use this pattern:
+
+### Step 1: Setup and launch
+
+```bash
+# Kill stale session if exists, create fresh one
+tmux kill-session -t claude-work 2>/dev/null
+tmux new-session -d -s claude-work
+tmux send-keys -t claude-work "cd /path/to/project && git pull" Enter
+sleep 2
+tmux send-keys -t claude-work "claude --dangerously-skip-permissions 'your task here'" Enter
+```
+
+### Step 2: Handle permission prompts
+
+Claude Code may show a bypass prompt on startup:
+
+```bash
+# Wait for prompt to appear, then accept
+sleep 5
+tmux send-keys -t claude-work Down Enter
+```
+
+### Step 3: Monitor progress
+
+```bash
+# Check current state (last 80 lines with scrollback)
+tmux capture-pane -t claude-work -p -S -200 | tail -80
+
+# Look for completion
+tmux capture-pane -t claude-work -p | grep -E "Done|✓|committed|pushed"
+```
+
+### Step 4: Interrupt if stuck
+
+If the coding agent stalls (no token progress for 2+ minutes):
+
+```bash
+# Send Ctrl+C to interrupt
+tmux send-keys -t claude-work C-c
+sleep 3
+# Give a simpler instruction
+tmux send-keys -t claude-work "Use bash commands directly to complete the task" Enter
+```
+
+### Step 5: Chain follow-up tasks
+
+After one task completes, send the next without creating a new session:
+
+```bash
+tmux send-keys -t claude-work "Now create tests for the feature you just built" Enter
+```
+
+## Batch Script Execution
+
+For repetitive tasks, write a shell script and run it in tmux:
+
+```bash
+tmux new-session -d -s batch
+tmux send-keys -t batch "bash /path/to/batch-script.sh" Enter
+
+# Monitor progress
+tmux capture-pane -t batch -p | grep "=== .* DONE ==="
+```
+
 ## Notes
 
 - Use `capture-pane -p` to print to stdout (essential for scripting)
-- `-S -` captures entire scrollback history
+- `-S -` captures entire scrollback history (use `-S -200` for last ~200 lines)
 - Target format: `session:window.pane` (e.g., `shared:0.0`)
 - Sessions persist across SSH disconnects
+- Always `kill-session` before `new-session` to avoid "duplicate session" errors
+- Use `sleep` between commands to avoid input buffering issues
