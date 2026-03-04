@@ -45,7 +45,7 @@ function cleanPhoneNumber(raw: string): string {
 
 /** Generate a unique, collision-resistant message reference. */
 function generateMessageRef(): string {
-  return `openclaw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `openclaw-${crypto.randomUUID()}`;
 }
 
 // ─── Config Types ────────────────────────────────────────────────────────────
