@@ -1,15 +1,42 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 
-const tempDirs = createTrackedTempDirs();
+const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
+let truncationWorkspaceTemplateDir = "";
+let nestedRepoTemplateDir = "";
 
-afterEach(async () => {
-  await tempDirs.cleanup();
+beforeAll(async () => {
+  await fixtureSuite.setup();
+  truncationWorkspaceTemplateDir = await fixtureSuite.createCaseDir(
+    "template-truncation-workspace",
+  );
+  for (let i = 0; i < 8; i += 1) {
+    const name = `skill-${String(i).padStart(2, "0")}`;
+    await writeSkill({
+      dir: path.join(truncationWorkspaceTemplateDir, "skills", name),
+      name,
+      description: "x".repeat(800),
+    });
+  }
+
+  nestedRepoTemplateDir = await fixtureSuite.createCaseDir("template-skills-repo");
+  for (let i = 0; i < 8; i += 1) {
+    const name = `repo-skill-${String(i).padStart(2, "0")}`;
+    await writeSkill({
+      dir: path.join(nestedRepoTemplateDir, "skills", name),
+      name,
+      description: `Desc ${i}`,
+    });
+  }
+});
+
+afterAll(async () => {
+  await fixtureSuite.cleanup();
 });
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
@@ -19,9 +46,15 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   );
 }
 
+async function cloneTemplateDir(templateDir: string, prefix: string): Promise<string> {
+  const cloned = await fixtureSuite.createCaseDir(prefix);
+  await fs.cp(templateDir, cloned, { recursive: true });
+  return cloned;
+}
+
 describe("buildWorkspaceSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -35,7 +68,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "visible-skill"),
       name: "visible-skill",
@@ -64,7 +97,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "visible"),
       name: "visible",
@@ -109,17 +142,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-
-    // Keep fixture size modest while still forcing truncation logic.
-    for (let i = 0; i < 8; i += 1) {
-      const name = `skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "x".repeat(800),
-      });
-    }
+    const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -141,17 +164,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const repoDir = await tempDirs.make("openclaw-skills-repo-");
-
-    for (let i = 0; i < 8; i += 1) {
-      const name = `repo-skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(repoDir, "skills", name),
-        name,
-        description: `Desc ${i}`,
-      });
-    }
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -178,7 +192,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
 
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "small-skill"),
@@ -214,8 +228,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("detects nested skills roots beyond the first 25 entries", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const repoDir = await tempDirs.make("openclaw-skills-repo-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const repoDir = await fixtureSuite.createCaseDir("skills-repo");
 
     // Create 30 nested dirs, but only the last one is an actual skill.
     for (let i = 0; i < 30; i += 1) {
@@ -253,8 +267,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("enforces maxSkillFileBytes for root-level SKILL.md", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const rootSkillDir = await tempDirs.make("openclaw-root-skill-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const rootSkillDir = await fixtureSuite.createCaseDir("root-skill");
 
     await writeSkill({
       dir: rootSkillDir,

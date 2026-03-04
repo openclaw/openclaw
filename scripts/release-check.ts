@@ -14,6 +14,22 @@ const requiredPathGroups = [
   ["dist/entry.js", "dist/entry.mjs"],
   "dist/plugin-sdk/index.js",
   "dist/plugin-sdk/index.d.ts",
+  "dist/plugin-sdk/core.js",
+  "dist/plugin-sdk/core.d.ts",
+  "dist/plugin-sdk/telegram.js",
+  "dist/plugin-sdk/telegram.d.ts",
+  "dist/plugin-sdk/discord.js",
+  "dist/plugin-sdk/discord.d.ts",
+  "dist/plugin-sdk/slack.js",
+  "dist/plugin-sdk/slack.d.ts",
+  "dist/plugin-sdk/signal.js",
+  "dist/plugin-sdk/signal.d.ts",
+  "dist/plugin-sdk/imessage.js",
+  "dist/plugin-sdk/imessage.d.ts",
+  "dist/plugin-sdk/whatsapp.js",
+  "dist/plugin-sdk/whatsapp.d.ts",
+  "dist/plugin-sdk/line.js",
+  "dist/plugin-sdk/line.d.ts",
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
@@ -169,9 +185,71 @@ function checkAppcastSparkleVersions() {
   }
 }
 
+// Critical functions that channel extension plugins import from openclaw/plugin-sdk.
+// If any are missing from the compiled output, plugins crash at runtime (#27569).
+const requiredPluginSdkExports = [
+  "isDangerousNameMatchingEnabled",
+  "createAccountListHelpers",
+  "buildAgentMediaPayload",
+  "createReplyPrefixOptions",
+  "createTypingCallbacks",
+  "logInboundDrop",
+  "logTypingFailure",
+  "buildPendingHistoryContextFromMap",
+  "clearHistoryEntriesIfEnabled",
+  "recordPendingHistoryEntryIfEnabled",
+  "resolveControlCommandGate",
+  "resolveDmGroupAccessWithLists",
+  "resolveAllowlistProviderRuntimeGroupPolicy",
+  "resolveDefaultGroupPolicy",
+  "resolveChannelMediaMaxBytes",
+  "warnMissingProviderGroupPolicyFallbackOnce",
+  "emptyPluginConfigSchema",
+  "normalizePluginHttpPath",
+  "registerPluginHttpRoute",
+  "DEFAULT_ACCOUNT_ID",
+  "DEFAULT_GROUP_HISTORY_LIMIT",
+];
+
+function checkPluginSdkExports() {
+  const distPath = resolve("dist", "plugin-sdk", "index.js");
+  let content: string;
+  try {
+    content = readFileSync(distPath, "utf8");
+  } catch {
+    console.error("release-check: dist/plugin-sdk/index.js not found (build missing?).");
+    process.exit(1);
+    return;
+  }
+
+  const exportMatch = content.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
+  if (!exportMatch) {
+    console.error("release-check: could not find export statement in dist/plugin-sdk/index.js.");
+    process.exit(1);
+    return;
+  }
+
+  const exportedNames = new Set(
+    exportMatch[1].split(",").map((s) => {
+      const parts = s.trim().split(/\s+as\s+/);
+      return (parts[parts.length - 1] || "").trim();
+    }),
+  );
+
+  const missingExports = requiredPluginSdkExports.filter((name) => !exportedNames.has(name));
+  if (missingExports.length > 0) {
+    console.error("release-check: missing critical plugin-sdk exports (#27569):");
+    for (const name of missingExports) {
+      console.error(`  - ${name}`);
+    }
+    process.exit(1);
+  }
+}
+
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
+  checkPluginSdkExports();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);

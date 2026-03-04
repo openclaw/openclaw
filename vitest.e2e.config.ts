@@ -21,15 +21,12 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
-    pool: "vmForks",
+    // vmForks reuses VM contexts in ways that can leak module state/mocks across
+    // files for our e2e harnesses. Use process forks for deterministic isolation.
+    pool: "forks",
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
-    include: ["test/**/*.e2e.test.ts"],
-    exclude: [
-      ...exclude,
-      // Integration tests require `forks` pool (jiti incompatible with vmForks VM context).
-      // Run separately via: pnpm vitest run --config vitest.integration.config.ts
-      "test/fin-dashboard-integration.e2e.test.ts",
-    ],
+    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
+    exclude,
   },
 });

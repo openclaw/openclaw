@@ -6,6 +6,7 @@ import type {
   SupportedLanguages,
 } from "@pierre/diffs";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
+import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 type ViewerState = {
   theme: DiffTheme;
@@ -33,18 +34,25 @@ function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   if (!raw) {
     throw new Error("Diff payload was empty.");
   }
-  return JSON.parse(raw) as DiffViewerPayload;
+  return parseViewerPayloadJson(raw);
 }
 
 function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
-  return [...document.querySelectorAll<HTMLElement>(".oc-diff-card")].flatMap((card) => {
+  const cards: Array<{ host: HTMLElement; payload: DiffViewerPayload }> = [];
+  for (const card of document.querySelectorAll<HTMLElement>(".oc-diff-card")) {
     const host = card.querySelector<HTMLElement>("[data-openclaw-diff-host]");
     const payloadNode = card.querySelector<HTMLScriptElement>("[data-openclaw-diff-payload]");
     if (!host || !payloadNode) {
-      return [];
+      continue;
     }
-    return [{ host, payload: parsePayload(payloadNode) }];
-  });
+
+    try {
+      cards.push({ host, payload: parsePayload(payloadNode) });
+    } catch (error) {
+      console.warn("Skipping invalid diff payload", error);
+    }
+  }
+  return cards;
 }
 
 function ensureShadowRoot(host: HTMLElement): void {
@@ -98,39 +106,9 @@ function createToolbarButton(params: {
 }
 
 function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): void {
-  button.style.display = "inline-flex";
-  button.style.alignItems = "center";
-  button.style.justifyContent = "center";
-  button.style.width = "24px";
-  button.style.height = "24px";
-  button.style.padding = "0";
-  button.style.margin = "0";
-  button.style.border = "0";
-  button.style.borderRadius = "0";
-  button.style.background = "transparent";
-  button.style.boxShadow = "none";
-  button.style.lineHeight = "0";
-  button.style.cursor = "pointer";
-  button.style.overflow = "visible";
-  button.style.flex = "0 0 auto";
-  button.style.opacity = active ? "0.92" : "0.6";
   button.style.color =
     viewerState.theme === "dark" ? "rgba(226, 232, 240, 0.74)" : "rgba(15, 23, 42, 0.52)";
-
-  const svg = button.querySelector<SVGElement>("svg");
-  if (!svg) {
-    return;
-  }
-  svg.style.display = "block";
-  svg.style.width = "16px";
-  svg.style.height = "16px";
-  svg.style.minWidth = "16px";
-  svg.style.minHeight = "16px";
-  svg.style.overflow = "visible";
-  svg.style.flex = "0 0 auto";
-  svg.style.color = "inherit";
-  svg.style.fill = "currentColor";
-  svg.style.pointerEvents = "none";
+  button.dataset.active = String(active);
 }
 
 function splitIcon(): string {
@@ -185,11 +163,6 @@ function themeIcon(theme: DiffTheme): string {
 function createToolbar(): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "oc-diff-toolbar";
-  toolbar.style.display = "inline-flex";
-  toolbar.style.alignItems = "center";
-  toolbar.style.gap = "6px";
-  toolbar.style.marginInlineStart = "6px";
-  toolbar.style.flex = "0 0 auto";
 
   toolbar.append(
     createToolbarButton({
@@ -249,8 +222,10 @@ function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefi
     theme: payload.options.theme,
     themeType: viewerState.theme,
     diffStyle: viewerState.layout,
+    diffIndicators: payload.options.diffIndicators,
     expandUnchanged: payload.options.expandUnchanged,
     overflow: viewerState.wrapEnabled ? "wrap" : "scroll",
+    disableLineNumbers: payload.options.disableLineNumbers,
     disableBackground: !viewerState.backgroundEnabled,
     unsafeCSS: payload.options.unsafeCSS,
     renderHeaderMetadata: () => createToolbar(),

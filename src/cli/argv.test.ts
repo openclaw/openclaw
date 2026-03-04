@@ -3,11 +3,15 @@ import {
   buildParseArgv,
   getFlagValue,
   getCommandPath,
+  getCommandPositionalsWithRootOptions,
+  getCommandPathWithRootOptions,
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  isRootHelpInvocation,
+  isRootVersionInvocation,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -65,6 +69,81 @@ describe("argv helpers", () => {
 
   it.each([
     {
+      name: "root --version",
+      argv: ["node", "openclaw", "--version"],
+      expected: true,
+    },
+    {
+      name: "root -V",
+      argv: ["node", "openclaw", "-V"],
+      expected: true,
+    },
+    {
+      name: "root -v alias with profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "subcommand version flag",
+      argv: ["node", "openclaw", "status", "--version"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag with version",
+      argv: ["node", "openclaw", "--unknown", "--version"],
+      expected: false,
+    },
+  ])("detects root-only version invocations: $name", ({ argv, expected }) => {
+    expect(isRootVersionInvocation(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "root --help",
+      argv: ["node", "openclaw", "--help"],
+      expected: true,
+    },
+    {
+      name: "root -h",
+      argv: ["node", "openclaw", "-h"],
+      expected: true,
+    },
+    {
+      name: "root --help with profile",
+      argv: ["node", "openclaw", "--profile", "work", "--help"],
+      expected: true,
+    },
+    {
+      name: "subcommand --help",
+      argv: ["node", "openclaw", "status", "--help"],
+      expected: false,
+    },
+    {
+      name: "help before subcommand token",
+      argv: ["node", "openclaw", "--help", "status"],
+      expected: false,
+    },
+    {
+      name: "help after -- terminator",
+      argv: ["node", "openclaw", "nodes", "run", "--", "git", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag before help",
+      argv: ["node", "openclaw", "--unknown", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag after help",
+      argv: ["node", "openclaw", "--help", "--unknown"],
+      expected: false,
+    },
+  ])("detects root-only help invocations: $name", ({ argv, expected }) => {
+    expect(isRootHelpInvocation(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
       name: "single command with trailing flag",
       argv: ["node", "openclaw", "status", "--json"],
       expected: ["status"],
@@ -83,6 +162,50 @@ describe("argv helpers", () => {
     expect(getCommandPath(argv, 2)).toEqual(expected);
   });
 
+  it("extracts command path while skipping known root option values", () => {
+    expect(
+      getCommandPathWithRootOptions(
+        ["node", "openclaw", "--profile", "work", "--no-color", "config", "validate"],
+        2,
+      ),
+    ).toEqual(["config", "validate"]);
+  });
+
+  it("extracts routed config get positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--log-level", "debug", "update.channel", "--json"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("extracts routed config unset positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"],
+        {
+          commandPath: ["config", "unset"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("returns null when routed command sees unknown options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toBeNull();
+  });
+
   it.each([
     {
       name: "returns first command token",
@@ -93,6 +216,11 @@ describe("argv helpers", () => {
       name: "returns null when no command exists",
       argv: ["node", "openclaw"],
       expected: null,
+    },
+    {
+      name: "skips known root option values",
+      argv: ["node", "openclaw", "--log-level", "debug", "status"],
+      expected: "status",
     },
   ])("returns primary command: $name", ({ argv, expected }) => {
     expect(getPrimaryCommand(argv)).toBe(expected);

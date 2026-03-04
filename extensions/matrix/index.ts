@@ -1,6 +1,7 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
+import { ensureMatrixCryptoRuntime } from "./src/matrix/deps.js";
 import { setMatrixRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -10,6 +11,10 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setMatrixRuntime(api.runtime);
+    void ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      api.logger.warn?.(`matrix: crypto runtime bootstrap failed: ${message}`);
+    });
     api.registerChannel({ plugin: matrixPlugin });
   },
 };
