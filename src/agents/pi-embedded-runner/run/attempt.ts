@@ -1679,10 +1679,22 @@ export async function runEmbeddedAttempt(
             promptChars: effectivePrompt.length,
             systemPromptChars: systemPromptText?.length ?? 0,
             historyMessages: activeSession.messages.length,
-            historyChars: activeSession.messages.reduce(
-              (sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0),
-              0,
-            ),
+            historyChars: activeSession.messages.reduce((sum, m) => {
+              if (typeof m.content === "string") {
+                return sum + m.content.length;
+              }
+              if (Array.isArray(m.content)) {
+                return (
+                  sum +
+                  m.content.reduce(
+                    (s, block) =>
+                      s + (typeof block === "string" ? block.length : (block?.text?.length ?? 0)),
+                    0,
+                  )
+                );
+              }
+              return sum;
+            }, 0),
             imagesCount: imageResult.images.length,
           });
           // Set modelCallStartedAt AFTER logModelApiRequest so that if logging throws,
