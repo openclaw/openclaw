@@ -1394,27 +1394,14 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       const effectiveGroupAllowFrom =
         groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
 
-      // Check if any per-group allowFrom is configured
-      const groups = asObjectRecord(account.groups);
-      let hasPerGroupAllowFrom = false;
-      if (groups) {
-        for (const groupId of Object.keys(groups)) {
-          const group = asObjectRecord(groups[groupId]);
-          if (group && group.enabled !== false && hasAllowFromEntries(group.allowFrom as Array<string | number> | undefined)) {
-            hasPerGroupAllowFrom = true;
-            break;
-          }
-        }
-      }
-
-      if (!hasAllowFromEntries(effectiveGroupAllowFrom) && !hasPerGroupAllowFrom) {
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
         if (fallbackToAllowFrom) {
           warnings.push(
-            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — groups without per-group allowFrom will have all messages silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
           );
         } else {
           warnings.push(
-            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so groups without per-group allowFrom will have all messages silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
           );
         }
       }
