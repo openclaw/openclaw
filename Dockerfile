@@ -19,6 +19,12 @@ ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
 
+# Configure Corepack to use mirror for downloading package managers
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+
+# Force all npm requests through mirror
+ENV npm_config_registry=https://registry.npmmirror.com
+
 WORKDIR /app
 RUN chown node:node /app
 
