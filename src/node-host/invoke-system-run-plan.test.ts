@@ -111,7 +111,9 @@ describe("hardenApprovedExecutionPaths", () => {
 });
 
 describe("buildSystemRunApprovalPlan cross-platform cwd handling", () => {
-  it("omits cwd from plan when cwd does not exist (cross-platform exec)", () => {
+  // Skip on Windows: echo is a cmd.exe builtin, not a file, so resolveCommandResolutionFromArgv
+  // returns null and tests fail.
+  it.runIf(process.platform !== "win32")("omits cwd from plan when cwd does not exist (cross-platform exec)", () => {
     // This test simulates the case where a gateway sends its workspace path
     // (e.g., /root/workspace on WSL) to a Windows node where that path doesn't exist.
     // The prepare phase should gracefully omit the cwd rather than failing.
@@ -128,7 +130,9 @@ describe("buildSystemRunApprovalPlan cross-platform cwd handling", () => {
     expect(prepared.plan.cwd).toBeNull();
   });
 
-  it("preserves cwd in plan when cwd exists", () => {
+  // Skip on Windows: echo is a cmd.exe builtin, not a file, so resolveCommandResolutionFromArgv
+  // returns null and tests fail.
+  it.runIf(process.platform !== "win32")("preserves cwd in plan when cwd exists", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cwd-exists-"));
     try {
       const prepared = buildSystemRunApprovalPlan({

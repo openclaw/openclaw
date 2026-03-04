@@ -243,7 +243,12 @@ export function buildSystemRunApprovalPlan(params: {
     cwd: requestedCwd,
   });
   if (!hardening.ok) {
-    // If cwd validation failed, retry without cwd to allow cross-platform exec
+    // Only retry without cwd for "path doesn't exist" errors (cross-platform exec scenario).
+    // Other hardening failures (directory check, symlink checks, identity mismatch) are
+    // security-related and must NOT be bypassed.
+    if (!hardening.message.includes("existing canonical cwd")) {
+      return { ok: false, message: hardening.message };
+    }
     const hardeningWithoutCwd = hardenApprovedExecutionPaths({
       approvedByAsk: true,
       argv: command.argv,
