@@ -6,6 +6,8 @@ export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
   key?: string;
+  /** @deprecated Older persisted profiles may store the key as `apiKey`. Read `apiKey ?? key`. */
+  apiKey?: string;
   keyRef?: SecretRef;
   email?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */

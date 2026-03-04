@@ -313,7 +313,7 @@ export async function resolveApiKeyForProfile(
     const key = await resolveProfileSecretString({
       profileId,
       provider: cred.provider,
-      value: cred.key,
+      value: cred.apiKey ?? cred.key,
       valueRef: cred.keyRef,
       refDefaults,
       configForRefResolution,

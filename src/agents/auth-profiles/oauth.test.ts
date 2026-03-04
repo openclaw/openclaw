@@ -227,6 +227,57 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
   });
 });
 
+describe("resolveApiKeyForProfile apiKey legacy field", () => {
+  it("resolves api_key credential when key is stored as apiKey", async () => {
+    const profileId = "openai:legacy";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider: "openai",
+          apiKey: "sk-legacy-key",
+        },
+      },
+    };
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openai", "api_key"),
+      store,
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "sk-legacy-key",
+      provider: "openai",
+      email: undefined,
+    });
+  });
+
+  it("prefers apiKey over key when both are present", async () => {
+    const profileId = "openai:both-fields";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider: "openai",
+          apiKey: "sk-from-apiKey",
+          key: "sk-from-key",
+        },
+      },
+    };
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openai", "api_key"),
+      store,
+      profileId,
+    });
+    expect(result).toEqual({
+      apiKey: "sk-from-apiKey",
+      provider: "openai",
+      email: undefined,
+    });
+  });
+});
+
 describe("resolveApiKeyForProfile secret refs", () => {
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
