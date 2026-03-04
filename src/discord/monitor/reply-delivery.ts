@@ -6,12 +6,15 @@ import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
 import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
+
+const log = createSubsystemLogger("discord/delivery");
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -92,6 +95,12 @@ async function sendWithRetry(
     ...retryConfig,
     shouldRetry: (err) => isRetryableDiscordError(err),
     retryAfterMs: getDiscordRetryAfterMs,
+    onRetry: (info) => {
+      const status = extractHttpStatus(info.err);
+      log.warn(
+        `discord delivery retry ${info.attempt}/${info.maxAttempts} after HTTP ${status ?? "??"} (delay ${info.delayMs}ms)`,
+      );
+    },
   });
 }
 
