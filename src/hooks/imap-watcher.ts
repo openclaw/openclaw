@@ -246,6 +246,14 @@ async function runPollCycle(cfg: ImapHookRuntimeConfig, expectedGeneration: numb
           break;
         }
 
+        // Guard: ensure only allowlisted senders reach hook delivery.
+        if (!isAllowedSender(envelope.from, cfg.allowedSenders)) {
+          log.warn(
+            `skipping envelope ${envelope.id} from non-allowlisted sender: ${envelope.from}`,
+          );
+          continue;
+        }
+
         log.debug(
           `processing envelope ${envelope.id}: "${envelope.subject}" from "${envelope.from}"`,
         );
@@ -433,15 +441,16 @@ function isAllowedSender(from: string, allowedSenders: string[]): boolean {
     return false;
   }
   const candidates = extractSenderEmails(normalizedFrom);
+  const allowed =
+    candidates.length > 0
+      ? candidates.some((candidate) => normalizedAllowed.includes(candidate))
+      : normalizedAllowed.some((candidate) => matchesAllowedSender(normalizedFrom, candidate));
   log.debug(
     `allowlist check: from="${from}" normalized="${normalizedFrom}" candidates=${candidates.join(
       ",",
-    )} allowed=${normalizedAllowed.join(",")}`,
+    )} allowed=${normalizedAllowed.join(",")} result=${allowed}`,
   );
-  if (candidates.length > 0) {
-    return candidates.some((candidate) => normalizedAllowed.includes(candidate));
-  }
-  return normalizedAllowed.some((allowed) => matchesAllowedSender(normalizedFrom, allowed));
+  return allowed;
 }
 
 function extractSenderEmails(from: string): string[] {
