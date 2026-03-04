@@ -173,7 +173,7 @@ function isUnsupportedNodeCommandError(error: unknown, command: string): boolean
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const normalized = message.toLowerCase();
   if (normalized.includes("command not supported")) {
-    return true;
+    return normalized.includes(command.toLowerCase());
   }
   if (!normalized.includes("node command not allowed")) {
     return false;
