@@ -259,9 +259,7 @@ export function registerDevicesCli(program: Command) {
               width: tableWidth,
               columns: [
                 { key: "Request", header: "Request", minWidth: 10 },
-                { key: "Type", header: "Type", minWidth: 8 },
-                { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
+                { key: "Device", header: "Device", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
                 { key: "IP", header: "IP", minWidth: 12 },
                 { key: "Age", header: "Age", minWidth: 8 },
@@ -269,9 +267,7 @@ export function registerDevicesCli(program: Command) {
               ],
               rows: list.pending.map((req) => ({
                 Request: req.requestId,
-                Type: "pending",
-                Name: req.displayName ?? "",
-                deviceId: req.deviceId,
+                Device: req.displayName || req.deviceId,
                 Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
                 Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
@@ -289,18 +285,14 @@ export function registerDevicesCli(program: Command) {
             renderTable({
               width: tableWidth,
               columns: [
-                { key: "Type", header: "Type", minWidth: 8 },
-                { key: "Name", header: "Name", minWidth: 16, flex: true },
-                { key: "deviceId", header: "deviceId", minWidth: 16, flex: true },
+                { key: "Device", header: "Device", minWidth: 16, flex: true },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
                 { key: "IP", header: "IP", minWidth: 12 },
               ],
               rows: list.paired.map((device) => ({
-                Type: "paired",
-                Name: device.displayName ?? "",
-                deviceId: device.deviceId,
+                Device: device.displayName || device.deviceId,
                 Roles: device.roles?.length ? device.roles.join(", ") : "",
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
