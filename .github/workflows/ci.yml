@@ -158,6 +158,8 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: matrix.runtime != 'bun' || github.event_name != 'push'
+        env:
+          NODE_OPTIONS: ${{ (matrix.task == 'test' && matrix.runtime == 'node') && '--max-old-space-size=6144' || '' }}
         run: ${{ matrix.command }}
 
   # Types, lint, and format check.

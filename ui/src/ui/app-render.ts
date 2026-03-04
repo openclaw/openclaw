@@ -812,86 +812,117 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
+                  const cfg = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
+                  const list = cfg.agents?.list;
+                  const listIndex = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+                  // If the agent has an explicit list entry, update that entry's model.
+                  if (listIndex >= 0) {
+                    const basePath = ["agents", "list", listIndex, "model"];
+                    if (!modelId) {
+                      removeConfigFormValue(state, basePath);
+                      return;
+                    }
+                    const entry = (list as unknown[])[listIndex] as { model?: unknown };
+                    const existing = entry?.model;
+                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                      const next = {
+                        primary: modelId,
+                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                      };
+                      updateConfigFormValue(state, basePath, next);
+                    } else {
+                      updateConfigFormValue(state, basePath, modelId);
+                    }
                     return;
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  if (!modelId) {
-                    removeConfigFormValue(state, basePath);
-                    return;
-                  }
-                  const entry = list[index] as { model?: unknown };
-                  const existing = entry?.model;
-                  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                    const next = {
-                      primary: modelId,
-                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                    };
-                    updateConfigFormValue(state, basePath, next);
-                  } else {
-                    updateConfigFormValue(state, basePath, modelId);
+                  // Default agent with no list entry: update agents.defaults.model.
+                  const defaultAgentId = state.agentsList?.defaultId;
+                  if (defaultAgentId && agentId === defaultAgentId) {
+                    const basePath = ["agents", "defaults", "model"];
+                    if (!modelId) {
+                      removeConfigFormValue(state, basePath);
+                      return;
+                    }
+                    const existing = cfg.agents?.defaults?.model;
+                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                      const next = {
+                        primary: modelId,
+                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                      };
+                      updateConfigFormValue(state, basePath, next);
+                    } else {
+                      updateConfigFormValue(state, basePath, modelId);
+                    }
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  const cfg = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
-                  const resolvePrimary = () => {
+                  const list = cfg.agents?.list;
+                  const listIndex = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+                  const resolveExistingPrimary = (existing: unknown) => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
                     }
                     if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                       const primary = (existing as { primary?: unknown }).primary;
                       if (typeof primary === "string") {
-                        const trimmed = primary.trim();
-                        return trimmed || null;
+                        return primary.trim() || null;
                       }
                     }
                     return null;
                   };
-                  const primary = resolvePrimary();
-                  if (normalized.length === 0) {
-                    if (primary) {
-                      updateConfigFormValue(state, basePath, primary);
+                  const applyFallbacks = (basePath: Array<string | number>, existing: unknown) => {
+                    const primary = resolveExistingPrimary(existing);
+                    if (normalized.length === 0) {
+                      if (primary) {
+                        updateConfigFormValue(state, basePath, primary);
+                      } else {
+                        removeConfigFormValue(state, basePath);
+                      }
                     } else {
-                      removeConfigFormValue(state, basePath);
+                      const next = primary
+                        ? { primary, fallbacks: normalized }
+                        : { fallbacks: normalized };
+                      updateConfigFormValue(state, basePath, next);
                     }
+                  };
+                  // If the agent has an explicit list entry, update that entry's model.
+                  if (listIndex >= 0) {
+                    const entry = (list as unknown[])[listIndex] as { model?: unknown };
+                    applyFallbacks(["agents", "list", listIndex, "model"], entry.model);
                     return;
                   }
-                  const next = primary
-                    ? { primary, fallbacks: normalized }
-                    : { fallbacks: normalized };
-                  updateConfigFormValue(state, basePath, next);
+                  // Default agent with no list entry: update agents.defaults.model.
+                  const defaultAgentId = state.agentsList?.defaultId;
+                  if (defaultAgentId && agentId === defaultAgentId) {
+                    applyFallbacks(["agents", "defaults", "model"], cfg.agents?.defaults?.model);
+                  }
                 },
               })
             : nothing
