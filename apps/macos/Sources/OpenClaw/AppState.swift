@@ -508,6 +508,66 @@ final class AppState {
         }
     }
 
+    private static func syncedGatewayRoot(
+        currentRoot: [String: Any],
+        connectionMode: ConnectionMode,
+        remoteTransport: RemoteTransport,
+        remoteTarget: String,
+        remoteIdentity: String,
+        remoteUrl: String,
+        remoteToken: String) -> (root: [String: Any], changed: Bool)
+    {
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var changed = false
+
+        let desiredMode: String? = switch connectionMode {
+        case .local:
+            "local"
+        case .remote:
+            "remote"
+        case .unconfigured:
+            nil
+        }
+
+        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let desiredMode {
+            if currentMode != desiredMode {
+                gateway["mode"] = desiredMode
+                changed = true
+            }
+        } else if currentMode != nil {
+            gateway.removeValue(forKey: "mode")
+            changed = true
+        }
+
+        if connectionMode == .remote {
+            let remoteHost = CommandResolver.parseSSHTarget(remoteTarget)?.host
+            let currentRemote = gateway["remote"] as? [String: Any] ?? [:]
+            let updated = Self.updatedRemoteGatewayConfig(
+                current: currentRemote,
+                transport: remoteTransport,
+                remoteUrl: remoteUrl,
+                remoteHost: remoteHost,
+                remoteTarget: remoteTarget,
+                remoteIdentity: remoteIdentity,
+                remoteToken: remoteToken)
+            if updated.changed {
+                gateway["remote"] = updated.remote
+                changed = true
+            }
+        }
+
+        guard changed else { return (currentRoot, false) }
+
+        if gateway.isEmpty {
+            root.removeValue(forKey: "gateway")
+        } else {
+            root["gateway"] = gateway
+        }
+        return (root, true)
+    }
+
     private func syncGatewayConfigIfNeeded() {
         guard !self.isPreview, !self.isInitializing else { return }
 
@@ -517,58 +577,19 @@ final class AppState {
         let remoteTransport = self.remoteTransport
         let remoteUrl = self.remoteUrl
         let remoteToken = self.remoteToken
-        let desiredMode: String? = switch connectionMode {
-        case .local:
-            "local"
-        case .remote:
-            "remote"
-        case .unconfigured:
-            nil
-        }
-        let remoteHost = connectionMode == .remote
-            ? CommandResolver.parseSSHTarget(remoteTarget)?.host
-            : nil
 
         Task { @MainActor in
             // Keep app-only connection settings local to avoid overwriting remote gateway config.
-            var root = OpenClawConfigFile.loadDict()
-            var gateway = root["gateway"] as? [String: Any] ?? [:]
-            var changed = false
-
-            let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let desiredMode {
-                if currentMode != desiredMode {
-                    gateway["mode"] = desiredMode
-                    changed = true
-                }
-            } else if currentMode != nil {
-                gateway.removeValue(forKey: "mode")
-                changed = true
-            }
-
-            if connectionMode == .remote {
-                let currentRemote = gateway["remote"] as? [String: Any] ?? [:]
-                let updated = Self.updatedRemoteGatewayConfig(
-                    current: currentRemote,
-                    transport: remoteTransport,
-                    remoteUrl: remoteUrl,
-                    remoteHost: remoteHost,
-                    remoteTarget: remoteTarget,
-                    remoteIdentity: remoteIdentity,
-                    remoteToken: remoteToken)
-                if updated.changed {
-                    gateway["remote"] = updated.remote
-                    changed = true
-                }
-            }
-
-            guard changed else { return }
-            if gateway.isEmpty {
-                root.removeValue(forKey: "gateway")
-            } else {
-                root["gateway"] = gateway
-            }
-            OpenClawConfigFile.saveDict(root)
+            let synced = Self.syncedGatewayRoot(
+                currentRoot: OpenClawConfigFile.loadDict(),
+                connectionMode: connectionMode,
+                remoteTransport: remoteTransport,
+                remoteTarget: remoteTarget,
+                remoteIdentity: remoteIdentity,
+                remoteUrl: remoteUrl,
+                remoteToken: remoteToken)
+            guard synced.changed else { return }
+            OpenClawConfigFile.saveDict(synced.root)
         }
     }
 
@@ -739,6 +760,25 @@ extension AppState {
             remoteTarget: remoteTarget,
             remoteIdentity: remoteIdentity,
             remoteToken: remoteToken).remote
+    }
+
+    static func _testSyncedGatewayRoot(
+        currentRoot: [String: Any],
+        connectionMode: ConnectionMode,
+        remoteTransport: RemoteTransport,
+        remoteTarget: String,
+        remoteIdentity: String,
+        remoteUrl: String,
+        remoteToken: String) -> [String: Any]
+    {
+        Self.syncedGatewayRoot(
+            currentRoot: currentRoot,
+            connectionMode: connectionMode,
+            remoteTransport: remoteTransport,
+            remoteTarget: remoteTarget,
+            remoteIdentity: remoteIdentity,
+            remoteUrl: remoteUrl,
+            remoteToken: remoteToken).root
     }
 }
 #endif
