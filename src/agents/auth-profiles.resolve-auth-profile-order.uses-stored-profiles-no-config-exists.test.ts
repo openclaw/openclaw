@@ -13,7 +13,7 @@ describe("resolveAuthProfileOrder", () => {
     type: "token";
     provider: "minimax";
     token?: string;
-    tokenRef?: { source: "env" | "file" | "exec"; provider: string; id: string };
+    tokenRef?: { source: "env" | "file" | "exec" | "vault"; provider: string; id: string };
     expires?: number;
   }) {
     return resolveAuthProfileOrder({
