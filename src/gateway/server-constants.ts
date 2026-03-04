@@ -1,3 +1,5 @@
+import type { GatewayConfig } from "../config/types.gateway.js";
+
 // Keep server maxPayload aligned with gateway client maxPayload so high-res canvas snapshots
 // don't get disconnected mid-invoke with "Max payload size exceeded".
 export const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -20,6 +22,20 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
     maxChatHistoryMessagesBytes = value;
   }
 };
+
+/**
+ * Initialize chat history byte limit from gateway config.
+ * Call once at gateway startup.
+ */
+export const initMaxChatHistoryBytes = (gatewayCfg?: GatewayConfig) => {
+  const configured = gatewayCfg?.maxChatHistoryBytes;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    maxChatHistoryMessagesBytes = configured;
+  } else {
+    maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
+  }
+};
+
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const getHandshakeTimeoutMs = () => {
   if (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS) {
