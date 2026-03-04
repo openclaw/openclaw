@@ -66,6 +66,8 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const rawBody = message.text?.trim() ?? "";
+  // Thread context annotation (prepended to body if in a thread)
+  const threadAnnotation = message.threadId ? `[Thread ID: ${message.threadId}]\n` : "";
   if (!rawBody) {
     return;
   }
@@ -80,6 +82,7 @@ export async function handleNextcloudTalkInbound(params: {
   const senderName = message.senderName;
   const roomToken = message.roomToken;
   const roomName = message.roomName;
+  const threadId = message.threadId;
 
   statusSink?.({ lastInboundAt: message.timestamp });
 
@@ -308,7 +311,7 @@ export async function handleNextcloudTalkInbound(params: {
   });
   const deliverReply = createNormalizedOutboundDeliverer(async (payload) => {
     await deliverNextcloudTalkReply({
-      payload,
+      payload: threadId ? { ...payload, replyToId: payload.replyToId ?? threadId } : payload,
       roomToken,
       accountId: account.accountId,
       statusSink,

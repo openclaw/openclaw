@@ -116,6 +116,8 @@ export type NextcloudTalkObject = {
   content: string;
   /** Media type of the content. */
   mediaType: string;
+  /** Thread ID — present when message is part of an NC Talk thread (NC Talk 20+). */
+  threadId?: string;
 };
 
 /** Target conversation/room. */
@@ -153,6 +155,8 @@ export type NextcloudTalkInboundMessage = {
   mediaType: string;
   timestamp: number;
   isGroupChat: boolean;
+  /** Thread ID — present when message is part of an NC Talk thread (NC Talk 20+). */
+  threadId?: string;
 };
 
 /** Headers sent by Nextcloud Talk webhook. */

@@ -101,9 +101,11 @@ Minimal config:
 | --------------- | ------------- |
 | Direct messages | Supported     |
 | Rooms           | Supported     |
-| Threads         | Not supported |
+| Threads         | Supported (NC Talk 20+) |
 | Media           | URL-only      |
 | Reactions       | Supported     |
+
+> **Thread routing:** When a message is sent inside a thread, the bot automatically replies into the same thread. Requires NC Talk 20+ with the `threads` feature flag.
 | Native commands | Not supported |
 
 ## Configuration reference (Nextcloud Talk)
