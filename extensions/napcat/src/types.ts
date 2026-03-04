@@ -120,6 +120,7 @@ export type NapCatInboundMessage = {
   isGroup: boolean;
   targetId: string;
   rawBody: string;
+  commandBody: string;
   mediaUrls: string[];
   selfId?: string;
   timestamp: number;

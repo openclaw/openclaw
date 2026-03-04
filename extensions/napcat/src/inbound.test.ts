@@ -9,6 +9,7 @@ import {
   resolveNapCatCommandAuthorized,
   resolveNapCatGroupConfig,
 } from "./inbound.js";
+import { setNapCatRuntime } from "./runtime.js";
 import type { ResolvedNapCatAccount } from "./types.js";
 
 describe("extractNapCatInboundMessage", () => {
@@ -78,6 +79,22 @@ describe("extractNapCatInboundMessage", () => {
     expect(result).toBeTruthy();
     expect(result?.rawBody).toBe("[CQ:image,url=https://example.com/from-raw.png]");
     expect(result?.mediaUrls).toEqual(["https://example.com/from-raw.png"]);
+  });
+
+  it("normalizes commandBody by stripping CQ at-mentions from string payloads", () => {
+    const result = extractNapCatInboundMessage({
+      post_type: "message",
+      message_type: "private",
+      message_id: 103,
+      user_id: 123,
+      self_id: 789,
+      time: 1_700_000_003,
+      message: "[CQ:at,qq=789]/status",
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.rawBody).toBe("[CQ:at,qq=789]/status");
+    expect(result?.commandBody).toBe("/status");
   });
 });
 
@@ -346,5 +363,45 @@ describe("processNapCatEvent", () => {
     });
 
     expect(patches.some((patch) => typeof patch.lastEventAt === "number")).toBe(true);
+  });
+
+  it("strips CQ mentions before command auth detection", async () => {
+    const shouldComputeCommandAuthorized = vi.fn(() => false);
+    setNapCatRuntime({
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => {}),
+        },
+        commands: {
+          shouldComputeCommandAuthorized,
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+      },
+    } as unknown as Parameters<typeof setNapCatRuntime>[0]);
+
+    await processNapCatEvent({
+      event: {
+        post_type: "message",
+        message_type: "private",
+        message_id: "status-command",
+        user_id: "123",
+        self_id: "789",
+        time: 1_700_000_004,
+        message: "[CQ:at,qq=789]/status",
+      },
+      account: {
+        ...baseAccount,
+        config: {
+          dm: {
+            policy: "disabled",
+          },
+        },
+      },
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("/status", {});
   });
 });

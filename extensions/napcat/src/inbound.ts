@@ -127,10 +127,17 @@ function extractCqImageUrls(value: string): string[] {
   return mediaUrls;
 }
 
+function stripCqMentionsForCommandBody(value: string): string {
+  return value
+    .replace(/\[CQ:at,[^\]]*\]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractTextAndMedia(params: {
   rawMessage?: string;
   message?: OneBotSegment[] | string;
-}): { rawBody: string; mediaUrls: string[] } {
+}): { rawBody: string; commandBody: string; mediaUrls: string[] } {
   const mediaUrls: string[] = [];
   const textParts: string[] = [];
 
@@ -167,9 +174,11 @@ function extractTextAndMedia(params: {
     typeof params.message === "string"
       ? params.message.trim()
       : (params.rawMessage?.trim() ?? "");
+  const rawBody = fromSegments || fromRaw;
 
   return {
-    rawBody: fromSegments || fromRaw,
+    rawBody,
+    commandBody: stripCqMentionsForCommandBody(rawBody),
     mediaUrls: Array.from(new Set(mediaUrls)),
   };
 }
@@ -332,7 +341,7 @@ export function extractNapCatInboundMessage(event: unknown): NapCatInboundMessag
       ? Math.floor(data.time * 1000)
       : Date.now();
   const messageId = toStringId(data.message_id) || `${targetId}:${timestamp}`;
-  const { rawBody, mediaUrls } = extractTextAndMedia({
+  const { rawBody, commandBody, mediaUrls } = extractTextAndMedia({
     rawMessage: data.raw_message,
     message: data.message,
   });
@@ -349,6 +358,7 @@ export function extractNapCatInboundMessage(event: unknown): NapCatInboundMessag
     isGroup,
     targetId,
     rawBody,
+    commandBody,
     mediaUrls,
     selfId: toStringId(data.self_id) || undefined,
     timestamp,
@@ -429,7 +439,7 @@ export async function processNapCatEvent(params: {
   });
   const commandAuthorized = resolveNapCatCommandAuthorized({
     cfg: params.config,
-    rawBody: inbound.rawBody,
+    rawBody: inbound.commandBody,
     senderId: inbound.senderId,
     isGroup: inbound.isGroup,
     configuredAllowFrom,
@@ -516,7 +526,8 @@ export async function processNapCatEvent(params: {
     Body: envelope,
     BodyForAgent: bodyForAgent,
     RawBody: inbound.rawBody,
-    CommandBody: inbound.rawBody,
+    CommandBody: inbound.commandBody,
+    BodyForCommands: inbound.commandBody,
     From: `napcat:user:${inbound.senderId}`,
     To: toTarget,
     SessionKey: route.sessionKey,
