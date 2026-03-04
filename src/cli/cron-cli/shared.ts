@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { parseDurationMs as parseCliDurationMs } from "../parse-duration.js";
 
 export const getCronChannelOptions = () =>
   ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
@@ -40,26 +41,16 @@ export function parseDurationMs(input: string): number | null {
   if (!raw) {
     return null;
   }
-  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
-  if (!match) {
+  // Keep cron CLI strictness: require at least one explicit unit.
+  if (!/[a-z]/i.test(raw)) {
     return null;
   }
-  const n = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(n) || n <= 0) {
+  try {
+    const parsed = parseCliDurationMs(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
     return null;
   }
-  const unit = (match[2] ?? "").toLowerCase();
-  const factor =
-    unit === "ms"
-      ? 1
-      : unit === "s"
-        ? 1000
-        : unit === "m"
-          ? 60_000
-          : unit === "h"
-            ? 3_600_000
-            : 86_400_000;
-  return Math.floor(n * factor);
 }
 
 export function parseCronStaggerMs(params: {

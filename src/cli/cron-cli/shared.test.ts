@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { printCronList } from "./shared.js";
+import { parseAt, parseDurationMs, printCronList } from "./shared.js";
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -165,5 +165,36 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+  });
+});
+
+describe("parseDurationMs", () => {
+  it("accepts single-token durations with explicit units", () => {
+    expect(parseDurationMs("10m")).toBe(600_000);
+    expect(parseDurationMs("1.5h")).toBe(5_400_000);
+  });
+
+  it("accepts composite durations", () => {
+    expect(parseDurationMs("1h30m")).toBe(5_400_000);
+    expect(parseDurationMs("2m500ms")).toBe(120_500);
+  });
+
+  it("rejects empty, unitless, and non-positive values", () => {
+    expect(parseDurationMs("")).toBeNull();
+    expect(parseDurationMs("120")).toBeNull();
+    expect(parseDurationMs("0m")).toBeNull();
+    expect(parseDurationMs("-5m")).toBeNull();
+  });
+});
+
+describe("parseAt", () => {
+  it("supports relative composite durations", () => {
+    const baseNow = new Date("2026-03-04T00:00:00.000Z").valueOf();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseNow);
+    try {
+      expect(parseAt("1h30m")).toBe("2026-03-04T01:30:00.000Z");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
