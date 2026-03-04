@@ -125,9 +125,9 @@ function maybeCleanupCache() {
 // Tiktoken Tokenizer
 // ================================
 
-// Tiktoken encoding type
+// Tiktoken encoding type - Tiktoken.encode returns Uint32Array
 interface TiktokenEncoding {
-  encode: (text: string) => number[];
+  encode: (text: string) => Uint32Array;
   free: () => void;
 }
 
@@ -163,9 +163,9 @@ async function loadTiktokenTokenizer(): Promise<TiktokenEncoding> {
       // tiktoken.get_encoding expects a specific encoding name
       // @ts-expect-error - tiktoken types are not fully compatible
       const encoding = tiktoken.get_encoding(model);
-      tiktokenEncoding = encoding;
+      tiktokenEncoding = encoding as TiktokenEncoding;
       console.log(`[tokenizer] Loaded tiktoken model: ${model}`);
-      return encoding;
+      return tiktokenEncoding;
     } catch (error) {
       console.error("[tokenizer] Failed to load tiktoken:", error);
       tiktokenLoadPromise = null;
