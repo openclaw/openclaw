@@ -444,6 +444,43 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("treats exec runs with volatile details as no-progress repeats", () => {
+      const state = createState();
+      const params = { command: "grafana-api.sh datasources" };
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+      };
+
+      for (let i = 0; i < 4; i += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: '{"id":2,"name":"Loki"}' }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + i,
+              pid: 1000 + i,
+              cwd: `/tmp/run-${i}`,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, config);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
     it("warns on ping-pong alternating patterns", () => {
       const state = createState();
       const readParams = { path: "/a.txt" };

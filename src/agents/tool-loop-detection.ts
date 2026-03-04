@@ -197,6 +197,20 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
+  if (toolName === "exec" || toolName === "bash") {
+    // Exec details include volatile fields (durationMs/pid/cwd) that vary even
+    // when the command has identical outcomes. Keep only stable outcome fields
+    // so no-progress loop detection can trigger for repeated exec loops.
+    return digestStable({
+      details: {
+        status: details.status ?? null,
+        exitCode: details.exitCode ?? null,
+        exitSignal: details.exitSignal ?? null,
+        timedOut: details.timedOut ?? null,
+      },
+      text,
+    });
+  }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
