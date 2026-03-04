@@ -207,7 +207,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ### Field notes
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
-- `jitter`: cold-start jitter (duration string; default: 10% of `every`). After a gateway restart, each agent's first heartbeat is delayed by a random offset within `[0, jitter)` to avoid all agents firing simultaneously. Set `"0s"` to disable. Clamped to `every` — the maximum first-run wait is therefore just under `2 × every`.
+- `jitter`: cold-start jitter (duration string; default: 10% of `every`). After a gateway restart, each agent's first heartbeat is delayed by a random offset within `[0, jitter)` to avoid all agents firing simultaneously. Set `"0s"` to disable. Clamped to `every`, so the maximum first-run wait is `every + jitter` (at most `2 × every` when jitter equals the interval).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `session`: optional session key for heartbeat runs.
