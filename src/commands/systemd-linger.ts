@@ -1,3 +1,4 @@
+import { isSystemdSystemScope } from "../daemon/systemd-scope.js";
 import {
   enableSystemdUserLinger,
   isSystemdUserServiceAvailable,
@@ -23,13 +24,16 @@ export async function ensureSystemdUserLingerInteractive(params: {
   if (process.platform !== "linux") {
     return;
   }
+  const env = params.env ?? process.env;
+  if (isSystemdSystemScope(env)) {
+    return;
+  }
   if (params.prompt === false) {
     return;
   }
-  const env = params.env ?? process.env;
   const prompter = params.prompter ?? { note };
   const title = params.title ?? "Systemd";
-  if (!(await isSystemdUserServiceAvailable())) {
+  if (!(await isSystemdUserServiceAvailable(env))) {
     await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
     return;
   }
@@ -97,7 +101,10 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
     return;
   }
   const env = params.env ?? process.env;
-  if (!(await isSystemdUserServiceAvailable())) {
+  if (isSystemdSystemScope(env)) {
+    return;
+  }
+  if (!(await isSystemdUserServiceAvailable(env))) {
     return;
   }
   const status = await readSystemdUserLingerStatus(env);
