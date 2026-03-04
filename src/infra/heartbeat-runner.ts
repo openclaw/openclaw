@@ -1052,7 +1052,7 @@ export function startHeartbeatRunner(opts: {
       return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
     }
     // Config changed on pending schedule — recompute from original base, don't reset countdown
-    if (prevState?.scheduledAt && !prevState.lastRunMs) {
+    if (prevState && !prevState.lastRunMs) {
       const recomputed = prevState.scheduledAt + intervalMs + Math.floor(Math.random() * jitterMs);
       return { nextDueMs: Math.max(now, recomputed), scheduledAt: prevState.scheduledAt };
     }
