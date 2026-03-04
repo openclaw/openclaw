@@ -1,4 +1,4 @@
-import type { BaseProbeResult, MSTeamsConfig } from "openclaw/plugin-sdk";
+import type { BaseProbeResult, MSTeamsConfig } from "openclaw/plugin-sdk/compat";
 import { formatUnknownError } from "./errors.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";

@@ -1,4 +1,4 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/compat";
 import { describe, expect, it } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
