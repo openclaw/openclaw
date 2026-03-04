@@ -36,11 +36,11 @@ export const formatTokensCompact = (
 
   // Add cache hit rate if there are cached reads
   if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+    const usedTotal = typeof used === "number" && used > 0 ? used : 0;
+    const cacheTotal =
+      cacheRead + (typeof cacheWrite === "number" && cacheWrite > 0 ? cacheWrite : 0);
+    const denominator = Math.max(usedTotal, cacheTotal, 1);
+    const hitRate = Math.min(100, Math.round((cacheRead / denominator) * 100));
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 
