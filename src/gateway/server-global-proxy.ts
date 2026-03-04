@@ -10,7 +10,7 @@ const log = createSubsystemLogger("gateway/global-proxy");
 let applied = false;
 
 /**
- * Collect the first proxy URL found in enabled channel configurations.
+ * Collect the first proxy URL found in enabled, credentialed channel configurations.
  *
  * When a proxy is configured for any enabled channel (e.g. `channels.telegram.proxy`
  * or `channels.discord.proxy`), the gateway process itself — and any
@@ -21,22 +21,35 @@ let applied = false;
  *
  * Channels with `enabled: false` are skipped so a stale/unreachable proxy
  * from a disabled channel does not affect unrelated outbound requests.
+ *
+ * Accounts without credentials (Telegram `botToken`/`tokenFile`, Discord
+ * `token`) are also skipped — tokenless accounts are not runnable, so a
+ * stale proxy on an unconfigured placeholder should not hijack process-wide
+ * fetch traffic.
  */
 function resolveFirstChannelProxy(cfg: ReturnType<typeof loadConfig>): string | undefined {
   const telegram = cfg.channels?.telegram;
   // Skip disabled channels (enabled defaults to true when not set)
   if (telegram && telegram.enabled !== false) {
-    const telegramProxy = telegram.proxy?.trim();
-    if (telegramProxy) {
-      return telegramProxy;
+    // Top-level telegram config has credentials → use its proxy
+    if (hasTelegramToken(telegram)) {
+      const telegramProxy = telegram.proxy?.trim();
+      if (telegramProxy) {
+        return telegramProxy;
+      }
     }
 
     // Check per-account proxy settings
     const telegramAccounts = telegram.accounts;
     if (telegramAccounts) {
       for (const acct of Object.values(telegramAccounts)) {
-        const account = acct as { enabled?: boolean; proxy?: string };
-        if (account.enabled !== false) {
+        const account = acct as {
+          enabled?: boolean;
+          proxy?: string;
+          botToken?: string;
+          tokenFile?: string;
+        };
+        if (account.enabled !== false && hasTelegramToken(account)) {
           const p = account.proxy?.trim();
           if (p) {
             return p;
@@ -48,17 +61,20 @@ function resolveFirstChannelProxy(cfg: ReturnType<typeof loadConfig>): string | 
 
   const discord = cfg.channels?.discord;
   if (discord && discord.enabled !== false) {
-    const discordProxy = discord.proxy?.trim();
-    if (discordProxy) {
-      return discordProxy;
+    // Top-level discord config has credentials → use its proxy
+    if (hasDiscordToken(discord)) {
+      const discordProxy = discord.proxy?.trim();
+      if (discordProxy) {
+        return discordProxy;
+      }
     }
 
     // Check per-account proxy settings
     const discordAccounts = discord.accounts;
     if (discordAccounts) {
       for (const acct of Object.values(discordAccounts)) {
-        const account = acct as { enabled?: boolean; proxy?: string };
-        if (account.enabled !== false) {
+        const account = acct as { enabled?: boolean; proxy?: string; token?: string };
+        if (account.enabled !== false && hasDiscordToken(account)) {
           const p = account.proxy?.trim();
           if (p) {
             return p;
@@ -69,6 +85,16 @@ function resolveFirstChannelProxy(cfg: ReturnType<typeof loadConfig>): string | 
   }
 
   return undefined;
+}
+
+/** Telegram account is credentialed when it has a botToken or tokenFile. */
+function hasTelegramToken(account: { botToken?: string; tokenFile?: string }): boolean {
+  return !!(account.botToken?.trim() || account.tokenFile?.trim());
+}
+
+/** Discord account is credentialed when it has a token. */
+function hasDiscordToken(account: { token?: string }): boolean {
+  return !!account.token?.trim();
 }
 
 /**
