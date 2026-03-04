@@ -221,59 +221,32 @@ export const icons = {
   circle: html`
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
   `,
+  // Material Symbols Outlined icons (fill-based; inline style overrides .btn svg { fill: none })
   microphone: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 2c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2s2-.9 2-2V4c0-1.1-.9-2-2-2z" />
+    <svg viewBox="0 -960 960 960" style="fill: currentColor; stroke: none">
       <path
-        d="M19 11c0 2.8-2.2 5.1-5 5.1h-1V19c0 .6.4 1 1 1s1-.4 1-1v-1c0-.6.4-1 1-1h2c.6 0 1 .4 1 1v1c0 .6.4 1 1 1s1-.4 1-1v-2.9c0-2.8-2.2-5.1-5-5.1s-5 2.3-5 5.1"
+        d="M395-435q-35-35-35-85v-240q0-50 35-85t85-35q50 0 85 35t35 85v240q0 50-35 85t-85 35q-50 0-85-35Zm85-205Zm-40 520v-123q-104-14-172-93t-68-184h80q0 83 58.5 141.5T480-320q83 0 141.5-58.5T680-520h80q0 105-68 184t-172 93v123h-80Zm68.5-371.5Q520-503 520-520v-240q0-17-11.5-28.5T480-800q-17 0-28.5 11.5T440-760v240q0 17 11.5 28.5T480-480q17 0 28.5-11.5Z"
       />
-      <path d="M5 11c0 2.2 1.6 4.1 3.7 4.5" />
     </svg>
   `,
   microphoneOff: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 2c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2s2-.9 2-2V4c0-1.1-.9-2-2-2z" />
+    <svg viewBox="0 -960 960 960" style="fill: currentColor; stroke: none">
       <path
-        d="M19 11c0 2.8-2.2 5.1-5 5.1h-1V19c0 .6.4 1 1 1s1-.4 1-1v-1c0-.6.4-1 1-1h2c.6 0 1 .4 1 1v1c0 .6.4 1 1 1s1-.4 1-1v-2.9c0-2.8-2.2-5.1-5-5.1s-5 2.3-5 5.1"
-      />
-      <path d="M5 11c0 2.2 1.6 4.1 3.7 4.5" />
-      <line
-        x1="3"
-        x2="21"
-        y1="3"
-        y2="21"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
+        d="m710-362-58-58q14-23 21-48t7-52h80q0 44-13 83.5T710-362ZM480-594Zm112 112-72-72v-206q0-17-11.5-28.5T480-800q-17 0-28.5 11.5T440-760v126l-80-80v-46q0-50 35-85t85-35q50 0 85 35t35 85v240q0 11-2.5 20t-5.5 18ZM440-120v-123q-104-14-172-93t-68-184h80q0 83 57.5 141.5T480-320q34 0 64.5-10.5T600-360l57 57q-29 23-63.5 39T520-243v123h-80Zm352 64L56-792l56-56 736 736-56 56Z"
       />
     </svg>
   `,
   volume2: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <path d="M15.54 5.54a9 9 0 0 1 0 12.92M19.07 4a15 15 0 0 1 0 16" />
+    <svg viewBox="0 -960 960 960" style="fill: currentColor; stroke: none">
+      <path
+        d="M560-131v-82q90-26 145-100t55-168q0-94-55-168T560-749v-82q124 28 202 125.5T840-481q0 127-78 224.5T560-131ZM120-360v-240h160l200-200v640L280-360H120Zm440 40v-322q47 22 73.5 66t26.5 96q0 51-26.5 94.5T560-320ZM400-606l-86 86H200v80h114l86 86v-252ZM300-480Z"
+      />
     </svg>
   `,
   volumeX: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line
-        x1="23"
-        x2="17"
-        y1="9"
-        y2="15"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-      />
-      <line
-        x1="17"
-        x2="23"
-        y1="9"
-        y2="15"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
+    <svg viewBox="0 -960 960 960" style="fill: currentColor; stroke: none">
+      <path
+        d="M792-56 671-177q-25 16-53 27.5T560-131v-82q14-5 27.5-10t25.5-12L480-368v208L280-360H120v-240h128L56-792l56-56 736 736-56 56Zm-8-232-58-58q17-31 25.5-65t8.5-70q0-94-55-168T560-749v-82q124 28 202 125.5T840-481q0 53-14.5 102T784-288ZM650-422l-90-90v-130q47 22 73.5 66t26.5 96q0 15-2.5 29.5T650-422ZM480-592 376-696l104-104v208Zm-80 238v-94l-72-72H200v80h114l86 86Zm-36-130Z"
       />
     </svg>
   `,

@@ -464,7 +464,7 @@ export function renderChat(props: ChatProps) {
           </label>
           <div class="chat-compose__actions">
             <button
-              class="btn ${props.voiceInputEnabled ? "active" : ""}"
+              class="btn btn--icon ${props.voiceInputEnabled ? "active" : ""}"
               title="${props.voiceInputEnabled ? "Voice input enabled" : "Enable voice input"}"
               ?disabled=${!props.connected}
               @click=${props.onToggleVoiceInput}
@@ -472,7 +472,7 @@ export function renderChat(props: ChatProps) {
               ${props.voiceInputEnabled ? icons.microphone : icons.microphoneOff}
             </button>
             <button
-              class="btn ${props.audioOutputEnabled ? "active" : ""}"
+              class="btn btn--icon ${props.audioOutputEnabled ? "active" : ""}"
               title="${props.audioOutputEnabled ? "Audio output enabled" : "Enable audio output"}"
               ?disabled=${!props.connected}
               @click=${props.onToggleAudioOutput}
