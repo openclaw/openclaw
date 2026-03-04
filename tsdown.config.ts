@@ -103,6 +103,13 @@ export default defineConfig([
     platform: "node" as const,
   })),
   {
+    entry: "src/plugin-sdk/keyed-async-queue.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,
