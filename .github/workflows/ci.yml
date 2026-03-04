@@ -210,10 +210,10 @@ jobs:
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns 3 vitest
           # groups in parallel (unit-fast, unit-isolated, extensions) then gateway
           # serially. Each group gets BOT_TEST_WORKERS worker processes.
-          # Total heap: 3 groups × 1 worker × 2048 MB = ~6 GB, safe within 14 GB pod.
-          # Using 2 workers caused OOM (12 GB + process overhead exceeded 14 GB limit).
-          echo "BOT_TEST_WORKERS=1" >> "$GITHUB_ENV"
-          echo "BOT_TEST_MAX_OLD_SPACE_SIZE_MB=2048" >> "$GITHUB_ENV"
+          # Total heap: 3 groups × 2 workers × 1536 MB = ~9 GB, fits within 14 GB pod.
+          # (1 worker was safe but too slow; 2 workers with 2048 MB caused OOM at ~15 GB.)
+          echo "BOT_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "BOT_TEST_MAX_OLD_SPACE_SIZE_MB=1536" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         continue-on-error: ${{ matrix.runtime == 'bun' }}
