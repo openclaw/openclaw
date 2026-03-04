@@ -30,12 +30,26 @@ export type MonitorTelegramOpts = {
   webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
+  /**
+   * Total number of Telegram bot accounts running concurrently in this gateway.
+   * When >1, the per-bot runner sink concurrency is divided proportionally so
+   * that aggregate message-processing throughput stays within
+   * `agents.defaults.maxConcurrent` regardless of how many bot accounts are active.
+   */
+  accountCount?: number;
 };
 
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+export function createTelegramRunnerOptions(
+  cfg: OpenClawConfig,
+  opts?: { accountCount?: number },
+): RunOptions<unknown> {
+  const total = resolveAgentMaxConcurrent(cfg);
+  const count =
+    typeof opts?.accountCount === "number" && opts.accountCount > 1 ? opts.accountCount : 1;
+  const perBot = Math.max(1, Math.floor(total / count));
   return {
     sink: {
-      concurrency: resolveAgentMaxConcurrent(cfg),
+      concurrency: perBot,
     },
     runner: {
       fetch: {
@@ -180,7 +194,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     // Use grammyjs/runner for concurrent update processing
     let restartAttempts = 0;
     let webhookCleared = false;
-    const runnerOptions = createTelegramRunnerOptions(cfg);
+    const runnerOptions = createTelegramRunnerOptions(cfg, { accountCount: opts.accountCount });
     const waitBeforeRestart = async (buildLine: (delay: string) => string): Promise<boolean> => {
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
