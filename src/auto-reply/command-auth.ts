@@ -9,6 +9,7 @@ import type { MsgContext } from "./templating.js";
 export type CommandAuthorization = {
   providerId?: ChannelId;
   ownerList: string[];
+  enforceExplicitOwners: boolean;
   senderId?: string;
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
@@ -370,6 +371,7 @@ export function resolveCommandAuthorization(params: {
   return {
     providerId,
     ownerList,
+    enforceExplicitOwners: explicitOwners.length > 0,
     senderId: senderId || undefined,
     senderIsOwner,
     isAuthorizedSender,

@@ -14,7 +14,7 @@ import {
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { persistAbortTargetEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
@@ -97,6 +97,10 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   if (unauthorizedStop) {
     return unauthorizedStop;
   }
+  const nonOwnerStop = rejectNonOwnerCommand(params, "/stop");
+  if (nonOwnerStop) {
+    return nonOwnerStop;
+  }
   const abortTarget = resolveAbortTarget({
     ctx: params.ctx,
     sessionKey: params.sessionKey,
@@ -153,6 +157,10 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
   const unauthorizedAbortTrigger = rejectUnauthorizedCommand(params, "abort trigger");
   if (unauthorizedAbortTrigger) {
     return unauthorizedAbortTrigger;
+  }
+  const nonOwnerAbortTrigger = rejectNonOwnerCommand(params, "abort trigger");
+  if (nonOwnerAbortTrigger) {
+    return nonOwnerAbortTrigger;
   }
   const abortTarget = resolveAbortTarget({
     ctx: params.ctx,

@@ -253,6 +253,182 @@ describe("handleCommands gating", () => {
   });
 });
 
+describe("owner-only command enforcement", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      parsed: {},
+    });
+    validateConfigObjectWithPluginsMock.mockReturnValue({ ok: true, config: {} });
+    writeConfigFileMock.mockResolvedValue(undefined);
+  });
+
+  it("blocks /config for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        config: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/config show", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks /send for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/send off", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("blocks /debug for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        debug: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/debug show", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+    expect(params.command.enforceExplicitOwners).toBe(true);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("blocks /activation for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/activation mention", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+      ChatType: "group",
+    });
+    params.isGroup = true;
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+    expect(params.command.enforceExplicitOwners).toBe(true);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("blocks /stop for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/stop", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+    expect(params.command.enforceExplicitOwners).toBe(true);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("allows /stop for commands.allowFrom sender when owner allowlist is not explicit", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/stop", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+    expect(params.command.enforceExplicitOwners).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Agent was aborted");
+  });
+
+  it("does not block owner-only commands when owners are inferred from channel allowFrom", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        config: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+      },
+      channels: { whatsapp: { allowFrom: ["+15550002222"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/config show", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+    expect(params.command.ownerList).toEqual(["+15550002222"]);
+    expect(params.command.enforceExplicitOwners).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("⚙️ Config");
+  });
+});
+
 describe("/approve command", () => {
   beforeEach(() => {
     vi.clearAllMocks();

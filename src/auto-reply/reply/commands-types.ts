@@ -12,6 +12,7 @@ export type CommandContext = {
   channel: string;
   channelId?: ChannelId;
   ownerList: string[];
+  enforceExplicitOwners?: boolean;
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   senderId?: string;
