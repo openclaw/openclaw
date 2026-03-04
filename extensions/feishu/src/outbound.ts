@@ -104,7 +104,16 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "feishu", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, replyToId, threadId, accountId, mediaLocalRoots }) => {
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    replyToId,
+    threadId,
+    accountId,
+    mediaLocalRoots,
+  }) => {
     // Map outbound context to Feishu API params (coerce numeric threadId to string for consistency with Slack adapter)
     const replyToMessageId = replyToId ?? (threadId != null ? String(threadId) : undefined);
     const replyInThread = threadId != null;
