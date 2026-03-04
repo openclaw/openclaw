@@ -365,6 +365,7 @@ export function createStatusReactionController(params: {
     }
 
     clearAllTimers();
+    finished = false; // allow new state transitions after restore
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
       pendingEmoji = "";
