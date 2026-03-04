@@ -156,6 +156,28 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
+  it("quickstart preserves enabled:false when search was intentionally disabled", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "perplexity",
+            enabled: false,
+            perplexity: { apiKey: "stored-pplx-key" },
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({ selectValue: "perplexity" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(result.tools?.web?.search?.provider).toBe("perplexity");
+    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("stored-pplx-key");
+    expect(result.tools?.web?.search?.enabled).toBe(false);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("quickstart falls through to key prompt when no key and no env var", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "grok", textValue: "" });

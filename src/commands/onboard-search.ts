@@ -192,9 +192,20 @@ export async function setupSearch(
   const envAvailable = hasKeyInEnv(entry);
 
   if (opts?.quickstartDefaults && (existingKey || envAvailable)) {
-    return existingKey
+    const wasDisabled = config.tools?.web?.search?.enabled === false;
+    let result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applyProviderOnly(config, choice);
+    if (wasDisabled) {
+      result = {
+        ...result,
+        tools: {
+          ...result.tools,
+          web: { ...result.tools?.web, search: { ...result.tools?.web?.search, enabled: false } },
+        },
+      };
+    }
+    return result;
   }
 
   const keyInput = await prompter.text({
