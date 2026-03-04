@@ -92,9 +92,9 @@ export const zh_TW: TranslationMap = {
       cronText: "為重複運行使用隔離的會話。",
     },
     auth: {
-      required: "此閘道需要 HiClaw 雲端身份驗證。新增 HiClaw 雲端令牌或密碼，然後點擊連接。",
+      required: "此網關需要 HiClaw 雲端身份驗證。添加 HiClaw 雲端令牌或密碼，然後點擊連接。",
       failed:
-        "HiClaw 雲端身份驗證失敗。請使用 {command} 重新複製帶令牌的 URL，或更新 HiClaw 雲端令牌，然後點擊連接。",
+        "HiClaw 雲端身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新 HiClaw 雲端令牌，然後點擊連接。",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",

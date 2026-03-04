@@ -222,7 +222,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onSettingsChange({ ...props.settings, token: v });
                     }}
-                    placeholder="HiClaw Cloud token (OPENCLAW_GATEWAY_TOKEN)"
+                    placeholder="HiClaw Cloud token"
                   />
                 </label>
                 <label class="field">

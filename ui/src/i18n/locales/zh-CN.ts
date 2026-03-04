@@ -94,7 +94,7 @@ export const zh_CN: TranslationMap = {
     auth: {
       required: "此网关需要 HiClaw 云端身份验证。添加 HiClaw 云端令牌或密码，然后点击连接。",
       failed:
-        "HiClaw 云端身份验证失败。请使用 {command} 重新复制带令牌的 URL，或更新 HiClaw 云端令牌，然后点击连接。",
+        "HiClaw 云端身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新 HiClaw 云端令牌，然后点击连接。",
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
