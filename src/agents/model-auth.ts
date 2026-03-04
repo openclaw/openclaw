@@ -271,7 +271,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: envKey, source: "gcloud adc" };
   }
 
-  if (normalized === "opencode") {
+  if (normalized === "opencode" || normalized === "opencode-go") {
     return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
   }
 
@@ -318,6 +318,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     venice: "VENICE_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
     together: "TOGETHER_API_KEY",
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",

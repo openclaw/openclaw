@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCODE_GO_BASE_URL } from "../agents/opencode-go-models.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -557,6 +558,45 @@ describe("applyAuthChoice", () => {
     },
   );
 
+  it("configures OpenCode Go from opts token and writes provider config", async () => {
+    await setupTempState();
+
+    const token = "sk-opencode-go-test";
+    const text = vi.fn();
+    const confirm = vi.fn(async () => false);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+
+    const result = await applyAuthChoice({
+      authChoice: "opencode-go",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "opencode-go",
+        token,
+      },
+    });
+
+    expect(text).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["opencode-go:default"]).toMatchObject({
+      provider: "opencode-go",
+      mode: "api_key",
+    });
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "opencode-go/kimi-k2.5",
+    );
+    expect(result.config.models?.providers?.["opencode-go"]).toMatchObject({
+      baseUrl: OPENCODE_GO_BASE_URL,
+      api: "openai-completions",
+    });
+    expect(
+      result.config.models?.providers?.["opencode-go"]?.models?.map((model) => model.id),
+    ).toEqual(["glm-5", "kimi-k2.5", "minimax-m2.5"]);
+    expect((await readAuthProfile("opencode-go:default"))?.key).toBe(token);
+  });
+
   it("uses opts token for Gemini and keeps global default model when setDefaultModel=false", async () => {
     await setupTempState();
 
@@ -869,6 +909,38 @@ describe("applyAuthChoice", () => {
         ).toBeUndefined();
       }
     }
+  });
+
+  it("keeps the current default model for OpenCode Go when setDefaultModel=false", async () => {
+    await setupTempState();
+
+    const token = "sk-opencode-go-manual";
+    const text = vi.fn().mockResolvedValue(token);
+    const { prompter, runtime } = createApiKeyPromptHarness({ text });
+
+    const result = await applyAuthChoice({
+      authChoice: "opencode-go",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "anthropic/claude-opus-4-5",
+    );
+    expect(result.agentModelOverride).toBe("opencode-go/kimi-k2.5");
+    expect(result.config.models?.providers?.["opencode-go"]).toMatchObject({
+      baseUrl: OPENCODE_GO_BASE_URL,
+      api: "openai-completions",
+    });
+    expect((await readAuthProfile("opencode-go:default"))?.key).toBe(token);
   });
 
   it("sets default model when selecting github-copilot", async () => {
@@ -1320,6 +1392,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "opencode-go" as const, expectedProvider: "opencode-go" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {

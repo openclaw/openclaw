@@ -2058,6 +2058,7 @@ Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
 ```
 
 Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Shortcut: `openclaw onboard --auth-choice opencode-zen`.
+For OpenCode Go, use `openclaw onboard --auth-choice opencode-go`.
 
 </Accordion>
 
