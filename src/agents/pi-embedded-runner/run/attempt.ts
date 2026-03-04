@@ -2856,15 +2856,16 @@ export async function runEmbeddedAttempt(
           // because subsequent turns reuse the same session context with appended
           // messages; use loop_iteration_start for per-turn tracking.
           if (hookRunner?.hasHooks("context_assembled")) {
-            // Snapshot messages array to avoid mutation during async hook handling
-            const messagesSnapshot = activeSession.messages.slice();
+            // Snapshot messages array to avoid mutation during async hook handling.
+            // Named contextMessagesSnapshot to avoid shadowing the outer messagesSnapshot.
+            const contextMessagesSnapshot = activeSession.messages.slice();
             hookRunner
               .runContextAssembled(
                 {
                   systemPrompt: systemPromptText,
                   prompt: effectivePrompt,
-                  messages: messagesSnapshot,
-                  messageCount: messagesSnapshot.length,
+                  messages: contextMessagesSnapshot,
+                  messageCount: contextMessagesSnapshot.length,
                   imageCount: imageResult.images.length,
                   iteration: 1,
                 },
