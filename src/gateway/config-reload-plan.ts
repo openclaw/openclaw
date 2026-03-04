@@ -15,6 +15,7 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
   restartChannels: Set<ChannelKind>;
+  reloadChannelGroups: Set<ChannelKind>;
   noopPaths: string[];
 };
 
@@ -31,7 +32,8 @@ type ReloadAction =
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
-  | `restart-channel:${ChannelId}`;
+  | `restart-channel:${ChannelId}`
+  | `reload-channel-groups:${ChannelId}`;
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
@@ -67,6 +69,17 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  // Telegram: groups support hot reload without restarting the channel
+  {
+    prefix: "channels.telegram.accounts.*.groups",
+    kind: "hot",
+    actions: ["reload-channel-groups:telegram"],
+  },
+  {
+    prefix: "channels.telegram.groups",
+    kind: "hot",
+    actions: ["reload-channel-groups:telegram"],
+  },
   {
     prefix: "browser",
     kind: "hot",
@@ -152,6 +165,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     restartHeartbeat: false,
     restartHealthMonitor: false,
     restartChannels: new Set(),
+    reloadChannelGroups: new Set(),
     noopPaths: [],
   };
 
@@ -159,6 +173,11 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     if (action.startsWith("restart-channel:")) {
       const channel = action.slice("restart-channel:".length) as ChannelId;
       plan.restartChannels.add(channel);
+      return;
+    }
+    if (action.startsWith("reload-channel-groups:")) {
+      const channel = action.slice("reload-channel-groups:".length) as ChannelId;
+      plan.reloadChannelGroups.add(channel);
       return;
     }
     switch (action) {

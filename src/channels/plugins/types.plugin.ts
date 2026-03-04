@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type {
   ChannelAuthAdapter,
@@ -55,7 +56,11 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    noopPrefixes?: string[];
+    reloadGroups?: (params: { cfg: OpenClawConfig; accountId: string }) => Promise<void>;
+  };
   // CLI onboarding wizard hooks for this channel.
   onboarding?: ChannelOnboardingAdapter;
   config: ChannelConfigAdapter<ResolvedAccount>;
