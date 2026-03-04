@@ -53,7 +53,13 @@ const TELEGRAM_TEXT_LIMIT = 4096;
 type SendMatrixMessage = (
   to: string,
   text: string,
-  opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
+  opts?: {
+    cfg?: OpenClawConfig;
+    mediaUrl?: string;
+    replyToId?: string;
+    threadId?: string;
+    timeoutMs?: number;
+  },
 ) => Promise<{ messageId: string; roomId: string }>;
 
 export type OutboundSendDeps = {

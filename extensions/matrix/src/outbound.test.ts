@@ -88,6 +88,41 @@ describe("matrixOutbound cfg threading", () => {
     );
   });
 
+  it("passes resolved cfg through injected deps.sendMatrix", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+    const sendMatrix = vi.fn(async () => ({
+      messageId: "evt-injected",
+      roomId: "!room:example",
+    }));
+
+    await matrixOutbound.sendText!({
+      cfg,
+      to: "room:!room:example",
+      text: "hello via deps",
+      deps: { sendMatrix },
+      accountId: "default",
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith(
+      "room:!room:example",
+      "hello via deps",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadId: "$thread",
+        replyToId: "$reply",
+      }),
+    );
+  });
+
   it("passes resolved cfg to sendPollMatrix", async () => {
     const cfg = {
       channels: {

@@ -12,7 +12,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await send(to, text, {
-      ...(deps?.sendMatrix ? {} : { cfg }),
+      cfg,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
@@ -28,7 +28,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
     const result = await send(to, text, {
-      ...(deps?.sendMatrix ? {} : { cfg }),
+      cfg,
       mediaUrl,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,

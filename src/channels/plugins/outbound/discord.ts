@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getThreadBindingManager,
   type ThreadBindingRecord,
@@ -38,6 +39,7 @@ function resolveDiscordWebhookIdentity(params: {
 }
 
 async function maybeSendDiscordWebhookText(params: {
+  cfg?: OpenClawConfig;
   text: string;
   threadId?: string | number | null;
   accountId?: string | null;
@@ -68,6 +70,7 @@ async function maybeSendDiscordWebhookText(params: {
     webhookToken: binding.webhookToken,
     accountId: binding.accountId,
     threadId: binding.threadId,
+    cfg: params.cfg,
     replyTo: params.replyToId ?? undefined,
     username: persona.username,
     avatarUrl: persona.avatarUrl,
@@ -86,6 +89,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
+        cfg,
         text,
         threadId,
         accountId,
