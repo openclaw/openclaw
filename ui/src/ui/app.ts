@@ -120,36 +120,48 @@ export class OpenClawApp extends LitElement {
   }
 
   // toggle handlers used by chat UI
-  // Draft text that existed before recording started; restored on cancel, prepended on commit.
-  private _voiceBase = "";
+  // The speech portion currently appended to the textarea; replaced on each interim update.
+  // Tracking only the suffix (not the full base) means user edits elsewhere are preserved.
+  private _lastVoiceSuffix = "";
+
+  private _replaceVoiceSuffix(next: string) {
+    const cur = this.chatMessage;
+    // If the textarea still ends with what we last wrote, replace just that part.
+    // If the user edited it (deleted characters from the suffix), fall back to appending.
+    const base =
+      this._lastVoiceSuffix && cur.endsWith(this._lastVoiceSuffix)
+        ? cur.slice(0, cur.length - this._lastVoiceSuffix.length)
+        : cur;
+    const sep = base && next ? " " : "";
+    this._lastVoiceSuffix = next ? sep + next : "";
+    this.chatMessage = base + this._lastVoiceSuffix;
+  }
 
   toggleVoiceInput() {
     if (!this.voiceInputEnabled) {
       // start recording
       this.voiceInputEnabled = true;
-      this._voiceBase = this.chatMessage;
+      this._lastVoiceSuffix = "";
       void import("./services/voice.ts").then((m) => {
         m.startRecording(
           (interim) => {
-            // Show live transcript while recording
-            const sep = this._voiceBase && interim ? " " : "";
-            this.chatMessage = this._voiceBase + sep + interim;
+            this._replaceVoiceSuffix(interim);
           },
           (errorCode) => {
-            // Recognition ended naturally (error or browser timeout) — reset mic state
+            // Recognition ended naturally (error or browser timeout) — clear suffix and reset
             if (this.voiceInputEnabled) {
               if (errorCode) {
                 console.warn("voice recognition ended:", errorCode);
               }
-              this.chatMessage = this._voiceBase;
-              this._voiceBase = "";
+              this._replaceVoiceSuffix("");
+              this._lastVoiceSuffix = "";
               this.voiceInputEnabled = false;
             }
           },
         ).catch((err) => {
           console.error("voice start failed", err);
-          this.chatMessage = this._voiceBase;
-          this._voiceBase = "";
+          this._replaceVoiceSuffix("");
+          this._lastVoiceSuffix = "";
           this.voiceInputEnabled = false;
         });
       });
@@ -158,13 +170,12 @@ export class OpenClawApp extends LitElement {
       void import("./services/voice.ts").then(async (m) => {
         try {
           const transcript = await m.stopRecording();
-          const sep = this._voiceBase && transcript ? " " : "";
-          this.chatMessage = this._voiceBase + sep + transcript;
+          this._replaceVoiceSuffix(transcript);
         } catch (err) {
           console.error("voice stop failed", err);
-          this.chatMessage = this._voiceBase;
+          this._replaceVoiceSuffix("");
         } finally {
-          this._voiceBase = "";
+          this._lastVoiceSuffix = "";
           this.voiceInputEnabled = false;
         }
       });

@@ -58,6 +58,14 @@ export async function startRecording(
       recognitionEnded = true;
       onEnd?.(lastErrorCode);
     };
+    // Request getUserMedia first so macOS adds Chrome to System Settings →
+    // Privacy & Security → Microphone (Web Speech API alone doesn't trigger it).
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      return Promise.reject(new Error(`Microphone access denied: ${String(err)}`));
+    }
     recognition.start();
     return;
   }
