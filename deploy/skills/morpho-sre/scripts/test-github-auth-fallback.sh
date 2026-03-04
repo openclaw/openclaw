@@ -108,7 +108,7 @@ echo "PASS: keeps valid env token"
 
 export GITHUB_TOKEN="env-bad"
 export GITHUB_APP_ID="12345"
-export GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----"
+export GITHUB_APP_PRIVATE_KEY="FAKE_GITHUB_APP_PEM_LINE_1\\nFAKE_GITHUB_APP_PEM_LINE_2"
 unset GITHUB_APP_INSTALLATION_ID
 token="$(resolve_auth_token_for_repo morpho-org/test-repo || true)"
 [[ "$token" == "app-good" ]] || fail "expected app token fallback when env token invalid, got '$token'"
