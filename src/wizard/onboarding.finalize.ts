@@ -455,34 +455,67 @@ export async function finalizeOnboardingWizard(
   }
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
-  const webSearchKey =
-    webSearchProvider === "perplexity"
-      ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv =
-    webSearchProvider === "perplexity"
-      ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
-      : (process.env.BRAVE_API_KEY ?? "").trim();
+  const webSearchProviderLabels: Record<string, string> = {
+    brave: "Brave Search",
+    perplexity: "Perplexity Search",
+    gemini: "Gemini Search",
+    grok: "Grok Search",
+    kimi: "Kimi Search",
+  };
+  const webSearchConfigKeys: Record<string, string> = {
+    brave: "apiKey",
+    perplexity: "perplexity.apiKey",
+    gemini: "gemini.apiKey",
+    grok: "grok.apiKey",
+    kimi: "kimi.apiKey",
+  };
+  const webSearchEnvVars: Record<string, string[]> = {
+    brave: ["BRAVE_API_KEY"],
+    perplexity: ["PERPLEXITY_API_KEY"],
+    gemini: ["GEMINI_API_KEY"],
+    grok: ["XAI_API_KEY"],
+    kimi: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+  };
+  const search = nextConfig.tools?.web?.search;
+  const webSearchKey = ((): string => {
+    switch (webSearchProvider) {
+      case "perplexity":
+        return (search?.perplexity?.apiKey ?? "").trim();
+      case "gemini":
+        return (search?.gemini?.apiKey ?? "").trim();
+      case "grok":
+        return (search?.grok?.apiKey ?? "").trim();
+      case "kimi":
+        return (search?.kimi?.apiKey ?? "").trim();
+      default:
+        return (search?.apiKey ?? "").trim();
+    }
+  })();
+  const envVars = webSearchEnvVars[webSearchProvider] ?? [];
+  const webSearchEnv = envVars.some((v) => (process.env[v] ?? "").trim());
   const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
+  const providerLabel = webSearchProviderLabels[webSearchProvider] ?? webSearchProvider;
+  const configKeyPath = webSearchConfigKeys[webSearchProvider] ?? "apiKey";
+  const envVarLabel = envVars.join(" or ");
   await prompter.note(
     hasWebSearchKey
       ? [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
+          `Provider: ${providerLabel}`,
           webSearchKey
-            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
-            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
+            ? `API key: stored in config (tools.web.search.${configKeyPath}).`
+            : `API key: provided via ${envVarLabel} env var (Gateway environment).`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
-          "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
+          "To enable web search, your agent will need an API key for a supported search provider.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
           "- Choose a provider and paste your API key",
           "",
-          "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
+          "Alternative: set BRAVE_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, XAI_API_KEY, or KIMI_API_KEY in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
     "Web search (optional)",
