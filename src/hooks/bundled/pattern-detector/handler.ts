@@ -262,6 +262,85 @@ function drainPendingOutboundAlerts(agentId?: string): string[] {
   }
 }
 
+/**
+ * Extract sender metadata from the prompt text when event.senderMetadata is not populated.
+ * Parses "Sender (untrusted metadata):" and "Conversation info (untrusted metadata):" JSON blocks.
+ */
+function enrichSenderMetadataFromPrompt(
+  event: PluginHookBeforeAgentStartEvent,
+): PluginHookBeforeAgentStartEvent {
+  // If senderMetadata is already populated, use it as-is
+  if (event.senderMetadata?.senderE164) {
+    return event;
+  }
+
+  const prompt = event.prompt ?? "";
+
+  // Extract sender E164 from "Sender (untrusted metadata):" JSON block
+  const senderBlockMatch = prompt.match(
+    /Sender\s*\(untrusted[^)]*\):\s*```json\s*(\{[\s\S]*?\})\s*```/,
+  );
+  let senderE164: string | undefined;
+  let senderName: string | undefined;
+
+  if (senderBlockMatch) {
+    try {
+      const senderData = JSON.parse(senderBlockMatch[1]) as Record<string, unknown>;
+      if (typeof senderData.e164 === "string") {
+        senderE164 = senderData.e164;
+      }
+      if (typeof senderData.name === "string") {
+        senderName = senderData.name;
+      }
+    } catch {
+      // JSON parse failed, try regex fallback
+    }
+  }
+
+  // Regex fallback: extract e164 from the raw text
+  if (!senderE164) {
+    const e164Match = prompt.match(/"e164"\s*:\s*"(\+\d{10,15})"/);
+    if (e164Match) {
+      senderE164 = e164Match[1];
+    }
+  }
+  if (!senderName) {
+    const nameMatch = prompt.match(/"name"\s*:\s*"([^"]+)"/);
+    if (nameMatch) {
+      senderName = nameMatch[1];
+    }
+  }
+
+  // Extract chat_type from "Conversation info" block
+  const convMatch = prompt.match(/"chat_type"\s*:\s*"(group|direct)"/);
+  const chatType = convMatch ? (convMatch[1] as "group" | "direct") : undefined;
+
+  // Determine ownership from "Inbound Context" metadata
+  const senderIdMatch = prompt.match(/"sender_id"\s*:\s*"(\+\d+)"/);
+  const chatIdMatch = prompt.match(/"chat_id"\s*:\s*"(\+\d+)"/);
+
+  if (!senderE164 && !senderName) {
+    log.debug("enrichSenderMetadata: no sender info found in prompt");
+    return event;
+  }
+
+  log.debug(
+    `enrichSenderMetadata: extracted e164=${senderE164 ?? "?"} name=${senderName ?? "?"} chatType=${chatType ?? "?"}`,
+  );
+
+  return {
+    ...event,
+    senderMetadata: {
+      ...event.senderMetadata,
+      senderE164,
+      senderName,
+      chatType,
+      senderIsOwner: false, // If we're extracting from prompt, it's not the owner (owner messages don't have Sender blocks)
+      sessionKey: event.senderMetadata?.sessionKey,
+    },
+  };
+}
+
 export async function patternDetectorHandler(
   event: PluginHookBeforeAgentStartEvent,
   ctx: PluginHookAgentContext,
@@ -280,8 +359,11 @@ export async function patternDetectorHandler(
   const allAlerts: string[] = [];
 
   // 1. Sender identity check (high-priority context, prepended before pattern alerts)
+  //    The upstream does not populate event.senderMetadata, so we extract sender
+  //    info from the prompt metadata blocks (Sender/Conversation info JSON).
   if (isSenderCheckConfig(hookConfig?.senderCheck) && hookConfig.senderCheck.enabled) {
-    const senderAlert = runSenderCheck(event, ctx, hookConfig.senderCheck);
+    const enrichedEvent = enrichSenderMetadataFromPrompt(event);
+    const senderAlert = runSenderCheck(enrichedEvent, ctx, hookConfig.senderCheck);
     if (senderAlert) {
       allAlerts.unshift(senderAlert);
     }
