@@ -1618,4 +1618,83 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftA.clear).toHaveBeenCalledTimes(1);
     expect(draftB.clear).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves streamed preview text when verbose tool result is delivered during streaming", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Let me check that for you." });
+        await dispatcherOptions.deliver(
+          { text: "🔧 exec: ls -la" },
+          { kind: "tool" },
+        );
+        await dispatcherOptions.deliver(
+          { text: "Let me check that for you." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Tool result should be sent as a new message via deliverReplies
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "🔧 exec: ls -la" })],
+      }),
+    );
+    // Draft stream should be flushed before tool result delivery
+    expect(draftStream.flush).toHaveBeenCalled();
+    // Preview should be finalized with the final text, not overwritten by tool result
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Let me check that for you.",
+      expect.any(Object),
+    );
+  });
+
+  it("verbose notices delivered after response do not overwrite streamed preview", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Here is the answer to your question." });
+        // With the fix, actual response arrives first (finalPayloads before verboseNotices)
+        await dispatcherOptions.deliver(
+          { text: "Here is the answer to your question." },
+          { kind: "final" },
+        );
+        // Verbose session notice arrives after the response
+        await dispatcherOptions.deliver(
+          { text: "🧭 New session: abc-123" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // The actual response should finalize the preview via edit
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Here is the answer to your question.",
+      expect.any(Object),
+    );
+    // The verbose notice should be sent as a separate message since
+    // the preview was already finalized by the response
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "🧭 New session: abc-123" })],
+      }),
+    );
+  });
 });

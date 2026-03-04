@@ -528,6 +528,10 @@ export const dispatchTelegramMessage = async ({
             reasoningStepState.resetForNextStep();
           };
 
+          if (info.kind === "tool" && answerLane.stream) {
+            await flushDraftLane(answerLane);
+          }
+
           for (const segment of segments) {
             if (
               segment.lane === "answer" &&

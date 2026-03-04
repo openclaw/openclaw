@@ -683,7 +683,7 @@ export async function runReplyAgent(params: {
       }
     }
     if (verboseNotices.length > 0) {
-      finalPayloads = [...verboseNotices, ...finalPayloads];
+      finalPayloads = [...finalPayloads, ...verboseNotices];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
