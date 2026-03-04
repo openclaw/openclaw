@@ -41,6 +41,22 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
+    "vonage.applicationId": {
+      "label": "Vonage Application ID"
+    },
+    "vonage.privateKey": {
+      "label": "Vonage Private Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "vonage.privateKeyPath": {
+      "label": "Vonage Private Key Path",
+      "advanced": true
+    },
+    "vonage.signatureSecret": {
+      "label": "Vonage Signature Secret",
+      "sensitive": true
+    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -168,7 +184,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["telnyx", "twilio", "plivo", "vonage", "mock"]
       },
       "telnyx": {
         "type": "object",
@@ -205,6 +221,24 @@
             "type": "string"
           },
           "authToken": {
+            "type": "string"
+          }
+        }
+      },
+      "vonage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "applicationId": {
+            "type": "string"
+          },
+          "privateKey": {
+            "type": "string"
+          },
+          "privateKeyPath": {
+            "type": "string"
+          },
+          "signatureSecret": {
             "type": "string"
           }
         }
