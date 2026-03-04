@@ -853,6 +853,45 @@ function createZaiToolStreamWrapper(
 }
 
 /**
+ * Strip `reasoning.summary` from the outgoing API payload.
+ *
+ * pi-ai defaults `reasoning.summary` to `"auto"` whenever `reasoningEffort` is
+ * set.  This parameter requires organization verification on OpenAI's side,
+ * which is unavailable for Codex OAuth / ChatGPT Pro subscription users.
+ * Setting `disableReasoningSummary: true` in model params removes the field
+ * before the request is sent.
+ *
+ * See: openclaw/openclaw#34651
+ */
+function createReasoningSummaryStripperWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const reasoning = payloadObj.reasoning;
+          if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+            delete (reasoning as Record<string, unknown>).summary;
+          }
+          if (Array.isArray(payloadObj.include)) {
+            payloadObj.include = (payloadObj.include as string[]).filter(
+              (item) => item !== "reasoning.encrypted_content",
+            );
+            if ((payloadObj.include as string[]).length === 0) {
+              delete payloadObj.include;
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
@@ -959,6 +998,16 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  // Strip reasoning.summary from the payload when disableReasoningSummary is set.
+  // pi-ai defaults summary to "auto" which requires org verification — Codex
+  // OAuth / ChatGPT Pro users cannot use it.  See: openclaw/openclaw#34651
+  if (merged?.disableReasoningSummary === true) {
+    log.debug(
+      `stripping reasoning.summary from payload for ${provider}/${modelId} (disableReasoningSummary)`,
+    );
+    agent.streamFn = createReasoningSummaryStripperWrapper(agent.streamFn);
+  }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable

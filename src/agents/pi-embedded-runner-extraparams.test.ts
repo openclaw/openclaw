@@ -1242,4 +1242,75 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("strips reasoning.summary from payload when disableReasoningSummary is true (#34651)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "medium", summary: "auto" },
+        include: ["reasoning.encrypted_content"],
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/o3": {
+              params: {
+                disableReasoningSummary: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "o3");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "o3",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
+    expect(payloads[0]).not.toHaveProperty("include");
+  });
+
+  it("preserves reasoning.summary when disableReasoningSummary is not set", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "high", summary: "auto" },
+        include: ["reasoning.encrypted_content"],
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "o3");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "o3",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(payloads[0]?.include).toEqual(["reasoning.encrypted_content"]);
+  });
 });
