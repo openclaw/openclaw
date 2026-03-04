@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
 import { resolveStateDir } from "../config/paths.js";
+import { setDefaultSecurityHeaders } from "../gateway/http-common.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -417,6 +418,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;
     }
+    setDefaultSecurityHeaders(res);
     void (async () => {
       if (await handleA2uiHttpRequest(req, res)) {
         return;
