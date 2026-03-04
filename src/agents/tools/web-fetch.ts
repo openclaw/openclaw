@@ -734,9 +734,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
               extractor = "firecrawl";
             } else {
               throw new Error(
-                "Web fetch extraction failed: Readability, You.com Contents, and Firecrawl returned no content.",
+                "Web fetch extraction failed: Readability returned no content" +
+                  (params.youEnabled ? ", You.com Contents" : "") +
+                  (params.firecrawlEnabled ? ", and Firecrawl" : "") +
+                  " returned no usable content.",
               );
-            }
           }
         }
       } else {
