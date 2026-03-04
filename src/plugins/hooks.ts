@@ -140,6 +140,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
     prependContext:
       acc?.prependContext && next.prependContext
         ? `${acc.prependContext}\n\n${next.prependContext}`

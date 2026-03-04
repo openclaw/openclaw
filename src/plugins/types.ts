@@ -368,6 +368,7 @@ export type PluginHookBeforePromptBuildEvent = {
 
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
+  appendSystemPrompt?: string;
   prependContext?: string;
 };
 
