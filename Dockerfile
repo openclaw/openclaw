@@ -109,6 +109,12 @@ USER root
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
+# Bake default config so Telegram auth settings persist across restarts.
+RUN mkdir -p /home/node/.openclaw \
+ && cp /app/openclaw-clawcloud.json /home/node/.openclaw/openclaw.json \
+ && chown -R node:node /home/node/.openclaw
+ENV OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user

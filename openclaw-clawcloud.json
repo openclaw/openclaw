@@ -1,0 +1,12 @@
+{
+  "gateway": {
+    "bind": "0.0.0.0"
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "groupPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  }
+}
