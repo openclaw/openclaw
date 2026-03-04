@@ -39,10 +39,41 @@ const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 const syntaxTheme = createSyntaxTheme(fg(palette.code));
 
 /**
+ * Check if code looks like a credential (hex token, base64, etc.) that should not be syntax highlighted.
+ * Syntax highlighting splits long tokens, inserting whitespace that corrupts copy-paste.
+ */
+function looksLikeCredential(code: string): boolean {
+  const trimmed = code.trim();
+  // Single line only
+  if (trimmed.includes("\n")) {
+    return false;
+  }
+  // Hex string (40+ chars, common for git SHAs, tokens, UUIDs without dashes)
+  if (/^[a-fA-F0-9]{40,}$/.test(trimmed)) {
+    return true;
+  }
+  // UUID format (8-4-4-4-12 hex)
+  if (
+    /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.test(trimmed)
+  ) {
+    return true;
+  }
+  // Base64-like token (40+ chars, alphanumeric + special chars)
+  if (/^[A-Za-z0-9+/=_.-]{40,}$/.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Highlight code with syntax coloring.
  * Returns an array of lines with ANSI escape codes.
  */
 function highlightCode(code: string, lang?: string): string[] {
+  // Skip highlighting for credential-like strings to prevent copy-paste corruption
+  if (looksLikeCredential(code)) {
+    return code.split("\n").map((line) => fg(palette.code)(line));
+  }
   try {
     // Auto-detect can be slow for very large blocks; prefer explicit language when available.
     // Check if language is supported, fall back to auto-detect

@@ -51,6 +51,46 @@ describe("markdownTheme", () => {
       expect(result).toHaveLength(1);
       expect(stripAnsi(result[0] ?? "")).toBe("echo hello");
     });
+
+    it("skips highlighting for long hex tokens (40+ chars) to prevent copy-paste corruption", () => {
+      const longHex = "3ec1311e304d0b34d59fd8a4d4add0a8a3f8eba2d85c1a25";
+      const result = markdownTheme.highlightCode!(longHex);
+      // Should not call cli-highlight for credential-like strings
+      expect(cliHighlightMocks.highlight).not.toHaveBeenCalled();
+      expect(result).toHaveLength(1);
+      // Should still apply code color
+      expect(stripAnsi(result[0] ?? "")).toBe(longHex);
+    });
+
+    it("skips highlighting for UUID format", () => {
+      const uuid = "550e8400-e29b-41d4-a716-446655440000";
+      const result = markdownTheme.highlightCode!(uuid);
+      expect(cliHighlightMocks.highlight).not.toHaveBeenCalled();
+      expect(result).toHaveLength(1);
+      expect(stripAnsi(result[0] ?? "")).toBe(uuid);
+    });
+
+    it("skips highlighting for base64-like tokens", () => {
+      const token =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ";
+      const result = markdownTheme.highlightCode!(token);
+      expect(cliHighlightMocks.highlight).not.toHaveBeenCalled();
+      expect(result).toHaveLength(1);
+      expect(stripAnsi(result[0] ?? "")).toBe(token);
+    });
+
+    it("still highlights normal code", () => {
+      const code = "const x = 42;";
+      markdownTheme.highlightCode!(code);
+      expect(cliHighlightMocks.highlight).toHaveBeenCalled();
+    });
+
+    it("still highlights multi-line credential-like content", () => {
+      // Multi-line should still be highlighted (not treated as credential)
+      const multiLineHex = "line1\n3ec1311e304d0b34d59fd8a4d4add0a8a3f8eba2d85c1a25";
+      markdownTheme.highlightCode!(multiLineHex);
+      expect(cliHighlightMocks.highlight).toHaveBeenCalled();
+    });
   });
 });
 
