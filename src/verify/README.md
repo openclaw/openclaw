@@ -16,14 +16,14 @@ The `src/verify/` module reads the following TypeScript source files using the T
 
 From this parsed data, it generates 6 SMT-LIB2 model files:
 
-| Output file             | Contents                                                                              |
-| ----------------------- | ------------------------------------------------------------------------------------- |
-| `model/tools.smt2`      | Tool universe as an enumerated datatype, aliases, section groups, glob helpers        |
-| `model/pipeline.smt2`   | 7-step pipeline survival semantics (allow/deny per step, `apply_patch` special case)  |
-| `model/profiles.smt2`   | Profile presets (minimal, coding, messaging, full) with subset relationships          |
-| `model/owner-only.smt2` | Owner-only post-pipeline gate (`passes_owner_gate`)                                   |
-| `model/subagent.smt2`   | Subagent deny list (flat), depth structure (reserved), `alsoAllow` override mechanism |
-| `model/all.smt2`        | Combined loader that includes all components in dependency order                      |
+| Output file             | Contents                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `model/tools.smt2`      | Tool universe as an enumerated datatype, aliases, section groups, glob helpers       |
+| `model/pipeline.smt2`   | 7-step pipeline survival semantics (allow/deny per step, `apply_patch` special case) |
+| `model/profiles.smt2`   | Profile presets (minimal, coding, messaging, full) with subset relationships         |
+| `model/owner-only.smt2` | Owner-only post-pipeline gate (`passes_owner_gate`)                                  |
+| `model/subagent.smt2`   | Subagent deny list (flat), deny-first gate, optional allow-list filter               |
+| `model/all.smt2`        | Combined loader that includes all components in dependency order                     |
 
 Each generated `.smt2` file includes inline smoke tests (push/pop assertions with expected `unsat` results).
 
