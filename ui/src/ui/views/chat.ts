@@ -163,7 +163,7 @@ function generateAttachmentId(): string {
 }
 
 function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       resolve({
@@ -171,6 +171,9 @@ function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
         dataUrl: reader.result as string,
         mimeType: file.type,
       });
+    });
+    reader.addEventListener("error", () => {
+      reject(new Error(`Failed to read file: ${file.name}`));
     });
     reader.readAsDataURL(file);
   });
@@ -182,9 +185,14 @@ function addAttachments(files: File[], props: ChatProps) {
     return;
   }
 
-  void Promise.all(imageFiles.map((f) => readFileAsDataUrl(f))).then((newAttachments) => {
-    const current = props.attachments ?? [];
-    props.onAttachmentsChange?.([...current, ...newAttachments]);
+  void Promise.allSettled(imageFiles.map((f) => readFileAsDataUrl(f))).then((results) => {
+    const newAttachments = results
+      .filter((r): r is PromiseFulfilledResult<ChatAttachment> => r.status === "fulfilled")
+      .map((r) => r.value);
+    if (newAttachments.length > 0) {
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, ...newAttachments]);
+    }
   });
 }
 
