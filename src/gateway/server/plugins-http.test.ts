@@ -42,8 +42,9 @@ function buildRepeatedEncodedSlash(depth: number): string {
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
+    const registry = createTestRegistry();
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry(),
+      getRegistry: () => registry,
       log,
     });
     const { res } = makeMockHttpResponse();
@@ -55,10 +56,11 @@ describe("createGatewayPluginRequestHandler", () => {
     const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
     });
+    const registry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/demo", handler: routeHandler })],
+    });
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [createRoute({ path: "/demo", handler: routeHandler })],
-      }),
+      getRegistry: () => registry,
       log: createPluginLog(),
     });
 
@@ -73,13 +75,14 @@ describe("createGatewayPluginRequestHandler", () => {
       res.statusCode = 200;
     });
     const prefixHandler = vi.fn(async () => true);
+    const registry = createTestRegistry({
+      httpRoutes: [
+        createRoute({ path: "/api", match: "prefix", handler: prefixHandler }),
+        createRoute({ path: "/api/demo", match: "exact", handler: exactHandler }),
+      ],
+    });
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({ path: "/api", match: "prefix", handler: prefixHandler }),
-          createRoute({ path: "/api/demo", match: "exact", handler: exactHandler }),
-        ],
-      }),
+      getRegistry: () => registry,
       log: createPluginLog(),
     });
 
@@ -93,13 +96,14 @@ describe("createGatewayPluginRequestHandler", () => {
   it("supports route fallthrough when handler returns false", async () => {
     const first = vi.fn(async () => false);
     const second = vi.fn(async () => true);
+    const registry = createTestRegistry({
+      httpRoutes: [
+        createRoute({ path: "/hook", match: "exact", handler: first }),
+        createRoute({ path: "/hook", match: "prefix", handler: second }),
+      ],
+    });
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({ path: "/hook", match: "exact", handler: first }),
-          createRoute({ path: "/hook", match: "prefix", handler: second }),
-        ],
-      }),
+      getRegistry: () => registry,
       log: createPluginLog(),
     });
 
@@ -114,10 +118,11 @@ describe("createGatewayPluginRequestHandler", () => {
     const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
     });
+    const registry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/api/demo", handler: routeHandler })],
+    });
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [createRoute({ path: "/api/demo", handler: routeHandler })],
-      }),
+      getRegistry: () => registry,
       log: createPluginLog(),
     });
 
@@ -127,19 +132,49 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("picks up routes registered on a replacement registry (stale-registry regression)", async () => {
+    // Simulate what happens when loadOpenClawPlugins creates a new registry
+    // after a plugin config change: the handler must use the NEW active registry
+    // so that routes re-registered by channels (e.g. /line/webhook) are found.
+    let activeRegistry = createTestRegistry();
+
+    const handler = createGatewayPluginRequestHandler({
+      getRegistry: () => activeRegistry,
+      log: createPluginLog(),
+    });
+
+    // First registry — route not yet registered.
+    const { res: res1 } = makeMockHttpResponse();
+    expect(await handler({ url: "/line/webhook" } as IncomingMessage, res1)).toBe(false);
+
+    // Swap in a new registry (simulates setActivePluginRegistry after plugin config change).
+    const webhookHandler = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+    activeRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/line/webhook", auth: "plugin", handler: webhookHandler })],
+    });
+
+    // Handler must now resolve the route without any gateway restart.
+    const { res: res2 } = makeMockHttpResponse();
+    expect(await handler({ url: "/line/webhook" } as IncomingMessage, res2)).toBe(true);
+    expect(webhookHandler).toHaveBeenCalledTimes(1);
+  });
+
   it("logs and responds with 500 when a route throws", async () => {
     const log = createPluginLog();
+    const registry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/boom",
+          handler: async () => {
+            throw new Error("boom");
+          },
+        }),
+      ],
+    });
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/boom",
-            handler: async () => {
-              throw new Error("boom");
-            },
-          }),
-        ],
-      }),
+      getRegistry: () => registry,
       log,
     });
 

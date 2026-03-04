@@ -27,11 +27,18 @@ export type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 export function createGatewayPluginRequestHandler(params: {
-  registry: PluginRegistry;
+  /**
+   * Callback that returns the current active plugin registry.
+   * Called on every request so that routes registered after a plugin config
+   * change (which replaces the active registry via setActivePluginRegistry)
+   * are always visible to the HTTP handler without a gateway restart.
+   */
+  getRegistry: () => PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { getRegistry, log } = params;
   return async (req, res, providedPathContext) => {
+    const registry = getRegistry();
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;

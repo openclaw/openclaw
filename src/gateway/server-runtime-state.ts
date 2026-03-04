@@ -5,6 +5,7 @@ import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -115,12 +116,15 @@ export async function createGatewayRuntimeState(params: {
     logHooks: params.logHooks,
   });
 
+  // Use requireActivePluginRegistry() on every request so that routes
+  // registered after a plugin config change (which calls setActivePluginRegistry
+  // with a fresh registry object) are always visible without a gateway restart.
   const handlePluginRequest = createGatewayPluginRequestHandler({
-    registry: params.pluginRegistry,
+    getRegistry: requireActivePluginRegistry,
     log: params.logPlugins,
   });
   const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
+    return shouldEnforceGatewayAuthForPluginPath(requireActivePluginRegistry(), pathContext);
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
