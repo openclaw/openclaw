@@ -47,7 +47,10 @@ vi.mock("../runtime-api.js", () => ({
 }));
 
 vi.mock("express", () => {
-  const json = vi.fn(() => {
+  // Shared no-op middleware factory used for both json() and raw().
+  // monitor.ts switched from express.json() to express.raw() so both must
+  // be provided; missing raw() would throw "express.raw is not a function".
+  const makeNoopMiddleware = vi.fn(() => {
     return (_req: unknown, _res: unknown, next?: (err?: unknown) => void) => {
       next?.();
     };
@@ -86,7 +89,8 @@ vi.mock("express", () => {
 
   return {
     default: wrappedFactory,
-    json,
+    json: makeNoopMiddleware,
+    raw: makeNoopMiddleware,
   };
 });
 
@@ -245,12 +249,12 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const app = expressControl.apps.at(-1);
     expect(app).toBeDefined();
-    expect(app!.use).toHaveBeenCalledTimes(4);
+    expect(app!.use).toHaveBeenCalledTimes(5);
 
-    const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toBeDefined();
-    expect(app!.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
-    expect(app!.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
+    const rawMiddleware = vi.mocked((await import("express")).raw).mock.results[0]?.value;
+    expect(rawMiddleware).toBeDefined();
+    expect(app!.use.mock.calls[1]?.[0]).not.toBe(rawMiddleware);
+    expect(app!.use.mock.calls[2]?.[0]).toBe(rawMiddleware);
 
     const jwtMiddleware = app!.use.mock.calls[1]?.[0] as (
       req: Request,
