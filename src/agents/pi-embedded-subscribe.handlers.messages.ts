@@ -274,11 +274,11 @@ export function handleMessageEnd(
   });
 
   const hasToolCalls =
-   Array.isArray(assistantMessage.content) &&
-   (assistantMessage.content as Array<{ type?: string }>).some(
-     (block) => block?.type === "toolCall",
-   );
-   const userFacingRawText = hasToolCalls ? "" : rawText;
+    Array.isArray(assistantMessage.content) &&
+    (assistantMessage.content as Array<{ type?: string }>).some(
+      (block) => block?.type === "toolCall",
+    );
+  const userFacingRawText = hasToolCalls ? "" : rawText;
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(userFacingRawText, { thinking: false, final: false }),
