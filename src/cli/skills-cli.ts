@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { runSkillTest, runSkillBench, analyzeSkillTrigger } from "./skills-cli.eval.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -78,4 +79,58 @@ export function registerSkillsCli(program: Command) {
   skills.action(async () => {
     await runSkillsAction((report) => formatSkillsList(report, {}));
   });
+
+  // Test command: Run evaluation tests for a skill
+  skills
+    .command("test")
+    .description("Run evaluation tests for a skill")
+    .argument("<name>", "Skill name")
+    .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show detailed output", false)
+    .action(async (name, opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        await runSkillTest(workspaceDir, name, opts);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  // Benchmark command: Run all evaluations and report results
+  skills
+    .command("bench")
+    .description("Run benchmark mode - all evals with pass/fail rate and metrics")
+    .argument("<name>", "Skill name")
+    .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show detailed output", false)
+    .action(async (name, opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        await runSkillBench(workspaceDir, name, opts);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  // Analyze-trigger command: Analyze skill description against sample prompts
+  skills
+    .command("analyze-trigger")
+    .description("Analyze skill trigger description against sample prompts")
+    .argument("<name>", "Skill name")
+    .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show detailed output", false)
+    .action(async (name, opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        await analyzeSkillTrigger(workspaceDir, name, opts);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 }
