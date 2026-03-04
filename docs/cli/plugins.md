@@ -27,6 +27,7 @@ openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id>
 openclaw plugins update --all
+openclaw plugins import-claude
 ```
 
 Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
@@ -94,3 +95,16 @@ Updates only apply to plugins installed from npm (tracked in `plugins.installs`)
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
+
+### Import Claude MCP config
+
+```bash
+openclaw plugins import-claude
+openclaw plugins import-claude --dry-run
+openclaw plugins import-claude --from "~/Library/Application Support/Claude/claude_desktop_config.json"
+openclaw plugins import-claude --out ~/.openclaw/mcp/claude-import.json
+```
+
+`import-claude` reads a Claude MCP config JSON, extracts/normalizes
+`mcpServers`, and writes it to a local OpenClaw-managed file for follow-up
+runtime wiring.
