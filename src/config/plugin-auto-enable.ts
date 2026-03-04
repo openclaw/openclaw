@@ -367,6 +367,14 @@ function resolveConfiguredPlugins(
   return changes;
 }
 
+function isInstalledPluginEnabledByDefault(
+  registry: PluginManifestRegistry,
+  pluginId: string,
+): boolean {
+  const record = registry.plugins.find((entry) => entry.id === pluginId);
+  return record != null && (record.origin === "workspace" || record.origin === "global");
+}
+
 function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
@@ -492,6 +500,8 @@ export function applyPluginAutoEnable(params: {
 
   for (const entry of configured) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
+    const enabledByInstalledPlugin =
+      builtInChannelId == null && isInstalledPluginEnabledByDefault(registry, entry.pluginId);
     if (isPluginDenied(next, entry.pluginId)) {
       continue;
     }
@@ -517,11 +527,13 @@ export function applyPluginAutoEnable(params: {
             }
             return (channelConfig as { enabled?: unknown }).enabled === true;
           })()
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : next.plugins?.entries?.[entry.pluginId]?.enabled === true || enabledByInstalledPlugin;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
-    next = registerPluginEntry(next, entry.pluginId);
+    if (!enabledByInstalledPlugin) {
+      next = registerPluginEntry(next, entry.pluginId);
+    }
     if (allowMissing || !builtInChannelId) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }

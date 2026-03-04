@@ -202,6 +202,8 @@ export function loadPluginManifestRegistry(params: {
 
     const existing = seenIds.get(manifest.id);
     if (existing) {
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
@@ -217,7 +219,24 @@ export function loadPluginManifestRegistry(params: {
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (candidateRank < existingRank) {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue;
+      }
+      // Distinct plugin directories with the same id can still be intentional
+      // when a higher-precedence origin overrides a lower-precedence one
+      // (e.g. a global install shadowing a bundled plugin). In that case keep
+      // only the higher-precedence record without warning.
+      if (candidateRank !== existingRank) {
+        if (candidateRank < existingRank) {
           records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,
