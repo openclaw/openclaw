@@ -28,24 +28,6 @@ function installTrackedMkdtempHooks() {
   const originalMkdtempSync = fs.mkdtempSync.bind(fs);
   fs.mkdtempSync = ((...args: Parameters<typeof fs.mkdtempSync>) =>
     trackTempDir(originalMkdtempSync(...args))) as typeof fs.mkdtempSync;
-
-  const originalMkdtemp = fs.mkdtemp.bind(fs);
-  fs.mkdtemp = ((prefix: string, optionsOrCallback, maybeCallback) => {
-    if (typeof optionsOrCallback === "function") {
-      return originalMkdtemp(prefix, (error, folder) => {
-        if (!error && folder) {
-          trackTempDir(folder);
-        }
-        optionsOrCallback(error, folder);
-      });
-    }
-    return originalMkdtemp(prefix, optionsOrCallback, (error, folder) => {
-      if (!error && folder) {
-        trackTempDir(folder);
-      }
-      maybeCallback?.(error, folder);
-    });
-  }) as typeof fs.mkdtemp;
   syncBuiltinESMExports();
 
   const originalPromisesMkdtemp = fs.promises.mkdtemp.bind(fs.promises);
