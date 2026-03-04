@@ -133,11 +133,18 @@ export async function withRouteTabContext<T>(
       return params.res;
     };
 
-    const result = await params.run({
-      profileCtx,
-      tab,
-      cdpUrl: profileCtx.profile.cdpUrl,
-    });
+    let result: T | undefined;
+    try {
+      result = await params.run({
+        profileCtx,
+        tab,
+        cdpUrl: profileCtx.profile.cdpUrl,
+      });
+    } catch (runErr) {
+      // Restore original res.json so error handling can actually send.
+      params.res.json = originalJson;
+      throw runErr;
+    }
 
     // Now enrich and flush the intercepted response body.
     if (jsonCalled) {
