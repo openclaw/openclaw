@@ -5,8 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
+const {
+  createWaSocket,
+  formatError,
+  getStatusCode,
+  logWebSelfId,
+  waitForCredsSaveQueue,
+  waitForWaConnection,
+} = await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 async function flushCredsUpdate() {
@@ -104,6 +110,12 @@ describe("web session", () => {
       lastDisconnect: new Error("bye"),
     });
     await expect(promise).rejects.toBeInstanceOf(Error);
+  });
+
+  it("extracts status codes from nested disconnect wrappers", () => {
+    expect(getStatusCode({ error: { output: { statusCode: 515 } } })).toBe(515);
+    expect(getStatusCode({ lastDisconnect: { error: { output: { statusCode: 401 } } } })).toBe(401);
+    expect(getStatusCode({ cause: { status: 440 } })).toBe(440);
   });
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {
@@ -224,5 +236,38 @@ describe("web session", () => {
     expect(saveCreds).toHaveBeenCalled();
 
     creds.restore();
+  });
+
+  it("waitForCredsSaveQueue resolves after queued creds writes finish", async () => {
+    let releaseGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = () => resolve();
+    });
+
+    const saveCreds = vi.fn(async () => {
+      await gate;
+    });
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: { creds: {} as never, keys: {} as never },
+      saveCreds,
+    });
+
+    await createWaSocket(false, false);
+    const sock = getLastSocket();
+    sock.ev.emit("creds.update", {});
+
+    await flushCredsUpdate();
+
+    let drained = false;
+    const waitPromise = waitForCredsSaveQueue().then(() => {
+      drained = true;
+    });
+
+    await flushCredsUpdate();
+    expect(drained).toBe(false);
+
+    releaseGate?.();
+    await waitPromise;
+    expect(drained).toBe(true);
   });
 });

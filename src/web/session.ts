@@ -83,6 +83,10 @@ async function safeSaveCreds(
   }
 }
 
+export async function waitForCredsSaveQueue(): Promise<void> {
+  await credsSaveQueue;
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -184,10 +188,51 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
-  );
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    const outputStatus = (current as { output?: { statusCode?: unknown } })?.output?.statusCode;
+    if (typeof outputStatus === "number") {
+      return outputStatus;
+    }
+
+    const statusCode = (current as { statusCode?: unknown })?.statusCode;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+
+    const status = (current as { status?: unknown })?.status;
+    if (typeof status === "number") {
+      return status;
+    }
+
+    const error = (current as { error?: unknown })?.error;
+    if (error) {
+      queue.push(error);
+    }
+
+    const lastDisconnect = (current as { lastDisconnect?: unknown })?.lastDisconnect;
+    if (lastDisconnect) {
+      queue.push(lastDisconnect);
+    }
+
+    const cause = (current as { cause?: unknown })?.cause;
+    if (cause) {
+      queue.push(cause);
+    }
+  }
+
+  return undefined;
 }
 
 function safeStringify(value: unknown, limit = 800): string {

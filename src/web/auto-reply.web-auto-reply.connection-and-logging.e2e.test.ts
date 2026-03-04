@@ -201,6 +201,47 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it("clears stale auth when logged-out close reasons are reported", async () => {
+    const sessionModule = await import("./session.js");
+    const logoutSpy = vi.spyOn(sessionModule, "logoutWeb").mockResolvedValue(true);
+
+    try {
+      const closeResolvers: Array<(reason?: unknown) => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<unknown>((res) => {
+          closeResolvers.push(res);
+        });
+        return { close: vi.fn(), onClose };
+      });
+
+      const { runtime, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      closeResolvers.shift()?.({
+        status: 401,
+        isLoggedOut: true,
+        error: "Connection Failure",
+      });
+
+      await run;
+
+      expect(logoutSpy).toHaveBeenCalledTimes(1);
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session logged out"));
+    } finally {
+      logoutSpy.mockRestore();
+    }
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
