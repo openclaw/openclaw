@@ -104,6 +104,7 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
+  jitterMs: number;
   lastRunMs?: number;
   nextDueMs: number;
 };
@@ -1036,7 +1037,12 @@ export function startHeartbeatRunner(opts: {
     if (typeof prevState?.lastRunMs === "number") {
       return prevState.lastRunMs + intervalMs;
     }
-    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
+    if (
+      prevState &&
+      prevState.intervalMs === intervalMs &&
+      prevState.jitterMs === jitterMs &&
+      prevState.nextDueMs > now
+    ) {
       return prevState.nextDueMs;
     }
     // Cold start: stagger with jitter to avoid thundering herd.
@@ -1101,6 +1107,7 @@ export function startHeartbeatRunner(opts: {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
+        jitterMs,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
       });
