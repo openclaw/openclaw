@@ -32,10 +32,21 @@ function formatConversationTimestamp(value: unknown): string | undefined {
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
-  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  const provider = safeTrim(ctx.Provider);
+  const surface = safeTrim(ctx.Surface);
+  const senderId = safeTrim(ctx.SenderId)?.toLowerCase();
+  const isInternalWebchatSender =
+    senderId === "openclaw-control-ui" || senderId === "webchat-ui" || senderId === "webchat";
+  const isWebchatSurface = provider === "webchat" || surface === "webchat";
+
+  // Avoid stale external-route leakage for direct control-ui/webchat turns.
+  if (isWebchatSurface && isInternalWebchatSender) {
+    return "webchat";
+  }
+
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? surface;
   if (!channelValue) {
-    const provider = safeTrim(ctx.Provider);
-    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+    if (provider !== "webchat" && surface !== "webchat") {
       channelValue = provider;
     }
   }

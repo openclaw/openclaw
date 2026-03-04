@@ -99,6 +99,19 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("keeps channel as webchat for control-ui turns even with stale external origin", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingChannel: "slack",
+      Provider: "webchat",
+      Surface: "webchat",
+      SenderId: "openclaw-control-ui",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBe("webchat");
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {
