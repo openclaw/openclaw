@@ -66,6 +66,14 @@ struct LowCoverageViewSmokeTests {
         try? await Task.sleep(nanoseconds: 250_000_000)
     }
 
+    @Test func talkOverlayPresentsAndDismisses() async {
+        let controller = TalkOverlayController()
+        controller.present()
+        controller.present()
+        controller.dismiss()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+    }
+
     @Test func visualEffectViewHostsInNSHostingView() {
         let hosting = NSHostingView(rootView: VisualEffectView(material: .sidebar))
         _ = hosting.fittingSize

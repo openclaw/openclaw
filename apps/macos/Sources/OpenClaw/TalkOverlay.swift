@@ -30,11 +30,15 @@ final class TalkOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
-        OverlayPanelFactory.present(
-            window: self.window,
-            isVisible: &self.model.isVisible,
-            target: target)
-        { window in
+        guard let window = self.window else { return }
+
+        // Avoid `inout` access to observable state here; reentrant view reads can overlap
+        // with the borrow and trigger a fatal exclusivity conflict at launch.
+        if !self.model.isVisible {
+            self.model.isVisible = true
+            let start = target.offsetBy(dx: 0, dy: -6)
+            OverlayPanelFactory.animatePresent(window: window, from: start, to: target)
+        } else {
             window.setFrame(target, display: true)
             window.orderFrontRegardless()
         }
