@@ -117,11 +117,11 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
       "",
-      "Manifest (JSON):",
-      manifest,
+      "Slack app manifest JSON is printed below as raw output (copy/paste directly).",
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  process.stdout.write(`${manifest}\n`);
 }
 
 function setSlackGroupPolicy(
