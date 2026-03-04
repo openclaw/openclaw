@@ -17,6 +17,12 @@ const expressControl = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
+  normalizeSecretInputString: (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined,
+  hasConfiguredSecretInput: (value: unknown) =>
+    typeof value === "string" && value.trim().length > 0,
+  normalizeResolvedSecretInputString: (params: { value?: unknown }) =>
+    typeof params?.value === "string" && params.value.trim() ? params.value.trim() : undefined,
   keepHttpServerTaskAlive: vi.fn(
     async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
       await new Promise<void>((resolve) => {
