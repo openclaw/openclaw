@@ -91,8 +91,10 @@ async function promptSearchProviderOnboarding(
   // together). Otherwise append to tools.alsoAllow.
   const toolsAllow = config.tools?.allow;
   const hasExplicitAllow = Array.isArray(toolsAllow);
+  // When promoting to tools.allow, merge any existing alsoAllow entries so we
+  // can drop alsoAllow and avoid the schema conflict (allow + alsoAllow).
   const baseList: string[] = hasExplicitAllow
-    ? [...toolsAllow]
+    ? [...toolsAllow, ...(config.tools?.alsoAllow ?? [])]
     : [...(config.tools?.alsoAllow ?? [])];
   for (const tool of ["web_search", "web_fetch"]) {
     if (!baseList.includes(tool)) {
@@ -113,7 +115,7 @@ async function promptSearchProviderOnboarding(
     ...config,
     tools: {
       ...config.tools,
-      ...(hasExplicitAllow ? { allow: baseList } : { alsoAllow: baseList }),
+      ...(hasExplicitAllow ? { allow: baseList, alsoAllow: undefined } : { alsoAllow: baseList }),
       web: {
         ...config.tools?.web,
         search,
