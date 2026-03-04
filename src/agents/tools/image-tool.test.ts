@@ -48,6 +48,19 @@ async function withTempWorkspacePng(
   }
 }
 
+async function withTempAttachmentPng(
+  cb: (args: { attachmentRoot: string; imagePath: string }) => Promise<void>,
+) {
+  const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-attachments-"));
+  try {
+    const imagePath = path.join(attachmentRoot, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    await cb({ attachmentRoot, imagePath });
+  } finally {
+    await fs.rm(attachmentRoot, { recursive: true, force: true });
+  }
+}
+
 function stubMinimaxOkFetch() {
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -523,6 +536,26 @@ describe("image tool implicit imageModel config", () => {
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
+      });
+    });
+  });
+
+  it("allows image paths from configured iMessage attachment roots", async () => {
+    await withTempAttachmentPng(async ({ attachmentRoot, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg: OpenClawConfig = {
+          ...createMinimaxImageConfig(),
+          channels: {
+            imessage: {
+              attachmentRoots: [attachmentRoot],
+            },
+          },
+        };
+
+        const tool = createRequiredImageTool({ config: cfg, agentDir });
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
   });

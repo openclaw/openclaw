@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadWebMedia } from "../../web/media.js";
+import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
@@ -16,7 +16,6 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveModelFromRegistry,
-  resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -28,6 +27,7 @@ import {
   ensureOpenClawModelsJson,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
+  normalizeWorkspaceDir,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
   type SandboxFsBridge,
