@@ -1,0 +1,24 @@
+{
+  "name": "voicevox_stt",
+  "description": "Convert microphone audio to text using Faster-Whisper. FREE offline STT.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "duration": {
+        "type": "integer",
+        "description": "Recording duration in seconds",
+        "default": 5
+      },
+      "language": {
+        "type": "string",
+        "description": "Language code (ja, en, etc.)",
+        "default": "ja"
+      },
+      "model": {
+        "type": "string",
+        "description": "Model size (tiny, base, small, medium, large)",
+        "default": "base"
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "camera_vision",
+  "description": "Capture camera image and analyze with qwen3.5-9B (multimodal). 100% FREE - works offline via Ollama.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "Prompt for image analysis",
+        "default": "Describe what you see in this image."
+      },
+      "device": {
+        "type": "integer",
+        "description": "Camera device ID",
+        "default": 0
+      },
+      "width": {
+        "type": "integer",
+        "description": "Image width",
+        "default": 640
+      },
+      "height": {
+        "type": "integer",
+        "description": "Image height",
+        "default": 480
+      }
+    }
+  }
+}

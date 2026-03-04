@@ -1,0 +1,24 @@
+{
+  "name": "voicevox_tts",
+  "description": "Convert Japanese text to speech using VOICEVOX TTS engine. FREE local TTS.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Japanese text to convert to speech"
+      },
+      "speaker": {
+        "type": "integer",
+        "description": "Speaker ID (2=ずんだもん, 1=四国めたん, 3=あおい)",
+        "default": 2
+      },
+      "play": {
+        "type": "boolean",
+        "description": "Whether to play audio after synthesis",
+        "default": false
+      }
+    },
+    "required": ["text"]
+  }
+}
