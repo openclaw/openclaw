@@ -48,7 +48,7 @@ export type TypingSignaler = {
   shouldStartOnReasoning: boolean;
   signalRunStart: () => Promise<void>;
   signalMessageStart: () => Promise<void>;
-  signalTextDelta: (text?: string) => Promise<void>;
+  signalTextDelta: (text?: string, mediaUrls?: string[]) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
 };
@@ -65,6 +65,7 @@ export function createTypingSignaler(params: {
   const shouldStartOnReasoning = mode === "thinking";
   const disabled = isHeartbeat || mode === "never";
   let hasRenderableText = false;
+  let hasRenderableMedia = false;
 
   const isRenderableText = (text?: string): boolean => {
     const trimmed = text?.trim();
@@ -85,24 +86,31 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnMessageStart) {
       return;
     }
-    if (!hasRenderableText) {
+    if (!hasRenderableText && !hasRenderableMedia) {
       return;
     }
     await typing.startTypingLoop();
   };
 
-  const signalTextDelta = async (text?: string) => {
+  const signalTextDelta = async (text?: string, mediaUrls?: string[]) => {
     if (disabled) {
       return;
     }
+    const hasMedia = (mediaUrls?.length ?? 0) > 0;
     const renderable = isRenderableText(text);
     if (renderable) {
       hasRenderableText = true;
+    } else if (hasMedia) {
+      hasRenderableMedia = true;
     } else if (text?.trim()) {
       return;
     }
     if (shouldStartOnText) {
-      await typing.startTypingOnText(text);
+      if (hasMedia && !text?.trim()) {
+        await typing.startTypingLoop();
+      } else {
+        await typing.startTypingOnText(text);
+      }
       return;
     }
     if (shouldStartOnReasoning) {
@@ -117,7 +125,7 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    if (!hasRenderableText) {
+    if (!hasRenderableText && !hasRenderableMedia) {
       return;
     }
     await typing.startTypingLoop();
@@ -130,7 +138,7 @@ export function createTypingSignaler(params: {
     }
     // In message mode, only type after we have renderable assistant text.
     // This prevents brief typing blinks for runs that end up NO_REPLY.
-    if (mode === "message" && !hasRenderableText) {
+    if (mode === "message" && !hasRenderableText && !hasRenderableMedia) {
       return;
     }
     if (!typing.isActive()) {

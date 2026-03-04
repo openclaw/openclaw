@@ -179,7 +179,7 @@ export async function runAgentTurnWithFallback(params: {
         if (skip || !text) {
           return undefined;
         }
-        await params.typingSignals.signalTextDelta(text);
+        await params.typingSignals.signalTextDelta(text, payload.mediaUrls);
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
@@ -427,7 +427,7 @@ export async function runAgentTurnWithFallback(params: {
                           if (skip) {
                             return;
                           }
-                          await params.typingSignals.signalTextDelta(text);
+                          await params.typingSignals.signalTextDelta(text, payload.mediaUrls);
                           await onToolResult({
                             text,
                             mediaUrls: payload.mediaUrls,
