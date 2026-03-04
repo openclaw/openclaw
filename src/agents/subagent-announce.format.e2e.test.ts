@@ -1012,6 +1012,49 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBe("42");
   });
 
+  it("prefers agent turn over direct-send for group/topic requester sessions", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-topic-parent",
+      },
+      "agent:main:telegram:group:-100123:topic:42": {
+        sessionId: "requester-session-topic-parent",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastThreadId: 42,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-topic-parent-turn",
+      requesterSessionKey: "agent:main:telegram:group:-100123:topic:42",
+      requesterDisplayKey: "telegram:group:-100123:topic:42",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:42");
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("-100123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
   it("uses hook-provided thread target across requester thread variants", async () => {
     const cases = [
       {

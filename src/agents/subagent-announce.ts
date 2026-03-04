@@ -727,6 +727,10 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
+function isGroupOrTopicRequesterSessionKey(sessionKey: string): boolean {
+  return sessionKey.includes(":group:") || sessionKey.includes(":topic:");
+}
+
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
@@ -778,8 +782,11 @@ async function sendSubagentAnnounceDirectly(params: {
       const forceBoundSessionDirectDelivery =
         params.spawnMode === "session" &&
         (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
-      let shouldSendCompletionDirectly = true;
-      if (!forceBoundSessionDirectDelivery) {
+      const preferAgentTurnForGroupOrTopic = isGroupOrTopicRequesterSessionKey(
+        canonicalRequesterSessionKey,
+      );
+      let shouldSendCompletionDirectly = !preferAgentTurnForGroupOrTopic;
+      if (!forceBoundSessionDirectDelivery && shouldSendCompletionDirectly) {
         let pendingDescendantRuns = 0;
         try {
           const { countPendingDescendantRuns, countPendingDescendantRunsExcludingRun } =
