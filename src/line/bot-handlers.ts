@@ -403,18 +403,25 @@ async function shouldProcessLineEvent(
  * `isSelf: true` for the bot and `type: "all"` for @All mentions.
  * The `@line/bot-sdk` types don't expose these fields, so we use a type assertion.
  */
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
+/** Extract the mentionees array from a LINE text message (SDK types omit it). */
+function getLineMentionees(
+  message: MessageEvent["message"],
+): Array<{ type?: string; isSelf?: boolean }> {
   if (message.type !== "text") {
-    return false;
+    return [];
   }
   const mentionees = (message as Record<string, unknown> & { mention?: { mentionees?: unknown[] } })
     .mention?.mentionees;
-  if (!Array.isArray(mentionees)) {
-    return false;
-  }
-  return mentionees.some(
-    (m: { type?: string; isSelf?: boolean }) => m.isSelf === true || m.type === "all",
-  );
+  return Array.isArray(mentionees) ? mentionees : [];
+}
+
+function isLineBotMentioned(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
+}
+
+/** True when *any* @mention exists (bot or other users). */
+function hasAnyLineMention(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).length > 0;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
@@ -471,8 +478,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       const mentionGate = resolveMentionGatingWithBypass({
         isGroup: true,
         requireMention: true,
-        canDetectMention: true,
+        // Only text messages carry mention metadata; non-text (image/video/etc.)
+        // cannot be gated on mentions, so we let them through.
+        canDetectMention: message.type === "text",
         wasMentioned,
+        hasAnyMention: hasAnyLineMention(message),
         allowTextCommands: true,
         hasControlCommand: hasControlCommand(rawText, cfg),
         commandAuthorized: decision.commandAuthorized,

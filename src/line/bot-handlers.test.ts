@@ -741,6 +741,83 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
+    const processMessage = vi.fn();
+    // Image message -- LINE only carries mention metadata on text messages.
+    const event = {
+      type: "message",
+      message: { id: "m-mention-img", type: "image", contentProvider: { type: "line" } },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-img" },
+      mode: "active",
+      webhookEventId: "evt-mention-img",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not bypass mention gating when non-bot mention is present with control command", async () => {
+    const processMessage = vi.fn();
+    // Text message mentions another user (not bot) together with a control command.
+    const event = {
+      type: "message",
+      message: {
+        id: "m-mention-other",
+        type: "text",
+        text: "@other !status",
+        mention: { mentionees: [{ index: 0, length: 6, type: "user", isSelf: false }] },
+      },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-other" },
+      mode: "active",
+      webhookEventId: "evt-mention-other",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    // Should be skipped because there is a non-bot mention and the bot was not mentioned.
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it("does not mark replay cache when event processing fails", async () => {
     const processMessage = vi
       .fn()
