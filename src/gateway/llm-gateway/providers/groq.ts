@@ -478,7 +478,15 @@ export class AnthropicProvider extends BaseProvider {
     return { system, messages: anthropicMessages };
   }
 
-  private convertContent(content: string | Array<{ type: string; text?: string }>) {
+  private convertContent(
+    content:
+      | string
+      | Array<{
+          type: string;
+          text?: string;
+          source?: { type: string; media_type: string; data: string };
+        }>,
+  ) {
     if (typeof content === "string") {
       return [{ type: "text" as const, text: content }];
     }

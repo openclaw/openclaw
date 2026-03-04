@@ -172,8 +172,10 @@ export class KillSwitch {
 export class ContentPolicy {
   private blockedPatterns: RegExp[];
   private allowedModels: Set<string>;
+  private policy: SecurityPolicy;
 
   constructor(policy: SecurityPolicy) {
+    this.policy = policy;
     this.blockedPatterns = policy.blockedPatterns.map((p) => new RegExp(p, "i"));
     this.allowedModels = new Set(policy.allowedModels);
   }
@@ -351,13 +353,14 @@ export class SecurityLayer {
  * Create security middleware for Express/Fastify
  */
 export function createSecurityMiddleware(security: SecurityLayer) {
-  return async (req: unknown, res: unknown, next: unknown) => {
-    const request: GatewayRequest = req.body;
+  return async (req: Record<string, unknown>, res: Record<string, unknown>, next: () => void) => {
+    const request: GatewayRequest = req.body as GatewayRequest;
 
     const result = security.check(request);
 
     if (!result.allowed) {
-      res.status(429).json({
+      const resObj = res as { status: (code: number) => { json: (data: unknown) => void } };
+      resObj.status(429).json({
         error: "Too Many Requests",
         message: result.reason,
         retryAfter: result.retryAfter,
