@@ -1,7 +1,15 @@
 import {
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,
+  normalizeExecutableToken,
+  unwrapDispatchWrappersForResolution,
+  unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  POWERSHELL_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "./shell-inline-command.js";
 
 export type SystemRunCommandValidation =
   | {
@@ -32,21 +40,62 @@ export type ResolvedSystemRunCommand =
 export function formatExecCommand(argv: string[]): string {
   return argv
     .map((arg) => {
-      const trimmed = arg.trim();
-      if (!trimmed) {
+      if (arg.length === 0) {
         return '""';
       }
-      const needsQuotes = /\s|"/.test(trimmed);
+      const needsQuotes = /\s|"/.test(arg);
       if (!needsQuotes) {
-        return trimmed;
+        return arg;
       }
-      return `"${trimmed.replace(/"/g, '\\"')}"`;
+      return `"${arg.replace(/"/g, '\\"')}"`;
     })
     .join(" ");
 }
 
 export function extractShellCommandFromArgv(argv: string[]): string | null {
   return extractShellWrapperCommand(argv).command;
+}
+
+const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "fish",
+  "ksh",
+  "powershell",
+  "pwsh",
+  "sh",
+  "zsh",
+]);
+
+function unwrapShellWrapperArgv(argv: string[]): string[] {
+  const dispatchUnwrapped = unwrapDispatchWrappersForResolution(argv);
+  const shellMultiplexer = unwrapKnownShellMultiplexerInvocation(dispatchUnwrapped);
+  return shellMultiplexer.kind === "unwrapped" ? shellMultiplexer.argv : dispatchUnwrapped;
+}
+
+function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
+  const wrapperArgv = unwrapShellWrapperArgv(argv);
+  const token0 = wrapperArgv[0]?.trim();
+  if (!token0) {
+    return false;
+  }
+
+  const wrapper = normalizeExecutableToken(token0);
+  if (!POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES.has(wrapper)) {
+    return false;
+  }
+
+  const inlineCommandIndex =
+    wrapper === "powershell" || wrapper === "pwsh"
+      ? resolveInlineCommandMatch(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS).valueTokenIndex
+      : resolveInlineCommandMatch(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
+          allowCombinedC: true,
+        }).valueTokenIndex;
+  if (inlineCommandIndex === null) {
+    return false;
+  }
+  return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);
 }
 
 export function validateSystemRunCommandConsistency(params: {
@@ -59,10 +108,12 @@ export function validateSystemRunCommandConsistency(params: {
       : null;
   const shellWrapperResolution = extractShellWrapperCommand(params.argv);
   const shellCommand = shellWrapperResolution.command;
+  const shellWrapperPositionalArgv = hasTrailingPositionalArgvAfterInlineCommand(params.argv);
   const envManipulationBeforeShellWrapper =
     shellWrapperResolution.isWrapper && hasEnvManipulationBeforeShellWrapper(params.argv);
+  const mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv;
   const inferred =
-    shellCommand !== null && !envManipulationBeforeShellWrapper
+    shellCommand !== null && !mustBindDisplayToFullArgv
       ? shellCommand.trim()
       : formatExecCommand(params.argv);
 
