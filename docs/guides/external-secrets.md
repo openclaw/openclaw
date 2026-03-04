@@ -91,7 +91,6 @@ To start OpenClaw with Doppler on boot, create a wrapper script:
 ```bash
 #!/usr/bin/env bash
 # ~/.openclaw/start-with-doppler.sh
-
 # Explicitly set PATH to include Homebrew and pnpm binary locations
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/pnpm:$PATH"
 exec doppler run --project openclaw-system --config prd -- openclaw gateway --port 18789
@@ -133,7 +132,7 @@ Your `openclaw.json` uses the same `${VAR_NAME}` pattern shown above.
 
 For Vault, use OpenClaw's `exec` SecretRef provider to call the Vault CLI directly. This eliminates the need for a custom resolver script.
 
-```json5
+````json5
 {
   secrets: {
     providers: {
@@ -156,7 +155,6 @@ For Vault, use OpenClaw's `exec` SecretRef provider to call the Vault CLI direct
     },
   },
 }
-```
 
 The exec provider uses protocol payloads on stdin/stdout. See [Configuration Reference](/gateway/configuration-reference#secret-providers-config) for the full exec contract.
 
@@ -166,7 +164,7 @@ The exec provider uses protocol payloads on stdin/stdout. See [Configuration Ref
 
 ```bash
 infisical run -- openclaw gateway --port 18789
-```
+````
 
 Store keys in your Infisical project, reference them as `${VAR_NAME}` in config.
 
