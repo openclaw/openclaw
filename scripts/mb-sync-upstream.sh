@@ -236,7 +236,7 @@ resolve_conflicts_in_stage() {
     die "Conflict markers still present after protected resolution"
   fi
 
-  if grep -R -n --exclude-dir=.git '<<<<<<<\|=======\|>>>>>>>' "$STAGE_DIR" >/dev/null 2>&1; then
+  if grep -R -n --exclude-dir=.git -E '^(<<<<<<< |=======|>>>>>>> )' "$STAGE_DIR" >/dev/null 2>&1; then
     die "Conflict markers found in staged files"
   fi
 
