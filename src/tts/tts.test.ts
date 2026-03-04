@@ -236,6 +236,30 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig openai.baseUrl", () => {
+    it("resolves baseUrl from config", () => {
+      const cfg: OpenClawConfig = {
+        messages: { tts: { openai: { baseUrl: "http://localhost:8880/v1" } } },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+    });
+
+    it("returns undefined when baseUrl is not configured", () => {
+      const cfg: OpenClawConfig = { messages: { tts: {} } };
+      const config = resolveTtsConfig(cfg);
+      expect(config.openai.baseUrl).toBeUndefined();
+    });
+
+    it("trims whitespace from baseUrl", () => {
+      const cfg: OpenClawConfig = {
+        messages: { tts: { openai: { baseUrl: "  http://my-tts.local/v1  " } } },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.openai.baseUrl).toBe("http://my-tts.local/v1");
+    });
+  });
+
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });

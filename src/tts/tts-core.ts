@@ -591,17 +591,20 @@ export async function elevenLabsTTS(params: {
 export async function openaiTTS(params: {
   text: string;
   apiKey: string;
+  baseUrl?: string;
   model: string;
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const effectiveBaseUrl = params.baseUrl?.trim().replace(/\/+$/, "") || getOpenAITtsBaseUrl();
+  const isCustom = effectiveBaseUrl !== "https://api.openai.com/v1";
 
-  if (!isValidOpenAIModel(model)) {
+  if (!isCustom && !isValidOpenAIModel(model)) {
     throw new Error(`Invalid model: ${model}`);
   }
-  if (!isValidOpenAIVoice(voice)) {
+  if (!isCustom && !isValidOpenAIVoice(voice)) {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
@@ -609,7 +612,7 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+    const response = await fetch(`${effectiveBaseUrl}/audio/speech`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
