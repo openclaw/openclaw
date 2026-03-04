@@ -414,6 +414,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+<<<<<<< HEAD
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
     const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
     const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
@@ -687,7 +688,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("");
   });
-  it("does not collapse whitespace-only tool names to empty strings", async () => {
+  it("replaces blank/whitespace-only tool names with _blank sentinel to prevent dispatch loops", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
     const event = {
@@ -703,8 +704,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }
     await stream.result();
 
-    expect(partialToolCall.name).toBe("   ");
-    expect(finalToolCall.name).toBe("\t  ");
+    // Blank names are replaced with "_blank" so pi-agent-core produces a
+    // clear "Tool _blank not found" error instead of looping (#34129).
+    expect(partialToolCall.name).toBe("_blank");
+    expect(finalToolCall.name).toBe("_blank");
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
