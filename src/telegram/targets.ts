@@ -16,9 +16,11 @@ export function stripTelegramInternalPrefixes(to: string): string {
         strippedTelegramPrefix = true;
         return trimmed.replace(/^(telegram|tg):/i, "").trim();
       }
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-        return trimmed.replace(/^group:/i, "").trim();
+      // Legacy internal forms emitted by session keys:
+      // - `telegram:group:<id>`
+      // - `telegram:direct:<id>`
+      if (strippedTelegramPrefix && /^(group|direct):/i.test(trimmed)) {
+        return trimmed.replace(/^(group|direct):/i, "").trim();
       }
       return trimmed;
     })();
