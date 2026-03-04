@@ -457,6 +457,65 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("registers tool-event recipients for canonicalized same-session active runs", async () => {
+    primeMainAgentRun();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      chatAbortControllers: new Map([
+        [
+          "run-same-session",
+          {
+            controller: new AbortController(),
+            sessionId: "session-same",
+            sessionKey: "agent:main:main",
+            startedAtMs: 1,
+            expiresAtMs: 2,
+          },
+        ],
+        [
+          "run-other-session",
+          {
+            controller: new AbortController(),
+            sessionId: "session-other",
+            sessionKey: "agent:main:work",
+            startedAtMs: 1,
+            expiresAtMs: 2,
+          },
+        ],
+      ]),
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      {
+        message: "attach me to in-flight events",
+        sessionKey: "Main",
+        idempotencyKey: "tool-events-canonicalized-session",
+      },
+      {
+        context,
+        client: {
+          connId: "conn-late-join",
+          connect: {
+            caps: ["tool-events"],
+            client: { id: "test", mode: "ui" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(registerToolEventRecipient).toHaveBeenCalledWith(
+      "tool-events-canonicalized-session",
+      "conn-late-join",
+    );
+    expect(registerToolEventRecipient).toHaveBeenCalledWith("run-same-session", "conn-late-join");
+    expect(registerToolEventRecipient).not.toHaveBeenCalledWith(
+      "run-other-session",
+      "conn-late-join",
+    );
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
