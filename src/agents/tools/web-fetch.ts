@@ -15,7 +15,7 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import { fetchWithWebToolsNetworkGuard, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -247,48 +247,54 @@ async function fetchParallelContent(params: {
   const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
   const endpoint = `${baseUrl}/v1beta/extract`;
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": params.apiKey,
-      "parallel-beta": PARALLEL_BETA_HEADER,
+  return withTrustedWebToolsEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": params.apiKey,
+          "parallel-beta": PARALLEL_BETA_HEADER,
+        },
+        body: JSON.stringify({
+          urls: [params.url],
+          full_content: true,
+        }),
+      },
     },
-    body: JSON.stringify({
-      urls: [params.url],
-      full_content: true,
-    }),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
+    async ({ response: res }) => {
+      if (!res.ok) {
+        const detail = await readResponseText(res, { maxBytes: 64_000 });
+        throw new Error(
+          `Parallel extract failed (${res.status}): ${detail.text || res.statusText}`.trim(),
+        );
+      }
 
-  if (!res.ok) {
-    const detail = await readResponseText(res, { maxBytes: 64_000 });
-    throw new Error(
-      `Parallel extract failed (${res.status}): ${detail.text || res.statusText}`.trim(),
-    );
-  }
+      const payload = (await res.json()) as {
+        results?: Array<{
+          url?: string;
+          title?: string;
+          full_content?: string;
+          excerpts?: string[];
+        }>;
+        errors?: Array<{ url?: string; message?: string }>;
+      };
 
-  const payload = (await res.json()) as {
-    results?: Array<{
-      url?: string;
-      title?: string;
-      full_content?: string;
-      excerpts?: string[];
-    }>;
-    errors?: Array<{ url?: string; message?: string }>;
-  };
+      const result = payload.results?.[0];
+      if (!result) {
+        return null;
+      }
 
-  const result = payload.results?.[0];
-  if (!result) {
-    return null;
-  }
+      const text = result.full_content || (result.excerpts ?? []).join("\n\n");
+      if (!text) {
+        return null;
+      }
 
-  const text = result.full_content || (result.excerpts ?? []).join("\n\n");
-  if (!text) {
-    return null;
-  }
-
-  return { text, title: result.title };
+      return { text, title: result.title };
+    },
+  );
 }
 
 async function tryParallelFallback(params: {

@@ -54,8 +54,9 @@ export function applyParallelExtractToggle(
     };
   }
 
-  // Disable Parallel extract when switching away from Parallel.
-  if (existingFetch?.parallel) {
+  // Disable Parallel extract when explicitly switching away from Parallel.
+  // When provider is undefined (e.g. user disabled web_search), leave fetch config untouched.
+  if (provider !== undefined && existingFetch?.parallel) {
     return {
       ...existingFetch,
       parallel: {
