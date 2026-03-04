@@ -32,6 +32,9 @@ export async function runDiscordGatewayLifecycle(params: {
   const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   const RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
+  // Circuit breaker: force fresh IDENTIFY after N consecutive drops within window
+  const MAX_CONSECUTIVE_DROPS = 5;
+  const DROP_RESET_WINDOW_MS = 10 * 60_000;
   const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
     registerGateway(params.accountId, gateway);
@@ -110,6 +113,8 @@ export async function runDiscordGatewayLifecycle(params: {
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let consecutiveHelloStalls = 0;
+  let consecutiveDrops = 0;
+  let lastDropAt = 0;
   const clearHelloWatch = () => {
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
@@ -155,10 +160,24 @@ export async function runDiscordGatewayLifecycle(params: {
     const at = Date.now();
     pushStatus({ lastEventAt: at });
     if (message.includes("WebSocket connection closed")) {
-      // Carbon marks `isConnected` true only after READY/RESUMED and flips it
-      // false during reconnect handling after this debug line is emitted.
-      if (gateway?.isConnected) {
-        resetHelloStallCounter();
+      // Circuit breaker: track consecutive drops and force fresh IDENTIFY after threshold.
+      // NOTE: do NOT reset the hello stall counter here — a brief isConnected=true
+      // is unreliable and was masking the stall counter, allowing infinite resume loops.
+      const now = Date.now();
+      if (now - lastDropAt > DROP_RESET_WINDOW_MS) {
+        consecutiveDrops = 0;
+      }
+      consecutiveDrops += 1;
+      lastDropAt = now;
+      if (consecutiveDrops >= MAX_CONSECUTIVE_DROPS) {
+        consecutiveDrops = 0;
+        consecutiveHelloStalls = 0;
+        clearResumeState();
+        params.runtime.log?.(
+          danger(
+            `discord: circuit breaker tripped after ${MAX_CONSECUTIVE_DROPS} consecutive drops — forcing fresh IDENTIFY`,
+          ),
+        );
       }
       reconnectStallWatchdog.arm(at);
       pushStatus({
