@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import {
   addAllowlistEntry,
@@ -350,8 +349,10 @@ export async function processGatewayAllowlist(
     const interactiveApprovals = hasInteractiveExecApprovals(params.turnSourceChannel);
     const pendingText = interactiveApprovals
       ? `${warningText}Approval required (id ${approvalSlug}). ` +
-        `An interactive approval prompt with buttons has been sent to the user. ` +
-        `Reply with ONLY: ${SILENT_REPLY_TOKEN}`
+        `An interactive approval prompt with buttons has been sent to the user — ` +
+        `do not repeat the command or approval details. ` +
+        `The command will execute automatically once approved. ` +
+        `You will receive a system notification with the result — report it to the user at that time.`
       : `${warningText}Approval required (id ${approvalSlug}). ` +
         "Approve to run; updates will arrive after completion.";
 
