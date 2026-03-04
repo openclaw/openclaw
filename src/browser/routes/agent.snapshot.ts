@@ -48,6 +48,41 @@ async function saveBrowserMediaResponse(params: {
   });
 }
 
+/** Resolve the correct targetId after a navigation that may trigger a renderer swap. */
+export async function resolveTargetIdAfterNavigate(opts: {
+  oldTargetId: string;
+  navigatedUrl: string;
+  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+}): Promise<string> {
+  let currentTargetId = opts.oldTargetId;
+  try {
+    const refreshed = await opts.listTabs();
+    if (!refreshed.some((t) => t.targetId === opts.oldTargetId)) {
+      // Renderer swap: old target gone, resolve the replacement.
+      // Prefer a URL match whose targetId differs from the old one
+      // to avoid picking a pre-existing tab when multiple share the URL.
+      const byUrl = refreshed.filter((t) => t.url === opts.navigatedUrl);
+      const replaced = byUrl.find((t) => t.targetId !== opts.oldTargetId) ?? byUrl[0];
+      if (replaced) {
+        currentTargetId = replaced.targetId;
+      } else {
+        await new Promise((r) => setTimeout(r, 800));
+        const retried = await opts.listTabs();
+        const match =
+          retried.find((t) => t.url === opts.navigatedUrl && t.targetId !== opts.oldTargetId) ??
+          retried.find((t) => t.url === opts.navigatedUrl) ??
+          (retried.length === 1 ? retried[0] : null);
+        if (match) {
+          currentTargetId = match.targetId;
+        }
+      }
+    }
+  } catch {
+    // Best-effort: fall back to pre-navigation targetId
+  }
+  return currentTargetId;
+}
+
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -65,14 +100,19 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       feature: "navigate",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ cdpUrl, tab, pw, profileCtx }) => {
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           url,
           ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
         });
-        res.json({ ok: true, targetId: tab.targetId, ...result });
+        const currentTargetId = await resolveTargetIdAfterNavigate({
+          oldTargetId: tab.targetId,
+          navigatedUrl: result.url,
+          listTabs: () => profileCtx.listTabs(),
+        });
+        res.json({ ok: true, targetId: currentTargetId, ...result });
       },
     });
   });

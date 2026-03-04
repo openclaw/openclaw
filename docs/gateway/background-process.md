@@ -28,6 +28,7 @@ Behavior:
 - When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
 - Output is kept in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+- Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 
 ## Child process bridging
 

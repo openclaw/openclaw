@@ -5,20 +5,19 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -32,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ai.openclaw.android.MainViewModel
@@ -65,10 +66,13 @@ private enum class StatusVisual {
 }
 
 @Composable
-@OptIn(ExperimentalLayoutApi::class)
 fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
-  val imeVisible = WindowInsets.isImeVisible
+
+  // Stop TTS when user navigates away from voice tab
+  LaunchedEffect(activeTab) {
+    viewModel.setVoiceScreenActive(activeTab == HomeTab.Voice)
+  }
 
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
@@ -85,6 +89,10 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       }
     }
 
+  val density = LocalDensity.current
+  val imeVisible = WindowInsets.ime.getBottom(density) > 0
+  val hideBottomTabBar = activeTab == HomeTab.Chat && imeVisible
+
   Scaffold(
     modifier = modifier,
     containerColor = Color.Transparent,
@@ -96,7 +104,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       )
     },
     bottomBar = {
-      if (!imeVisible) {
+      if (!hideBottomTabBar) {
         BottomTabBar(
           activeTab = activeTab,
           onSelect = { activeTab = it },
@@ -109,14 +117,58 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         Modifier
           .fillMaxSize()
           .padding(innerPadding)
+          .consumeWindowInsets(innerPadding)
           .background(mobileBackgroundGradient),
     ) {
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> ChatSheet(viewModel = viewModel)
-        HomeTab.Voice -> ComingSoonTabScreen(label = "VOICE", title = "Coming soon", description = "Voice mode is coming soon.")
-        HomeTab.Screen -> ComingSoonTabScreen(label = "SCREEN", title = "Coming soon", description = "Screen mode is coming soon.")
+        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
+        HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ScreenTabScreen(viewModel: MainViewModel) {
+  val isConnected by viewModel.isConnected.collectAsState()
+  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
+  val canvasUrl by viewModel.canvasCurrentUrl.collectAsState()
+  val canvasA2uiHydrated by viewModel.canvasA2uiHydrated.collectAsState()
+  val canvasRehydratePending by viewModel.canvasRehydratePending.collectAsState()
+  val canvasRehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
+  val isA2uiUrl = canvasUrl?.contains("/__openclaw__/a2ui/") == true
+  val showRestoreCta = isConnected && isNodeConnected && (canvasUrl.isNullOrBlank() || (isA2uiUrl && !canvasA2uiHydrated))
+  val restoreCtaText =
+    when {
+      canvasRehydratePending -> "Restore requested. Waiting for agent…"
+      !canvasRehydrateErrorText.isNullOrBlank() -> canvasRehydrateErrorText!!
+      else -> "Canvas reset. Tap to restore dashboard."
+    }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    CanvasScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+
+    if (showRestoreCta) {
+      Surface(
+        onClick = {
+          if (canvasRehydratePending) return@Surface
+          viewModel.requestCanvasRehydrate(source = "screen_tab_cta")
+        },
+        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp, vertical = 16.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = mobileSurface.copy(alpha = 0.9f),
+        border = BorderStroke(1.dp, mobileBorder),
+        shadowElevation = 4.dp,
+      ) {
+        Text(
+          text = restoreCtaText,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+          style = mobileCallout.copy(fontWeight = FontWeight.Medium),
+          color = mobileText,
+        )
       }
     }
   }
@@ -222,18 +274,21 @@ private fun BottomTabBar(
   Box(
     modifier =
       Modifier
-        .fillMaxWidth()
-        .windowInsetsPadding(safeInsets),
+        .fillMaxWidth(),
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth().offset(y = (-4).dp),
+      modifier = Modifier.fillMaxWidth(),
       color = Color.White.copy(alpha = 0.97f),
       shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
     ) {
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(safeInsets)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -266,25 +321,6 @@ private fun BottomTabBar(
           }
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun ComingSoonTabScreen(
-  label: String,
-  title: String,
-  description: String,
-) {
-  Box(modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
-    Column(
-      modifier = Modifier.align(Alignment.Center),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
-      Text(title, style = mobileTitle1, color = mobileText)
-      Text(description, style = mobileBody, color = mobileTextSecondary)
     }
   }
 }

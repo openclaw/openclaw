@@ -1,5 +1,5 @@
 ---
-summary: "Android app (node): connection runbook + Canvas/Chat/Camera"
+summary: "Android app (node): connection runbook + Connect/Chat/Voice/Canvas command surface"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -13,7 +13,7 @@ title: "Android App"
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
+- Install: [Getting Started](/start/getting-started) + [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
@@ -25,7 +25,7 @@ System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gatew
 
 Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
-Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses Gateway-owned pairing.
+Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses device pairing (`role: node`).
 
 ### Prerequisites
 
@@ -75,9 +75,9 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 In the Android app:
 
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
-- Open **Settings**.
-- Under **Discovered Gateways**, select your gateway and hit **Connect**.
-- If mDNS is blocked, use **Advanced → Manual Gateway** (host + port) and **Connect (Manual)**.
+- Open the **Connect** tab.
+- Use **Setup Code** or **Manual** mode.
+- If discovery is blocked, use manual host/port (and TLS/token/password when required) in **Advanced controls**.
 
 After the first successful pairing, Android auto-reconnects on launch:
 
@@ -89,11 +89,12 @@ After the first successful pairing, Android auto-reconnects on launch:
 On the gateway machine:
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+openclaw devices list
+openclaw devices approve <requestId>
+openclaw devices reject <requestId>
 ```
 
-Pairing details: [Gateway pairing](/gateway/pairing).
+Pairing details: [Pairing](/channels/pairing).
 
 ### 5) Verify the node is connected
 
@@ -111,13 +112,13 @@ Pairing details: [Gateway pairing](/gateway/pairing).
 
 ### 6) Chat + history
 
-The Android node’s Chat sheet uses the gateway’s **primary session key** (`main`), so history and replies are shared with WebChat and other clients:
+The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
 - History: `chat.history`
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + camera
+### 7) Canvas + screen + camera
 
 #### Gateway Canvas Host (recommended for web content)
 
@@ -149,3 +150,20 @@ Camera commands (foreground only; permission-gated):
 - `camera.clip` (mp4)
 
 See [Camera node](/nodes/camera) for parameters and CLI helpers.
+
+Screen commands:
+
+- `screen.record` (mp4; foreground only)
+
+### 8) Voice + expanded Android command surface
+
+- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and TTS playback (ElevenLabs when configured, system TTS fallback).
+- Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
+- Additional Android command families (availability depends on device + permissions):
+  - `device.status`, `device.info`, `device.permissions`, `device.health`
+  - `notifications.list`, `notifications.actions`
+  - `photos.latest`
+  - `contacts.search`, `contacts.add`
+  - `calendar.events`, `calendar.add`
+  - `motion.activity`, `motion.pedometer`
+  - `app.update`

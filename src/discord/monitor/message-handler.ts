@@ -1,39 +1,96 @@
 import type { Client } from "@buape/carbon";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
+import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
+import type { DiscordMonitorStatusSink } from "./status.js";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
->;
+> & {
+  setStatus?: DiscordMonitorStatusSink;
+  abortSignal?: AbortSignal;
+};
+
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => void;
+};
+
+function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string {
+  const sessionKey = ctx.route.sessionKey?.trim();
+  if (sessionKey) {
+    return sessionKey;
+  }
+  const baseSessionKey = ctx.baseSessionKey?.trim();
+  if (baseSessionKey) {
+    return baseSessionKey;
+  }
+  return ctx.messageChannelId;
+}
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
-): DiscordMessageHandler {
+): DiscordMessageHandlerWithLifecycle {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
-  const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
+  const ackReactionScope =
+    params.discordConfig?.ackReactionScope ??
+    params.cfg.messages?.ackReactionScope ??
+    "group-mentions";
+  const runQueue = new KeyedAsyncQueue();
+  const runState = createRunStateMachine({
+    setStatus: params.setStatus,
+    abortSignal: params.abortSignal,
+  });
 
-  const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
-    debounceMs,
+  const enqueueDiscordRun = (ctx: DiscordMessagePreflightContext) => {
+    const queueKey = resolveDiscordRunQueueKey(ctx);
+    void runQueue
+      .enqueue(queueKey, async () => {
+        if (!runState.isActive()) {
+          return;
+        }
+        runState.onRunStart();
+        try {
+          if (!runState.isActive()) {
+            return;
+          }
+          await processDiscordMessage(ctx);
+        } finally {
+          runState.onRunEnd();
+        }
+      })
+      .catch((err) => {
+        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+      });
+  };
+
+  const { debouncer } = createChannelInboundDebouncer<{
+    data: DiscordMessageEvent;
+    client: Client;
+  }>({
+    cfg: params.cfg,
+    channel: "discord",
     buildKey: (entry) => {
       const message = entry.data.message;
       const authorId = entry.data.author?.id;
@@ -54,17 +111,15 @@ export function createDiscordMessageHandler(
       if (!message) {
         return false;
       }
-      if (message.attachments && message.attachments.length > 0) {
-        return false;
-      }
-      if (hasDiscordMessageStickers(message)) {
-        return false;
-      }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
-      if (!baseText.trim()) {
-        return false;
-      }
-      return !hasControlCommand(baseText, params.cfg);
+      return shouldDebounceTextInbound({
+        text: baseText,
+        cfg: params.cfg,
+        hasMedia: Boolean(
+          (message.attachments && message.attachments.length > 0) ||
+          hasDiscordMessageStickers(message),
+        ),
+      });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -82,7 +137,7 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
-        await processDiscordMessage(ctx);
+        enqueueDiscordRun(ctx);
         return;
       }
       const combinedBaseText = entries
@@ -126,18 +181,32 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      await processDiscordMessage(ctx);
+      enqueueDiscordRun(ctx);
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
     },
   });
 
-  return async (data, client) => {
+  const handler: DiscordMessageHandlerWithLifecycle = async (data, client) => {
+    // Filter bot-own messages before they enter the debounce queue.
+    // The same check exists in preflightDiscordMessage(), but by that point
+    // the message has already consumed debounce capacity and blocked
+    // legitimate user messages. On active servers this causes cumulative
+    // slowdown (see #15874).
+    const msgAuthorId = data.message?.author?.id ?? data.author?.id;
+    if (params.botUserId && msgAuthorId === params.botUserId) {
+      return;
+    }
+
     try {
       await debouncer.enqueue({ data, client });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   };
+
+  handler.deactivate = runState.deactivate;
+
+  return handler;
 }
