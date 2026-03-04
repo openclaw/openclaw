@@ -59,6 +59,9 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    // Limit restarts to prevent infinite crash loops (e.g. port already in use).
+    "StartLimitIntervalSec=300",
+    "StartLimitBurst=5",
     // KillMode=process ensures systemd only waits for the main process to exit.
     // Without this, podman's conmon (container monitor) processes block shutdown
     // since they run as children of the gateway and stay in the same cgroup.

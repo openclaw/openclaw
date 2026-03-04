@@ -15,7 +15,12 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import {
+  ensurePortAvailable,
+  formatPortDiagnostics,
+  handlePortError,
+  inspectPortUsage,
+} from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -363,6 +368,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
         }
       : undefined;
+
+  // Early port probe: fail fast before loading ~340MB gateway (avoids systemd crash loops).
+  if (!opts.force) {
+    try {
+      await ensurePortAvailable(port);
+    } catch (err) {
+      await handlePortError(err, port, "Early port check", defaultRuntime);
+      return;
+    }
+  }
 
   try {
     await runGatewayLoop({

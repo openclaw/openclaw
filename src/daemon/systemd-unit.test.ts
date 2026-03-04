@@ -23,4 +23,14 @@ describe("buildSystemdUnit", () => {
       }),
     ).toThrow(/CR or LF/);
   });
+
+  it("includes restart limits to prevent infinite crash loops", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {},
+    });
+    expect(unit).toContain("StartLimitIntervalSec=300");
+    expect(unit).toContain("StartLimitBurst=5");
+  });
 });

@@ -2,6 +2,10 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
+const { ensurePortAvailable, handlePortError } = vi.hoisted(() => ({
+  ensurePortAvailable: vi.fn().mockResolvedValue(undefined),
+  handlePortError: vi.fn().mockRejectedValue(new Error("__exit__:1")),
+}));
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
   close: vi.fn(async () => {}),
 }));
@@ -54,7 +58,9 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/ports.js", () => ({
+  ensurePortAvailable: (port: number) => ensurePortAvailable(port),
   formatPortDiagnostics: () => [],
+  handlePortError: (...args: unknown[]) => handlePortError(...args),
   inspectPortUsage: async () => ({ status: "free" }),
 }));
 
@@ -109,6 +115,10 @@ describe("gateway run option collisions", () => {
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
+    ensurePortAvailable.mockClear();
+    ensurePortAvailable.mockResolvedValue(undefined);
+    handlePortError.mockClear();
+    handlePortError.mockRejectedValue(new Error("__exit__:1"));
     forceFreePortAndWait.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
