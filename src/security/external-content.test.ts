@@ -204,6 +204,7 @@ describe("external-content security", () => {
         ["\u27EE", "\u27EF"], // flattened parentheses
         ["\u276C", "\u276D"], // medium angle bracket ornaments
         ["\u276E", "\u276F"], // heavy angle quotation ornaments
+        ["\u226A", "\u226B"], // much less-than/greater-than
       ];
 
       for (const [left, right] of bracketPairs) {

@@ -132,6 +132,8 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x276d: ">", // medium right-pointing angle bracket ornament
   0x276e: "<", // heavy left-pointing angle quotation mark ornament
   0x276f: ">", // heavy right-pointing angle quotation mark ornament
+  0x226a: "<", // much less-than
+  0x226b: ">", // much greater-than
 };
 
 function foldMarkerChar(char: string): string {
@@ -151,7 +153,7 @@ function foldMarkerChar(char: string): string {
 
 function foldMarkerText(input: string): string {
   return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F]/g,
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u226A\u226B]/g,
     (char) => foldMarkerChar(char),
   );
 }
