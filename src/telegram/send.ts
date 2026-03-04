@@ -349,6 +349,8 @@ function createTelegramRequestWithDiag(params: {
   retry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
+  /** When true, the shouldRetry predicate is used exclusively without the TELEGRAM_RETRY_RE fallback. */
+  strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
   const request = createTelegramRetryRunner({
@@ -356,6 +358,7 @@ function createTelegramRequestWithDiag(params: {
     configRetry: params.account.config.retry,
     verbose: params.verbose,
     ...(params.shouldRetry ? { shouldRetry: params.shouldRetry } : {}),
+    ...(params.strictShouldRetry ? { strictShouldRetry: true } : {}),
   });
   const logHttpError = createTelegramHttpLogger(params.cfg);
   return <T>(
