@@ -1668,11 +1668,24 @@ export async function runEmbeddedAttempt(
               if (Array.isArray(m.content)) {
                 return (
                   sum +
-                  m.content.reduce(
-                    (s, block) =>
-                      s + (typeof block === "string" ? block.length : (block?.text?.length ?? 0)),
-                    0,
-                  )
+                  m.content.reduce((s, block) => {
+                    if (typeof block === "string") {
+                      return s + block.length;
+                    }
+                    const b = block as Record<string, unknown>;
+                    // Count text content
+                    if (typeof b?.text === "string") {
+                      return s + b.text.length;
+                    }
+                    // Count tool-call arguments (serialized JSON in the model input)
+                    if (typeof b?.arguments === "string") {
+                      return s + b.arguments.length;
+                    }
+                    if (typeof b?.input === "string") {
+                      return s + b.input.length;
+                    }
+                    return s;
+                  }, 0)
                 );
               }
               return sum;
@@ -1719,7 +1732,12 @@ export async function runEmbeddedAttempt(
           // throws before the call site — in that case there is no API response to log.
           if (modelCallStartedAt > 0) {
             const modelCallDurationMs = Date.now() - modelCallStartedAt;
-            const responseChars = assistantTexts.reduce((sum, t) => sum + t.length, 0);
+            const responseChars =
+              assistantTexts.reduce((sum, t) => sum + t.length, 0) +
+              toolMetas.reduce(
+                (sum, t) => sum + (t.toolName?.length ?? 0) + (t.meta?.length ?? 0),
+                0,
+              );
             logModelApiResponse({
               runId: params.runId,
               provider: params.provider,
