@@ -104,7 +104,7 @@ describe("applyAuthChoiceAnthropic", () => {
   });
 
   it("preserves auth.order when adding OAuth credentials", async () => {
-    await setupTempState();
+    const agentDir = await setupTempState();
     const prompter = createWizardPrompter({});
     const runtime = createExitThrowingRuntime();
 
@@ -121,6 +121,7 @@ describe("applyAuthChoiceAnthropic", () => {
       prompter,
       runtime,
       setDefaultModel: false,
+      agentDir,
     });
 
     expect(result).not.toBeNull();
