@@ -40,6 +40,32 @@ function trimNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function sanitizeToolResultContentBlocks(message: AgentMessage): AgentMessage {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return message;
+  }
+  const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
+  const content = (toolResult as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return toolResult;
+  }
+
+  let changed = false;
+  const sanitized = content.map((block) => {
+    if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
+      return block;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string") {
+      return block;
+    }
+    changed = true;
+    return { ...(block as Record<string, unknown>), text: "" };
+  });
+
+  return changed ? ({ ...toolResult, content: sanitized } as AgentMessage) : toolResult;
+}
+
 function normalizePersistedToolResultName(
   message: AgentMessage,
   fallbackName?: string,
@@ -187,7 +213,9 @@ export function installSessionToolResultGuard(
       if (id) {
         pendingState.delete(id);
       }
-      const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
+      const normalizedToolResult = sanitizeToolResultContentBlocks(
+        normalizePersistedToolResultName(nextMessage, toolName),
+      );
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const capped = capToolResultSize(persistMessage(normalizedToolResult));

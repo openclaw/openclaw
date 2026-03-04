@@ -169,6 +169,26 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[1]?.toolName).toBe("read");
   });
 
+  it("sanitizes malformed text toolResult blocks before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    const persisted = messages[1] as { content?: Array<{ type?: string; text?: string }> };
+    expect(persisted.content?.[0]).toEqual({ type: "text", text: "" });
+  });
+
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);

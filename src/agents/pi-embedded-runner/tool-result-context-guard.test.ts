@@ -268,4 +268,28 @@ describe("installToolResultContextGuard", () => {
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
   });
+
+  it("does not crash on malformed text blocks missing text", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_bad",
+        toolName: "read",
+        content: [{ type: "text" }],
+        isError: false,
+      }),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.toBeDefined();
+  });
 });
