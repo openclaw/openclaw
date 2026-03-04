@@ -108,6 +108,33 @@ describe("slackPlugin outbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-media" });
   });
+
+  it("forwards mediaLocalRoots for sendMedia", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
+    const sendMedia = slackPlugin.outbound?.sendMedia;
+    expect(sendMedia).toBeDefined();
+    const mediaLocalRoots = ["/tmp/workspace"];
+
+    const result = await sendMedia!({
+      cfg,
+      to: "C999",
+      text: "caption",
+      mediaUrl: "/tmp/workspace/image.png",
+      mediaLocalRoots,
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C999",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots,
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
+  });
 });
 
 describe("slackPlugin config", () => {
