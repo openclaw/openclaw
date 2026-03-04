@@ -86,30 +86,30 @@ async function runBeforeResetPluginHook(params: {
   }
   const smartReset = resolveSmartResetReviewConfig(params.cfg);
   const sessionFile = params.sessionEntry?.sessionFile;
-  const run = async () => {
+  const messages: unknown[] = [];
+  if (sessionFile) {
     try {
-      const messages: unknown[] = [];
-      if (sessionFile) {
+      const content = await fs.promises.readFile(sessionFile, "utf-8");
+      for (const line of content.split("\n")) {
+        if (!line.trim()) {
+          continue;
+        }
         try {
-          const content = await fs.promises.readFile(sessionFile, "utf-8");
-          for (const line of content.split("\n")) {
-            if (!line.trim()) {
-              continue;
-            }
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === "message" && entry.message) {
-                messages.push(entry.message);
-              }
-            } catch {
-              // skip malformed lines
-            }
+          const entry = JSON.parse(line);
+          if (entry.type === "message" && entry.message) {
+            messages.push(entry.message);
           }
-        } catch (err) {
-          logVerbose(`before_reset: failed to read session file: ${String(err)}`);
+        } catch {
+          // skip malformed lines
         }
       }
+    } catch (err) {
+      logVerbose(`before_reset: failed to read session file: ${String(err)}`);
+    }
+  }
 
+  const run = async () => {
+    try {
       const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
       await hookRunner.runBeforeReset(
         {
