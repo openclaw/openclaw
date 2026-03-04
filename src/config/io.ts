@@ -1387,7 +1387,16 @@ export async function writeConfigFile(
   const io = createConfigIO();
   let nextCfg = cfg;
   if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
+    const bindingsExplicitlyUnset = (options.unsetPaths ?? []).some(
+      (path) => Array.isArray(path) && path.length > 0 && path[0] === "bindings",
+    );
+    const cfgForPatch =
+      cfg.bindings === undefined &&
+      runtimeConfigSnapshot.bindings !== undefined &&
+      !bindingsExplicitlyUnset
+        ? { ...cfg, bindings: runtimeConfigSnapshot.bindings }
+        : cfg;
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfgForPatch);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
   }
   const sameConfigPath =

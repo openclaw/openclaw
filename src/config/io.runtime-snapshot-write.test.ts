@@ -61,4 +61,42 @@ describe("runtime config snapshot writes", () => {
       }
     });
   });
+
+  it("preserves bindings when runtime snapshot writes receive a partial config", async () => {
+    await withTempHome("openclaw-config-runtime-write-bindings-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig: OpenClawConfig = {
+        bindings: [
+          {
+            agentId: "ops",
+            match: { channel: "slack", teamId: "T123" },
+          },
+        ],
+        gateway: { auth: { mode: "none" } },
+      };
+      const runtimeConfig: OpenClawConfig = structuredClone(sourceConfig);
+      const partialConfigWithoutBindings: OpenClawConfig = {
+        gateway: { auth: { mode: "token", token: "abc123" } },
+      };
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        await writeConfigFile(partialConfigWithoutBindings);
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          bindings?: unknown;
+          gateway?: { auth?: { mode?: string } };
+        };
+        expect(persisted.bindings).toEqual(sourceConfig.bindings);
+        expect(persisted.gateway?.auth?.mode).toBe("token");
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
 });
