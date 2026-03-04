@@ -16,6 +16,51 @@ import {
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
+const AGENT_HEARTBEAT_KEYS = new Set([
+  "every",
+  "activeHours",
+  "model",
+  "session",
+  "includeReasoning",
+  "target",
+  "directPolicy",
+  "to",
+  "accountId",
+  "prompt",
+  "ackMaxChars",
+  "suppressToolErrorWarnings",
+  "lightContext",
+]);
+
+const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
+
+function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
+  agentHeartbeat: Record<string, unknown> | null;
+  channelHeartbeat: Record<string, unknown> | null;
+} {
+  const agentHeartbeat: Record<string, unknown> = {};
+  const channelHeartbeat: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(legacyHeartbeat)) {
+    if (CHANNEL_HEARTBEAT_KEYS.has(key)) {
+      channelHeartbeat[key] = value;
+      continue;
+    }
+    if (AGENT_HEARTBEAT_KEYS.has(key)) {
+      agentHeartbeat[key] = value;
+      continue;
+    }
+    // Preserve unknown fields under the agent heartbeat namespace so validation
+    // still surfaces unsupported keys instead of silently dropping user input.
+    agentHeartbeat[key] = value;
+  }
+
+  return {
+    agentHeartbeat: Object.keys(agentHeartbeat).length > 0 ? agentHeartbeat : null,
+    channelHeartbeat: Object.keys(channelHeartbeat).length > 0 ? channelHeartbeat : null,
+  };
+}
+
 // NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
 
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
@@ -243,6 +288,65 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       raw.agents = agents;
       delete raw.agent;
       changes.push("Moved agent → agents.defaults.");
+    },
+  },
+  {
+    id: "heartbeat->agents.defaults.heartbeat",
+    describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",
+    apply: (raw, changes) => {
+      const legacyHeartbeat = getRecord(raw.heartbeat);
+      if (!legacyHeartbeat) {
+        return;
+      }
+
+      const { agentHeartbeat, channelHeartbeat } = splitLegacyHeartbeat(legacyHeartbeat);
+
+      if (agentHeartbeat) {
+        const agents = ensureRecord(raw, "agents");
+        const defaults = ensureRecord(agents, "defaults");
+        const existing = getRecord(defaults.heartbeat);
+        if (!existing) {
+          defaults.heartbeat = agentHeartbeat;
+          changes.push("Moved heartbeat → agents.defaults.heartbeat.");
+        } else {
+          // agents.defaults stays authoritative; legacy top-level config only fills gaps.
+          const merged = structuredClone(existing);
+          mergeMissing(merged, agentHeartbeat);
+          defaults.heartbeat = merged;
+          changes.push(
+            "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+          );
+        }
+
+        agents.defaults = defaults;
+        raw.agents = agents;
+      }
+
+      if (channelHeartbeat) {
+        const channels = ensureRecord(raw, "channels");
+        const defaults = ensureRecord(channels, "defaults");
+        const existing = getRecord(defaults.heartbeat);
+        if (!existing) {
+          defaults.heartbeat = channelHeartbeat;
+          changes.push("Moved heartbeat visibility → channels.defaults.heartbeat.");
+        } else {
+          // channels.defaults stays authoritative; legacy top-level config only fills gaps.
+          const merged = structuredClone(existing);
+          mergeMissing(merged, channelHeartbeat);
+          defaults.heartbeat = merged;
+          changes.push(
+            "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
+          );
+        }
+
+        channels.defaults = defaults;
+        raw.channels = channels;
+      }
+
+      if (!agentHeartbeat && !channelHeartbeat) {
+        changes.push("Removed empty top-level heartbeat.");
+      }
+      delete raw.heartbeat;
     },
   },
   {
