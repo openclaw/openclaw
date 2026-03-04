@@ -47,6 +47,7 @@ export type FollowupRun = {
     sessionId: string;
     sessionKey?: string;
     messageProvider?: string;
+    sourceProvider?: string;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
@@ -56,6 +57,7 @@ export type FollowupRun = {
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
+    spawnedBy?: string | null;
     sessionFile: string;
     workspaceDir: string;
     config: OpenClawConfig;
