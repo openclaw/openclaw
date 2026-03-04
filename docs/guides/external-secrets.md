@@ -91,6 +91,9 @@ To start OpenClaw with Doppler on boot, create a wrapper script:
 ```bash
 #!/usr/bin/env bash
 # ~/.openclaw/start-with-doppler.sh
+
+# Explicitly set PATH to include Homebrew and pnpm binary locations
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/pnpm:$PATH"
 exec doppler run --project openclaw-system --config prd -- openclaw gateway --port 18789
 ```
 
@@ -126,25 +129,29 @@ OPENAI_API_KEY=op://Vault/OpenClaw/openai-key
 
 Your `openclaw.json` uses the same `${VAR_NAME}` pattern shown above.
 
-## HashiCorp Vault (exec provider)
+## HashiCorp Vault (CLI Direct)
 
-For Vault, use OpenClaw's `exec` SecretRef provider to call a resolver script at activation time:
+For Vault, use OpenClaw's `exec` SecretRef provider to call the Vault CLI directly. This eliminates the need for a custom resolver script.
 
 ```json5
 {
   secrets: {
     providers: {
-      vault: {
+      vault_openai: {
         source: "exec",
-        command: "/usr/local/bin/openclaw-vault-resolver",
-        passEnv: ["PATH", "VAULT_ADDR", "VAULT_TOKEN"],
+        command: "/opt/homebrew/bin/vault",
+        allowSymlinkCommand: true, // Required for Homebrew symlinked binaries
+        trustedDirs: ["/opt/homebrew"],
+        args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
+        passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
+        jsonOnly: false,
       },
     },
   },
   models: {
     providers: {
       openai: {
-        apiKey: { source: "exec", provider: "vault", id: "secret/data/openclaw/openai-api-key" },
+        apiKey: { source: "exec", provider: "vault_openai", id: "value" },
       },
     },
   },
