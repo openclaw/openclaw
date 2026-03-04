@@ -3,6 +3,7 @@ import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js"
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
   collectSecretInputAssignment,
+  hasOwnProperty,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -281,13 +282,40 @@ function collectToolsWebSearchAssignments(params: {
     rawProvider === "perplexity"
       ? rawProvider
       : undefined;
-  const paths = [
-    "apiKey",
-    "gemini.apiKey",
-    "grok.apiKey",
-    "kimi.apiKey",
-    "perplexity.apiKey",
-  ] as const;
+  const braveActive =
+    searchEnabled && (selectedProvider === undefined || selectedProvider === "brave");
+  const braveInactiveReason = !searchEnabled
+    ? "tools.web.search is disabled."
+    : selectedProvider === undefined
+      ? undefined
+      : `tools.web.search.provider is "${selectedProvider}".`;
+  const braveConfig = isRecord(search.brave) ? search.brave : undefined;
+  const hasCanonicalBraveApiKey = Boolean(braveConfig && hasOwnProperty(braveConfig, "apiKey"));
+  const hasLegacyBraveApiKey = hasOwnProperty(search, "apiKey");
+  if (hasCanonicalBraveApiKey || hasLegacyBraveApiKey) {
+    const sourcePath = hasCanonicalBraveApiKey
+      ? "tools.web.search.brave.apiKey"
+      : "tools.web.search.apiKey";
+    const sourceValue = hasCanonicalBraveApiKey ? braveConfig?.apiKey : search.apiKey;
+    collectSecretInputAssignment({
+      value: sourceValue,
+      path: sourcePath,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: braveActive,
+      inactiveReason: braveInactiveReason,
+      apply: (value) => {
+        const nextBraveConfig = isRecord(search.brave) ? search.brave : {};
+        nextBraveConfig.apiKey = value;
+        search.brave = nextBraveConfig;
+        if (!hasCanonicalBraveApiKey && hasLegacyBraveApiKey) {
+          search.apiKey = value;
+        }
+      },
+    });
+  }
+  const paths = ["gemini.apiKey", "grok.apiKey", "kimi.apiKey", "perplexity.apiKey"] as const;
   for (const path of paths) {
     const [scope, field] = path.includes(".") ? path.split(".", 2) : [undefined, path];
     const target = scope ? search[scope] : search;

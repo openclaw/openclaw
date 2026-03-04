@@ -357,6 +357,61 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves canonical brave web search refs from tools.web.search.brave.apiKey", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              brave: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_BRAVE_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_BRAVE_API_KEY: "web-search-brave-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.brave?.apiKey).toBe("web-search-brave-ref");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.web.search.brave.apiKey",
+    );
+  });
+
+  it("falls back to legacy brave web search alias when canonical key is missing", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_API_KEY: "web-search-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
+    expect(snapshot.config.tools?.web?.search?.brave?.apiKey).toBe("web-search-ref");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.web.search.apiKey",
+    );
+  });
+
   it("resolves selected web search provider ref even when provider config is disabled", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

@@ -370,16 +370,28 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
-  const fromConfigRaw =
+  const fromBraveConfigRaw =
+    search &&
+    "brave" in search &&
+    search.brave &&
+    typeof search.brave === "object" &&
+    "apiKey" in search.brave
+      ? normalizeResolvedSecretInputString({
+          value: search.brave.apiKey,
+          path: "tools.web.search.brave.apiKey",
+        })
+      : undefined;
+  const fromLegacyConfigRaw =
     search && "apiKey" in search
       ? normalizeResolvedSecretInputString({
           value: search.apiKey,
           path: "tools.web.search.apiKey",
         })
       : undefined;
-  const fromConfig = normalizeSecretInput(fromConfigRaw);
+  const fromBraveConfig = normalizeSecretInput(fromBraveConfigRaw);
+  const fromLegacyConfig = normalizeSecretInput(fromLegacyConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
-  return fromConfig || fromEnv || undefined;
+  return fromBraveConfig || fromLegacyConfig || fromEnv || undefined;
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
@@ -417,7 +429,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   }
   return {
     error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it (tools.web.search.brave.apiKey), or set BRAVE_API_KEY in the Gateway environment.`,
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -1603,6 +1615,7 @@ export function createWebSearchTool(options?: {
 }
 
 export const __testing = {
+  resolveSearchApiKey,
   resolveSearchProvider,
   normalizeBraveLanguageParams,
   normalizeFreshness,

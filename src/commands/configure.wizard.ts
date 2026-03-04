@@ -141,7 +141,9 @@ async function promptWebToolsConfig(
   const hasPerplexityKey = Boolean(
     existingSearch?.perplexity?.apiKey || process.env.PERPLEXITY_API_KEY,
   );
-  const hasBraveKey = Boolean(existingSearch?.apiKey || process.env.BRAVE_API_KEY);
+  const hasBraveKey = Boolean(
+    existingSearch?.brave?.apiKey || existingSearch?.apiKey || process.env.BRAVE_API_KEY,
+  );
   const hasSearchKey = existingProvider === "perplexity" ? hasPerplexityKey : hasBraveKey;
 
   note(
@@ -217,7 +219,7 @@ async function promptWebToolsConfig(
         );
       }
     } else {
-      const hasKey = Boolean(existingSearch?.apiKey);
+      const hasKey = Boolean(existingSearch?.brave?.apiKey || existingSearch?.apiKey);
       const keyInput = guardCancel(
         await text({
           message: hasKey
@@ -229,7 +231,12 @@ async function promptWebToolsConfig(
       );
       const key = String(keyInput ?? "").trim();
       if (key) {
-        nextSearch = { ...nextSearch, apiKey: key };
+        const { apiKey: _legacyBraveApiKey, ...nextSearchWithoutLegacyBraveApiKey } =
+          nextSearch as Record<string, unknown>;
+        nextSearch = {
+          ...(nextSearchWithoutLegacyBraveApiKey as typeof nextSearch),
+          brave: { ...existingSearch?.brave, apiKey: key },
+        };
       } else if (!hasKey && !process.env.BRAVE_API_KEY) {
         note(
           [

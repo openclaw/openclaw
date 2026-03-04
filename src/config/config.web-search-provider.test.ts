@@ -7,9 +7,23 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { __testing } = await import("../agents/tools/web-search.js");
-const { resolveSearchProvider } = __testing;
+const { resolveSearchApiKey, resolveSearchProvider } = __testing;
 
 describe("web search provider config", () => {
+  it("accepts brave provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "brave",
+        providerConfig: {
+          apiKey: "test-key",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -79,6 +93,16 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("brave");
   });
 
+  it("auto-detects brave when tools.web.search.brave.apiKey is configured", () => {
+    expect(
+      resolveSearchProvider({
+        brave: {
+          apiKey: "config-brave-key",
+        },
+      } as unknown as Parameters<typeof resolveSearchProvider>[0]),
+    ).toBe("brave");
+  });
+
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     expect(resolveSearchProvider({})).toBe("gemini");
@@ -129,5 +153,16 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("uses canonical brave key before legacy alias when both are set", () => {
+    expect(
+      resolveSearchApiKey({
+        brave: {
+          apiKey: "canonical-brave-key",
+        },
+        apiKey: "legacy-brave-key",
+      } as unknown as Parameters<typeof resolveSearchProvider>[0]),
+    ).toBe("canonical-brave-key");
   });
 });

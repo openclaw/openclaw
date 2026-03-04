@@ -442,8 +442,13 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
       provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
-      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
+      /** @deprecated Legacy alias for Brave Search API key. Prefer tools.web.search.brave.apiKey. */
       apiKey?: string;
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
+        apiKey?: string;
+      };
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */

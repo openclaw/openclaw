@@ -455,10 +455,20 @@ export async function finalizeOnboardingWizard(
   }
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
+  const braveSearchConfigKey = (nextConfig.tools?.web?.search?.brave?.apiKey ?? "").trim();
+  const braveSearchLegacyKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
   const webSearchKey =
     webSearchProvider === "perplexity"
       ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
+      : braveSearchConfigKey || braveSearchLegacyKey;
+  const webSearchConfigPath =
+    webSearchProvider === "perplexity"
+      ? "tools.web.search.perplexity.apiKey"
+      : braveSearchConfigKey
+        ? "tools.web.search.brave.apiKey"
+        : braveSearchLegacyKey
+          ? "tools.web.search.apiKey (legacy alias; prefer tools.web.search.brave.apiKey)"
+          : "tools.web.search.brave.apiKey";
   const webSearchEnv =
     webSearchProvider === "perplexity"
       ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
@@ -471,7 +481,7 @@ export async function finalizeOnboardingWizard(
           "",
           `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
           webSearchKey
-            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
+            ? `API key: stored in config (${webSearchConfigPath}).`
             : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")

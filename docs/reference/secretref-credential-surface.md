@@ -30,6 +30,7 @@ Scope intent:
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`
 - `messages.tts.openai.apiKey`
+- `tools.web.search.brave.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
@@ -99,7 +100,7 @@ Notes:
 - Auth-profile refs are included in runtime resolution and audit coverage.
 - For web search:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
-  - In auto mode (`tools.web.search.provider` unset), `tools.web.search.apiKey` and provider-specific keys are active.
+  - In auto mode (`tools.web.search.provider` unset), `tools.web.search.brave.apiKey`, `tools.web.search.apiKey` (legacy alias), and provider-specific keys are active.
 
 ## Unsupported credentials
 
