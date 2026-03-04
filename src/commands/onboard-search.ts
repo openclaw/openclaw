@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -67,15 +68,15 @@ export function resolveExistingKey(
   const search = config.tools?.web?.search;
   switch (provider) {
     case "brave":
-      return search?.apiKey?.trim() || undefined;
+      return normalizeSecretInputString(search?.apiKey);
     case "perplexity":
-      return search?.perplexity?.apiKey?.trim() || undefined;
+      return normalizeSecretInputString(search?.perplexity?.apiKey);
     case "gemini":
-      return search?.gemini?.apiKey?.trim() || undefined;
+      return normalizeSecretInputString(search?.gemini?.apiKey);
     case "grok":
-      return search?.grok?.apiKey?.trim() || undefined;
+      return normalizeSecretInputString(search?.grok?.apiKey);
     case "kimi":
-      return search?.kimi?.apiKey?.trim() || undefined;
+      return normalizeSecretInputString(search?.kimi?.apiKey);
   }
 }
 
