@@ -38,6 +38,26 @@ describe("memory index", () => {
   let indexVectorPath = "";
   let indexMainPath = "";
   let indexExtraPath = "";
+  let indexStatusPath = "";
+  let indexSourceChangePath = "";
+  let indexModelPath = "";
+  let sourceChangeStateDir = "";
+  const sourceChangeSessionLogLines = [
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "session change test user line" }],
+      },
+    }),
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "session change test assistant line" }],
+      },
+    }),
+  ].join("\n");
 
   // Perf: keep managers open across tests, but only reset the one a test uses.
   const managersByStorePath = new Map<string, MemoryIndexManager>();
@@ -51,6 +71,10 @@ describe("memory index", () => {
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
+    indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
+    indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
+    indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
@@ -127,6 +151,17 @@ describe("memory index", () => {
     };
   }
 
+  function requireManager(
+    result: Awaited<ReturnType<typeof getMemorySearchManager>>,
+    missingMessage = "manager missing",
+  ): MemoryIndexManager {
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error(missingMessage);
+    }
+    return result.manager as MemoryIndexManager;
+  }
+
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
     const storePath = cfg.agents?.defaults?.memorySearch?.store?.path;
     if (!storePath) {
@@ -139,15 +174,24 @@ describe("memory index", () => {
     }
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    const manager = result.manager as MemoryIndexManager;
+    const manager = requireManager(result);
     managersByStorePath.set(storePath, manager);
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
     return manager;
+  }
+
+  async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
+    const manager = await getPersistentManager(cfg);
+    const status = manager.status();
+    if (!status.fts?.available) {
+      return;
+    }
+
+    await manager.sync({ reason: "test" });
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
   }
 
   it("indexes memory files and searches", async () => {
@@ -174,58 +218,32 @@ describe("memory index", () => {
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const indexStatusPath = path.join(workspaceDir, `index-status-${Date.now()}.sqlite`);
     const cfg = createCfg({ storePath: indexStatusPath });
 
     const first = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(first.manager).not.toBeNull();
-    if (!first.manager) {
-      throw new Error("manager missing");
-    }
-    await first.manager.sync?.({ reason: "test" });
-    await first.manager.close?.();
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
+    await firstManager.close?.();
 
     const statusOnly = await getMemorySearchManager({
       cfg,
       agentId: "main",
       purpose: "status",
     });
-    expect(statusOnly.manager).not.toBeNull();
-    if (!statusOnly.manager) {
-      throw new Error("status manager missing");
-    }
-
-    const status = statusOnly.manager.status();
+    const statusManager = requireManager(statusOnly, "status manager missing");
+    const status = statusManager.status();
     expect(status.dirty).toBe(false);
-    await statusOnly.manager.close?.();
+    await statusManager.close?.();
   });
 
   it("reindexes sessions when source config adds sessions to an existing index", async () => {
-    const indexSourceChangePath = path.join(
-      workspaceDir,
-      `index-source-change-${Date.now()}.sqlite`,
-    );
-    const stateDir = path.join(fixtureRoot, `state-source-change-${Date.now()}`);
+    const stateDir = sourceChangeStateDir;
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.rm(stateDir, { recursive: true, force: true });
     await fs.mkdir(sessionDir, { recursive: true });
     await fs.writeFile(
       path.join(sessionDir, "session-source-change.jsonl"),
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "session change test user line" }],
-          },
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "session change test assistant line" }],
-          },
-        }),
-      ].join("\n") + "\n",
+      `${sourceChangeSessionLogLines}\n`,
     );
 
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -244,31 +262,25 @@ describe("memory index", () => {
 
     try {
       const first = await getMemorySearchManager({ cfg: firstCfg, agentId: "main" });
-      expect(first.manager).not.toBeNull();
-      if (!first.manager) {
-        throw new Error("manager missing");
-      }
-      await first.manager.sync?.({ reason: "test" });
-      const firstStatus = first.manager.status();
+      const firstManager = requireManager(first);
+      await firstManager.sync?.({ reason: "test" });
+      const firstStatus = firstManager.status();
       expect(
         firstStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files ?? 0,
       ).toBe(0);
-      await first.manager.close?.();
+      await firstManager.close?.();
 
       const second = await getMemorySearchManager({ cfg: secondCfg, agentId: "main" });
-      expect(second.manager).not.toBeNull();
-      if (!second.manager) {
-        throw new Error("manager missing");
-      }
-      await second.manager.sync?.({ reason: "test" });
-      const secondStatus = second.manager.status();
+      const secondManager = requireManager(second);
+      await secondManager.sync?.({ reason: "test" });
+      const secondStatus = secondManager.status();
       expect(secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files).toBe(
         1,
       );
       expect(
         secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
       ).toBeGreaterThan(0);
-      await second.manager.close?.();
+      await secondManager.close?.();
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -280,7 +292,6 @@ describe("memory index", () => {
   });
 
   it("reindexes when the embedding model changes", async () => {
-    const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
     const baseDefaults = baseAgents.defaults!;
@@ -302,13 +313,10 @@ describe("memory index", () => {
       },
       agentId: "main",
     });
-    expect(first.manager).not.toBeNull();
-    if (!first.manager) {
-      throw new Error("manager missing");
-    }
-    await first.manager.sync?.({ reason: "test" });
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
     const callsAfterFirstSync = embedBatchCalls;
-    await first.manager.close?.();
+    await firstManager.close?.();
 
     const second = await getMemorySearchManager({
       cfg: {
@@ -326,15 +334,12 @@ describe("memory index", () => {
       },
       agentId: "main",
     });
-    expect(second.manager).not.toBeNull();
-    if (!second.manager) {
-      throw new Error("manager missing");
-    }
-    await second.manager.sync?.({ reason: "test" });
+    const secondManager = requireManager(second);
+    await secondManager.sync?.({ reason: "test" });
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
-    const status = second.manager.status();
+    const status = secondManager.status();
     expect(status.files).toBeGreaterThan(0);
-    await second.manager.close?.();
+    await secondManager.close?.();
   });
 
   it("reuses cached embeddings on forced reindex", async () => {
@@ -351,40 +356,22 @@ describe("memory index", () => {
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
-    const cfg = createCfg({
-      storePath: indexMainPath,
-      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-    });
-    const manager = await getPersistentManager(cfg);
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ reason: "test" });
-    const results = await manager.search("zebra");
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    await expectHybridKeywordSearchFindsMemory(
+      createCfg({
+        storePath: indexMainPath,
+        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+      }),
+    );
   });
 
   it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
-    const cfg = createCfg({
-      storePath: indexMainPath,
-      minScore: 0.35,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-    });
-    const manager = await getPersistentManager(cfg);
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ reason: "test" });
-    const results = await manager.search("zebra");
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    await expectHybridKeywordSearchFindsMemory(
+      createCfg({
+        storePath: indexMainPath,
+        minScore: 0.35,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
   });
 
   it("reports vector availability after probe", async () => {

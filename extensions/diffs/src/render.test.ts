@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
+import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 
 describe("renderDiffDocument", () => {
@@ -13,6 +13,7 @@ describe("renderDiffDocument", () => {
       },
       {
         presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
         expandUnchanged: false,
       },
     );
@@ -26,6 +27,10 @@ describe("renderDiffDocument", () => {
     expect(rendered.imageHtml).toContain('data-openclaw-diffs-ready="true"');
     expect(rendered.imageHtml).toContain("max-width: 960px;");
     expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).toContain("min-height: 100vh;");
+    expect(rendered.html).toContain('"diffIndicators":"bars"');
+    expect(rendered.html).toContain('"disableLineNumbers":false');
+    expect(rendered.html).toContain("--diffs-line-height: 24px;");
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
   });
@@ -58,6 +63,11 @@ describe("renderDiffDocument", () => {
           layout: "split",
           theme: "dark",
         },
+        image: resolveDiffImageRenderOptions({
+          defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          fileQuality: "hq",
+          fileMaxWidth: 1180,
+        }),
         expandUnchanged: true,
       },
     );
@@ -65,5 +75,33 @@ describe("renderDiffDocument", () => {
     expect(rendered.title).toBe("Workspace patch");
     expect(rendered.fileCount).toBe(2);
     expect(rendered.html).toContain("Workspace patch");
+    expect(rendered.imageHtml).toContain("max-width: 1180px;");
+  });
+
+  it("rejects patches that exceed file-count limits", async () => {
+    const patch = Array.from({ length: 129 }, (_, i) => {
+      return [
+        `diff --git a/f${i}.ts b/f${i}.ts`,
+        `--- a/f${i}.ts`,
+        `+++ b/f${i}.ts`,
+        "@@ -1 +1 @@",
+        "-const x = 1;",
+        "+const x = 2;",
+      ].join("\n");
+    }).join("\n");
+
+    await expect(
+      renderDiffDocument(
+        {
+          kind: "patch",
+          patch,
+        },
+        {
+          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+          expandUnchanged: false,
+        },
+      ),
+    ).rejects.toThrow("too many files");
   });
 });

@@ -47,6 +47,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
   val micEnabled: StateFlow<Boolean> = runtime.micEnabled
+  val micCooldown: StateFlow<Boolean> = runtime.micCooldown
   val micStatusText: StateFlow<String> = runtime.micStatusText
   val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
   val micIsListening: StateFlow<Boolean> = runtime.micIsListening
@@ -128,6 +129,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     runtime.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setVoiceScreenActive(active: Boolean) {
+    runtime.setVoiceScreenActive(active)
   }
 
   fun setMicEnabled(enabled: Boolean) {

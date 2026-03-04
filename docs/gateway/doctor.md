@@ -128,6 +128,11 @@ Current migrations:
   → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
+Doctor warnings also include account-default guidance for multi-account channels:
+
+- If two or more `channels.<channel>.accounts` entries are configured without `channels.<channel>.defaultAccount` or `accounts.default`, doctor warns that fallback routing can pick an unexpected account.
+- If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
+
 ### 2b) OpenCode Zen provider overrides
 
 If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it
@@ -164,6 +169,13 @@ Doctor checks:
   the directory, and reminds you that it cannot recover missing data.
 - **State dir permissions**: verifies writability; offers to repair permissions
   (and emits a `chown` hint when owner/group mismatch is detected).
+- **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive
+  (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or
+  `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O
+  and lock/sync races.
+- **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*`
+  mount source, because SD or eMMC-backed random I/O can be slower and wear
+  faster under session and credential writes.
 - **Session dirs missing**: `sessions/` and the session store directory are
   required to persist history and avoid `ENOENT` crashes.
 - **Transcript mismatch**: warns when recent session entries have missing

@@ -16,7 +16,8 @@ export function resolveAcpDispatchPolicyState(cfg: OpenClawConfig): AcpDispatchP
   if (!isAcpEnabledByPolicy(cfg)) {
     return "acp_disabled";
   }
-  if (cfg.acp?.dispatch?.enabled !== true) {
+  // ACP dispatch is enabled unless explicitly disabled.
+  if (cfg.acp?.dispatch?.enabled === false) {
     return "dispatch_disabled";
   }
   return "enabled";

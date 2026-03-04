@@ -160,8 +160,7 @@ TRASH
     local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
-    export HOME="$home_dir"
-    mkdir -p "$HOME"
+    set_isolated_openclaw_env "$home_dir"
 
     input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
@@ -213,6 +212,15 @@ TRASH
 
   make_home() {
     mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
+  }
+
+  set_isolated_openclaw_env() {
+    local home_dir="$1"
+    export HOME="$home_dir"
+    export OPENCLAW_HOME="$home_dir"
+    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+    mkdir -p "$OPENCLAW_STATE_DIR"
   }
 
   assert_file() {
@@ -282,12 +290,11 @@ TRASH
     send "" 2.0
   }
 
-	  run_case_local_basic() {
-	    local home_dir
-	    home_dir="$(make_home local-basic)"
-	    export HOME="$home_dir"
-	    mkdir -p "$HOME"
-	    node "$OPENCLAW_ENTRY" onboard \
+  run_case_local_basic() {
+    local home_dir
+    home_dir="$(make_home local-basic)"
+    set_isolated_openclaw_env "$home_dir"
+    node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -299,9 +306,9 @@ TRASH
       --skip-health
 
     # Assert config + workspace scaffolding.
-    workspace_dir="$HOME/.openclaw/workspace"
-    config_path="$HOME/.openclaw/openclaw.json"
-    sessions_dir="$HOME/.openclaw/agents/main/sessions"
+    workspace_dir="$OPENCLAW_STATE_DIR/workspace"
+    config_path="$OPENCLAW_CONFIG_PATH"
+    sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -361,8 +368,7 @@ NODE
   run_case_remote_non_interactive() {
     local home_dir
     home_dir="$(make_home remote-non-interactive)"
-    export HOME="$home_dir"
-	    mkdir -p "$HOME"
+    set_isolated_openclaw_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
 	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
@@ -371,7 +377,7 @@ NODE
       --skip-skills \
       --skip-health
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -404,10 +410,9 @@ NODE
   run_case_reset() {
     local home_dir
     home_dir="$(make_home reset-config)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME/.openclaw"
+    set_isolated_openclaw_env "$home_dir"
     # Seed a remote config to exercise reset path.
-	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "agents": { "defaults": { "workspace": "/root/old" } },
@@ -430,7 +435,7 @@ JSON
       --skip-ui \
       --skip-health
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -463,7 +468,7 @@ NODE
 	    # Channels-only configure flow.
 	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -500,10 +505,9 @@ NODE
   run_case_skills() {
     local home_dir
     home_dir="$(make_home skills)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME/.openclaw"
+    set_isolated_openclaw_env "$home_dir"
     # Seed skills config to ensure it survives the wizard.
-	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "skills": {
@@ -515,7 +519,7 @@ JSON
 
 	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
-    config_path="$HOME/.openclaw/openclaw.json"
+    config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'

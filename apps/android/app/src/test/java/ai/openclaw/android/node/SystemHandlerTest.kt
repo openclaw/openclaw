@@ -36,6 +36,26 @@ class SystemHandlerTest {
     assertTrue(result.ok)
     assertEquals(1, poster.posts)
   }
+
+  @Test
+  fun handleSystemNotify_returnsUnauthorizedWhenPostFailsPermission() {
+    val handler = SystemHandler.forTesting(poster = ThrowingPoster(authorized = true, error = SecurityException("denied")))
+
+    val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done"}""")
+
+    assertFalse(result.ok)
+    assertEquals("NOT_AUTHORIZED", result.error?.code)
+  }
+
+  @Test
+  fun handleSystemNotify_returnsUnavailableWhenPostFailsUnexpectedly() {
+    val handler = SystemHandler.forTesting(poster = ThrowingPoster(authorized = true, error = IllegalStateException("boom")))
+
+    val result = handler.handleSystemNotify("""{"title":"OpenClaw","body":"done"}""")
+
+    assertFalse(result.ok)
+    assertEquals("UNAVAILABLE", result.error?.code)
+  }
 }
 
 private class FakePoster(
@@ -48,5 +68,16 @@ private class FakePoster(
 
   override fun post(request: SystemNotifyRequest) {
     posts += 1
+  }
+}
+
+private class ThrowingPoster(
+  private val authorized: Boolean,
+  private val error: Throwable,
+) : SystemNotificationPoster {
+  override fun isAuthorized(): Boolean = authorized
+
+  override fun post(request: SystemNotifyRequest) {
+    throw error
   }
 }
