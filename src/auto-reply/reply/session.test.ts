@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -492,6 +493,72 @@ describe("initSessionState RawBody", () => {
       expect(result.sessionEntry.sessionId).toBe(sessionId);
       expect(result.sessionEntry.sessionFile).toBe(sessionFile);
       expect(result.storePath).toBe(storePath);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reuses existing sessions when only a mixed-case key exists in the store", async () => {
+    const root = await makeCaseDir("openclaw-session-case-recovery-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:c123";
+    const legacyStoreKey = "Agent:Main:Discord:Channel:C123";
+    const sessionId = "session-case-recovery";
+
+    await saveSessionStore(storePath, {
+      [legacyStoreKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "discord", Surface: "discord" },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.sessionId).toBe(sessionId);
+    const persistedStore = loadSessionStore(storePath, { skipCache: true });
+    expect(persistedStore[sessionKey]?.sessionId).toBe(sessionId);
+    expect(persistedStore[legacyStoreKey]).toBeUndefined();
+  });
+
+  it("recovers missing session entries from another agent store", async () => {
+    const root = await makeCaseDir("openclaw-session-cross-agent-recovery-");
+    const stateDir = path.join(root, ".openclaw");
+    const sessionKey = "agent:worker1:discord:channel:42";
+    const sessionId = "session-cross-agent-recovery";
+    const misplacedStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const expectedStorePath = path.join(stateDir, "agents", "worker1", "sessions", "sessions.json");
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await fs.mkdir(path.dirname(misplacedStorePath), { recursive: true });
+      await saveSessionStore(misplacedStorePath, {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      });
+
+      const cfg = {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "worker1" }],
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey, Provider: "discord", Surface: "discord" },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.storePath).toBe(expectedStorePath);
+      expect(result.sessionEntry.sessionId).toBe(sessionId);
+      const recoveredStore = loadSessionStore(expectedStorePath, { skipCache: true });
+      expect(recoveredStore[sessionKey]?.sessionId).toBe(sessionId);
     } finally {
       vi.unstubAllEnvs();
     }

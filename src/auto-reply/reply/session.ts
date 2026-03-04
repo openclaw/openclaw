@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -43,6 +47,73 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 
 const log = createSubsystemLogger("session-init");
 
+type SessionStoreMatch = {
+  entry: SessionEntry;
+  legacyKeys: string[];
+};
+
+function resolveSessionStoreMatch(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): SessionStoreMatch | undefined {
+  const target = sessionKey.trim();
+  if (!target) {
+    return undefined;
+  }
+  const exact = store[target];
+  if (exact) {
+    return { entry: exact, legacyKeys: [] };
+  }
+  const normalized = target.toLowerCase();
+  let selectedEntry: SessionEntry | undefined;
+  const legacyKeys: string[] = [];
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry || key.toLowerCase() !== normalized) {
+      continue;
+    }
+    if (!selectedEntry || (entry.updatedAt ?? 0) > (selectedEntry.updatedAt ?? 0)) {
+      selectedEntry = entry;
+    }
+    legacyKeys.push(key);
+  }
+  if (!selectedEntry) {
+    return undefined;
+  }
+  return { entry: selectedEntry, legacyKeys };
+}
+
+function recoverSessionEntryFromOtherAgentStores(params: {
+  cfg: OpenClawConfig;
+  sessionCfg: OpenClawConfig["session"];
+  sessionKey: string;
+  currentStorePath: string;
+}): SessionEntry | undefined {
+  const candidateAgentIds = new Set<string>([
+    resolveDefaultAgentId(params.cfg),
+    ...listAgentIds(params.cfg),
+  ]);
+  let recovered: SessionEntry | undefined;
+  for (const agentId of candidateAgentIds) {
+    const storePath = resolveStorePath(params.sessionCfg?.store, { agentId });
+    if (storePath === params.currentStorePath) {
+      continue;
+    }
+    let candidateStore: Record<string, SessionEntry>;
+    try {
+      candidateStore = loadSessionStore(storePath, { skipCache: true });
+    } catch {
+      continue;
+    }
+    const candidateMatch = resolveSessionStoreMatch(candidateStore, params.sessionKey);
+    if (!candidateMatch) {
+      continue;
+    }
+    if (!recovered || (candidateMatch.entry.updatedAt ?? 0) > (recovered.updatedAt ?? 0)) {
+      recovered = candidateMatch.entry;
+    }
+  }
+  return recovered;
+}
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -99,6 +170,7 @@ export async function initSessionState(params: {
   });
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
+  const legacySessionKeysToDelete = new Set<string>();
 
   let sessionId: string | undefined;
   let isNewSession = false;
@@ -185,7 +257,23 @@ export async function initSessionState(params: {
   if (retiredLegacyMainDelivery) {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
-  const entry = sessionStore[sessionKey];
+  const localMatch = resolveSessionStoreMatch(sessionStore, sessionKey);
+  let entry = localMatch?.entry;
+  for (const legacyKey of localMatch?.legacyKeys ?? []) {
+    legacySessionKeysToDelete.add(legacyKey);
+  }
+  if (!entry) {
+    const recoveredEntry = recoverSessionEntryFromOtherAgentStores({
+      cfg,
+      sessionCfg,
+      sessionKey,
+      currentStorePath: storePath,
+    });
+    if (recoveredEntry) {
+      entry = recoveredEntry;
+      log.warn(`Recovered missing session key from alternate agent store: ${sessionKey}`);
+    }
+  }
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
@@ -213,7 +301,7 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
 
-  if (!isNewSession && freshEntry) {
+  if (!isNewSession && entry && freshEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
@@ -391,11 +479,17 @@ export async function initSessionState(params: {
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  for (const legacyKey of legacySessionKeysToDelete) {
+    delete sessionStore[legacyKey];
+  }
   await updateSessionStore(
     storePath,
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      for (const legacyKey of legacySessionKeysToDelete) {
+        delete store[legacyKey];
+      }
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
