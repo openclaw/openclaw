@@ -1066,7 +1066,6 @@ export async function resolveImplicitProviders(params: {
         ...ollamaProvider,
         ...(explicitOllama
           ? {
-              baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
               api: explicitOllama.api ?? "ollama",
               // Use explicit models only when user supplied a non-empty list; otherwise keep discovery results
               models:
