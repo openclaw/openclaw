@@ -74,6 +74,17 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:ops:incident");
   });
+
+  it("lowercases bare session names even with global scope", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "MyTask",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:mytask");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
