@@ -49,5 +49,21 @@ export function resolveConfig(api: OpenClawPluginApi): FindooTraderConfig {
     ...(tradingCfg.blockedPairs && { blockedPairs: tradingCfg.blockedPairs }),
   };
 
+  // Auto-discover exchanges from environment variables
+  // BINANCE_TESTNET_API_KEY + BINANCE_TESTNET_SECRET → auto-register "binance-testnet"
+  if (
+    !exchanges["binance-testnet"] &&
+    process.env.BINANCE_TESTNET_API_KEY &&
+    process.env.BINANCE_TESTNET_SECRET
+  ) {
+    exchanges["binance-testnet"] = {
+      exchange: "binance",
+      apiKey: process.env.BINANCE_TESTNET_API_KEY,
+      secret: process.env.BINANCE_TESTNET_SECRET,
+      testnet: true,
+      defaultType: "spot",
+    };
+  }
+
   return { exchanges, riskConfig };
 }

@@ -129,7 +129,7 @@ describe("OrderBook route", () => {
     const deps = makeDeps(registry as unknown as ExchangeRegistry);
     const errRoutes = collectRoutes(deps);
     const handler = errRoutes.get("/api/v1/finance/orderbook")!.handler;
-    const req = makeReq("/api/v1/finance/orderbook?symbol=BTC%2FUSDT?exchangeId=kraken");
+    const req = makeReq("/api/v1/finance/orderbook?symbol=BTC%2FUSDT&exchangeId=kraken");
     const res = makeRes();
 
     await handler(req, res);
@@ -152,7 +152,7 @@ describe("OrderBook route", () => {
 
   it("should accept custom limit parameter", async () => {
     const handler = routes.get("/api/v1/finance/orderbook")!.handler;
-    const req = makeReq("/api/v1/finance/orderbook?symbol=ETH%2FUSDT?limit=10");
+    const req = makeReq("/api/v1/finance/orderbook?symbol=ETH%2FUSDT&limit=10");
     const res = makeRes();
 
     await handler(req, res);
