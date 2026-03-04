@@ -316,6 +316,10 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
+  // Exit code 4 means "unit file does not exist" - treat as not enabled
+  if (res.code === 4) {
+    return false;
+  }
   return res.code === 0;
 }
 
@@ -392,6 +396,7 @@ export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<Le
     let enabled = false;
     if (systemctlAvailable) {
       const res = await execSystemctl(["--user", "is-enabled", `${name}.service`]);
+      // Exit code 4 means "unit file does not exist" - treat as not enabled
       enabled = res.code === 0;
     }
     if (exists || enabled) {
