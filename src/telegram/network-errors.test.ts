@@ -114,6 +114,16 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(err)).toBe(true);
   });
 
+  it("allows retry for ENETUNREACH (no route to host, message not sent)", () => {
+    const err = Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("allows retry for EHOSTUNREACH (host unreachable, message not sent)", () => {
+    const err = Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
   it("does NOT allow retry for ECONNRESET (message may already be delivered)", () => {
     const err = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
     expect(isSafeToRetrySendError(err)).toBe(false);
