@@ -287,11 +287,7 @@ export async function startGatewayServer(
           await new Promise<void>((resolve, reject) => {
             const probe = net.createServer();
             probe.once("error", (err: NodeJS.ErrnoException) => {
-              if (err.code === "EADDRINUSE") {
-                reject(err);
-              } else {
-                resolve();
-              }
+              reject(err);
             });
             probe.once("listening", () => {
               probe.close(() => resolve());
