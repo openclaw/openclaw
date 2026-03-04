@@ -5,9 +5,17 @@ import { createNativeCommandTestParams } from "./bot-native-commands.test-helper
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
+type ResolveConfiguredAcpBindingRecordFn =
+  typeof import("../acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
+type EnsureConfiguredAcpBindingSessionFn =
+  typeof import("../acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
+
 const persistentBindingMocks = vi.hoisted(() => ({
-  resolveConfiguredAcpBindingRecord: vi.fn(() => null),
-  ensureConfiguredAcpBindingSession: vi.fn(async () => ({ ok: true })),
+  resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>(() => null),
+  ensureConfiguredAcpBindingSession: vi.fn<EnsureConfiguredAcpBindingSessionFn>(async () => ({
+    ok: true,
+    sessionKey: "agent:codex:acp:binding:telegram:default:seed",
+  })),
 }));
 const sessionMocks = vi.hoisted(() => ({
   recordSessionMetaFromInbound: vi.fn(),
@@ -21,10 +29,8 @@ vi.mock("../acp/persistent-bindings.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../acp/persistent-bindings.js")>();
   return {
     ...actual,
-    resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>
-      persistentBindingMocks.resolveConfiguredAcpBindingRecord(...args),
-    ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
-      persistentBindingMocks.ensureConfiguredAcpBindingSession(...args),
+    resolveConfiguredAcpBindingRecord: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
+    ensureConfiguredAcpBindingSession: persistentBindingMocks.ensureConfiguredAcpBindingSession,
   };
 });
 vi.mock("../config/sessions.js", () => ({
@@ -134,7 +140,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockClear();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(null);
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockClear();
-    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({ ok: true });
+    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
+      ok: true,
+      sessionKey: "agent:codex:acp:binding:telegram:default:seed",
+    });
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
@@ -187,7 +196,17 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         mode: "persistent",
       },
       record: {
+        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
         targetSessionKey: boundSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        status: "active",
+        boundAt: 0,
       },
     });
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
@@ -223,7 +242,17 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         mode: "persistent",
       },
       record: {
+        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
         targetSessionKey: "agent:codex:acp:binding:telegram:default:feedface",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        status: "active",
+        boundAt: 0,
       },
     });
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({

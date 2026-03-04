@@ -88,60 +88,102 @@ Required feature flags for thread-bound ACP:
 
 ## Channel specific settings
 
-For non-ephemeral workflows, configure ACP bindings directly on channel or topic nodes.
+For non-ephemeral workflows, configure persistent ACP bindings in top-level `bindings[]` entries.
 
-### Discord
+### Binding model
 
-Persistent ACP channel binding path:
+- `bindings[].type="acp"` marks a persistent ACP conversation binding.
+- `bindings[].match` identifies the target conversation:
+  - Discord channel or thread: `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
+  - Telegram forum topic: `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+- `bindings[].agentId` is the owning OpenClaw agent id.
+- Optional ACP overrides live under `bindings[].acp`:
+  - `mode` (`persistent` or `oneshot`)
+  - `label`
+  - `cwd`
+  - `backend`
 
-- `channels.discord.guilds.<guildId>.channels.<channelId>.bindings.acp`
+### Runtime defaults per agent
 
-Thread behavior:
+Use `agents.list[].runtime` to define ACP defaults once per agent:
 
-- Messages inside a thread can inherit the parent channel ACP binding.
-- `/new` and `/reset` in the bound conversation reset the same ACP session key in place.
+- `agents.list[].runtime.type="acp"`
+- `agents.list[].runtime.acp.agent` (harness id, for example `codex` or `claude`)
+- `agents.list[].runtime.acp.backend`
+- `agents.list[].runtime.acp.mode`
+- `agents.list[].runtime.acp.cwd`
 
-### Telegram
+Override precedence for ACP bound sessions:
 
-Persistent ACP topic binding path:
-
-- `channels.telegram.groups.<chatId>.topics.<threadId>.bindings.acp`
-
-Scope notes:
-
-- This binding shape is for forum topics in groups and supergroups.
-- Use canonical topic identity: `chatId:topic:topicId`.
-
-### Shared binding fields
-
-- `enabled` (optional, default enabled when present)
-- `agentId` (required to activate binding)
-- `mode` (`persistent` or `oneshot`, default `persistent`)
-- `label` (optional)
-- `cwd` (optional)
-- `backend` (optional; falls back to global `acp.backend`)
+1. `bindings[].acp.*`
+2. `agents.list[].runtime.acp.*`
+3. global ACP defaults (for example `acp.backend`)
 
 Example:
 
 ```json5
 {
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+      {
+        id: "claude",
+        runtime: {
+          type: "acp",
+          acp: { agent: "claude", backend: "acpx", mode: "persistent" },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "1478836151241412759" },
+      },
+      acp: { label: "codex-main" },
+    },
+    {
+      type: "acp",
+      agentId: "claude",
+      match: {
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-1001234567890:topic:42" },
+      },
+      acp: { cwd: "/workspace/repo-b" },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "discord", accountId: "default" },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "telegram", accountId: "default" },
+    },
+  ],
   channels: {
     discord: {
       guilds: {
         "1459246755253325866": {
           channels: {
-            "1478836151241412759": {
-              bindings: {
-                acp: {
-                  enabled: true,
-                  agentId: "codex",
-                  mode: "persistent",
-                  cwd: "/workspace/openclaw",
-                  backend: "acpx",
-                  label: "codex-main",
-                },
-              },
-            },
+            "1478836151241412759": { requireMention: false },
           },
         },
       },
@@ -149,18 +191,7 @@ Example:
     telegram: {
       groups: {
         "-1001234567890": {
-          topics: {
-            "42": {
-              bindings: {
-                acp: {
-                  enabled: true,
-                  agentId: "claude",
-                  mode: "persistent",
-                  cwd: "/workspace/repo-b",
-                },
-              },
-            },
-          },
+          topics: { "42": { requireMention: false } },
         },
       },
     },

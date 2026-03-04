@@ -1,155 +1,60 @@
+import { listAcpBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  DiscordAccountConfig,
-  DiscordGuildChannelConfig,
-  TelegramAccountConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import type { AgentAcpBinding } from "../config/types.js";
 import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
-import { normalizeAccountId } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { parseTelegramTopicConversation } from "./conversation-id.js";
 import {
   normalizeBindingConfig,
   normalizeMode,
+  normalizeText,
   toConfiguredAcpBindingRecord,
-  type AcpBindingConfigShape,
   type ConfiguredAcpBindingChannel,
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
-function resolveDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
-  const discord = cfg.channels?.discord;
-  if (!discord) {
-    return {};
-  }
-  const { accounts: _ignored, ...base } = discord as DiscordAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveAccountEntry(discord.accounts, accountId) ?? {};
-  return { ...base, ...account };
-}
-
-function resolveTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig {
-  const telegram = cfg.channels?.telegram;
-  if (!telegram) {
-    return {};
-  }
-  const {
-    accounts: _ignoredAccounts,
-    defaultAccount: _ignoredDefaultAccount,
-    groups: channelGroups,
-    ...base
-  } = telegram as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveAccountEntry(telegram.accounts, accountId) ?? {};
-  const configuredAccountIds = Object.keys(telegram.accounts ?? {});
-  const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
-  return { ...base, ...account, groups };
-}
-
-function findDiscordChannelBinding(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  conversationCandidates: string[];
-}):
-  | {
-      kind: "binding";
-      channelId: string;
-      binding: AcpBindingConfigShape;
-      channelConfig: DiscordGuildChannelConfig;
-    }
-  | {
-      kind: "explicit-disabled";
-      channelId: string;
-    }
-  | null {
-  const discordConfig = resolveDiscordAccountConfig(params.cfg, params.accountId);
-  const guilds = discordConfig.guilds;
-  if (!guilds || typeof guilds !== "object") {
-    return null;
-  }
-  for (const guild of Object.values(guilds)) {
-    const channels = guild?.channels;
-    if (!channels || typeof channels !== "object") {
-      continue;
-    }
-    for (const candidate of params.conversationCandidates) {
-      const channelConfig = channels[candidate];
-      if (!channelConfig || typeof channelConfig !== "object") {
-        continue;
-      }
-      const rawBinding = channelConfig.bindings?.acp;
-      if (
-        rawBinding &&
-        typeof rawBinding === "object" &&
-        (rawBinding as { enabled?: boolean }).enabled === false
-      ) {
-        return {
-          kind: "explicit-disabled",
-          channelId: candidate,
-        };
-      }
-      const binding = normalizeBindingConfig(rawBinding);
-      if (!binding) {
-        continue;
-      }
-      return {
-        kind: "binding",
-        channelId: candidate,
-        binding,
-        channelConfig,
-      };
-    }
+function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "discord" || normalized === "telegram") {
+    return normalized;
   }
   return null;
 }
 
-function findTelegramTopicBinding(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}): {
-  topicConfig: TelegramTopicConfig;
-  binding: AcpBindingConfigShape;
-  chatId: string;
-  topicId: string;
-  canonicalConversationId: string;
-} | null {
-  const parsed = parseTelegramTopicConversation({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (!parsed) {
-    return null;
+function matchesAccountId(match: string | undefined, actual: string): boolean {
+  const trimmed = (match ?? "").trim();
+  if (!trimmed) {
+    return actual === DEFAULT_ACCOUNT_ID;
   }
-  if (!parsed.chatId.startsWith("-")) {
-    return null;
+  if (trimmed === "*") {
+    return true;
   }
-  const telegramConfig = resolveTelegramAccountConfig(params.cfg, params.accountId);
-  const groupConfig = telegramConfig.groups?.[parsed.chatId];
-  const topicConfig = groupConfig?.topics?.[parsed.topicId];
-  if (!topicConfig || typeof topicConfig !== "object") {
-    return null;
-  }
-  const binding = normalizeBindingConfig(topicConfig.bindings?.acp);
-  if (!binding) {
-    return null;
+  return normalizeAccountId(trimmed) === actual;
+}
+
+function resolveBindingConversationId(binding: AgentAcpBinding): string | null {
+  const id = binding.match.peer?.id?.trim();
+  return id ? id : null;
+}
+
+function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgentId: string }): {
+  acpAgentId?: string;
+  mode?: string;
+  cwd?: string;
+  backend?: string;
+} {
+  const agent = params.cfg.agents?.list?.find(
+    (entry) => entry.id?.trim().toLowerCase() === params.ownerAgentId.toLowerCase(),
+  );
+  if (!agent || agent.runtime?.type !== "acp") {
+    return {};
   }
   return {
-    topicConfig,
-    binding,
-    chatId: parsed.chatId,
-    topicId: parsed.topicId,
-    canonicalConversationId: parsed.canonicalConversationId,
+    acpAgentId: normalizeText(agent.runtime.acp?.agent),
+    mode: normalizeText(agent.runtime.acp?.mode),
+    cwd: normalizeText(agent.runtime.acp?.cwd),
+    backend: normalizeText(agent.runtime.acp?.backend),
   };
 }
 
@@ -159,20 +64,28 @@ function toConfiguredBindingSpec(params: {
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
-  binding: AcpBindingConfigShape;
+  binding: AgentAcpBinding;
 }): ConfiguredAcpBindingSpec {
   const accountId = normalizeAccountId(params.accountId);
   const agentId = pickFirstExistingAgentId(params.cfg, params.binding.agentId ?? "main");
+  const runtimeDefaults = resolveAgentRuntimeAcpDefaults({
+    cfg: params.cfg,
+    ownerAgentId: agentId,
+  });
+  const bindingOverrides = normalizeBindingConfig(params.binding.acp);
+  const acpAgentId = normalizeText(runtimeDefaults.acpAgentId);
+  const mode = normalizeMode(bindingOverrides.mode ?? runtimeDefaults.mode);
   return {
     channel: params.channel,
     accountId,
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
     agentId,
-    mode: normalizeMode(params.binding.mode),
-    cwd: params.binding.cwd,
-    backend: params.binding.backend,
-    label: params.binding.label,
+    acpAgentId,
+    mode,
+    cwd: bindingOverrides.cwd ?? runtimeDefaults.cwd,
+    backend: bindingOverrides.backend ?? runtimeDefaults.backend,
+    label: bindingOverrides.label,
   };
 }
 
@@ -192,54 +105,77 @@ export function resolveConfiguredAcpBindingRecord(params: {
   }
 
   if (channel === "discord") {
-    const resolved = findDiscordChannelBinding({
-      cfg: params.cfg,
-      accountId,
-      conversationCandidates: [conversationId, parentConversationId].filter(
-        (value): value is string => Boolean(value),
-      ),
-    });
-    if (!resolved) {
-      return null;
+    const candidates = new Set(
+      [conversationId, parentConversationId].filter((value): value is string => Boolean(value)),
+    );
+    for (const binding of listAcpBindings(params.cfg)) {
+      if (normalizeBindingChannel(binding.match.channel) !== "discord") {
+        continue;
+      }
+      if (!matchesAccountId(binding.match.accountId, accountId)) {
+        continue;
+      }
+      const targetConversationId = resolveBindingConversationId(binding);
+      if (!targetConversationId || !candidates.has(targetConversationId)) {
+        continue;
+      }
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
     }
-    if (resolved.kind === "explicit-disabled") {
-      return null;
-    }
-    const spec = toConfiguredBindingSpec({
-      cfg: params.cfg,
-      channel: "discord",
-      accountId,
-      conversationId: resolved.channelId,
-      binding: resolved.binding,
-    });
-    return {
-      spec,
-      record: toConfiguredAcpBindingRecord(spec),
-    };
+    return null;
   }
 
   if (channel === "telegram") {
-    const resolved = findTelegramTopicBinding({
-      cfg: params.cfg,
-      accountId,
+    const parsed = parseTelegramTopicConversation({
       conversationId,
       parentConversationId,
     });
-    if (!resolved) {
+    if (!parsed || !parsed.chatId.startsWith("-")) {
       return null;
     }
-    const spec = toConfiguredBindingSpec({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId,
-      conversationId: resolved.canonicalConversationId,
-      parentConversationId: resolved.chatId,
-      binding: resolved.binding,
-    });
-    return {
-      spec,
-      record: toConfiguredAcpBindingRecord(spec),
-    };
+    for (const binding of listAcpBindings(params.cfg)) {
+      if (normalizeBindingChannel(binding.match.channel) !== "telegram") {
+        continue;
+      }
+      if (!matchesAccountId(binding.match.accountId, accountId)) {
+        continue;
+      }
+      const targetConversationId = resolveBindingConversationId(binding);
+      if (!targetConversationId) {
+        continue;
+      }
+      const targetParsed = parseTelegramTopicConversation({
+        conversationId: targetConversationId,
+      });
+      if (!targetParsed || !targetParsed.chatId.startsWith("-")) {
+        continue;
+      }
+      if (targetParsed.canonicalConversationId !== parsed.canonicalConversationId) {
+        continue;
+      }
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "telegram",
+        accountId,
+        conversationId: parsed.canonicalConversationId,
+        parentConversationId: parsed.chatId,
+        binding,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
+    return null;
   }
 
   return null;

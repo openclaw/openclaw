@@ -15,7 +15,7 @@ function sessionMatchesConfiguredBinding(params: {
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
 }): boolean {
-  const desiredAgent = params.spec.agentId.trim().toLowerCase();
+  const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
   const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
   if (!currentAgent || currentAgent !== desiredAgent) {
     return false;
@@ -82,7 +82,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
     await acpManager.initializeSession({
       cfg: params.cfg,
       sessionKey,
-      agent: params.spec.agentId,
+      agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,

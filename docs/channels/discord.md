@@ -686,16 +686,44 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Persistent ACP channel bindings">
-    For stable "always-on" ACP workspaces, configure ACP bindings directly on Discord channel nodes.
+    For stable "always-on" ACP workspaces, configure top-level typed ACP bindings targeting Discord conversations.
 
     Config path:
 
-    - `channels.discord.guilds.<guildId>.channels.<channelId>.bindings.acp`
+    - `bindings[]` with `type: "acp"` and `match.channel: "discord"`
 
     Example:
 
 ```json5
 {
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "1478836151241412759" },
+      },
+      acp: { label: "codex-main" },
+    },
+  ],
   channels: {
     discord: {
       guilds: {
@@ -703,16 +731,6 @@ Default slash command settings:
           channels: {
             "1478836151241412759": {
               requireMention: false,
-              bindings: {
-                acp: {
-                  enabled: true,
-                  agentId: "codex",
-                  mode: "persistent",
-                  cwd: "/workspace/openclaw",
-                  backend: "acpx",
-                  label: "codex-main",
-                },
-              },
             },
           },
         },
@@ -1167,7 +1185,7 @@ High-signal Discord fields:
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
-- features: `threadBindings`, `guilds.*.channels.*.bindings.acp`, `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations
 

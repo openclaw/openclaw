@@ -10,7 +10,10 @@ export type ConfiguredAcpBindingSpec = {
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
+  /** Owning OpenClaw agent id (used for session identity/storage). */
   agentId: string;
+  /** ACP harness agent id override (falls back to agentId when omitted). */
+  acpAgentId?: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   backend?: string;
@@ -23,8 +26,6 @@ export type ResolvedConfiguredAcpBinding = {
 };
 
 export type AcpBindingConfigShape = {
-  enabled?: boolean;
-  agentId?: string;
   mode?: string;
   cwd?: string;
   backend?: string;
@@ -44,22 +45,14 @@ export function normalizeMode(value: unknown): AcpRuntimeSessionMode {
   return raw === "oneshot" ? "oneshot" : "persistent";
 }
 
-export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape | null {
+export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape {
   if (!raw || typeof raw !== "object") {
-    return null;
+    return {};
   }
   const shape = raw as AcpBindingConfigShape;
-  if (shape.enabled === false) {
-    return null;
-  }
-  const agentId = normalizeText(shape.agentId);
-  if (!agentId) {
-    return null;
-  }
+  const mode = normalizeText(shape.mode);
   return {
-    enabled: shape.enabled,
-    agentId,
-    mode: normalizeMode(shape.mode),
+    mode: mode ? normalizeMode(mode) : undefined,
     cwd: normalizeText(shape.cwd),
     backend: normalizeText(shape.backend),
     label: normalizeText(shape.label),
@@ -101,8 +94,9 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
     boundAt: 0,
     metadata: {
       source: "config",
-      mode: "persistent",
+      mode: spec.mode,
       agentId: spec.agentId,
+      ...(spec.acpAgentId ? { acpAgentId: spec.acpAgentId } : {}),
       label: spec.label,
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),

@@ -104,8 +104,15 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+type ResetAcpSessionInPlaceResult = { ok: true } | { ok: false; skipped?: boolean; error?: string };
+
 const resetAcpSessionInPlaceMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: false, skipped: true }) as const),
+  vi.fn(
+    async (_params: unknown): Promise<ResetAcpSessionInPlaceResult> => ({
+      ok: false,
+      skipped: true,
+    }),
+  ),
 );
 vi.mock("../../acp/persistent-bindings.js", async () => {
   const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(

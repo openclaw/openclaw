@@ -307,17 +307,16 @@ Notes:
 - **Persistent binding reconciler**:
   - on startup: load configured top-level `type: "acp"` bindings, ensure ACP sessions exist, ensure bindings exist.
   - on config change: apply deltas safely.
-- **Legacy compatibility adapter**:
-  - read legacy channel-local `bindings.acp` if present,
-  - map to equivalent in-memory `type: "acp"` entries during migration window,
-  - emit migration warning/action hint.
+- **Cutover model**:
+  - no channel-local ACP binding fallback is read,
+  - persistent ACP bindings are sourced only from top-level `bindings[].type="acp"` entries.
 
 ## Phased Delivery
 
 ### Phase 1: Typed binding schema foundation
 
 - Extend config schema to support `bindings[].type` discriminator:
-  - `route` (default for legacy entries),
+  - `route`,
   - `acp` with optional `acp` override object (`mode`, `backend`, `cwd`, `label`).
 - Extend agent schema with runtime descriptor to mark ACP-native agents (`agents.list[].runtime.type`).
 - Add parser/indexer split for route vs ACP bindings.
@@ -330,17 +329,15 @@ Notes:
 - Implement Telegram binding adapter and inbound bound-session override parity with Discord.
 - Do not include Telegram direct/private topic variants in this phase.
 
-### Phase 3: Command parity, resets, and migration
+### Phase 3: Command parity and resets
 
 - Align `/acp`, `/new`, `/reset`, and `/focus` behavior in bound Telegram/Discord conversations.
 - Ensure binding survives reset flows as configured.
-- Add migration helper from legacy channel-local `bindings.acp` to top-level `bindings[].type="acp"` entries.
 
 ### Phase 4: Hardening
 
 - Better diagnostics (`/acp status`, startup reconciliation logs).
 - Conflict handling and health checks.
-- Migration helpers for users moving from temporary to persistent binds.
 
 ## Guardrails and Policy
 

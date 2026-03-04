@@ -34,26 +34,6 @@ export type AcpRuntimeConfig = {
   installCommand?: string;
 };
 
-export type AcpConversationBindingConfig = {
-  /** Enable ACP binding for this conversation node (default: true when configured). */
-  enabled?: boolean;
-  /** Agent to run for this bound conversation (for example: codex, claude). */
-  agentId?: string;
-  /** Session mode for the bound ACP runtime. Default: persistent. */
-  mode?: "persistent" | "oneshot";
-  /** Optional human label used in status text and diagnostics. */
-  label?: string;
-  /** Optional working directory for the bound ACP session. */
-  cwd?: string;
-  /** Optional ACP backend override for this bound conversation. */
-  backend?: string;
-};
-
-export type ConversationBindingsConfig = {
-  /** ACP conversation binding configuration. */
-  acp?: AcpConversationBindingConfig;
-};
-
 export type AcpConfig = {
   /** Global ACP runtime gate. */
   enabled?: boolean;
