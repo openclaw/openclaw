@@ -991,10 +991,15 @@ export async function executeJobCore(
   // Also suppress heartbeat-only summaries (e.g. "HEARTBEAT_OK") — these
   // are internal ack tokens that should never leak into user conversations.
   // See: https://github.com/openclaw/openclaw/issues/32013
+  //
+  // When postToMainMode is "off", skip the main summary entirely. This is
+  // useful for monitoring/housekeeping jobs whose output should never appear
+  // in the user's conversation.
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
-    res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
+    job.postToMainMode === "off" ||
+    (res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested);
   if (
     shouldEnqueueCronMainSummary({
       summaryText,
