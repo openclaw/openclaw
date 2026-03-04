@@ -85,4 +85,5 @@ describe("sessions_spawn default runTimeoutSeconds", () => {
     const calls = await getGatewayCalls();
     const agentCall = findLastCall(calls, (call) => call.method === "agent");
     expect(agentCall?.params?.timeout).toBe(900);
+  });
 });
