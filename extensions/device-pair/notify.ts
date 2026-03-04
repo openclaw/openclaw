@@ -29,6 +29,19 @@ export type PendingPairingRequest = {
   ts?: number;
 };
 
+export function coercePendingPairingRequests(input: unknown): PendingPairingRequest[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.filter((entry): entry is PendingPairingRequest => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as Record<string, unknown>;
+    return typeof record.requestId === "string" && typeof record.deviceId === "string";
+  });
+}
+
 export function formatPendingRequests(pending: PendingPairingRequest[]): string {
   if (pending.length === 0) {
     return "No pending device pairing requests.";
@@ -253,7 +266,7 @@ async function notifyPendingPairingRequests(params: {
 }): Promise<void> {
   const state = await readNotifyState(params.statePath);
   const pairing = await listDevicePairing();
-  const pending = pairing.pending as PendingPairingRequest[];
+  const pending = coercePendingPairingRequests(pairing.pending);
   const now = Date.now();
   const pendingIds = new Set(pending.map((entry) => entry.requestId));
   let changed = false;
