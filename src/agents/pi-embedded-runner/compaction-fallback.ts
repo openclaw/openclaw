@@ -13,14 +13,12 @@ export type CompactionModelCandidate = { provider: string; model: string };
  * Resolves the ordered fallback model candidates for compaction quota/rate-limit retries.
  *
  * Returns [] when fallbackModel is absent or "off".
- * Returns candidates (excluding the current model) for "fallback" or an explicit string.
- * Calls warn() when an explicit string cannot be resolved so the misconfiguration is visible.
+ * Returns candidates (excluding the current model) when fallbackModel is "fallback".
  */
 export function resolveCompactionFallbackCandidates(params: {
   cfg?: OpenClawConfig;
   currentProvider: string;
   currentModel: string;
-  warn?: (msg: string) => void;
 }): CompactionModelCandidate[] {
   const fallbackModel = params.cfg?.agents?.defaults?.compaction?.fallbackModel;
   if (!fallbackModel || fallbackModel === "off") {
@@ -40,32 +38,16 @@ export function resolveCompactionFallbackCandidates(params: {
   const isCurrent = (ref: CompactionModelCandidate) =>
     ref.provider === params.currentProvider && ref.model === params.currentModel;
 
-  if (fallbackModel === "fallback") {
-    const candidates: CompactionModelCandidate[] = [];
-    for (const raw of resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model)) {
-      const resolved = resolveModelRefFromString({
-        raw: String(raw ?? ""),
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved && !isCurrent(resolved.ref)) {
-        candidates.push(resolved.ref);
-      }
+  const candidates: CompactionModelCandidate[] = [];
+  for (const raw of resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model)) {
+    const resolved = resolveModelRefFromString({
+      raw: String(raw ?? ""),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved && !isCurrent(resolved.ref)) {
+      candidates.push(resolved.ref);
     }
-    return candidates;
   }
-
-  // Explicit "provider/model" string
-  const resolved = resolveModelRefFromString({
-    raw: fallbackModel,
-    defaultProvider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    params.warn?.(
-      `[compaction] fallbackModel "${fallbackModel}" could not be resolved — expected "off", "fallback", or a "provider/model" string; no fallback will be used`,
-    );
-    return [];
-  }
-  return !isCurrent(resolved.ref) ? [resolved.ref] : [];
+  return candidates;
 }

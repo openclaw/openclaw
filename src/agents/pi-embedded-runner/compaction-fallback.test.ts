@@ -72,22 +72,4 @@ describe("resolveCompactionFallbackCandidates", () => {
     } as unknown as OpenClawConfig;
     expect(resolveCompactionFallbackCandidates({ cfg, ...current })).toEqual([]);
   });
-
-  it("explicit provider/model string returns that candidate", () => {
-    const cfg = {
-      agents: { defaults: { compaction: { fallbackModel: "openai/gpt-4o-mini" } } },
-    } as unknown as OpenClawConfig;
-    expect(resolveCompactionFallbackCandidates({ cfg, ...current })).toEqual([
-      { provider: "openai", model: "gpt-4o-mini" },
-    ]);
-  });
-
-  it("explicit string matching the current model returns []", () => {
-    const cfg = {
-      agents: {
-        defaults: { compaction: { fallbackModel: "anthropic/claude-sonnet-4-6" } },
-      },
-    } as unknown as OpenClawConfig;
-    expect(resolveCompactionFallbackCandidates({ cfg, ...current })).toEqual([]);
-  });
 });

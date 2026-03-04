@@ -1,27 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="480" height="150" viewBox="0 0 480 150">
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="168" viewBox="0 0 480 168">
   <defs>
-    <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-    </style>
+    <style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }</style>
   </defs>
-  <!-- Card background -->
-  <rect x="1" y="1" width="478" height="148" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
-  <!-- Label -->
-  <text x="16" y="26" font-size="13" font-weight="600" fill="#24292f">Compaction Fallback Model</text>
-  <!-- Help text (none in old version) -->
-  <text x="16" y="44" font-size="12" fill="#8c959f">(no description)</text>
-  <!-- Segmented: off -->
-  <rect x="16" y="56" width="64" height="32" rx="5" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1"/>
-  <text x="48" y="77" font-size="13" fill="#57606a" text-anchor="middle">off</text>
-  <!-- Segmented: fallback -->
-  <rect x="80" y="56" width="88" height="32" rx="5" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1"/>
-  <text x="124" y="77" font-size="13" fill="#57606a" text-anchor="middle">fallback</text>
-  <!-- Segmented: custom (active) -->
-  <rect x="168" y="56" width="80" height="32" rx="5" fill="#0969da" stroke="#0969da" stroke-width="1"/>
-  <text x="208" y="77" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">custom</text>
-  <!-- Text input (visible when custom active) -->
-  <rect x="16" y="100" width="340" height="32" rx="5" fill="#ffffff" stroke="#0969da" stroke-width="2"/>
-  <text x="28" y="121" font-size="13" fill="#24292f">anthropic/claude-haiku-4-5</text>
-  <!-- Placeholder hint -->
-  <text x="16" y="146" font-size="11" fill="#8c959f">placeholder: provider/model</text>
+  <!-- Card -->
+  <rect x="1" y="1" width="478" height="166" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1"/>
+  <!-- Section label -->
+  <text x="16" y="24" font-size="11" font-weight="600" fill="#8c959f" letter-spacing="0.5">COMPACTION</text>
+  <!-- Mode field -->
+  <text x="16" y="50" font-size="13" font-weight="600" fill="#24292f">Compaction Mode</text>
+  <rect x="16" y="58" width="88" height="28" rx="5" fill="#0969da" stroke="#0969da"/>
+  <text x="60" y="77" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">default</text>
+  <rect x="104" y="58" width="96" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="152" y="77" font-size="12" fill="#57606a" text-anchor="middle">safeguard</text>
+  <!-- Divider -->
+  <line x1="16" y1="98" x2="464" y2="98" stroke="#d0d7de" stroke-width="1"/>
+  <!-- Reserve Tokens field -->
+  <text x="16" y="120" font-size="13" font-weight="600" fill="#24292f">Compaction Reserve Tokens</text>
+  <rect x="16" y="128" width="120" height="28" rx="5" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="28" y="147" font-size="12" fill="#57606a">24000</text>
+  <!-- No fallback field annotation -->
+  <text x="16" y="160" font-size="11" fill="#8c959f" font-style="italic">← no Compaction Fallback Model field (upstream main)</text>
 </svg>

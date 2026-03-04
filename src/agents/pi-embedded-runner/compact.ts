@@ -296,7 +296,6 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       currentProvider: provider,
       currentModel: modelId,
-      warn: (msg) => log.warn(msg),
     }),
   ];
   // Mutable model state — updated when falling back to a different candidate.
@@ -746,6 +745,7 @@ export async function compactEmbeddedPiSessionDirect(
                 `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                   `diagId=${diagId} trigger=${trigger} provider=${cand.provider}/${cand.model} ` +
                   `attempt=${attempt} maxAttempts=${maxAttempts} ` +
+                  `thinking=${effectiveThinkLevel} thinkAttempt=${thinkAttempt} ` +
                   `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
                   `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
               );
@@ -800,6 +800,7 @@ export async function compactEmbeddedPiSessionDirect(
                 `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                   `diagId=${diagId} trigger=${trigger} provider=${cand.provider}/${cand.model} ` +
                   `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+                  `thinking=${effectiveThinkLevel} thinkAttempt=${thinkAttempt} ` +
                   `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
                   `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
                   `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +
