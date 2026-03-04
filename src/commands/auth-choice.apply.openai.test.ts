@@ -418,6 +418,52 @@ describe("applyAuthChoiceOpenAI", () => {
     });
   });
 
+  it("preserves configured env provider alias when reusing inline env-ref key strings", async () => {
+    const agentDir = await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-inline-ref";
+
+    upsertAuthProfile({
+      profileId: "openai:default",
+      agentDir,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "${OPENAI_API_KEY}",
+      },
+    });
+
+    const runtime = createExitThrowingRuntime();
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true), text: vi.fn(async () => "should-not-be-used") },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {
+        secrets: {
+          defaults: { env: "envmain" },
+          providers: {
+            envmain: { source: "env" },
+          },
+        },
+      },
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir,
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toEqual({
+      source: "env",
+      provider: "envmain",
+      id: "OPENAI_API_KEY",
+    });
+  });
+
   it("respects persisted auth profile order when selecting reusable OpenAI credentials", async () => {
     const agentDir = await setupTempState();
     delete process.env.OPENAI_API_KEY;

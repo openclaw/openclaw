@@ -12,7 +12,11 @@ import {
   type AuthProfileCredential,
 } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
+import {
+  parseEnvTemplateSecretRef,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import {
@@ -194,11 +198,21 @@ async function resolveExistingProviderApiKey(params: {
         return {
           apiKey: profileResolved.apiKey,
           source: `profile:${profileId}`,
-          credential:
-            profile.keyRef ??
-            (typeof profile.key === "string" && profile.key.trim().length > 0
-              ? profile.key
-              : profileResolved.apiKey),
+          credential: (() => {
+            if (profile.keyRef) {
+              return profile.keyRef;
+            }
+            if (typeof profile.key === "string" && profile.key.trim().length > 0) {
+              const inlineEnvRef = parseEnvTemplateSecretRef(
+                profile.key,
+                resolveDefaultSecretProviderAlias(params.config, "env", {
+                  preferFirstProviderForSource: true,
+                }),
+              );
+              return inlineEnvRef ?? profile.key;
+            }
+            return profileResolved.apiKey;
+          })(),
         };
       } catch {}
     }
