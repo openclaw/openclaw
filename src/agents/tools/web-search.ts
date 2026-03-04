@@ -1457,6 +1457,7 @@ export function createWebSearchTool(options?: {
 }
 
 export const __testing = {
+  clearSearchCache: () => SEARCH_CACHE.clear(),
   resolveSearchProvider,
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,

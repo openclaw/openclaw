@@ -2,6 +2,7 @@ import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
+import { __testing as webSearchTesting } from "./web-search.js";
 
 function installMockFetch(payload: unknown) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -154,6 +155,7 @@ describe("web_search country and language parameters", () => {
 
   beforeEach(() => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
+    webSearchTesting.clearSearchCache();
   });
 
   afterEach(() => {
@@ -168,22 +170,28 @@ describe("web_search country and language parameters", () => {
       ui_lang: string;
       freshness: string;
     }>,
+    uniqueQuery: string,
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const tool = createWebSearchTool({
+      config: {
+        tools: { web: { search: { provider: "brave" } } },
+      },
+      sandboxed: true,
+    });
     expect(tool).not.toBeNull();
-    await tool?.execute?.("call-1", { query: "test", ...params });
+    await tool?.execute?.("call-1", { query: uniqueQuery, ...params });
     expect(mockFetch).toHaveBeenCalled();
     return new URL(mockFetch.mock.calls[0][0] as string);
   }
 
   it.each([
-    { key: "country", value: "DE" },
-    { key: "search_lang", value: "de" },
-    { key: "ui_lang", value: "de-DE" },
-    { key: "freshness", value: "pw" },
-  ])("passes $key parameter to Brave API", async ({ key, value }) => {
-    const url = await runBraveSearchAndGetUrl({ [key]: value });
+    { key: "country", value: "DE", query: "test-country-DE" },
+    { key: "search_lang", value: "de", query: "test-search-lang-de" },
+    { key: "ui_lang", value: "de", query: "test-ui-lang-de" },
+    { key: "freshness", value: "pw", query: "test-freshness-pw" },
+  ])("passes $key parameter to Brave API", async ({ key, value, query }) => {
+    const url = await runBraveSearchAndGetUrl({ [key]: value }, query);
     expect(url.searchParams.get(key)).toBe(value);
   });
 

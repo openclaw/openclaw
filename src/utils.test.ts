@@ -4,8 +4,12 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
+  clamp,
+  clampNumber,
   CONFIG_DIR,
   ensureDir,
+  escapeRegExp,
+  isRecord,
   jidToE164,
   normalizeE164,
   normalizePath,
@@ -13,6 +17,7 @@ import {
   resolveHomeDir,
   resolveJidToE164,
   resolveUserPath,
+  safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -28,6 +33,50 @@ function withTempDirSync<T>(prefix: string, run: (dir: string) => T): T {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe("escapeRegExp", () => {
+  it("escapes regex special characters", () => {
+    expect(escapeRegExp(".*+?^${}()|[ ]\\")).toBe("\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[ \\]\\\\");
+  });
+
+  it("returns literal string for safe use in RegExp", () => {
+    const escaped = escapeRegExp("file (1).txt");
+    expect(new RegExp(escaped).test("file (1).txt")).toBe(true);
+  });
+});
+
+describe("clampNumber / clamp", () => {
+  it("clamps value to min/max", () => {
+    expect(clampNumber(5, 0, 10)).toBe(5);
+    expect(clampNumber(-1, 0, 10)).toBe(0);
+    expect(clampNumber(15, 0, 10)).toBe(10);
+    expect(clamp(3, 0, 10)).toBe(3);
+  });
+});
+
+describe("safeParseJson", () => {
+  it("parses valid JSON", () => {
+    expect(safeParseJson('{"a":1}')).toEqual({ a: 1 });
+    expect(safeParseJson("[1,2]")).toEqual([1, 2]);
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(safeParseJson("not json")).toBeNull();
+    expect(safeParseJson("{")).toBeNull();
+  });
+});
+
+describe("isRecord", () => {
+  it("accepts plain objects", () => {
+    expect(isRecord({})).toBe(true);
+    expect(isRecord({ a: 1 })).toBe(true);
+  });
+
+  it("rejects arrays and null", () => {
+    expect(isRecord([])).toBe(false);
+    expect(isRecord(null)).toBe(false);
+  });
+});
 
 describe("normalizePath", () => {
   it("adds leading slash when missing", () => {
