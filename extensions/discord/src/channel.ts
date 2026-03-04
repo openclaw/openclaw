@@ -48,6 +48,12 @@ const discordMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
+function resolveThreadTarget(to: string, threadId?: string | number | null): string {
+  if (threadId == null) return to;
+  const id = String(threadId).trim();
+  return id ? `channel:${id}` : to;
+}
+
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   id: "discord",
   meta: {
@@ -302,9 +308,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     textChunkLimit: 2000,
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
+      const target = resolveThreadTarget(to, threadId);
+      const result = await send(target, text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
@@ -320,10 +327,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       accountId,
       deps,
       replyToId,
+      threadId,
       silent,
     }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
+      const target = resolveThreadTarget(to, threadId);
+      const result = await send(target, text, {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,
@@ -333,11 +342,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       });
       return { channel: "discord", ...result };
     },
-    sendPoll: async ({ to, poll, accountId, silent }) =>
-      await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-      }),
+    sendPoll: async ({ to, poll, accountId, threadId, silent }) =>
+      await getDiscordRuntime().channel.discord.sendPollDiscord(
+        resolveThreadTarget(to, threadId),
+        poll,
+        {
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+        },
+      ),
   },
   status: {
     defaultRuntime: {
