@@ -308,6 +308,12 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
