@@ -61,7 +61,8 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
   return false;
 }
 
-function buildSandboxBrowserResolvedConfig(params: {
+/** @internal Exported for testing. */
+export function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
   cdpPort: number;
   headless: boolean;
@@ -93,6 +94,8 @@ function buildSandboxBrowserResolvedConfig(params: {
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
+    // Default to trusted-network mode (same as normal browser) to allow localhost access
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
   };
 }
 
