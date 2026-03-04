@@ -20,11 +20,18 @@ import {
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
->;
+> & {
+  setStatus?: (patch: Record<string, unknown>) => void;
+  listenerTimeoutMs?: number;
+};
+
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => Promise<void>;
+};
 
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
-): DiscordMessageHandler {
+): DiscordMessageHandlerWithLifecycle {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
@@ -176,11 +183,18 @@ export function createDiscordMessageHandler(
     });
   }
 
-  return async (data, client) => {
+  const handler: DiscordMessageHandlerWithLifecycle = async (data, client) => {
     try {
       await debouncer.enqueue({ data, client });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   };
+
+  handler.deactivate = async () => {
+    // Flush all pending debounced messages
+    // No-op for now - debouncer doesn't expose flushAll
+  };
+
+  return handler;
 }

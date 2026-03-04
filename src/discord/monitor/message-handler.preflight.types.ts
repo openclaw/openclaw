@@ -1,11 +1,13 @@
 import type { ChannelType, Client, User } from "@buape/carbon";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { ReplyToMode } from "../../config/config.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
-import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
+import type {
+  DiscordThreadBindingLookup,
+  DiscordThreadBindingLookupRecord,
+} from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
@@ -54,7 +56,7 @@ export type DiscordMessagePreflightContext = {
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;
-  threadBinding?: SessionBindingRecord;
+  threadBinding?: DiscordThreadBindingLookupRecord;
   boundSessionKey?: string;
   boundAgentId?: string;
 

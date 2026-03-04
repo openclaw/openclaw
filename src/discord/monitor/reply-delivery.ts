@@ -15,15 +15,24 @@ import { sendDiscordText } from "../send.shared.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
+  channelId: string;
   threadId: string;
+  targetKind: "subagent" | "acp";
+  targetSessionKey: string;
   agentId: string;
   label?: string;
   webhookId?: string;
   webhookToken?: string;
+  boundBy: string;
+  boundAt: number;
+  lastActivityAt: number;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
 };
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId: (threadId: string) => DiscordThreadBindingLookupRecord | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
