@@ -63,4 +63,4 @@ The goal is to make every report actionable and reproducible.
 
 - This is intentionally lightweight: it should take 2-5 minutes to fill.
 - If issue spans multiple incidents, submit one summary per incident.
-- For security vulnerabilities, use the dedicated process in [`SECURITY.md`](../../SECURITY.md).
+- For security vulnerabilities, use the dedicated process in [Out of Scope](https://github.com/openclaw/openclaw/blob/main/SECURITY.md#out-of-scope).
