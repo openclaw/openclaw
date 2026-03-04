@@ -657,8 +657,13 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
 
-  // Auto-infer messageId for react actions when not provided
-  if (action === "react" && !params.messageId && input.toolContext?.currentMessageTs) {
+  // Auto-infer messageId for react actions when not provided (Slack only)
+  if (
+    channel === "slack" &&
+    action === "react" &&
+    !params.messageId &&
+    input.toolContext?.currentMessageTs
+  ) {
     params.messageId = input.toolContext.currentMessageTs;
   }
 
