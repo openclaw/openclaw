@@ -125,6 +125,11 @@ function resolveTelegramReasoningLevel(params: {
   } catch {
     // Fall through to default.
   }
+  // Check config default before falling back to "off"
+  const configDefault = cfg.agents?.defaults?.reasoningDefault;
+  if (configDefault === "on" || configDefault === "stream") {
+    return configDefault;
+  }
   return "off";
 }
 
