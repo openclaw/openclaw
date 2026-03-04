@@ -24,7 +24,7 @@ function extractBearerToken(header: unknown): string {
 
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
-  | { ok: false };
+  | { ok: false; unknownAddonEvent?: boolean; addOnBearerToken?: string }
 
 function parseGoogleChatInboundPayload(
   raw: unknown,
@@ -84,11 +84,9 @@ function parseGoogleChatInboundPayload(
         eventTime: chat.eventTime,
       };
     } else {
-      // Unknown Add-on event type — respond 200 to avoid error logs
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end("{}");
-      return { ok: false };
+      // Unknown Add-on event type — return flag so caller can respond 200
+      // after verifying the token (avoid auth bypass by not responding here)
+      return { ok: false, unknownAddonEvent: true, addOnBearerToken };
     }
   }
 
@@ -192,10 +190,9 @@ export function createGoogleChatWebhookRequestHandler(params: {
         }
 
         const parsed = parseGoogleChatInboundPayload(body.value, res);
-        if (!parsed.ok) {
+        if (!parsed.ok && !parsed.unknownAddonEvent) {
           return true;
         }
-        parsedEvent = parsed.event;
 
         if (!parsed.addOnBearerToken) {
           res.statusCode = 401;
@@ -208,7 +205,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           res,
           isMatch: async (target) => {
             const verification = await verifyGoogleChatRequest({
-              bearer: parsed.addOnBearerToken,
+              bearer: parsed.addOnBearerToken!,
               audienceType: target.audienceType,
               audience: target.audience,
             });
@@ -218,6 +215,16 @@ export function createGoogleChatWebhookRequestHandler(params: {
         if (!selectedTarget) {
           return true;
         }
+
+        // Unknown Add-on event type: respond 200 after auth passes
+        if (parsed.unknownAddonEvent) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end("{}");
+          return true;
+        }
+
+        parsedEvent = (parsed as { ok: true; event: GoogleChatEvent }).event;
       }
 
       if (!selectedTarget || !parsedEvent) {
