@@ -128,14 +128,16 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    // Start typing as soon as tools begin executing, even before the first text delta.
-    if (!typing.isActive()) {
+    // Guard on hasRenderableText so NO_REPLY runs don't flash typing (#33951).
+    if (!typing.isActive() && hasRenderableText) {
       await typing.startTypingLoop();
       typing.refreshTypingTtl();
       return;
     }
     // Keep typing indicator alive during tool execution.
-    typing.refreshTypingTtl();
+    if (typing.isActive()) {
+      typing.refreshTypingTtl();
+    }
   };
 
   return {
