@@ -79,7 +79,7 @@ describe("sendMessageIrc cfg threading", () => {
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
-    } as IrcClient;
+    } as unknown as IrcClient;
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
@@ -102,7 +102,7 @@ describe("sendMessageIrc cfg threading", () => {
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
-    } as IrcClient;
+    } as unknown as IrcClient;
 
     await sendMessageIrc("#ops", "ping", { client });
 
