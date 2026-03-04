@@ -234,6 +234,23 @@ function resolveChannelAccountConfig(params: {
   return accountValue as Record<string, unknown>;
 }
 
+function resolveFeishuFallbackAllowlistAccountId(accountsValue: unknown): string | undefined {
+  if (!accountsValue || typeof accountsValue !== "object") {
+    return undefined;
+  }
+  const ids = Array.from(
+    new Set(
+      Object.keys(accountsValue as Record<string, unknown>)
+        .map((key) => normalizeOptionalAccountId(key))
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return ids[0];
+}
+
 function resolveEffectiveAllowlistAccountId(params: {
   cfg: OpenClawConfig;
   channelId: ChannelId;
@@ -255,11 +272,18 @@ function resolveEffectiveAllowlistAccountId(params: {
     return normalizeAccountId(undefined);
   }
   const record = channel as Record<string, unknown>;
-  const hasAccounts = Boolean(record.accounts && typeof record.accounts === "object");
+  const accountsValue = record.accounts;
+  const hasAccounts = Boolean(accountsValue && typeof accountsValue === "object");
   const rawDefaultAccount =
     typeof record.defaultAccount === "string" ? record.defaultAccount.trim() : "";
   if (hasAccounts && rawDefaultAccount) {
     return normalizeAccountId(rawDefaultAccount);
+  }
+  if (params.channelId === "feishu" && hasAccounts) {
+    const fallbackAccountId = resolveFeishuFallbackAllowlistAccountId(accountsValue);
+    if (fallbackAccountId) {
+      return normalizeAccountId(fallbackAccountId);
+    }
   }
   return normalizeAccountId(undefined);
 }
@@ -667,7 +691,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const allowWrites = resolveChannelConfigWrites({
       cfg: params.cfg,
       channelId,
-      accountId: params.ctx.AccountId,
+      accountId,
     });
     if (!allowWrites) {
       const hint = `channels.${channelId}.configWrites=true`;

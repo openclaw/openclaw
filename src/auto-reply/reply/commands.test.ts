@@ -898,6 +898,64 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("channels.feishu.accounts.ops.allowFrom");
   });
 
+  it("falls back to first feishu account when defaultAccount is unset", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        feishu: {
+          accounts: {
+            ops: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:ops"],
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["chat:ops"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist list all channel=feishu", cfg, {
+      AccountId: undefined,
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Channel: feishu (account ops)");
+    expect(result.reply?.text).toContain("DM allowFrom (config): user:ops");
+    expect(result.reply?.text).toContain("Group allowFrom (config): chat:ops");
+    expect(result.reply?.text).not.toContain("account default");
+  });
+
+  it("checks feishu configWrites against resolved allowlist account", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        feishu: {
+          defaultAccount: "ops",
+          configWrites: true,
+          accounts: {
+            default: {
+              configWrites: true,
+            },
+            ops: {
+              configWrites: false,
+              allowFrom: ["user:ops"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm channel=feishu --config user:new", cfg, {
+      AccountId: undefined,
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config writes are disabled for feishu");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
     delete (Object.prototype as Record<string, unknown>).allowFrom;
 
