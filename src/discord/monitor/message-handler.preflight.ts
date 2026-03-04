@@ -68,6 +68,10 @@ export type {
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
+function isPreflightAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
+}
+
 function isBoundThreadBotSystemMessage(params: {
   isBoundThreadSession: boolean;
   isBotAuthor: boolean;
@@ -124,6 +128,9 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const logger = getChildLogger({ module: "discord-auto-reply" });
   const message = params.data.message;
   const author = params.data.author;
@@ -157,6 +164,9 @@ export async function preflightDiscordMessage(
         messageId: message.id,
         config: pluralkitConfig,
       });
+      if (isPreflightAborted(params.abortSignal)) {
+        return null;
+      }
     } catch (err) {
       logVerbose(`discord: pluralkit lookup failed for ${message.id}: ${String(err)}`);
     }
@@ -176,6 +186,9 @@ export async function preflightDiscordMessage(
 
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
   logDebug(
@@ -213,6 +226,9 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       useAccessGroups,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     commandAuthorized = dmAccess.commandAuthorized;
     if (dmAccess.decision !== "allow") {
       const allowMatchMeta = formatAllowlistMatchMeta(
@@ -300,6 +316,9 @@ export async function preflightDiscordMessage(
       threadChannel: earlyThreadChannel,
       channelInfo,
     });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
     earlyThreadParentId = parentInfo.id;
     earlyThreadParentName = parentInfo.name;
     earlyThreadParentType = parentInfo.type;
@@ -548,7 +567,11 @@ export async function preflightDiscordMessage(
       shouldRequireMention,
       mentionRegexes,
       cfg: params.cfg,
+      abortSignal: params.abortSignal,
     });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
 
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
@@ -727,6 +750,7 @@ export async function preflightDiscordMessage(
     token: params.token,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    abortSignal: params.abortSignal,
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,
     mediaMaxBytes: params.mediaMaxBytes,

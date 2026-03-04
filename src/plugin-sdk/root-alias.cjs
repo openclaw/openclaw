@@ -4,6 +4,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 let monolithicSdk = null;
+let jitiLoader = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -31,16 +32,54 @@ function emptyPluginConfigSchema() {
   };
 }
 
+function resolveCommandAuthorizedFromAuthorizers(params) {
+  const { useAccessGroups, authorizers } = params;
+  const mode = params.modeWhenAccessGroupsOff ?? "allow";
+  if (!useAccessGroups) {
+    if (mode === "allow") {
+      return true;
+    }
+    if (mode === "deny") {
+      return false;
+    }
+    const anyConfigured = authorizers.some((entry) => entry.configured);
+    if (!anyConfigured) {
+      return true;
+    }
+    return authorizers.some((entry) => entry.configured && entry.allowed);
+  }
+  return authorizers.some((entry) => entry.configured && entry.allowed);
+}
+
+function resolveControlCommandGate(params) {
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups: params.useAccessGroups,
+    authorizers: params.authorizers,
+    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
+  });
+  const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
+  return { commandAuthorized, shouldBlock };
+}
+
+function getJiti() {
+  if (jitiLoader) {
+    return jitiLoader;
+  }
+
+  const { createJiti } = require("jiti");
+  jitiLoader = createJiti(__filename, {
+    interopDefault: true,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+  });
+  return jitiLoader;
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
-  const { createJiti } = require("jiti");
-  const jiti = createJiti(__filename, {
-    interopDefault: true,
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-  });
+  const jiti = getJiti();
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
@@ -56,8 +95,17 @@ function loadMonolithicSdk() {
   return monolithicSdk;
 }
 
+function tryLoadMonolithicSdk() {
+  try {
+    return loadMonolithicSdk();
+  } catch {
+    return null;
+  }
+}
+
 const fastExports = {
   emptyPluginConfigSchema,
+  resolveControlCommandGate,
 };
 
 const rootProxy = new Proxy(fastExports, {
@@ -80,15 +128,18 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
-    return prop in loadMonolithicSdk();
+    const monolithic = tryLoadMonolithicSdk();
+    return monolithic ? prop in monolithic : false;
   },
   ownKeys(target) {
-    const keys = new Set([
-      ...Reflect.ownKeys(target),
-      ...Reflect.ownKeys(loadMonolithicSdk()),
-      "default",
-      "__esModule",
-    ]);
+    const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
+    // Keep Object.keys/property reflection fast and deterministic.
+    // Only expose monolithic keys if it was already loaded by direct access.
+    if (monolithicSdk) {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
+        keys.add(key);
+      }
+    }
     return [...keys];
   },
   getOwnPropertyDescriptor(target, prop) {
@@ -112,12 +163,15 @@ const rootProxy = new Proxy(fastExports, {
     if (own) {
       return own;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(loadMonolithicSdk(), prop);
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return undefined;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
     if (!descriptor) {
       return undefined;
     }
     if (descriptor.get || descriptor.set) {
-      const monolithic = loadMonolithicSdk();
       return {
         configurable: true,
         enumerable: descriptor.enumerable ?? true,

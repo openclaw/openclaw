@@ -117,7 +117,7 @@ export interface AcpRuntime {
     handle?: AcpRuntimeHandle;
   }): Promise<AcpRuntimeCapabilities> | AcpRuntimeCapabilities;
 
-  getStatus?(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus>;
+  getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
