@@ -916,8 +916,12 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects context-1m beta via additionalModelRequestFields for Bedrock Anthropic models", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
+    const capturedPayloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
+      // Simulate underlying stream emitting a payload so the wrapper can mutate it
+      const payload: Record<string, unknown> = { messages: [] };
+      options?.onPayload?.(payload);
+      capturedPayloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
@@ -942,20 +946,20 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"amazon-bedrock">;
     const context: Context = { messages: [] };
 
-    const payload: Record<string, unknown> = { messages: [] };
-    void agent.streamFn?.(model, context, {
-      onPayload: (p) => Object.assign(payload, p as Record<string, unknown>),
-    });
+    void agent.streamFn?.(model, context, {});
 
-    expect(payload.additionalModelRequestFields).toEqual({
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0].additionalModelRequestFields).toEqual({
       anthropic_beta: ["context-1m-2025-08-07"],
     });
   });
 
   it("does not inject context-1m for non-Anthropic Bedrock models", () => {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const capturedPayloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
+      const payload: Record<string, unknown> = { messages: [] };
+      options?.onPayload?.(payload);
+      capturedPayloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
@@ -980,12 +984,10 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"amazon-bedrock">;
     const context: Context = { messages: [] };
 
-    const payload: Record<string, unknown> = { messages: [] };
-    void agent.streamFn?.(model, context, {
-      onPayload: (p) => Object.assign(payload, p as Record<string, unknown>),
-    });
+    void agent.streamFn?.(model, context, {});
 
-    expect(payload.additionalModelRequestFields).toBeUndefined();
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0].additionalModelRequestFields).toBeUndefined();
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
