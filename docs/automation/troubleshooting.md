@@ -50,6 +50,23 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick crashed; inspect surrounding stack/log context.
 - `reason: not-due` in run output → manual run called without `--force` and job not due yet.
 
+## System scheduler fallback (advanced)
+
+If your gateway process is not continuously online, you can use a host scheduler
+(`crond`, `systemd timer`, Task Scheduler) to trigger due checks.
+
+Example (`crontab`):
+
+```bash
+*/5 * * * * OPENCLAW_SKIP_CRON=1 openclaw cron run <jobId> --due
+```
+
+Notes:
+
+- `--due` is idempotent for schedule checks: it runs only when the job is due.
+- Keep exactly one scheduler path active per host (either built-in cron, or external fallback).
+- After switching modes, verify with `openclaw cron runs --id <jobId> --limit 20`.
+
 ## Cron fired but no delivery
 
 ```bash
