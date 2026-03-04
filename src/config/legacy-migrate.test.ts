@@ -208,6 +208,16 @@ describe("legacy migrate heartbeat config", () => {
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
     expect((res.config as { agent?: unknown } | null)?.agent).toBeUndefined();
   });
+
+  it("records a migration change when removing empty top-level heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {},
+    });
+
+    expect(res.changes).toContain("Removed empty top-level heartbeat.");
+    expect(res.config).not.toBeNull();
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
 });
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {

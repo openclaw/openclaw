@@ -343,6 +343,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         raw.channels = channels;
       }
 
+      if (!agentHeartbeat && !channelHeartbeat) {
+        changes.push("Removed empty top-level heartbeat.");
+      }
       delete raw.heartbeat;
     },
   },
