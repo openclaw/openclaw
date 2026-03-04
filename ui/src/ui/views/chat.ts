@@ -496,8 +496,8 @@ export function renderChat(props: ChatProps) {
         <div class="chat-compose__row">
           <input
             type="file"
-            accept=${ACCEPTED_IMAGE_TYPES}
-            multiple
+            accept="image/*"
+            ?multiple=${true}
             class="chat-compose__file-input"
             @change=${(e: Event) => handleFileSelect(e, props)}
           />
