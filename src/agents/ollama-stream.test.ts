@@ -120,6 +120,23 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
   });
 
+  it("prefers thinking over reasoning when content is empty", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        thinking: "Thinking output",
+        reasoning: "Reasoning output",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "Thinking output" }]);
+  });
+
   it("builds response with tool calls", () => {
     const response = {
       model: "qwen3:32b",
@@ -414,6 +431,27 @@ describe("createOllamaStreamFn", () => {
         }
 
         expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+      },
+    );
+  });
+
+  it("accumulates thinking chunks when content is empty", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"thinking"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.content).toEqual([{ type: "text", text: "thinking output" }]);
       },
     );
   });
