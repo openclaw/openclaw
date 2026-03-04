@@ -238,6 +238,37 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("browser");
   });
 
+  it("detects web_search from any provider apiKey and skips when all are empty", async () => {
+    const withKey = {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+      tools: { web: { search: { kimi: { apiKey: "kimi-key" } }, fetch: { enabled: false } } },
+      browser: { enabled: false },
+    } as OpenClawConfig;
+    const noKey = {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+      tools: { web: { search: { kimi: {} }, fetch: { enabled: false } } },
+      browser: { enabled: false },
+    } as OpenClawConfig;
+
+    const withKeyRes = await runSecurityAudit({
+      config: withKey,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+    const noKeyRes = await runSecurityAudit({
+      config: noKey,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(withKeyRes.findings.find((f) => f.checkId === "models.small_params")?.detail).toContain(
+      "web_search",
+    );
+    expect(noKeyRes.findings.find((f) => f.checkId === "models.small_params")?.detail).not.toContain(
+      "web_search",
+    );
+  });
+
   it("treats small models as safe when sandbox is on and web tools are disabled", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } } },

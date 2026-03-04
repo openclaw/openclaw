@@ -221,11 +221,20 @@ function resolveToolPolicies(params: {
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
+  const hasConfigKey =
+    Object.values((search ?? {}) as Record<string, unknown>).some((value) => {
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+      const apiKey = (value as { apiKey?: unknown }).apiKey;
+      return typeof apiKey === "string" ? apiKey.trim().length > 0 : Boolean(apiKey);
+    }) ||
+    (typeof search?.apiKey === "string" ? search.apiKey.trim().length > 0 : Boolean(search?.apiKey));
   return Boolean(
-    search?.apiKey ||
-    search?.perplexity?.apiKey ||
+    hasConfigKey ||
     env.BRAVE_API_KEY ||
     env.PERPLEXITY_API_KEY ||
+    env.XAI_API_KEY ||
     env.OPENROUTER_API_KEY,
   );
 }
