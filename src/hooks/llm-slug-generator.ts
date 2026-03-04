@@ -25,6 +25,7 @@ const log = createSubsystemLogger("llm-slug-generator");
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  model?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -63,6 +64,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       model,
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
+      ...(params.model ? { model: params.model } : {}),
     });
 
     // Extract text from payloads
