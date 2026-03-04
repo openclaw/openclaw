@@ -16,8 +16,12 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { danger, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -68,6 +72,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     accountId: opts.accountId,
   });
   const telegramCfg = account.config;
+
+  // Warn if Telegram provider config is missing and group policy falls back to allowlist.
+  // Only warn when the effective policy is actually "allowlist" (i.e., no account-level
+  // groupPolicy AND no default groupPolicy is set). If defaults are configured (e.g.,
+  // channels.defaults.groupPolicy: open), groups are allowed and the warning is misleading.
+  const providerMissing = cfg.channels?.telegram === undefined;
+  const hasAccountGroupPolicy = telegramCfg.groupPolicy !== undefined;
+  const hasDefaultGroupPolicy = cfg.channels?.defaults?.groupPolicy !== undefined;
+  const effectivePolicyIsAllowlist =
+    !hasAccountGroupPolicy && !hasDefaultGroupPolicy && providerMissing;
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied: effectivePolicyIsAllowlist,
+    providerKey: "telegram",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.group,
+    log: (message) => runtime.log?.(warn(message)),
+  });
 
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
     network: telegramCfg.network,
