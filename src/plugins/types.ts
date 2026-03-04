@@ -896,6 +896,8 @@ export type PluginHookGatewayStopEvent = {
 // context_assembled hook (void — parallel)
 export type PluginHookContextAssembledEvent = {
   systemPrompt: string;
+  /** The effective user prompt for this turn (after hook modifications). */
+  prompt: string;
   messages: AgentMessage[];
   messageCount: number;
   iteration: number;
@@ -915,6 +917,8 @@ export type PluginHookLoopIterationEndEvent = {
   toolCallsMade: number;
   /** Number of new messages added this iteration. Undefined when not available. */
   newMessagesAdded?: number;
+  /** Approximate: true when tool results exist (loop typically continues).
+   *  Does not account for abort/timeout/max-iteration limits. */
   willContinue: boolean;
 };
 
