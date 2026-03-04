@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   stripDowngradedToolCallText,
+  stripJsonToolCallText,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -418,6 +419,38 @@ File contents here`,
     const result = extractAssistantText(msg);
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
+  it("strips raw JSON tool call payloads", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '{"name":"sessions_send","arguments":{"sessionKey":"abc","message":"hi"}}',
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("preserves JSON blobs that are not tool payloads", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '{"title":"Status","data":[1,2,3]}',
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe('{"title":"Status","data":[1,2,3]}');
+  });
+
 
   it("strips reasoning/thinking tag variants", () => {
     const cases = [
@@ -557,3 +590,23 @@ describe("empty input handling", () => {
     }
   });
 });
+
+
+describe("stripJsonToolCallText", () => {
+  it("removes standalone tool-call shaped JSON objects", () => {
+    const payload = '{"name":"exec","arguments":{"command":"ls"}}';
+    expect(stripJsonToolCallText(payload)).toBe("");
+  });
+
+  it("removes arrays containing tool-call payloads", () => {
+    const payload =
+      '[{"name":"read","arguments":{"path":"/tmp/foo"}},{"name":"exec","arguments":{"command":"pwd"}}]';
+    expect(stripJsonToolCallText(payload)).toBe("");
+  });
+
+  it("keeps JSON that lacks name/arguments fields", () => {
+    const payload = '{"hello":"world"}';
+    expect(stripJsonToolCallText(payload)).toBe(payload);
+  });
+});
+

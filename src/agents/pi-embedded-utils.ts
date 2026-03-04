@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -203,20 +202,81 @@ export function stripDowngradedToolCallText(text: string): string {
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
  */
+const JSON_TOOL_CALL_ARG_KEYS = [
+  "arguments",
+  "args",
+  "input",
+  "tool_input",
+  "parameters",
+  "payload",
+] as const;
+
+function isJsonToolCallPayload(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.length > 0 && value.every(isJsonToolCallPayload);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!name) {
+    return false;
+  }
+  return JSON_TOOL_CALL_ARG_KEYS.some((key) => key in record);
+}
+
+export function stripJsonToolCallText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return text;
+  }
+  const parsed = (() => {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  })();
+  if (parsed !== null && isJsonToolCallPayload(parsed)) {
+    return "";
+  }
+  const looseRe = /^\s*(?:\{[\s\S]*?\bname\b[\s\S]*?\barguments?\b[\s\S]*\}|\[[\s\S]*?\bname\b[\s\S]*?\barguments?\b[\s\S]*\])\s*$/i;
+  if (looseRe.test(trimmed)) {
+    return "";
+  }
+  return text;
+}
+
 export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const extracted =
-    extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
-        ).trim(),
-      joinWith: "\n",
-      normalizeText: (text) => text.trim(),
-    }) ?? "";
+  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const rec = block as Record<string, unknown>;
+    return rec.type === "text" && typeof rec.text === "string";
+  };
+
+  const blocks = Array.isArray(msg.content)
+    ? msg.content
+        .filter(isTextBlock)
+        .map((c) =>
+          stripThinkingTagsFromText(
+            stripDowngradedToolCallText(
+              stripJsonToolCallText(stripMinimaxToolCallXml(c.text)),
+            ),
+          ).trim(),
+        )
+        .filter(Boolean)
+    : [];
+  const extracted = blocks.join("\n").trim();
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
