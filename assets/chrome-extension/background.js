@@ -545,15 +545,16 @@ async function autoAttachTab(tabId) {
 }
 
 // Auto-attach all currently open tabs that aren't already attached.
-// Called on startup and after relay reconnects.
+// Called on startup and after relay reconnects. Parallelized with
+// Promise.allSettled so startup waits for the slowest tab, not all tabs sequentially.
 async function autoAttachAllTabs() {
   if (!(await getAutoAttach())) return
   const allTabs = await chrome.tabs.query({})
-  for (const tab of allTabs) {
-    if (tab.id && !tabs.has(tab.id) && isAutoAttachableUrl(tab.url)) {
-      await autoAttachTab(tab.id)
-    }
-  }
+  await Promise.allSettled(
+    allTabs
+      .filter(tab => tab.id && !tabs.has(tab.id) && isAutoAttachableUrl(tab.url))
+      .map(tab => autoAttachTab(tab.id))
+  )
 }
 
 async function connectOrToggleForActiveTab() {
