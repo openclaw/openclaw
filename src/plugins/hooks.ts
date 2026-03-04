@@ -2,7 +2,7 @@
  * Plugin Hook Runner
  *
  * Provides utilities for executing plugin lifecycle hooks with proper
- * error handling, priority ordering, and async support.
+ * error handling, registration-order (FIFO) execution, and async support.
  */
 
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -120,15 +120,18 @@ export type HookRunnerOptions = {
 };
 
 /**
- * Get hooks for a specific hook name, sorted by priority (higher first).
+ * Get hooks for a specific hook name in registration order (FIFO).
  */
 function getHooksForName<K extends PluginHookName>(
   registry: PluginRegistry,
   hookName: K,
 ): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
-    .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  // Hooks run in registration order (FIFO). Plugins register during
+  // loadGatewayPlugins, then bundled hooks register during loadInternalHooks,
+  // so plugin handlers naturally run before bundled handlers.
+  return (registry.typedHooks as PluginHookRegistration<K>[]).filter(
+    (h) => h.hookName === hookName,
+  );
 }
 
 /**
@@ -236,7 +239,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run a hook that can return a modifying result.
-   * Handlers are executed sequentially in priority order, and results are merged.
+   * Handlers are executed sequentially in registration order (FIFO), and results are merged.
    */
   async function runModifyingHook<K extends PluginHookName, TResult>(
     hookName: K,
@@ -479,7 +482,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * This hook is intentionally synchronous: it runs in hot paths where session
    * transcripts are appended synchronously.
    *
-   * Handlers are executed sequentially in priority order (higher first). Each
+   * Handlers are executed sequentially in registration order (FIFO). Each
    * handler may return `{ message }` to replace the message passed to the next
    * handler.
    */
@@ -542,7 +545,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * This hook is intentionally synchronous: it runs on the hot path where
    * session transcripts are appended synchronously.
    *
-   * Handlers are executed sequentially in priority order (higher first).
+   * Handlers are executed sequentially in registration order (FIFO).
    * If any handler returns { block: true }, the message is NOT written
    * to the session JSONL and we return immediately.
    * If a handler returns { message }, the modified message replaces the

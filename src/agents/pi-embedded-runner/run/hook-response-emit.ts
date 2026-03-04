@@ -80,6 +80,9 @@ export async function applyBeforeResponseEmitHook(
 
   if (emitResult?.block) {
     log.warn(`response blocked: ${emitResult.blockReason ?? "no reason"}`);
+    // Clear blocked content from session history so it doesn't leak to
+    // subsequent turns or session persistence.
+    clearAssistantContent(activeSession.messages);
     // Return empty string to signal the caller that the response was blocked.
     // The caller checks `modifiedContent !== undefined` — returning undefined
     // would be indistinguishable from "no modification".
@@ -96,18 +99,41 @@ export async function applyBeforeResponseEmitHook(
   // Update session messages for consistency with the delivery pipeline.
   // We update in-place because activeSession.messages is a mutable array
   // shared with the session persistence layer.
-  const sessionMsg = activeSession.messages[activeSession.messages.length - 1];
-  if (sessionMsg?.role === "assistant" && "content" in sessionMsg) {
-    const msgContent = (sessionMsg as { content: unknown }).content;
-    if (typeof msgContent === "string") {
-      (sessionMsg as unknown as Record<string, unknown>).content = emitResult.content;
-    } else if (Array.isArray(msgContent)) {
-      const textParts = (msgContent as ContentPart[]).filter((c) => c?.type === "text");
-      if (textParts.length > 0) {
-        textParts[0].text = emitResult.content;
+  rewriteAssistantContent(activeSession.messages, emitResult.content);
+
+  return emitResult.content;
+}
+
+/**
+ * Rewrite all text content in the last assistant message.
+ * Handles both string content and multi-part content arrays.
+ * For multi-part arrays, replaces the first text part with the new content
+ * and clears all subsequent text parts to prevent stale/unredacted fragments.
+ */
+function rewriteAssistantContent(messages: AgentMessage[], newContent: string): void {
+  const sessionMsg = messages[messages.length - 1];
+  if (!sessionMsg || sessionMsg.role !== "assistant" || !("content" in sessionMsg)) {
+    return;
+  }
+  const msgContent = (sessionMsg as { content: unknown }).content;
+  if (typeof msgContent === "string") {
+    (sessionMsg as unknown as Record<string, unknown>).content = newContent;
+  } else if (Array.isArray(msgContent)) {
+    const textParts = (msgContent as ContentPart[]).filter((c) => c?.type === "text");
+    if (textParts.length > 0) {
+      textParts[0].text = newContent;
+      // Clear all subsequent text parts to prevent stale/unredacted fragments
+      for (let i = 1; i < textParts.length; i++) {
+        textParts[i].text = "";
       }
     }
   }
+}
 
-  return emitResult.content;
+/**
+ * Clear all text content from the last assistant message in session history.
+ * Used when before_response_emit blocks delivery to prevent data leaks.
+ */
+function clearAssistantContent(messages: AgentMessage[]): void {
+  rewriteAssistantContent(messages, "");
 }

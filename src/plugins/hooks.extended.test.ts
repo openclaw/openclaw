@@ -331,7 +331,7 @@ describe("before_response_emit hook", () => {
     );
 
     const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
-    // h1 runs first (higher priority), h2 runs second (lower priority).
+    // h1 runs first, h2 runs second (registration order).
     // Merge: block and blockReason from h2 override; content stays from h1
     // since h2 doesn't provide content.
     // Actually with the merge function: next.content ?? acc?.content — h2 returns no content,
