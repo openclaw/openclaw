@@ -74,6 +74,33 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:ops:incident");
   });
+
+  it("lowercases session keys to match gateway canonical form", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "agent",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    expect(
+      resolveTuiSessionKey({
+        raw: "MySession",
+        sessionScope: "agent",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:mysession");
+    expect(
+      resolveTuiSessionKey({
+        raw: "Global",
+        sessionScope: "agent",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("global");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
