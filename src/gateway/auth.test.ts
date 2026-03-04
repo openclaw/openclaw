@@ -417,6 +417,63 @@ describe("trusted-proxy auth", () => {
     expect(localToken.method).toBe("token");
   });
 
+  it("does not let local fallback preempt valid trusted-proxy header auth", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "wrong" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "203.0.113.10",
+          "x-forwarded-user": "nick@example.com",
+          "x-forwarded-proto": "https",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
+  });
+
+  it("applies rate limiting before trusted-proxy local shared-secret fallback", async () => {
+    const limiter = createLimiterSpy();
+    limiter.check.mockReturnValue({
+      allowed: false,
+      remaining: 0,
+      retryAfterMs: 60_000,
+    });
+
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("rate_limited");
+    expect(limiter.check).toHaveBeenCalled();
+  });
+
   it("rejects request from untrusted source", async () => {
     const res = await authorizeTrustedProxy({
       remoteAddress: "192.168.1.100",
