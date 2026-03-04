@@ -96,6 +96,36 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "heartbeat->agents.defaults.heartbeat",
+    describe: "Move top-level heartbeat to agents.defaults.heartbeat",
+    apply: (raw, changes) => {
+      const legacyHeartbeat = getRecord(raw.heartbeat);
+      if (!legacyHeartbeat) {
+        return;
+      }
+
+      const agents = ensureRecord(raw, "agents");
+      const defaults = ensureRecord(agents, "defaults");
+      const existing = getRecord(defaults.heartbeat);
+      if (!existing) {
+        defaults.heartbeat = legacyHeartbeat;
+        changes.push("Moved heartbeat → agents.defaults.heartbeat.");
+      } else {
+        // agents.defaults stays authoritative; legacy top-level config only fills gaps.
+        const merged = structuredClone(existing);
+        mergeMissing(merged, legacyHeartbeat);
+        defaults.heartbeat = merged;
+        changes.push(
+          "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+        );
+      }
+
+      agents.defaults = defaults;
+      raw.agents = agents;
+      delete raw.heartbeat;
+    },
+  },
+  {
     id: "auth.anthropic-claude-cli-mode-oauth",
     describe: "Switch anthropic:claude-cli auth profile mode to oauth",
     apply: (raw, changes) => {

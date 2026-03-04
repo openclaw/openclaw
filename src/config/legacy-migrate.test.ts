@@ -96,6 +96,51 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
+describe("legacy migrate heartbeat config", () => {
+  it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        model: "anthropic/claude-3-5-haiku-20241022",
+        every: "30m",
+      },
+    });
+
+    expect(res.changes).toContain("Moved heartbeat → agents.defaults.heartbeat.");
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      model: "anthropic/claude-3-5-haiku-20241022",
+      every: "30m",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        model: "anthropic/claude-3-5-haiku-20241022",
+        every: "30m",
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            target: "telegram",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+    );
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      every: "1h",
+      target: "telegram",
+      model: "anthropic/claude-3-5-haiku-20241022",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+});
+
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
     const res = migrateLegacyConfig({
