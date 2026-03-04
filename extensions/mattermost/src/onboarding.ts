@@ -6,7 +6,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/mattermost";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,

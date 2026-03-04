@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/compat";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/mattermost";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 
 export type MattermostProbe = BaseProbeResult & {
