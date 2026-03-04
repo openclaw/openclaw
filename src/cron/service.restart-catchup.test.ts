@@ -151,7 +151,7 @@ describe("CronService restart catch-up", () => {
         enabled: true,
         createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
         updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
-        schedule: { kind: "at", atIso: "2025-12-13T16:00:00.000Z" },
+        schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "one-shot stale marker" },
