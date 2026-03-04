@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -185,10 +186,14 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const cfg = opts?.config ?? loadConfig();
+      const requesterAgentId = opts?.agentSessionKey
+        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
+        : undefined;
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: requesterAgentId,
           sandboxed: opts?.sandboxed,
         });
       const resolvedSession = await resolveSessionReference({
@@ -221,6 +226,7 @@ export function createSessionsHistoryTool(opts?: {
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentId: requesterAgentId,
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
