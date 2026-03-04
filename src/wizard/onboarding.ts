@@ -114,19 +114,17 @@ export async function runOnboardingWizard(
       );
     }
     await prompter.outro(
-      t("wizard.configInvalidOutro").replace(
-        "openclaw doctor",
-        formatCliCommand("openclaw doctor"),
-      ),
+      cliT("wizard.configInvalidOutro", process.env, {
+        doctorCommand: formatCliCommand("openclaw doctor"),
+      }),
     );
     runtime.exit(1);
     return;
   }
 
-  const quickstartHint = t("wizard.modeQuickstartHint").replace(
-    "openclaw configure",
-    formatCliCommand("openclaw configure"),
-  );
+  const quickstartHint = cliT("wizard.modeQuickstartHint", process.env, {
+    configureCommand: formatCliCommand("openclaw configure"),
+  });
   const manualHint = t("wizard.modeManualHint");
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
