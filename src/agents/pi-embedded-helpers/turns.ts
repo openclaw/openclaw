@@ -1,7 +1,8 @@
-import type { AgentMessage, ContentBlock } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-type AnthropicContentBlock = ContentBlock & {
+type AnthropicContentBlock = {
   type: "text" | "toolUse" | "toolResult";
+  text?: string;
   id?: string;
   name?: string;
   toolUseId?: string;
@@ -61,8 +62,12 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     // Filter out tool_use blocks that don't have matching tool_result
     const originalContent = assistantMsg.content || [];
     const filteredContent = originalContent.filter((block) => {
-      if (!block) return false;
-      if (block.type !== "toolUse") return true;
+      if (!block) {
+        return false;
+      }
+      if (block.type !== "toolUse") {
+        return true;
+      }
       // Keep tool_use if its id is in the valid set
       return validToolUseIds.has(block.id || "");
     });

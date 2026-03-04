@@ -180,12 +180,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
         createPreflightContext(params.data.channel_id),
     );
 
-    let heartbeatTick: (() => void) | null = null;
+    let heartbeatTick: () => void = () => {};
+    let capturedHeartbeat = false;
     const setIntervalSpy = vi
       .spyOn(globalThis, "setInterval")
       .mockImplementation((callback: TimerHandler) => {
         if (typeof callback === "function") {
-          heartbeatTick = callback;
+          heartbeatTick = () => {
+            callback();
+          };
+          capturedHeartbeat = true;
         }
         return 1 as unknown as ReturnType<typeof setInterval>;
       });
@@ -202,12 +206,12 @@ describe("createDiscordMessageHandler queue behavior", () => {
         expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
       });
 
-      expect(heartbeatTick).toBeTypeOf("function");
+      expect(capturedHeartbeat).toBe(true);
       const busyCallsBefore = setStatus.mock.calls.filter(
         ([patch]) => (patch as { busy?: boolean }).busy === true,
       ).length;
 
-      heartbeatTick?.();
+      heartbeatTick();
 
       const busyCallsAfter = setStatus.mock.calls.filter(
         ([patch]) => (patch as { busy?: boolean }).busy === true,
@@ -337,5 +341,40 @@ describe("createDiscordMessageHandler queue behavior", () => {
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
     });
     expect(processedMessageIds).toEqual(["m-1", "m-2"]);
+  });
+
+  it("recovers queue progress after a run failure without leaving busy state stuck", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    processDiscordMessageMock
+      .mockImplementationOnce(async () => {
+        await firstRun.promise;
+        throw new Error("simulated run failure");
+      })
+      .mockImplementationOnce(async () => undefined);
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const setStatus = vi.fn();
+    const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
+
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
+
+    firstRun.resolve();
+    await firstRun.promise.catch(() => undefined);
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ activeRuns: 0, busy: false }),
+      );
+    });
   });
 });

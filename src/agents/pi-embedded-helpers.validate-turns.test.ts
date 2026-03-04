@@ -484,4 +484,33 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
   });
+
+  it("is replay-safe across repeated validation passes", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-1", name: "test1", input: {} },
+          { type: "toolUse", id: "tool-2", name: "test2", input: {} },
+          { type: "text", text: "Done" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "tool-1",
+            content: [{ type: "text", text: "Result 1" }],
+          },
+        ],
+      },
+    ]);
+
+    const firstPass = validateAnthropicTurns(msgs);
+    const secondPass = validateAnthropicTurns(firstPass);
+
+    expect(secondPass).toEqual(firstPass);
+  });
 });

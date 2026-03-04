@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
+import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -27,8 +28,6 @@ type DiscordMessageHandlerParams = Omit<
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
 };
-
-const RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
@@ -59,81 +58,20 @@ export function createDiscordMessageHandler(
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
   const runQueue = new KeyedAsyncQueue();
-  let activeRuns = 0;
-  let runActivityHeartbeat: ReturnType<typeof setInterval> | null = null;
-  let lifecycleActive = !params.abortSignal?.aborted;
-
-  const publishRunStatus = () => {
-    if (!lifecycleActive) {
-      return;
-    }
-    params.setStatus?.({
-      activeRuns,
-      busy: activeRuns > 0,
-      lastRunActivityAt: Date.now(),
-    });
-  };
-
-  const clearRunActivityHeartbeat = () => {
-    if (!runActivityHeartbeat) {
-      return;
-    }
-    clearInterval(runActivityHeartbeat);
-    runActivityHeartbeat = null;
-  };
-
-  const ensureRunActivityHeartbeat = () => {
-    if (runActivityHeartbeat || activeRuns <= 0 || !lifecycleActive) {
-      return;
-    }
-    runActivityHeartbeat = setInterval(() => {
-      if (!lifecycleActive || activeRuns <= 0) {
-        clearRunActivityHeartbeat();
-        return;
-      }
-      publishRunStatus();
-    }, RUN_ACTIVITY_HEARTBEAT_MS);
-    runActivityHeartbeat.unref?.();
-  };
-
-  const deactivateStatusPublishing = () => {
-    lifecycleActive = false;
-    clearRunActivityHeartbeat();
-  };
-
-  const onAbort = () => {
-    deactivateStatusPublishing();
-  };
-
-  if (params.abortSignal?.aborted) {
-    onAbort();
-  } else {
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-  }
-
-  if (lifecycleActive) {
-    // Reset stale busy counters inherited from previous runtime snapshots.
-    params.setStatus?.({
-      activeRuns: 0,
-      busy: false,
-    });
-  }
+  const runState = createRunStateMachine({
+    setStatus: params.setStatus,
+    abortSignal: params.abortSignal,
+  });
 
   const enqueueDiscordRun = (ctx: DiscordMessagePreflightContext) => {
     const queueKey = resolveDiscordRunQueueKey(ctx);
     void runQueue
       .enqueue(queueKey, async () => {
-        activeRuns += 1;
-        publishRunStatus();
-        ensureRunActivityHeartbeat();
+        runState.onRunStart();
         try {
           await processDiscordMessage(ctx);
         } finally {
-          activeRuns = Math.max(0, activeRuns - 1);
-          if (activeRuns <= 0) {
-            clearRunActivityHeartbeat();
-          }
-          publishRunStatus();
+          runState.onRunEnd();
         }
       })
       .catch((err) => {
@@ -262,7 +200,7 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = deactivateStatusPublishing;
+  handler.deactivate = runState.deactivate;
 
   return handler;
 }
