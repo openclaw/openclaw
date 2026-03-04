@@ -12,6 +12,7 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -847,7 +848,32 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const parsedSessionKey = parseAgentSessionKey(sessionKey);
+      const sessionScopeHead = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean)[0];
+      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+      const isChannelAgnosticSessionScope = new Set([
+        "main",
+        "direct",
+        "dm",
+        "group",
+        "channel",
+        "cron",
+        "run",
+        "subagent",
+        "acp",
+        "thread",
+        "topic",
+      ]).has((sessionScopeHead ?? "").trim().toLowerCase());
+      // Only inherit prior external route metadata for channel-scoped sessions.
+      // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
+      // leak stale routes across surfaces.
+      const canInheritDeliverableRoute = Boolean(
+        sessionChannelHint &&
+        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+        !isChannelAgnosticSessionScope,
+      );
       const hasDeliverableRoute =
+        canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
