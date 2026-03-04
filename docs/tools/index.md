@@ -422,6 +422,7 @@ Core actions:
 - `role-add` / `role-remove`
 - `channel-info` / `channel-list`
 - `voice-status`
+- `self-profile` (Discord bot self-only nickname/avatar/status/activity updates)
 - `event-list` / `event-create`
 - `timeout` / `kick` / `ban`
 

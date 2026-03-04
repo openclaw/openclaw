@@ -704,6 +704,53 @@ describe("runMessageAction sandboxed media validation", () => {
     });
   });
 
+  it("forwards sandboxRoot in mediaLocalRoots for plugin avatar actions", async () => {
+    await withSandbox(async (sandboxDir) => {
+      const avatarPath = path.join(sandboxDir, "avatar.png");
+      await fs.writeFile(avatarPath, "png", "utf8");
+
+      const messageActionsModule = await import("../../channels/plugins/message-actions.js");
+      const dispatchSpy = vi
+        .spyOn(messageActionsModule, "dispatchChannelMessageAction")
+        .mockResolvedValue(jsonResult({ ok: true }));
+
+      let call:
+        | {
+            params?: Record<string, unknown>;
+            mediaLocalRoots?: readonly string[];
+          }
+        | undefined;
+      try {
+        await runMessageAction({
+          cfg: {
+            channels: {
+              discord: {
+                token: "d-token",
+              },
+            },
+          } as OpenClawConfig,
+          action: "self-profile",
+          params: {
+            channel: "discord",
+            avatar: "/workspace/avatar.png",
+          },
+          sandboxRoot: sandboxDir,
+        });
+        call = dispatchSpy.mock.calls.at(-1)?.[0] as
+          | {
+              params?: Record<string, unknown>;
+              mediaLocalRoots?: readonly string[];
+            }
+          | undefined;
+      } finally {
+        dispatchSpy.mockRestore();
+      }
+
+      expect(call?.params).toEqual(expect.objectContaining({ avatar: avatarPath }));
+      expect(call?.mediaLocalRoots).toEqual(expect.arrayContaining([sandboxDir]));
+    });
+  });
+
   it("rewrites MEDIA directives under sandbox", async () => {
     await withSandbox(async (sandboxDir) => {
       await expectSandboxMediaRewrite({

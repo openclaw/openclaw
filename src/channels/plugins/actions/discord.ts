@@ -98,6 +98,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("presence", false)) {
       actions.add("set-presence");
     }
+    if (isEnabled("selfProfile", false)) {
+      actions.add("self-profile");
+    }
     return Array.from(actions);
   },
   extractToolSend: ({ args }) => {

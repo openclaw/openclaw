@@ -203,6 +203,21 @@ describe("discord message actions", () => {
     expect(actions).toContain("emoji-upload");
     expect(actions).toContain("sticker-upload");
     expect(actions).toContain("channel-create");
+    expect(actions).not.toContain("self-profile");
+  });
+
+  it("lists self-profile action only when gate is enabled", () => {
+    const disabledCfg = { channels: { discord: { token: "d0" } } } as OpenClawConfig;
+    const enabledCfg = {
+      channels: { discord: { token: "d0", actions: { selfProfile: true } } },
+    } as OpenClawConfig;
+
+    expect(discordMessageActions.listActions?.({ cfg: disabledCfg }) ?? []).not.toContain(
+      "self-profile",
+    );
+    expect(discordMessageActions.listActions?.({ cfg: enabledCfg }) ?? []).toContain(
+      "self-profile",
+    );
   });
 
   it("respects disabled channel actions", async () => {
@@ -397,6 +412,29 @@ describe("handleDiscordMessageAction", () => {
         autoArchiveDuration: 1440,
       },
     },
+    {
+      name: "forwards self-profile update payload",
+      input: {
+        action: "self-profile" as const,
+        params: {
+          guildId: "guild-1",
+          userId: "bot-1",
+          nickname: "Bot",
+          statusMessage: "Working",
+          buffer: "Zm9v",
+          contentType: "image/png",
+        },
+      },
+      expected: {
+        action: "updateSelfProfile",
+        guildId: "guild-1",
+        userId: "bot-1",
+        nickname: "Bot",
+        statusMessage: "Working",
+        buffer: "Zm9v",
+        contentType: "image/png",
+      },
+    },
   ] as const;
 
   for (const testCase of forwardingCases) {
@@ -411,6 +449,81 @@ describe("handleDiscordMessageAction", () => {
       expect(call?.[1]).toEqual(expect.any(Object));
     });
   }
+
+  it("requires accountId for self-profile when multiple Discord accounts are enabled", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "self-profile",
+        params: {
+          guildId: "guild-1",
+          nickname: "Bot",
+        },
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                alpha: { token: "a" },
+                beta: { token: "b" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/accountId required/i);
+
+    expect(handleDiscordAction).not.toHaveBeenCalled();
+  });
+
+  it("requires accountId for self-profile when multiple accounts are enabled even if only one has token", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "self-profile",
+        params: {
+          guildId: "guild-1",
+          nickname: "Bot",
+        },
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                alpha: { token: "a" },
+                beta: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/accountId required/i);
+
+    expect(handleDiscordAction).not.toHaveBeenCalled();
+  });
+
+  it("defaults self-profile accountId to the sole enabled Discord account", async () => {
+    await handleDiscordMessageAction({
+      action: "self-profile",
+      params: {
+        guildId: "guild-1",
+        nickname: "Bot",
+      },
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              ops: { token: "tok" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const call = handleDiscordAction.mock.calls.at(-1);
+    expect(call?.[0]).toEqual(
+      expect.objectContaining({
+        action: "updateSelfProfile",
+        accountId: "ops",
+      }),
+    );
+  });
 
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
     await handleDiscordMessageAction({

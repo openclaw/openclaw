@@ -236,6 +236,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         voiceStatus: true,
         events: true,
         moderation: false,
+        presence: false,
+        selfProfile: false,
       },
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
@@ -320,6 +322,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
+- `channels.discord.actions.selfProfile` enables the Discord `self-profile` message action (strict bot self-only nickname/avatar/status/activity updates).
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).

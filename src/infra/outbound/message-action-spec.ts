@@ -55,6 +55,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     kick: "none",
     ban: "none",
     "set-presence": "none",
+    "self-profile": "none",
     "download-file": "none",
   };
 

@@ -278,12 +278,25 @@ type ResolvedActionContext = {
   channel: ChannelId;
   accountId?: string | null;
   dryRun: boolean;
+  mediaLocalRoots?: readonly string[];
   gateway?: MessageActionRunnerGateway;
   input: RunMessageActionParams;
   agentId?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+function resolvePluginMediaLocalRoots(params: {
+  mediaPolicy: ReturnType<typeof resolveAttachmentMediaPolicy>;
+  mediaLocalRoots?: readonly string[];
+}): readonly string[] | undefined {
+  const roots = [...(params.mediaLocalRoots ?? [])];
+  if (params.mediaPolicy.mode === "sandbox") {
+    roots.push(params.mediaPolicy.sandboxRoot.trim());
+  }
+  const normalized = [...new Set(roots.map((root) => root.trim()).filter(Boolean))];
+  return normalized.length > 0 ? normalized : undefined;
+}
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) {
     return undefined;
@@ -653,7 +666,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
-  const { cfg, params, channel, accountId, dryRun, gateway, input, abortSignal } = ctx;
+  const { cfg, params, channel, accountId, dryRun, mediaLocalRoots, gateway, input, abortSignal } =
+    ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
@@ -672,6 +686,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     action,
     cfg,
     params,
+    mediaLocalRoots,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     gateway,
@@ -732,6 +747,10 @@ export async function runMessageAction(
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, resolvedAgentId);
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    mediaLocalRoots,
+  });
+  const pluginMediaLocalRoots = resolvePluginMediaLocalRoots({
+    mediaPolicy,
     mediaLocalRoots,
   });
 
@@ -802,6 +821,7 @@ export async function runMessageAction(
     channel,
     accountId,
     dryRun,
+    mediaLocalRoots: pluginMediaLocalRoots,
     gateway,
     input,
     abortSignal: input.abortSignal,

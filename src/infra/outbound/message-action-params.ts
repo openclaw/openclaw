@@ -269,7 +269,12 @@ export async function normalizeSandboxMediaParams(params: {
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
-  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  const mediaKeys: Array<"media" | "path" | "filePath" | "avatar"> = [
+    "media",
+    "path",
+    "filePath",
+    "avatar",
+  ];
   for (const key of mediaKeys) {
     const raw = readStringParam(params.args, key, { trim: false });
     if (!raw) {

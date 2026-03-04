@@ -375,6 +375,34 @@ function buildPresenceSchema() {
   };
 }
 
+function buildDiscordSelfProfileSchema() {
+  return {
+    nickname: Type.Optional(
+      Type.String({
+        description: "Guild-specific bot nickname (self-only). Requires guildId.",
+      }),
+    ),
+    memberId: Type.Optional(
+      Type.String({
+        description:
+          "Optional self-check id. If provided, must match the bot account user id (self-only action).",
+      }),
+    ),
+    statusMessage: Type.Optional(
+      Type.String({
+        description:
+          "Custom status text for Discord self-profile action (maps to custom activity state).",
+      }),
+    ),
+    avatar: Type.Optional(
+      Type.String({
+        description:
+          "Avatar source URL or local path for Discord self-profile action (alias for media/path/filePath).",
+      }),
+    ),
+  };
+}
+
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
@@ -412,6 +440,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
     ...buildPresenceSchema(),
+    ...buildDiscordSelfProfileSchema(),
   };
 }
 

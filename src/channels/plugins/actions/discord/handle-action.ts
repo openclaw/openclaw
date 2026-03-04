@@ -6,6 +6,7 @@ import {
 } from "../../../../agents/tools/common.js";
 import { readDiscordParentIdParam } from "../../../../agents/tools/discord-actions-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
+import { listEnabledDiscordAccounts } from "../../../../discord/accounts.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 import { resolveReactionMessageId } from "../reaction-message-id.js";
@@ -274,6 +275,49 @@ export async function handleDiscordMessageAction(
         activityName: readStringParam(params, "activityName"),
         activityUrl: readStringParam(params, "activityUrl"),
         activityState: readStringParam(params, "activityState"),
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
+  if (action === "self-profile") {
+    const enabledAccounts = listEnabledDiscordAccounts(cfg);
+    let effectiveAccountId = accountId;
+    if (!effectiveAccountId) {
+      if (enabledAccounts.length > 1) {
+        throw new Error(
+          "accountId required for Discord self-profile updates when multiple Discord accounts are enabled.",
+        );
+      }
+      if (enabledAccounts.length === 1) {
+        effectiveAccountId = enabledAccounts[0]?.accountId;
+      }
+    }
+
+    return await handleDiscordAction(
+      {
+        action: "updateSelfProfile",
+        accountId: effectiveAccountId ?? undefined,
+        guildId: readStringParam(params, "guildId"),
+        userId: readStringParam(params, "userId"),
+        memberId: readStringParam(params, "memberId"),
+        target: readStringParam(params, "target"),
+        nickname: readStringParam(params, "nickname", { allowEmpty: true }),
+        avatar: readStringParam(params, "avatar", { trim: false }),
+        mediaUrl:
+          readStringParam(params, "media", { trim: false }) ??
+          readStringParam(params, "path", { trim: false }) ??
+          readStringParam(params, "filePath", { trim: false }),
+        buffer: readStringParam(params, "buffer", { trim: false }),
+        contentType: readStringParam(params, "contentType") ?? readStringParam(params, "mimeType"),
+        status: readStringParam(params, "status"),
+        statusMessage: readStringParam(params, "statusMessage", { allowEmpty: true }),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState", { allowEmpty: true }),
+        bestEffort: params.bestEffort === true,
       },
       cfg,
       actionOptions,
