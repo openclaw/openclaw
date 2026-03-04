@@ -10,6 +10,7 @@ export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   chat: true,
   wiki: true,
   drive: true,
+  sheets: true,
   perm: false,
   scopes: true,
 };

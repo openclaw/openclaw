@@ -71,7 +71,7 @@ async function getNode(client: Lark.Client, token: string) {
   }
 
   const node = res.data?.node;
-  return {
+  const nodeData = {
     node_token: node?.node_token,
     space_id: node?.space_id,
     obj_token: node?.obj_token,
@@ -82,6 +82,18 @@ async function getNode(client: Lark.Client, token: string) {
     creator: node?.creator,
     create_time: node?.node_create_time,
   };
+
+  if (nodeData.obj_type === "sheet" && nodeData.obj_token) {
+    return {
+      ...nodeData,
+      sheet_read_hint:
+        "Sheet content is not in this tool output. " +
+        "Use feishu_sheets_read_range and pass spreadsheet_token from obj_token. " +
+        "If the sheet has multiple tabs, use the correct sheet_id from the sheet URL or API.",
+    };
+  }
+
+  return nodeData;
 }
 
 async function createNode(
