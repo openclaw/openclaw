@@ -101,8 +101,10 @@ function withLoopbackBrowserAuth(
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const isLocal = !isAbsoluteHttp(url);
   // Human-facing hint for logs/diagnostics.
+  // NOTE: prefer non-disruptive guidance here — repeated gateway restarts can turn
+  // intermittent browser issues into restart loops.
   const operatorHint = isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    ? `Check whether browser control is enabled/running. If needed, restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
   // Model-facing suffix: explicitly tell the LLM NOT to retry.
   // Without this, models see "try again" and enter an infinite tool-call loop.
@@ -111,6 +113,14 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
+
+  // Avoid misleading reachability errors for local config issues.
+  if (msgLower.includes("browser control disabled")) {
+    return new Error(
+      `OpenClaw browser control is disabled. Enable it in config before using the browser tool. ${modelHint}`,
+    );
+  }
+
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||
