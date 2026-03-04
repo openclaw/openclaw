@@ -214,12 +214,22 @@ export function resolveOpenClawMetadata(
 export function resolveSkillInvocationPolicy(
   frontmatter: ParsedSkillFrontmatter,
 ): SkillInvocationPolicy {
+  const contextRaw = (frontmatter?.["context"] ?? frontmatter?.["execution-context"] ?? "")
+    .trim()
+    .toLowerCase();
+  const context: SkillInvocationPolicy["context"] =
+    contextRaw === "fork" ? "fork" : contextRaw === "inline" ? "inline" : undefined;
+
+  const agentType = (frontmatter?.["agent-type"] ?? frontmatter?.["agentType"] ?? "").trim();
+
   return {
     userInvocable: parseFrontmatterBool(getFrontmatterString(frontmatter, "user-invocable"), true),
     disableModelInvocation: parseFrontmatterBool(
       getFrontmatterString(frontmatter, "disable-model-invocation"),
       false,
     ),
+    context,
+    agentType: agentType || undefined,
   };
 }
 

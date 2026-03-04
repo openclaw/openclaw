@@ -238,6 +238,90 @@ export async function handleInlineActions(params: {
       }
     }
 
+    // Check if skill should be executed in fork context (subagent)
+    const shouldFork = skillInvocation.command.context === "fork";
+
+    if (shouldFork) {
+      // Spawn subagent to execute the skill
+      const skillEntries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+      const matchedEntry = skillEntries.find(
+        (entry) => entry.skill.name === skillInvocation.command.skillName,
+      );
+
+      let skillContent = "";
+      if (matchedEntry) {
+        try {
+          skillContent = fs.readFileSync(matchedEntry.skill.filePath, "utf-8");
+          const placeholderContext: PlaceholderContext = {
+            CWD: workspaceDir,
+            ARGS: skillInvocation.args ?? "",
+            SELECTION: ctx.ReplyToBody ?? "",
+          };
+          skillContent = applyPlaceholders(skillContent, placeholderContext);
+        } catch {
+          skillContent = "";
+        }
+      }
+
+      const taskPrompt = [
+        `Execute the "${skillInvocation.command.skillName}" skill.`,
+        skillContent ? `\n\nSkill instructions:\n\n${skillContent}` : null,
+        skillInvocation.args ? `\n\nUser input:\n${skillInvocation.args}` : null,
+      ]
+        .filter((entry): entry is string => Boolean(entry))
+        .join("\n\n");
+
+      const channel =
+        resolveGatewayMessageChannel(ctx.Surface) ??
+        resolveGatewayMessageChannel(ctx.Provider) ??
+        undefined;
+
+      const tools = createOpenClawTools({
+        agentSessionKey: sessionKey,
+        agentChannel: channel,
+        agentAccountId: (ctx as { AccountId?: string }).AccountId,
+        agentTo: ctx.OriginatingTo ?? ctx.To,
+        agentThreadId: ctx.MessageThreadId ?? undefined,
+        agentDir,
+        workspaceDir,
+        config: cfg,
+      });
+      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
+
+      const sessionsSpawnTool = authorizedTools.find((tool) => tool.name === "sessions_spawn");
+      if (!sessionsSpawnTool) {
+        typing.cleanup();
+        return {
+          kind: "reply",
+          reply: { text: `❌ Subagent execution not available (sessions_spawn tool missing)` },
+        };
+      }
+
+      const toolCallId = `fork_${generateSecureToken(8)}`;
+      try {
+        const spawnParams: Record<string, unknown> = {
+          task: taskPrompt,
+          label: `Skill: ${skillInvocation.command.skillName}`,
+        };
+        if (skillInvocation.command.agentType) {
+          spawnParams.agentId = skillInvocation.command.agentType;
+        }
+        await sessionsSpawnTool.execute(toolCallId, spawnParams);
+        typing.cleanup();
+        return {
+          kind: "reply",
+          reply: {
+            text: `🚀 Spawned subagent to execute "${skillInvocation.command.skillName}" skill. Results will be announced when complete.`,
+          },
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ Failed to spawn subagent: ${message}` } };
+      }
+    }
+
+    // Inline execution (default)
     // Load skill entries to access SKILL.md content for placeholder expansion
     const skillEntries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
     const matchedEntry = skillEntries.find(
