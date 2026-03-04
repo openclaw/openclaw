@@ -5,19 +5,27 @@ import type {
   DmPolicy,
   SecretInput,
   WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import { resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
+
+function normalizeString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
 function setFeishuDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy): ClawdbotConfig {
   const allowFrom =
@@ -169,20 +177,43 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+
+    const isAppIdConfigured = (value: unknown): boolean => {
+      const asString = normalizeString(value);
+      if (asString) {
+        return true;
+      }
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+      const rec = value as Record<string, unknown>;
+      const source = normalizeString(rec.source)?.toLowerCase();
+      const id = normalizeString(rec.id);
+      if (source === "env" && id) {
+        return Boolean(normalizeString(process.env[id]));
+      }
+      return hasConfiguredSecretInput(value);
+    };
+
     const topLevelConfigured = Boolean(
-      feishuCfg?.appId?.trim() && hasConfiguredSecretInput(feishuCfg?.appSecret),
+      isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
     );
+
     const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
       if (!account || typeof account !== "object") {
         return false;
       }
-      const accountAppId =
-        typeof account.appId === "string" ? account.appId.trim() : feishuCfg?.appId?.trim();
-      const accountSecretConfigured =
-        hasConfiguredSecretInput(account.appSecret) ||
-        hasConfiguredSecretInput(feishuCfg?.appSecret);
-      return Boolean(accountAppId && accountSecretConfigured);
+      const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
+      const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
+      const accountAppIdConfigured = hasOwnAppId
+        ? isAppIdConfigured((account as Record<string, unknown>).appId)
+        : isAppIdConfigured(feishuCfg?.appId);
+      const accountSecretConfigured = hasOwnAppSecret
+        ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
+        : hasConfiguredSecretInput(feishuCfg?.appSecret);
+      return Boolean(accountAppIdConfigured && accountSecretConfigured);
     });
+
     const configured = topLevelConfigured || accountConfigured;
     const resolvedCredentials = resolveFeishuCredentials(feishuCfg, {
       allowUnresolvedSecretRef: true,
@@ -224,7 +255,9 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       allowUnresolvedSecretRef: true,
     });
     const hasConfigSecret = hasConfiguredSecretInput(feishuCfg?.appSecret);
-    const hasConfigCreds = Boolean(feishuCfg?.appId?.trim() && hasConfigSecret);
+    const hasConfigCreds = Boolean(
+      typeof feishuCfg?.appId === "string" && feishuCfg.appId.trim() && hasConfigSecret,
+    );
     const canUseEnv = Boolean(
       !hasConfigCreds && process.env.FEISHU_APP_ID?.trim() && process.env.FEISHU_APP_SECRET?.trim(),
     );
@@ -265,7 +298,8 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       appSecretProbeValue = appSecretResult.resolvedValue;
       appId = await promptFeishuAppId({
         prompter,
-        initialValue: feishuCfg?.appId?.trim() || process.env.FEISHU_APP_ID?.trim(),
+        initialValue:
+          normalizeString(feishuCfg?.appId) ?? normalizeString(process.env.FEISHU_APP_ID),
       });
     }
 
