@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   applyCustomApiConfig,
@@ -78,13 +79,13 @@ function expectOpenAiCompatResult(params: {
 
 function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
-    return {};
+    return {} as OpenClawConfig;
   }
   return {
     models: {
       providers: {
         custom: {
-          api: "openai-completions",
+          api: "openai-completions" as const,
           baseUrl: "https://llm.example.com/v1",
           models: [
             {
@@ -100,7 +101,7 @@ function buildCustomProviderConfig(contextWindow?: number) {
         },
       },
     },
-  };
+  } as OpenClawConfig;
 }
 
 function applyCustomModelConfigWithContextWindow(contextWindow?: number) {

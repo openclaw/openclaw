@@ -199,11 +199,11 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     await expectSpawnUsesConfiguredModel({
       config: {
         session: { mainKey: "main", scope: "per-sender" },
-        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
+        agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.5" } } },
       },
       runId: "run-default-model",
       callId: "call-default-model",
-      expectedModel: "minimax/MiniMax-M2.1",
+      expectedModel: "minimax/MiniMax-M2.5",
     });
   });
 
@@ -220,7 +220,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       config: {
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
-          defaults: { subagents: { model: "minimax/MiniMax-M2.1" } },
+          defaults: { subagents: { model: "minimax/MiniMax-M2.5" } },
           list: [{ id: "research", subagents: { model: "opencode/claude" } }],
         },
       },
@@ -235,7 +235,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       config: {
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
-          defaults: { model: { primary: "minimax/MiniMax-M2.1" } },
+          defaults: { model: { primary: "minimax/MiniMax-M2.5" } },
           list: [{ id: "research", model: { primary: "opencode/claude" } }],
         },
       },

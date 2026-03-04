@@ -41,7 +41,7 @@ const SessionsSpawnToolSchema = Type.Object({
     Type.Array(
       Type.Object({
         name: Type.String(),
-        content: Type.String({ maxLength: 6_700_000 }),
+        content: Type.String(),
         encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
         mimeType: Type.Optional(Type.String()),
       }),
@@ -134,6 +134,7 @@ export function createSessionsSpawnTool(opts?: {
             cwd,
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
             thread,
+            sandbox,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
@@ -141,6 +142,7 @@ export function createSessionsSpawnTool(opts?: {
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
+            sandboxed: opts?.sandboxed,
           },
         );
         return jsonResult(result);
