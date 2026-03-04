@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 // Mock the reactions module before importing actions
 vi.mock("./reactions.js", () => ({
   addReactionFeishu: vi.fn().mockResolvedValue({ reactionId: "mock-reaction-id" }),
+  removeReactionFeishu: vi.fn().mockResolvedValue(undefined),
   listReactionsFeishu: vi.fn().mockResolvedValue([]),
 }));
 
@@ -20,7 +21,7 @@ vi.mock("./accounts.js", () => ({
 
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { feishuMessageActions } from "./actions.js";
-import { addReactionFeishu } from "./reactions.js";
+import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
 
 const mockCfg = {} as Parameters<NonNullable<typeof feishuMessageActions.listActions>>[0]["cfg"];
 
@@ -38,7 +39,7 @@ describe("feishuMessageActions", () => {
     });
   });
 
-  describe("handleAction - react", () => {
+  describe("handleAction - react (add)", () => {
     it("adds reaction with explicit messageId and emoji", async () => {
       const result = await feishuMessageActions.handleAction!({
         channel: "feishu" as never,
@@ -135,7 +136,41 @@ describe("feishuMessageActions", () => {
         expect.objectContaining({ accountId: "my-bot" }),
       );
     });
+  });
 
+  describe("handleAction - react (remove)", () => {
+    it("removes reaction with reactionId", async () => {
+      const result = await feishuMessageActions.handleAction!({
+        channel: "feishu" as never,
+        action: "react" as never,
+        cfg: mockCfg,
+        params: { messageId: "om_abc123", remove: true, reactionId: "rc_456" },
+      });
+
+      expect(removeReactionFeishu).toHaveBeenCalledWith({
+        cfg: mockCfg,
+        messageId: "om_abc123",
+        reactionId: "rc_456",
+        accountId: undefined,
+      });
+      expect(result.details).toEqual(
+        expect.objectContaining({ ok: true, removed: true, reactionId: "rc_456" }),
+      );
+    });
+
+    it("throws when remove=true but no reactionId", async () => {
+      await expect(
+        feishuMessageActions.handleAction!({
+          channel: "feishu" as never,
+          action: "react" as never,
+          cfg: mockCfg,
+          params: { messageId: "om_abc123", remove: true },
+        }),
+      ).rejects.toThrow("reactionId is required");
+    });
+  });
+
+  describe("handleAction - unsupported", () => {
     it("throws for unsupported action", async () => {
       await expect(
         feishuMessageActions.handleAction!({

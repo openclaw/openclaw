@@ -1,15 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
-import { jsonResult } from "openclaw/plugin-sdk";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { addReactionFeishu } from "./reactions.js";
-
-function readStringParam(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return String(value).trim() || undefined;
-}
+import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
 
 export const feishuMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -40,12 +32,33 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
+      const remove = typeof params.remove === "boolean" ? params.remove : false;
+
       const emoji =
         readStringParam(params, "emoji") ??
         readStringParam(params, "emojiName") ??
         readStringParam(params, "emojiType");
 
       const emojiType = normalizeFeishuEmoji(emoji ?? "THUMBSUP");
+
+      if (remove) {
+        // To remove a reaction, we need the reactionId. The Feishu API requires
+        // reactionId for deletion, but the caller may only have messageId + emoji.
+        // For now, require reactionId explicitly for removal.
+        const reactionId = readStringParam(params, "reactionId");
+        if (!reactionId) {
+          throw new Error(
+            "reactionId is required to remove a reaction. Use message(action='reactions') to list reaction IDs first.",
+          );
+        }
+        await removeReactionFeishu({
+          cfg,
+          messageId,
+          reactionId,
+          accountId: resolvedAccountId,
+        });
+        return jsonResult({ ok: true, action: "react", removed: true, messageId, reactionId });
+      }
 
       const result = await addReactionFeishu({
         cfg,
