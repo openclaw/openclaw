@@ -1,3 +1,3 @@
-import type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/compat";
+import type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/googlechat";
 
 export type { GoogleChatAccountConfig, GoogleChatConfig };
