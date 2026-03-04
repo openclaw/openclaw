@@ -28,7 +28,7 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
     const id = trimmed.slice(1).trim();
     return id ? `channel:${id}` : undefined;
   }
-  return `channel:${trimmed}`;
+  return trimmed;
 }
 
 export function looksLikeMattermostTargetId(raw: string): boolean {
