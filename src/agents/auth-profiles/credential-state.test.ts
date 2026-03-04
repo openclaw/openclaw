@@ -62,6 +62,31 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
+  it("marks api_key with apiKey (legacy field) as eligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        apiKey: "sk-legacy-123",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
+  it("prefers apiKey over key when both are present", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        apiKey: "sk-from-apiKey",
+        key: "sk-from-key",
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
   it("marks token with invalid expires as ineligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
