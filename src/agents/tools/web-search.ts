@@ -1543,6 +1543,13 @@ export function createWebSearchTool(options?: {
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");
+      if (domainFilter && domainFilter.length > 0 && provider !== "perplexity") {
+        return jsonResult({
+          error: "unsupported_domain_filter",
+          message: `domain_filter is not supported by the ${provider} provider. Only Perplexity supports domain filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
 
       if (domainFilter && domainFilter.length > 0) {
         const hasDenylist = domainFilter.some((d) => d.startsWith("-"));
