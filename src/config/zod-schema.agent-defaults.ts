@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -17,6 +18,9 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    pdfModel: AgentModelSchema.optional(),
+    pdfMaxBytesMb: z.number().positive().optional(),
+    pdfMaxPages: z.number().int().positive().optional(),
     models: z
       .record(
         z.string(),
@@ -36,6 +40,9 @@ export const AgentDefaultsSchema = z
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapPromptTruncationWarning: z
+      .union([z.literal("off"), z.literal("once"), z.literal("always")])
+      .optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
@@ -84,14 +91,34 @@ export const AgentDefaultsSchema = z
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+        identifierPolicy: z
+          .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
+          .optional(),
+        identifierInstructions: z.string().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
+            forceFlushTranscriptBytes: z
+              .union([
+                z.number().int().nonnegative(),
+                z
+                  .string()
+                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+              ])
+              .optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
           .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    embeddedPi: z
+      .object({
+        projectSettingsPolicy: z
+          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
       })
       .strict()
@@ -104,6 +131,7 @@ export const AgentDefaultsSchema = z
         z.literal("medium"),
         z.literal("high"),
         z.literal("xhigh"),
+        z.literal("adaptive"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),

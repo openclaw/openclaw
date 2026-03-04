@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   evaluateMissingDeviceIdentity,
+  isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -185,5 +186,56 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+  });
+
+  test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
+    const cases: Array<{
+      role: "operator" | "node";
+      authMode: string;
+      authOk: boolean;
+      authMethod: string | undefined;
+      expected: boolean;
+    }> = [
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: true,
+      },
+      {
+        role: "node",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "token",
+        authOk: true,
+        authMethod: "token",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: false,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+    ];
+
+    for (const tc of cases) {
+      expect(
+        isTrustedProxyControlUiOperatorAuth({
+          isControlUi: true,
+          role: tc.role,
+          authMode: tc.authMode,
+          authOk: tc.authOk,
+          authMethod: tc.authMethod,
+        }),
+      ).toBe(tc.expected);
+    }
   });
 });

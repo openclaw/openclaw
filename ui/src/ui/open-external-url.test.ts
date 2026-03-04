@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { resolveSafeExternalUrl } from "./open-external-url.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("resolveSafeExternalUrl", () => {
   const baseHref = "https://openclaw.ai/chat";
@@ -38,6 +43,30 @@ describe("resolveSafeExternalUrl", () => {
     ).toBeNull();
   });
 
+  it("rejects SVG data image URLs", () => {
+    expect(
+      resolveSafeExternalUrl(
+        "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
+        baseHref,
+        {
+          allowDataImage: true,
+        },
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects base64-encoded SVG data image URLs", () => {
+    expect(
+      resolveSafeExternalUrl(
+        "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIC8+",
+        baseHref,
+        {
+          allowDataImage: true,
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("rejects data image URLs unless explicitly enabled", () => {
     expect(resolveSafeExternalUrl("data:image/png;base64,iVBORw0KGgo=", baseHref)).toBeNull();
   });
@@ -52,5 +81,28 @@ describe("resolveSafeExternalUrl", () => {
 
   it("rejects empty values", () => {
     expect(resolveSafeExternalUrl("   ", baseHref)).toBeNull();
+  });
+});
+
+describe("openExternalUrlSafe", () => {
+  it("nulls opener when window.open returns a proxy-like object", () => {
+    const openedLikeProxy = {
+      opener: { postMessage: () => void 0 },
+    } as unknown as WindowProxy;
+    const openMock = vi.fn(() => openedLikeProxy);
+    vi.stubGlobal("window", {
+      location: { href: "https://openclaw.ai/chat" },
+      open: openMock,
+    } as unknown as Window & typeof globalThis);
+
+    const opened = openExternalUrlSafe("https://example.com/safe.png");
+
+    expect(openMock).toHaveBeenCalledWith(
+      "https://example.com/safe.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(opened).toBe(openedLikeProxy);
+    expect(openedLikeProxy.opener).toBeNull();
   });
 });
