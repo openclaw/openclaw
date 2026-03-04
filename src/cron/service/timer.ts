@@ -283,8 +283,11 @@ export async function onTimer(state: CronServiceState) {
           }
         }
 
-        // For all jobs in this batch that have nextRunAtMs computed,
-        // unify them to the earliest one to prevent anchorMs drift (#11452).
+        // For jobs in this batch that share the same "every" interval,
+        // unify their nextRunAtMs to prevent anchorMs drift (#11452).
+        // Only "every"-kind jobs with the same everyMs are unified;
+        // "cron" and "at" jobs keep their individually computed nextRunAtMs
+        // to avoid cross-contamination between unrelated schedules.
         const batchJobIds = new Set(results.map((r) => r.jobId));
         const batchJobs =
           state.store?.jobs.filter(
@@ -295,9 +298,24 @@ export async function onTimer(state: CronServiceState) {
           ) ?? [];
 
         if (batchJobs.length > 1) {
-          const earliestNextRun = Math.min(...batchJobs.map((j) => j.state.nextRunAtMs!));
+          const everyGroups = new Map<number, typeof batchJobs>();
           for (const job of batchJobs) {
-            job.state.nextRunAtMs = earliestNextRun;
+            if (job.schedule.kind === "every") {
+              const key = job.schedule.everyMs;
+              const group = everyGroups.get(key) ?? [];
+              group.push(job);
+              everyGroups.set(key, group);
+            }
+            // "cron" and "at" jobs are not unified — they keep their
+            // individually computed nextRunAtMs.
+          }
+          for (const group of everyGroups.values()) {
+            if (group.length > 1) {
+              const earliestNextRun = Math.min(...group.map((j) => j.state.nextRunAtMs!));
+              for (const job of group) {
+                job.state.nextRunAtMs = earliestNextRun;
+              }
+            }
           }
         }
 
