@@ -1398,7 +1398,8 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         // Check if any per-group allowFrom entries exist — runtime uses
         // groupConfig?.allowFrom for sender filtering, so account-level
         // groupAllowFrom is not required when per-group allowFrom is set.
-        const groups = asObjectRecord(account.groups);
+        // Fall back to parent channel groups for sub-accounts that inherit config.
+        const groups = asObjectRecord(account.groups) ?? asObjectRecord(parent?.groups);
         const hasPerGroupAllowFrom =
           groups != null &&
           Object.values(groups).some((g) => {
