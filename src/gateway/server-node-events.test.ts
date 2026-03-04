@@ -24,6 +24,8 @@ const buildSessionLookup = (
   legacyKey: undefined,
 });
 
+const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
@@ -31,7 +33,8 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: vi.fn(),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand: vi.fn(),
+  agentCommand: ingressAgentCommandMock,
+  agentCommandFromIngress: ingressAgentCommandMock,
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
