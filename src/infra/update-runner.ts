@@ -631,7 +631,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
           cwd: gitRoot,
           timeoutMs,
-        });
+        }).catch(() => ({ stdout: "", stderr: "rebase --abort failed", code: -1 }));
         steps.push({
           name: "git rebase --abort",
           command: "git rebase --abort",
