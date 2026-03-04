@@ -168,7 +168,8 @@ async function promptWebToolsConfig(
   const existingFetch = nextConfig.tools?.web?.fetch;
   const existingProvider = existingSearch?.provider ?? "perplexity";
 
-  const { SEARCH_PROVIDER_OPTIONS } = await import("./onboard-search.js");
+  const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey } = await import("./onboard-search.js");
+  type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
 
   const hasKeyForProvider = (provider: string): boolean => {
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
@@ -176,20 +177,7 @@ async function promptWebToolsConfig(
       return false;
     }
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
-    switch (provider) {
-      case "brave":
-        return Boolean(existingSearch?.apiKey) || envAvailable;
-      case "perplexity":
-        return Boolean(existingSearch?.perplexity?.apiKey) || envAvailable;
-      case "gemini":
-        return Boolean(existingSearch?.gemini?.apiKey) || envAvailable;
-      case "grok":
-        return Boolean(existingSearch?.grok?.apiKey) || envAvailable;
-      case "kimi":
-        return Boolean(existingSearch?.kimi?.apiKey) || envAvailable;
-      default:
-        return false;
-    }
+    return Boolean(resolveExistingKey(nextConfig, provider as SP)) || envAvailable;
   };
 
   note(
@@ -236,22 +224,7 @@ async function promptWebToolsConfig(
     nextSearch = { ...nextSearch, provider: providerChoice };
 
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
-    const existingKey = (() => {
-      switch (providerChoice) {
-        case "brave":
-          return existingSearch?.apiKey;
-        case "perplexity":
-          return existingSearch?.perplexity?.apiKey;
-        case "gemini":
-          return existingSearch?.gemini?.apiKey;
-        case "grok":
-          return existingSearch?.grok?.apiKey;
-        case "kimi":
-          return existingSearch?.kimi?.apiKey;
-        default:
-          return undefined;
-      }
-    })();
+    const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
     const hasKey = Boolean(existingKey);
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
     const envVarNames = entry.envKeys.join(" / ");
@@ -299,6 +272,7 @@ async function promptWebToolsConfig(
           break;
       }
     } else if (!envAvailable) {
+      nextSearch = { ...nextSearch, enabled: false };
       note(
         [
           "No key stored yet, so web_search will stay unavailable.",

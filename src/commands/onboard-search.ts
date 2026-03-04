@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -60,7 +60,10 @@ function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
 }
 
-function resolveExistingKey(config: OpenClawConfig, provider: SearchProvider): string | undefined {
+export function resolveExistingKey(
+  config: OpenClawConfig,
+  provider: SearchProvider,
+): string | undefined {
   const search = config.tools?.web?.search;
   switch (provider) {
     case "brave":
@@ -226,5 +229,18 @@ export async function setupSearch(
     "Web search",
   );
 
-  return applyProviderOnly(config, choice);
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: {
+        ...config.tools?.web,
+        search: {
+          ...config.tools?.web?.search,
+          provider: choice,
+          enabled: false,
+        },
+      },
+    },
+  };
 }
