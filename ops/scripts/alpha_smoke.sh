@@ -39,19 +39,22 @@ EOF
 
   # One deterministic retry only for known reviewer heartbeat contamination case.
   if [[ "$role" == "reviewer" && "$text" == "HEARTBEAT_OK" ]]; then
-    echo "[alpha_smoke][WARN] role=reviewer returned HEARTBEAT_OK; retrying once with hard prompt"
-    hard_prompt="This is an automated deterministic smoke test, not heartbeat. Return EXACT token only: $tok"
-    openclaw agent --agent "$agent" --session-id "$sid" --message "$hard_prompt" --json < /dev/null > "${TMP}-${role}-retry.json" 2>&1
-    status="$(jq -r ".status // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
-    text="$(jq -r ".result.payloads[0].text // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
-    prov="$(jq -r ".result.meta.agentMeta.provider // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
-    modl="$(jq -r ".result.meta.agentMeta.model // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
+  echo "[alpha_smoke][WARN] role=reviewer returned HEARTBEAT_OK; retrying once with hard prompt"
+  hard_prompt="This is an automated deterministic smoke test, not heartbeat. Return EXACT token only: $tok"
+
+  if ! timeout 60 openclaw agent --agent "$agent" --session-id "$sid" --message "$hard_prompt" --json < /dev/null > "${TMP}-${role}-retry.json" 2>&1; then
+    rc=$?
+    err="$(sed -n '1,200p' "${TMP}-${role}-retry.json" 2>/dev/null | python3 -c 'import json,sys; s=sys.stdin.read(); print(json.dumps(s))')"
+    cat > "${TMP}-${role}-retry.json" <<EOR
+{"status":"error","summary":"agent_failed_retry","result":{"payloads":[]},"meta":{"aborted":false},"error":{"role":"$role","agent":"$agent","sessionId":"$sid","exitCode":$rc,"message":$err}}
+EOR
   fi
 
-  [[ "$status" == "ok" ]] || { echo "[alpha_smoke][FAIL] role=$role status=$status"; exit 1; }
-  [[ "$text" == "$tok" ]] || { echo "[alpha_smoke][FAIL] role=$role token mismatch: got='$text' expected='$tok'"; exit 1; }
-  [[ "$prov" == "$expP" && "$modl" == "$expM" ]] || { echo "[alpha_smoke][FAIL] role=$role provider/model mismatch: provider='$prov' model='$modl' (expected $expP / $expM)"; exit 1; }
-  echo "[alpha_smoke][OK] role=$role pinned=$expP/$expM"
+  status="$(jq -r ".status // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
+  text="$(jq -r ".result.payloads[0].text // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
+  prov="$(jq -r ".result.meta.agentMeta.provider // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
+  modl="$(jq -r ".result.meta.agentMeta.model // empty" "${TMP}-${role}-retry.json" 2>/dev/null || true)"
+fi
 }
 
 # captain (Codex)

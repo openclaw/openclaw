@@ -1,0 +1,9 @@
+{
+  "task_id": "task-002",
+  "mission": "mission-003",
+  "title": "Autonomous pipeline verification",
+  "owner": "strike-team-alpha",
+  "goal": "verify daemon task execution",
+  "acceptance_criteria": ["alpha_smoke PASS", "gate_archive PASS", "ledger receipt written"],
+  "status": "complete"
+}

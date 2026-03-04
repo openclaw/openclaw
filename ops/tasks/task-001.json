@@ -1,0 +1,10 @@
+{
+  "task_id": "task-001",
+  "mission": "mission-003",
+  "title": "Verify alpha_smoke retry hardening",
+  "owner": "strike-team-alpha",
+  "target_file": "ops/scripts/alpha_smoke.sh",
+  "goal": "confirm retry path uses timeout and JSON wrapper",
+  "acceptance_criteria": ["alpha_smoke PASS", "gate_archive PASS", "ledger receipt written"],
+  "status": "complete"
+}

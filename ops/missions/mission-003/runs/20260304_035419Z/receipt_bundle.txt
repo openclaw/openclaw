@@ -1,0 +1,176 @@
+== time ==
+Wed Mar  4 03:54:19 AM UTC 2026
+Wed Mar  4 03:54:19 AM UTC 2026
+== git ==
+main
+a801f62176d6292250221348130b817b2e996228
+== status ==
+?? ops/missions/mission-003/
+== last 10 commits ==
+a801f6217 chore(gitignore): ignore local gate ledger receipts
+2d6e9aa1f docs(mission-002): add SSOT spec/state/handover
+6908d86ea fix(alpha_smoke): always emit JSON on agent failure; timeout + soft reset
+539a10188 docs(runbook): link Mission 002 Anthropic hardening issue
+f8e2fbbfc ops(ledger): gate PASS receipt 2026-03-03T17:20Z (alpha run 172131-912168)
+d76c39d5d ops(alpha): avoid false-positive ERR_PATTERNS match on bare 401
+eb59f391e ops(gate): auto-retry alpha with codex reviewer when Anthropic unavailable
+f782c3405 ops(ledger): gate PASS receipt 2026-03-03T16:33Z (alpha run 163440-886639)
+d2534defd Merge pull request #3 from THESPRYGUY/feat/gate-auto-ledger
+59f981487 chore: ignore python build artifacts (*.egg-info)
+== remote ==
+origin	https://github.com/THESPRYGUY/openclaw-CyborgClaw.git (fetch)
+origin	https://github.com/THESPRYGUY/openclaw-CyborgClaw.git (push)
+upstream	https://github.com/openclaw/openclaw.git (fetch)
+upstream	https://github.com/openclaw/openclaw.git (push)
+== alpha smoke ==
+[alpha_smoke] run_id=035419-958899 tmp=/tmp/cc-alpha-035419-958899 reviewer_agent=president-a
+[alpha_smoke][OK] role=captain pinned=openai-codex/gpt-5.3-codex
+[alpha_smoke][OK] role=implementer pinned=openai-codex/gpt-5.3-codex
+[alpha_smoke][OK] role=reviewer pinned=anthropic/claude-sonnet-4-6
+[alpha_smoke][OK] role=sre pinned=openai-codex/gpt-5.3-codex
+[alpha_smoke][OK] role=docs pinned=google/gemini-2.5-pro
+[alpha_smoke][PASS] 5/5 roles ok; provider/model pinned per role; no error patterns detected.
+== gate archive ==
+== health ==
+== pwd ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "/home/spryguy\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== strike_echo ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "[strike_echo] run_id=035514-959216\n[strike_echo] phase 1: resetting sessions...\n[strike_echo] phase 2: starting burst...\n[strike_echo] burst complete. verifying...\n[strike_echo][PASS] 10/10 echoes returned; provider/model pinned to openai-codex/gpt-5.3-codex; no error patterns detected.\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== assert pinned codex ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "PIN_OK\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== alpha_smoke ==
+== alpha_smoke ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "[alpha_smoke] run_id=035626-959909 tmp=/tmp/cc-alpha-035626-959909 reviewer_agent=president-a\n[alpha_smoke][OK] role=captain pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=implementer pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=reviewer pinned=anthropic/claude-sonnet-4-6\n[alpha_smoke][OK] role=sre pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=docs pinned=google/gemini-2.5-pro\n[alpha_smoke][PASS] 5/5 roles ok; provider/model pinned per role; no error patterns detected.\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+WROTE_JSON ops/ledger/gate_20260304_035511Z_035626-959909.json bytes 2404
+[gate_archive][OK] wrote:
+-rw-rw-r-- 1 spryguy spryguy 2404 Mar  4 03:57 ops/ledger/gate_20260304_035511Z_035626-959909.json
+-rw-rw-r-- 1 spryguy spryguy  317 Mar  4 03:57 ops/ledger/gate_20260304_035511Z_035626-959909.md
+== ledger tail ==
+total 84
+-rw-rw-r--  1 spryguy spryguy  317 Mar  4 03:57 gate_20260304_035511Z_035626-959909.md
+drwxrwxr-x  2 spryguy spryguy 4096 Mar  4 03:57 .
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  4 03:57 gate_20260304_035511Z_035626-959909.json
+-rw-rw-r--  1 spryguy spryguy  317 Mar  4 02:51 gate_20260304_024846Z_025005-955749.md
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  4 02:51 gate_20260304_024846Z_025005-955749.json
+-rw-rw-r--  1 spryguy spryguy  317 Mar  3 22:53 gate_20260303_225131Z_225239-943169.md
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  3 22:53 gate_20260303_225131Z_225239-943169.json
+drwxrwxr-x 10 spryguy spryguy 4096 Mar  3 22:32 ..
+-rw-rw-r--  1 spryguy spryguy  317 Mar  3 22:10 gate_20260303_220838Z_220957-940374.md
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  3 22:10 gate_20260303_220838Z_220957-940374.json
+-rw-rw-r--  1 spryguy spryguy  317 Mar  3 21:50 gate_20260303_214651Z_214855-938507.md
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  3 21:50 gate_20260303_214651Z_214855-938507.json
+-rw-rw-r--  1 spryguy spryguy  317 Mar  3 21:09 gate_20260303_210701Z_210829-935031.md
+-rw-rw-r--  1 spryguy spryguy 2404 Mar  3 21:09 gate_20260303_210701Z_210829-935031.json
+-rw-rw-r--  1 spryguy spryguy 2405 Mar  3 17:23 gate_20260303_172012Z_172131-912168.json
+-rw-rw-r--  1 spryguy spryguy  319 Mar  3 17:23 gate_20260303_172012Z_172131-912168.md
+-rw-rw-r--  1 spryguy spryguy 2400 Mar  3 16:38 gate_20260303_163329Z_163440-886639.json
+-rw-rw-r--  1 spryguy spryguy  319 Mar  3 16:38 gate_20260303_163329Z_163440-886639.md
+-rw-rw-r--  1 spryguy spryguy 2417 Mar  3 16:25 gate_20260303_155806Z_155845-880794.json
+== sandbox explain main ==
+Effective sandbox:
+  agentId: main
+  sessionKey: agent:main:main
+  mainSessionKey: agent:main:main
+  runtime: direct
+  mode: off scope: agent perSession: false
+  workspaceAccess: none workspaceRoot: /home/spryguy/.openclaw/sandboxes
+
+Sandbox tool policy:
+  allow (default): exec, process, read, write, edit, apply_patch, image, sessions_list, sessions_history, sessions_send, sessions_spawn, subagents, session_status
+  deny  (default): browser, canvas, nodes, cron, gateway, telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage
+
+Elevated:
+  enabled: true
+  channel: webchat
+  allowedByConfig: true
+
+Fix-it:
+  - tools.sandbox.tools.allow
+  - tools.sandbox.tools.deny
+  - agents.list[].tools.sandbox.tools.allow
+  - agents.list[].tools.sandbox.tools.deny
+  - tools.elevated.enabled
+  - tools.elevated.allowFrom.webchat
+
+Docs: https://docs.openclaw.ai/sandbox
+
+== sandbox explain president-a ==
+Effective sandbox:
+  agentId: president-a
+  sessionKey: agent:president-a:main
+  mainSessionKey: agent:president-a:main
+  runtime: direct
+  mode: off scope: agent perSession: false
+  workspaceAccess: none workspaceRoot: /home/spryguy/.openclaw/sandboxes
+
+Sandbox tool policy:
+  allow (default): exec, process, read, write, edit, apply_patch, image, sessions_list, sessions_history, sessions_send, sessions_spawn, subagents, session_status
+  deny  (default): browser, canvas, nodes, cron, gateway, telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage
+
+Elevated:
+  enabled: true
+  channel: webchat
+  allowedByConfig: true
+
+Fix-it:
+  - tools.sandbox.tools.allow
+  - tools.sandbox.tools.deny
+  - agents.list[].tools.sandbox.tools.allow
+  - agents.list[].tools.sandbox.tools.deny
+  - tools.elevated.enabled
+  - tools.elevated.allowFrom.webchat
+
+Docs: https://docs.openclaw.ai/sandbox
+
