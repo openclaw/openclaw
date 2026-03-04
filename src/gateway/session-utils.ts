@@ -770,10 +770,16 @@ export function resolveSessionModelRef(
   // First check explicit per-session override (set at spawn/model-patch time).
   // This takes highest priority as it's the most recent user intent.
   const storedModelOverride = entry?.modelOverride?.trim();
+  const explicitProviderOverride = entry?.providerOverride?.trim();
   let provider = resolved.provider;
   let model = resolved.model;
   if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    // If provider override is explicitly set, preserve it to avoid incorrectly
+    // splitting wrapper provider model names (e.g. "openrouter/anthropic/claude-haiku-4.5").
+    if (explicitProviderOverride) {
+      return { provider: explicitProviderOverride, model: storedModelOverride };
+    }
+    const overrideProvider = provider || DEFAULT_PROVIDER;
     const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
     if (parsedOverride) {
       provider = parsedOverride.provider;
