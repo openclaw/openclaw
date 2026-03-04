@@ -415,6 +415,14 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
         changed = true;
       }
     }
+    // Also recompute if nextRunAtMs is in the past (expired).
+    // This handles the case where gateway restarts after a scheduled time has passed,
+    // and the job was never executed (issue #34432).
+    if (isFiniteTimestamp(job.state.nextRunAtMs) && job.state.nextRunAtMs < now) {
+      if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        changed = true;
+      }
+    }
     return changed;
   });
 }
