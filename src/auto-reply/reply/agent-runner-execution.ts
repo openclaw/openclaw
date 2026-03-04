@@ -13,8 +13,8 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
+import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -211,7 +211,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
-        run: (provider, model) => {
+        run: async (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -226,13 +226,15 @@ export async function runAgentTurnWithFallback(params: {
           let cliProvider = isCliProvider(provider, params.followupRun.run.config)
             ? provider
             : undefined;
+          let isCodexAutoFallback = false;
           if (!cliProvider && codexCliBackend) {
             const modelApi = resolveModelApi(provider, model);
             if (modelApi === "openai-codex-responses") {
-              defaultRuntime.error(
+              defaultRuntime.log(
                 "Codex model detected, routing through CLI backend for tool support",
               );
               cliProvider = codexCliBackend.id;
+              isCodexAutoFallback = true;
             }
           }
 
@@ -248,61 +250,61 @@ export async function runAgentTurnWithFallback(params: {
               },
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), cliProvider);
-            return (async () => {
-              let lifecycleTerminalEmitted = false;
-              try {
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
-                  prompt: params.commandBody,
-                  provider: cliProvider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId,
-                  bootstrapPromptWarningSignaturesSeen,
-                  bootstrapPromptWarningSignature:
-                    bootstrapPromptWarningSignaturesSeen[
-                      bootstrapPromptWarningSignaturesSeen.length - 1
-                    ],
-                  images: params.opts?.images,
-                });
-                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                  result.meta?.systemPromptReport,
-                );
+            let lifecycleTerminalEmitted = false;
+            try {
+              const result = await runCliAgent({
+                sessionId: params.followupRun.run.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: params.followupRun.run.agentId,
+                sessionFile: params.followupRun.run.sessionFile,
+                workspaceDir: params.followupRun.run.workspaceDir,
+                config: params.followupRun.run.config,
+                prompt: params.commandBody,
+                provider: cliProvider,
+                model,
+                thinkLevel: params.followupRun.run.thinkLevel,
+                timeoutMs: params.followupRun.run.timeoutMs,
+                runId,
+                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                ownerNumbers: params.followupRun.run.ownerNumbers,
+                cliSessionId,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature:
+                  bootstrapPromptWarningSignaturesSeen[
+                    bootstrapPromptWarningSignaturesSeen.length - 1
+                  ],
+                images: params.opts?.images,
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
 
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = result.payloads?.[0]?.text?.trim();
-                if (cliText) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "assistant",
-                    data: { text: cliText },
-                  });
-                }
-
+              // CLI backends don't emit streaming assistant events, so we need to
+              // emit one with the final text so server-chat can populate its buffer
+              // and send the response to TUI/WebSocket clients.
+              const cliText = result.payloads?.[0]?.text?.trim();
+              if (cliText) {
                 emitAgentEvent({
                   runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
+                  stream: "assistant",
+                  data: { text: cliText },
                 });
-                lifecycleTerminalEmitted = true;
+              }
 
-                return result;
-              } catch (err) {
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: {
+                  phase: "end",
+                  startedAt,
+                  endedAt: Date.now(),
+                },
+              });
+              lifecycleTerminalEmitted = true;
+
+              return result;
+            } catch (err) {
+              if (!lifecycleTerminalEmitted) {
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -314,24 +316,33 @@ export async function runAgentTurnWithFallback(params: {
                   },
                 });
                 lifecycleTerminalEmitted = true;
-                throw err;
-              } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
               }
-            })();
+              // When the codex CLI backend was auto-selected (not explicitly configured
+              // by the user) and the CLI binary is unavailable or fails to launch,
+              // fall through to the embedded runner instead of surfacing an error.
+              if (isCodexAutoFallback) {
+                defaultRuntime.log(
+                  `Codex CLI backend unavailable, falling back to embedded runner: ${String(err)}`,
+                );
+              } else {
+                throw err;
+              }
+            } finally {
+              // Defensive backstop: never let a CLI run complete without a terminal
+              // lifecycle event, otherwise downstream consumers can hang.
+              if (!lifecycleTerminalEmitted) {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: "CLI run completed without lifecycle terminal event",
+                  },
+                });
+              }
+            }
           }
           const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
             run: params.followupRun.run,
