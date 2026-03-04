@@ -381,6 +381,63 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
+  it("persists in-flight markers during run and clears them on completion", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inflight-marker-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    await saveSessionStore(storePath, { [sessionKey]: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      const duringRun = loadSessionStore(storePath, { skipCache: true });
+      expect(duringRun[sessionKey]?.inFlightRunStartedAt).toEqual(expect.any(Number));
+      expect(duringRun[sessionKey]?.inFlightRunSummary).toBe("hello");
+      expect(duringRun[sessionKey]?.inFlightRunSessionId).toBe("session");
+      return {
+        payloads: [{ text: "done" }],
+        meta: {},
+      };
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const afterRun = loadSessionStore(storePath, { skipCache: true });
+    expect(afterRun[sessionKey]?.inFlightRunStartedAt).toBeUndefined();
+    expect(afterRun[sessionKey]?.inFlightRunSummary).toBeUndefined();
+    expect(afterRun[sessionKey]?.inFlightRunSessionId).toBeUndefined();
+  });
+
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
     const storePath = path.join(tmp, "sessions.json");

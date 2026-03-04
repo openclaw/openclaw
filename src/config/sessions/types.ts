@@ -85,6 +85,13 @@ export type SessionEntry = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
+   * Active run marker persisted at turn start and cleared on completion.
+   * If this remains set after process startup, the previous run was interrupted.
+   */
+  inFlightRunStartedAt?: number;
+  inFlightRunSummary?: string;
+  inFlightRunSessionId?: string;
+  /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
    * queued pre-stop backlog.

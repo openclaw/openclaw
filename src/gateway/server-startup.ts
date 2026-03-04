@@ -24,6 +24,10 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
+  scheduleInterruptedRunsWake,
+  shouldWakeInterruptedRuns,
+} from "./server-interrupted-runs.js";
+import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
@@ -185,6 +189,11 @@ export async function startGatewaySidecars(params: {
     setTimeout(() => {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
+  }
+  if (shouldWakeInterruptedRuns()) {
+    setTimeout(() => {
+      void scheduleInterruptedRunsWake();
+    }, 1200);
   }
 
   return { browserControl, pluginServices };

@@ -58,6 +58,18 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const IN_FLIGHT_SUMMARY_MAX_CHARS = 220;
+
+function summarizeInFlightRunText(text: string | undefined): string | undefined {
+  const normalized = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.length <= IN_FLIGHT_SUMMARY_MAX_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, IN_FLIGHT_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -184,6 +196,73 @@ export async function runReplyAgent(params: {
         storePath,
         sessionKey,
         update: async () => ({ updatedAt }),
+      });
+    }
+  };
+  const markInFlightRun = async () => {
+    if (!sessionKey || !activeSessionStore) {
+      return;
+    }
+    const now = Date.now();
+    const summary = summarizeInFlightRunText(followupRun.summaryLine || commandBody);
+    const current = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    if (!current) {
+      return;
+    }
+    const next: SessionEntry = {
+      ...current,
+      updatedAt: now,
+      inFlightRunStartedAt: now,
+      inFlightRunSummary: summary,
+      inFlightRunSessionId: followupRun.run.sessionId,
+    };
+    activeSessionEntry = next;
+    activeSessionStore[sessionKey] = next;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          updatedAt: now,
+          inFlightRunStartedAt: now,
+          inFlightRunSummary: summary,
+          inFlightRunSessionId: followupRun.run.sessionId,
+        }),
+      });
+    }
+  };
+  const clearInFlightRun = async () => {
+    if (!sessionKey || !activeSessionStore) {
+      return;
+    }
+    const current = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    if (!current) {
+      return;
+    }
+    if (
+      current.inFlightRunStartedAt == null &&
+      current.inFlightRunSummary == null &&
+      current.inFlightRunSessionId == null
+    ) {
+      return;
+    }
+    const next: SessionEntry = {
+      ...current,
+      inFlightRunStartedAt: undefined,
+      inFlightRunSummary: undefined,
+      inFlightRunSessionId: undefined,
+    };
+    activeSessionEntry = next;
+    activeSessionStore[sessionKey] = next;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          inFlightRunStartedAt: undefined,
+          inFlightRunSummary: undefined,
+          inFlightRunSessionId: undefined,
+        }),
       });
     }
   };
@@ -333,6 +412,7 @@ export async function runReplyAgent(params: {
       cleanupTranscripts: true,
     });
   try {
+    await markInFlightRun();
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
@@ -700,6 +780,11 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    try {
+      await clearInFlightRun();
+    } catch {
+      // Best-effort marker cleanup.
+    }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires
