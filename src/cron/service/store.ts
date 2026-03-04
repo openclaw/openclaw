@@ -222,11 +222,20 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
-async function getFileMtimeMs(path: string): Promise<number | null> {
+async function getFileMtimeMs(params: {
+  filePath: string;
+  log: CronServiceState["deps"]["log"];
+}): Promise<number | null> {
   try {
-    const stats = await fs.promises.stat(path);
+    const stats = await fs.promises.stat(params.filePath);
     return stats.mtimeMs;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      params.log.warn(
+        { storePath: params.filePath, err: String(err) },
+        "cron: failed to stat store file",
+      );
+    }
     return null;
   }
 }
@@ -248,7 +257,10 @@ export async function ensureLoaded(
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
 
-  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  const fileMtimeMs = await getFileMtimeMs({
+    filePath: state.deps.storePath,
+    log: state.deps.log,
+  });
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
@@ -567,5 +579,8 @@ export async function persist(state: CronServiceState) {
   }
   await saveCronStore(state.deps.storePath, state.store);
   // Update file mtime after save to prevent immediate reload
-  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  state.storeFileMtimeMs = await getFileMtimeMs({
+    filePath: state.deps.storePath,
+    log: state.deps.log,
+  });
 }

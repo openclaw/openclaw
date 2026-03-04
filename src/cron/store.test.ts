@@ -1,11 +1,22 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
-import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
+import {
+  getSerializedCronStoreCacheSizeForTests,
+  loadCronStore,
+  resetSerializedCronStoreCacheForTests,
+  resolveCronStorePath,
+  saveCronStore,
+} from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
+
+afterEach(() => {
+  resetSerializedCronStoreCacheForTests();
+});
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
@@ -136,5 +147,18 @@ describe("saveCronStore", () => {
     expect(loaded).toEqual(dummyStore);
 
     spy.mockRestore();
+  });
+
+  it("caps serialized store cache size across many store paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-cache-"));
+    try {
+      for (let index = 0; index < 160; index++) {
+        await saveCronStore(path.join(root, `store-${index}.json`), dummyStore);
+      }
+
+      expect(getSerializedCronStoreCacheSizeForTests()).toBe(128);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

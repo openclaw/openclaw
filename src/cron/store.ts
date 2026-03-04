@@ -3,12 +3,31 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { CONFIG_DIR } from "../utils.js";
 import type { CronStoreFile } from "./types.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
+const SERIALIZED_STORE_CACHE_MAX_ENTRIES = 128;
+
+function setSerializedStoreCache(storePath: string, value: string): void {
+  // Move existing keys to the tail so eviction behaves like a simple LRU.
+  if (serializedStoreCache.has(storePath)) {
+    serializedStoreCache.delete(storePath);
+  }
+  serializedStoreCache.set(storePath, value);
+  pruneMapToMaxSize(serializedStoreCache, SERIALIZED_STORE_CACHE_MAX_ENTRIES);
+}
+
+export function getSerializedCronStoreCacheSizeForTests(): number {
+  return serializedStoreCache.size;
+}
+
+export function resetSerializedCronStoreCacheForTests(): void {
+  serializedStoreCache.clear();
+}
 
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
@@ -41,7 +60,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
-    serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
+    setSerializedStoreCache(storePath, JSON.stringify(store, null, 2));
     return store;
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
@@ -71,7 +90,7 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     }
   }
   if (previous === json) {
-    serializedStoreCache.set(storePath, json);
+    setSerializedStoreCache(storePath, json);
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
@@ -84,7 +103,7 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     }
   }
   await renameWithRetry(tmp, storePath);
-  serializedStoreCache.set(storePath, json);
+  setSerializedStoreCache(storePath, json);
 }
 
 const RENAME_MAX_RETRIES = 3;
