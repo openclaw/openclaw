@@ -370,7 +370,7 @@ function hasSystemctlRemoteScope(argv: string[]): boolean {
   return false;
 }
 
-function hasSystemctlManagerScope(argv: string[]): boolean {
+function hasSystemctlSystemScope(argv: string[]): boolean {
   for (let idx = 1; idx < argv.length; idx += 1) {
     const token = normalizeLower(argv[idx]);
     if (!token) {
@@ -379,7 +379,7 @@ function hasSystemctlManagerScope(argv: string[]): boolean {
     if (token === FLAG_TERMINATOR) {
       break;
     }
-    if (token === "--system" || token === "--user") {
+    if (token === "--system") {
       return true;
     }
   }
@@ -966,7 +966,7 @@ function parseGatewayActionFromSystemctlArgv(
   if (hasSystemctlRemoteScope(argv)) {
     return null;
   }
-  if (hasSystemctlManagerScope(argv)) {
+  if (hasSystemctlSystemScope(argv)) {
     return null;
   }
 
@@ -1109,7 +1109,7 @@ function parseGatewayActionFromSystemctlFallbackArgv(
   if (hasSystemctlRemoteScope(argv)) {
     return null;
   }
-  if (hasSystemctlManagerScope(argv)) {
+  if (hasSystemctlSystemScope(argv)) {
     return null;
   }
 

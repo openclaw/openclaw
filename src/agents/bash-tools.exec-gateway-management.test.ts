@@ -689,7 +689,7 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
-  it("does not detect explicit user-scope systemctl commands", () => {
+  it("detects explicit user-scope systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart openclaw-gateway.service",
       cwd: process.cwd(),
@@ -697,7 +697,12 @@ describe("detectGatewayManagementExecCommand", () => {
       platform: "linux",
     });
 
-    expect(detected).toBeNull();
+    expect(detected).toEqual({
+      action: "restart",
+      source: "systemctl",
+      hard: false,
+      complex: false,
+    });
   });
 
   it("does not detect explicit system-scope systemctl commands", () => {
@@ -1269,7 +1274,7 @@ describe("exec gateway management interception", () => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
       const result = await tool.execute("call3-systemctl", {
-        command: "systemctl restart openclaw-gateway.service",
+        command: "systemctl --user restart openclaw-gateway.service",
       });
 
       const text = result.content.find((part) => part.type === "text")?.text ?? "";
