@@ -34,11 +34,23 @@ assert_json_field() {
   fi
 }
 
+test_now_ms() {
+  local ms
+  ms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "$ms" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$ms"
+    return 0
+  fi
+  printf '%s\n' "$(( $(date +%s) * 1000 ))"
+}
+
 INCIDENT_STATE_DIR="${TMPDIR_TEST}/default"
 mkdir -p "$INCIDENT_STATE_DIR"
 
 # shellcheck source=lib-rca-chain.sh
 source "${SCRIPT_DIR}/lib-rca-chain.sh"
+# shellcheck source=lib-rca-crossreview.sh
+source "${SCRIPT_DIR}/lib-rca-crossreview.sh"
 
 _chain_llm_call() {
   local stage="$1"
@@ -229,6 +241,76 @@ if [[ "$mode_e" == "chain_v2" ]]; then
   pass "stage E path returns chain_v2"
 else
   fail "stage E path expected chain_v2 got ${mode_e}"
+fi
+
+INCIDENT_STATE_DIR="${TMPDIR_TEST}/dual"
+mkdir -p "$INCIDENT_STATE_DIR"
+RCA_CHAIN_STAGE_E_ENABLED=0
+RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS=4
+DUAL_TRACE_FILE="${TMPDIR_TEST}/dual-trace.tsv"
+: >"$DUAL_TRACE_FILE"
+
+_chain_llm_call() {
+  local stage="$1"
+  local provider="${_CHAIN_ACTIVE_PROVIDER:-codex}"
+  local now
+  case "$stage" in
+    A)
+      now="$(test_now_ms)"
+      printf '%s\tstart\t%s\n' "$provider" "$now" >>"$DUAL_TRACE_FILE"
+      sleep 0.2
+      now="$(test_now_ms)"
+      printf '%s\tend\t%s\n' "$provider" "$now" >>"$DUAL_TRACE_FILE"
+      printf '%s\n' '{"signals":[{"step":"01","classification":"signal","relevance":0.9,"summary":"oom"}],"noise":[],"signal_count":1}'
+      ;;
+    B)
+      if [[ "$provider" == "claude" ]]; then
+        printf '%s\n' '{"hypotheses":[{"hypothesis_id":"resource_exhaustion:claude-initial","canonical_category":"resource_exhaustion","description":"claude initial","confidence":74,"supporting_evidence":["01"],"contradicting_evidence":[],"evidence_keys":["e1","e2","e3"]}],"top_hypothesis_id":"resource_exhaustion:claude-initial"}'
+      else
+        printf '%s\n' '{"hypotheses":[{"hypothesis_id":"resource_exhaustion:codex-initial","canonical_category":"resource_exhaustion","description":"codex initial","confidence":79,"supporting_evidence":["01"],"contradicting_evidence":[],"evidence_keys":["e1","e2","e3"]}],"top_hypothesis_id":"resource_exhaustion:codex-initial"}'
+      fi
+      ;;
+    C)
+      printf '%s\n' '{"causal_chain":{"trigger":"deploy","propagation":["memory growth"],"symptoms":["oom"]},"gaps":[]}'
+      ;;
+    D)
+      printf '%s\n' '{"actions":[{"type":"IMMEDIATE","action":"restart pods"}],"action_plan_quality":"specific"}'
+      ;;
+    R)
+      printf '%s\n' '{"severity":"high","canonical_category":"resource_exhaustion","summary":"aligned","root_cause":"deploy","agree_with_peer":true,"hypotheses":[{"hypothesis_id":"resource_exhaustion:oom-under-load","canonical_category":"resource_exhaustion","description":"aligned hypothesis","confidence":90,"evidence_keys":["e1","e2","e3"]}]}'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+export -f _chain_llm_call
+
+result_dual="$(run_rca_chain "evidence" "critical" "" "" "dual")"
+dual_rounds="$(printf '%s\n' "$result_dual" | jq -r '.review_rounds // -1')"
+if [[ "$dual_rounds" == "1" ]]; then
+  pass "dual chain converges after one review round"
+else
+  fail "dual chain expected review_rounds=1 got ${dual_rounds}"
+fi
+
+dual_enabled="$(printf '%s\n' "$result_dual" | jq -r '.chain_metadata.dual_review.enabled // false')"
+if [[ "$dual_enabled" == "true" ]]; then
+  pass "dual review metadata enabled"
+else
+  fail "dual review metadata should be enabled"
+fi
+
+codex_start="$(awk -F'\t' '$1=="codex" && $2=="start"{print $3; exit}' "$DUAL_TRACE_FILE")"
+codex_end="$(awk -F'\t' '$1=="codex" && $2=="end"{print $3; exit}' "$DUAL_TRACE_FILE")"
+claude_start="$(awk -F'\t' '$1=="claude" && $2=="start"{print $3; exit}' "$DUAL_TRACE_FILE")"
+claude_end="$(awk -F'\t' '$1=="claude" && $2=="end"{print $3; exit}' "$DUAL_TRACE_FILE")"
+if [[ -n "$codex_start" && -n "$codex_end" && -n "$claude_start" && -n "$claude_end" ]] \
+  && (( claude_start <= codex_end )) \
+  && (( codex_start <= claude_end )); then
+  pass "dual chain provider runs overlap in time"
+else
+  fail "dual chain provider runs did not overlap"
 fi
 
 printf '\nResults: %s passed, %s failed\n' "$PASS" "$FAIL"

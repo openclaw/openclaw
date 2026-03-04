@@ -8,27 +8,47 @@ fi
 
 RCA_LLM_TIMEOUT_MS="${RCA_LLM_TIMEOUT_MS:-15000}"
 
+_rca_call_provider_script() {
+  local script_path="$1"
+  local prompt="$2"
+  local timeout_ms="${3:-$RCA_LLM_TIMEOUT_MS}"
+  local timeout_seconds
+  timeout_seconds="$(awk -v ms="$timeout_ms" 'BEGIN { printf "%.3f", ms / 1000.0 }')"
+
+  if [[ -n "$script_path" && -x "$script_path" ]]; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$timeout_seconds" "$script_path" "$prompt"
+      return $?
+    fi
+    "$script_path" "$prompt"
+    return $?
+  fi
+
+  return 127
+}
+
 call_codex_rca() {
   local prompt="${1:-}"
   local timeout_ms="${2:-$RCA_LLM_TIMEOUT_MS}"
-  local timeout_seconds
-  timeout_seconds="$(awk -v ms="$timeout_ms" 'BEGIN { printf "%.3f", ms / 1000.0 }')"
 
   if declare -F codex_rca_provider >/dev/null 2>&1; then
     codex_rca_provider "$prompt"
     return $?
   fi
 
-  if [[ -n "${RCA_CODEX_PROVIDER_SCRIPT:-}" && -x "${RCA_CODEX_PROVIDER_SCRIPT}" ]]; then
-    if command -v timeout >/dev/null 2>&1; then
-      timeout "$timeout_seconds" "$RCA_CODEX_PROVIDER_SCRIPT" "$prompt"
-      return $?
-    fi
-    "$RCA_CODEX_PROVIDER_SCRIPT" "$prompt"
+  _rca_call_provider_script "${RCA_CODEX_PROVIDER_SCRIPT:-}" "$prompt" "$timeout_ms"
+}
+
+call_claude_rca() {
+  local prompt="${1:-}"
+  local timeout_ms="${2:-$RCA_LLM_TIMEOUT_MS}"
+
+  if declare -F claude_rca_provider >/dev/null 2>&1; then
+    claude_rca_provider "$prompt"
     return $?
   fi
 
-  return 127
+  _rca_call_provider_script "${RCA_CLAUDE_PROVIDER_SCRIPT:-}" "$prompt" "$timeout_ms"
 }
 
 fallback_heuristic_rca() {
@@ -85,13 +105,10 @@ run_step_11() {
     service_context="${RCA_SERVICE_CONTEXT}"
   fi
 
-  # Chain mode (feature-flagged) replaces legacy single-shot/dual convergence.
+  # Chain mode supports single and dual operation.
   if [[ "${RCA_CHAIN_ENABLED:-0}" == "1" ]]; then
-    if [[ "$mode" == "dual" ]]; then
-      printf '%s\n' "WARN: RCA_CHAIN_ENABLED=1 overrides RCA_MODE=dual -- chain Stage E replaces external dual-mode convergence. Set RCA_MODE=single to suppress." >&2
-    fi
     if declare -F run_rca_chain >/dev/null 2>&1; then
-      run_rca_chain "$evidence_bundle" "${severity_level:-medium}" "${service_context:-}" "${linear_matches:-}"
+      run_rca_chain "$evidence_bundle" "${severity_level:-medium}" "${service_context:-}" "${linear_matches:-}" "$mode"
       return 0
     fi
     printf '%s\n' "WARN: RCA_CHAIN_ENABLED=1 but lib-rca-chain.sh not loaded, falling back to single-shot" >&2

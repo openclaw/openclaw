@@ -2555,9 +2555,6 @@ if [[ "$rca_mode_effective" == "dual" && "$HAS_LIB_RCA_SAFETY" -eq 1 ]] && decla
     rca_mode_effective="dual"
   fi
 fi
-if [[ "${RCA_CHAIN_ENABLED:-0}" == "1" && "$rca_mode_effective" != "heuristic" ]]; then
-  rca_mode_effective="single"
-fi
 
 STEP_STATUS_11="skipped"
 STEP_LATENCY_11=0
@@ -2733,6 +2730,19 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
     rca_agreement_score="$(printf '%s\n' "$rca_result_json" | jq -r '.agreement_score // 0')"
     if ! [[ "$rca_agreement_score" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
       rca_agreement_score="0"
+    fi
+    parsed_review_rounds="$(printf '%s\n' "$rca_result_json" | jq -r '.review_rounds // empty' 2>/dev/null || true)"
+    if [[ "$parsed_review_rounds" =~ ^[0-9]+$ ]]; then
+      rca_review_rounds="$parsed_review_rounds"
+    fi
+    if [[ "$rca_skip" -eq 0 && "$rca_mode_effective" == "dual" && "${RCA_CHAIN_ENABLED:-0}" == "1" ]] \
+      && [[ "$HAS_LIB_RCA_SAFETY" -eq 1 ]] \
+      && declare -F rca_safety_record_outcome >/dev/null 2>&1; then
+      rca_convergence_outcome="not_converged"
+      if printf '%s\n' "$rca_result_json" | jq -e '(.agreement_score // 0) > 0' >/dev/null 2>&1; then
+        rca_convergence_outcome="converged"
+      fi
+      rca_safety_record_outcome "$(date +%s 2>/dev/null || echo 0)" "$rca_convergence_outcome" >/dev/null 2>&1 || true
     fi
     if [[ "$rca_skip" -eq 0 ]]; then
       rca_cache_write_json "${incident_id:-}" "$incident_fingerprint" "$now_epoch" "$rca_result_json" >/dev/null 2>&1 || true

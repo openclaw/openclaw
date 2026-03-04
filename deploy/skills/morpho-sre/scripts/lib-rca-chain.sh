@@ -7,10 +7,13 @@ RCA_STAGE_TIMEOUT_MS="${RCA_STAGE_TIMEOUT_MS:-10000}"
 RCA_CHAIN_COST_ALERT_THRESHOLD="${RCA_CHAIN_COST_ALERT_THRESHOLD:-750}"
 RCA_CHAIN_CIRCUIT_BREAKER_THRESHOLD="${RCA_CHAIN_CIRCUIT_BREAKER_THRESHOLD:-3}"
 RCA_CHAIN_CIRCUIT_BREAKER_COOLDOWN_S="${RCA_CHAIN_CIRCUIT_BREAKER_COOLDOWN_S:-3600}"
+RCA_CHAIN_PRIMARY_PROVIDER="${RCA_CHAIN_PRIMARY_PROVIDER:-codex}"
+RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS="${RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS:-6}"
 
 _CHAIN_START_MS=0
 _CHAIN_CALL_COUNT=0
 _CHAIN_STAGES_COMPLETED=()
+_CHAIN_ACTIVE_PROVIDER="${_CHAIN_ACTIVE_PROVIDER:-}"
 
 _chain_state_dir() {
   printf '%s\n' "${INCIDENT_STATE_DIR:-/tmp/openclaw-state}"
@@ -301,6 +304,8 @@ _chain_call_llm() {
   local system_prompt="$2"
   local user_prompt="$3"
   local model_tier="${4:-fast}"
+  local provider="${_CHAIN_ACTIVE_PROVIDER:-$RCA_CHAIN_PRIMARY_PROVIDER}"
+  local combined_prompt
   (( _CHAIN_CALL_COUNT = _CHAIN_CALL_COUNT + 1 ))
 
   if _chain_cost_breaker_tripped; then
@@ -313,12 +318,95 @@ _chain_call_llm() {
     return $?
   fi
 
-  if declare -F call_codex_rca >/dev/null 2>&1; then
-    call_codex_rca "$user_prompt" "$RCA_STAGE_TIMEOUT_MS"
-    return $?
+  combined_prompt="$(
+    printf '%s\n\n%s\n\n%s\n' \
+      "Stage ${stage} (${model_tier})" \
+      "$system_prompt" \
+      "$user_prompt"
+  )"
+
+  case "$provider" in
+    claude)
+      if declare -F call_claude_rca >/dev/null 2>&1; then
+        call_claude_rca "$combined_prompt" "$RCA_STAGE_TIMEOUT_MS"
+        return $?
+      fi
+      return 127
+      ;;
+    codex|*)
+      if declare -F call_codex_rca >/dev/null 2>&1; then
+        call_codex_rca "$combined_prompt" "$RCA_STAGE_TIMEOUT_MS"
+        return $?
+      fi
+      return 127
+      ;;
+  esac
+}
+
+_chain_dual_review_refine() {
+  local provider="$1"
+  local evidence="$2"
+  local peer_rca="$3"
+  local current_rca="$4"
+  local round="$5"
+  local system_prompt user_prompt refined previous_provider
+
+  system_prompt="You are an SRE RCA reviewer. Reconcile your RCA with peer analysis. If peer is stronger, align and set agree_with_peer=true. Return strict JSON only."
+  user_prompt="$(
+    printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
+      "Round: ${round}" \
+      "Evidence:" \
+      "$evidence" \
+      "Peer RCA JSON:" \
+      "$peer_rca"
+  )"$'\n\n'"Current RCA JSON:"$'\n'"$current_rca"$'\n\n'"Return full RCA JSON with fields: severity, canonical_category, summary, root_cause, hypotheses[0], agree_with_peer."
+
+  previous_provider="${_CHAIN_ACTIVE_PROVIDER:-}"
+  _CHAIN_ACTIVE_PROVIDER="$provider"
+  if ! refined="$(_chain_call_llm "R" "$system_prompt" "$user_prompt" "strong" 2>/dev/null)"; then
+    _CHAIN_ACTIVE_PROVIDER="$previous_provider"
+    printf '%s\n' "$current_rca"
+    return 0
   fi
 
-  return 127
+  if ! _chain_is_json "$refined"; then
+    _CHAIN_ACTIVE_PROVIDER="$previous_provider"
+    printf '%s\n' "$current_rca"
+    return 0
+  fi
+
+  _CHAIN_ACTIVE_PROVIDER="$previous_provider"
+  printf '%s\n' "$refined"
+}
+
+_chain_dual_attach_metadata() {
+  local merged="$1"
+  local review_rounds="$2"
+  local max_rounds="$3"
+  local codex_available="$4"
+  local claude_available="$5"
+
+  if ! command -v jq >/dev/null 2>&1 || ! _chain_is_json "$merged"; then
+    printf '%s\n' "$merged"
+    return 0
+  fi
+
+  printf '%s\n' "$merged" | jq -c \
+    --argjson review_rounds "$review_rounds" \
+    --argjson max_rounds "$max_rounds" \
+    --argjson codex_available "$codex_available" \
+    --argjson claude_available "$claude_available" \
+    '
+      .review_rounds = $review_rounds
+      | .chain_metadata = (.chain_metadata // {})
+      | .chain_metadata.dual_review = {
+          enabled: true,
+          review_rounds: $review_rounds,
+          max_rounds: $max_rounds,
+          codex_available: ($codex_available == 1),
+          claude_available: ($claude_available == 1)
+        }
+    '
 }
 
 _chain_stage_a() {
@@ -506,7 +594,7 @@ _chain_fail_with_partial() {
     "$summary_override"
 }
 
-run_rca_chain() {
+_run_rca_chain_single_provider() {
   local evidence="${1:-}"
   local severity="${2:-medium}"
   local service_ctx="${3:-}"
@@ -699,6 +787,144 @@ run_rca_chain() {
 
   _chain_record_success
   printf '%s\n' "$result"
+}
+
+_chain_dual_compare_and_merge() {
+  local evidence="$1"
+  local codex_rca="$2"
+  local claude_rca="$3"
+  local max_rounds="$4"
+  local codex_available="$5"
+  local claude_available="$6"
+  local round=0
+  local cross_a cross_b merged next_a next_b
+
+  cross_a="$codex_rca"
+  cross_b="$claude_rca"
+
+  if ! [[ "$max_rounds" =~ ^[0-9]+$ ]]; then
+    max_rounds=6
+  fi
+  if (( max_rounds < 0 )); then
+    max_rounds=6
+  fi
+
+  if [[ -z "$cross_a" || -z "$cross_b" ]]; then
+    if declare -F run_cross_review >/dev/null 2>&1; then
+      merged="$(run_cross_review 0 "$cross_a" "$cross_b" "$evidence" "$max_rounds" 2>/dev/null || true)"
+      _chain_dual_attach_metadata "$merged" 0 "$max_rounds" "$codex_available" "$claude_available"
+      return 0
+    fi
+    if [[ -n "$cross_a" ]]; then
+      _chain_dual_attach_metadata "$cross_a" 0 "$max_rounds" "$codex_available" "$claude_available"
+      return 0
+    fi
+    if [[ -n "$cross_b" ]]; then
+      _chain_dual_attach_metadata "$cross_b" 0 "$max_rounds" "$codex_available" "$claude_available"
+      return 0
+    fi
+    printf '{"mode":"heuristic","degradation_note":"Both LLM providers unavailable — heuristic fallback"}\n'
+    return 0
+  fi
+
+  while true; do
+    if declare -F check_convergence >/dev/null 2>&1 \
+      && declare -F merge_rcas >/dev/null 2>&1 \
+      && check_convergence "$cross_a" "$cross_b" "$round" >/dev/null 2>&1; then
+      merged="$(merge_rcas "$cross_a" "$cross_b")"
+      _chain_dual_attach_metadata "$merged" "$round" "$max_rounds" "$codex_available" "$claude_available"
+      return 0
+    fi
+
+    if (( round >= max_rounds )); then
+      if declare -F run_cross_review >/dev/null 2>&1; then
+        merged="$(run_cross_review "$round" "$cross_a" "$cross_b" "$evidence" "$max_rounds" 2>/dev/null || true)"
+      else
+        merged="$cross_a"
+      fi
+      _chain_dual_attach_metadata "$merged" "$round" "$max_rounds" "$codex_available" "$claude_available"
+      return 0
+    fi
+
+    next_a="$(_chain_dual_review_refine "codex" "$evidence" "$cross_b" "$cross_a" "$round" 2>/dev/null || true)"
+    next_b="$(_chain_dual_review_refine "claude" "$evidence" "$cross_a" "$cross_b" "$round" 2>/dev/null || true)"
+    if _chain_is_json "$next_a"; then
+      cross_a="$next_a"
+    fi
+    if _chain_is_json "$next_b"; then
+      cross_b="$next_b"
+    fi
+    round=$((round + 1))
+  done
+}
+
+_run_rca_chain_dual_provider() {
+  local evidence="$1"
+  local severity="$2"
+  local service_ctx="$3"
+  local incident_memory="$4"
+  local max_rounds="${RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS:-6}"
+  local tmp_dir codex_rca claude_rca
+  local codex_available=0
+  local claude_available=0
+  local pid_codex pid_claude
+
+  tmp_dir="$(mktemp -d)"
+  (
+    _CHAIN_ACTIVE_PROVIDER="codex"
+    _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
+  ) >"${tmp_dir}/codex.json" 2>"${tmp_dir}/codex.err" &
+  pid_codex=$!
+  (
+    _CHAIN_ACTIVE_PROVIDER="claude"
+    _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
+  ) >"${tmp_dir}/claude.json" 2>"${tmp_dir}/claude.err" &
+  pid_claude=$!
+
+  wait "$pid_codex" >/dev/null 2>&1 || true
+  wait "$pid_claude" >/dev/null 2>&1 || true
+
+  codex_rca="$(cat "${tmp_dir}/codex.json" 2>/dev/null || true)"
+  claude_rca="$(cat "${tmp_dir}/claude.json" 2>/dev/null || true)"
+  rm -rf "$tmp_dir"
+
+  if ! _chain_is_json "$codex_rca"; then
+    codex_rca=""
+  else
+    codex_available=1
+  fi
+  if ! _chain_is_json "$claude_rca"; then
+    claude_rca=""
+  else
+    claude_available=1
+  fi
+
+  _chain_dual_compare_and_merge \
+    "$evidence" \
+    "$codex_rca" \
+    "$claude_rca" \
+    "$max_rounds" \
+    "$codex_available" \
+    "$claude_available"
+}
+
+run_rca_chain() {
+  local evidence="${1:-}"
+  local severity="${2:-medium}"
+  local service_ctx="${3:-}"
+  local incident_memory="${4:-}"
+  local mode="${5:-single}"
+
+  mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
+  case "$mode" in
+    dual)
+      _run_rca_chain_dual_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
+      ;;
+    *)
+      _CHAIN_ACTIVE_PROVIDER="$RCA_CHAIN_PRIMARY_PROVIDER"
+      _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
+      ;;
+  esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -430,6 +430,49 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
   });
 
+  it("streams reasoning progress text before final reply in progress mode", async () => {
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as {
+        onReplyStart?: () => Promise<void> | void;
+        onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
+      };
+      await opts?.onReplyStart?.();
+      await opts?.onReasoningStream?.({
+        text: "Reasoning:\n_checking Grafana dashboards for matching alerts_",
+      });
+      return { text: "final reply" };
+    });
+
+    setDirectMessageReplyMode("all");
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
+    slackTestState.config = {
+      ...currentConfig,
+      channels: {
+        ...currentConfig.channels,
+        slack: {
+          ...currentConfig.channels?.slack,
+          streaming: "progress",
+        },
+      },
+    };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    const statusCall = sendMock.mock.calls.find((call) =>
+      String(call[1]).includes("Status: analyzing"),
+    );
+    expect(statusCall?.[1]).toContain("checking Grafana dashboards for matching alerts");
+    expect(statusCall?.[2]).toMatchObject({ threadTs: "123" });
+    const sentTexts = sendMock.mock.calls.map((call) => String(call[1]));
+    expect(sentTexts).toContain("PFX final reply");
+  });
+
   it("falls back to thread emoji ack when progress reaction is missing_scope", async () => {
     reactMock.mockRejectedValueOnce(new Error("An API error occurred: missing_scope"));
     replyMock.mockImplementation(async (...args: unknown[]) => {

@@ -154,6 +154,14 @@ run_cross_review() {
   local rca_a="${2:-}"
   local rca_b="${3:-}"
   local evidence="${4:-}"
+  local max_rounds="${5:-2}"
+
+  if ! [[ "$max_rounds" =~ ^[0-9]+$ ]]; then
+    max_rounds=2
+  fi
+  if (( max_rounds < 0 )); then
+    max_rounds=2
+  fi
 
   if [[ -z "$rca_a" && -z "$rca_b" ]]; then
     printf '{"mode":"heuristic","degradation_note":"Both LLM providers unavailable — heuristic fallback"}\n'
@@ -183,12 +191,12 @@ run_cross_review() {
     return 0
   fi
 
-  if [[ "$round" -ge 2 ]]; then
+  if [[ "$round" -ge "$max_rounds" ]]; then
     if command -v jq >/dev/null 2>&1; then
-      printf '%s\n' "$rca_a" | jq -c '
+      printf '%s\n' "$rca_a" | jq -c --arg max_rounds "$max_rounds" '
         .merged_confidence = ((.hypotheses[0].confidence // 0) * 0.8)
         | .agreement_score = 0
-        | .degradation_note = "Models did not converge after 2 review rounds — Codex-primary report, low confidence"
+        | .degradation_note = ("Models did not converge after " + $max_rounds + " review rounds — Codex-primary report, low confidence")
       '
     else
       printf '%s\n' "$rca_a"

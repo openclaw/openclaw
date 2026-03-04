@@ -61,6 +61,16 @@ NOTE_NON_CONV="$(printf '%s\n' "$NON_CONV" | jq -r '.degradation_note')"
 [[ "$NOTE_NON_CONV" == *"did not converge"* ]] || fail "non-convergence fallback note"
 pass "round2 non-convergence fallback"
 
+NON_CONV_EXT="$(run_cross_review 2 "$RCA_A" "$RCA_WEAK" "evidence" 4)"
+printf '%s\n' "$NON_CONV_EXT" | jq -e '.converged == false and .next_a != null and .next_b != null' >/dev/null \
+  || fail "round2 with max_rounds=4 should continue"
+pass "configurable max rounds continues review"
+
+NON_CONV_EXT_FALLBACK="$(run_cross_review 4 "$RCA_A" "$RCA_WEAK" "evidence" 4)"
+NOTE_NON_CONV_EXT="$(printf '%s\n' "$NON_CONV_EXT_FALLBACK" | jq -r '.degradation_note')"
+[[ "$NOTE_NON_CONV_EXT" == *"after 4 review rounds"* ]] || fail "max_rounds fallback note should mention configured rounds"
+pass "configurable max rounds fallback note"
+
 CLAUDE_ONLY="$(run_cross_review 0 "" "$RCA_B" "evidence")"
 NOTE_CLAUDE_ONLY="$(printf '%s\n' "$CLAUDE_ONLY" | jq -r '.degradation_note')"
 [[ "$NOTE_CLAUDE_ONLY" == *"Codex unavailable"* ]] || fail "claude-only degradation note"

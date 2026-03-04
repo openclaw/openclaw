@@ -58,10 +58,52 @@ spec:
                 exit 1
               fi
 
-              kubectl create secret generic {{ .Values.vault.secretName }} \
-                --namespace={{ .Release.Namespace }} \
-                --from-env-file=/vault/secrets/secrets \
-                --dry-run=client -o yaml | kubectl apply -f -
+              sanitized_env="$(mktemp)"
+              while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+                case "$raw_line" in
+                  ''|\#*)
+                    continue
+                    ;;
+                esac
+                key="${raw_line%%=*}"
+                value="${raw_line#*=}"
+                key="$(printf '%s' "$key" | tr -d '\r')"
+                value="$(printf '%s' "$value" | tr -d '\r')"
+
+                if ! printf '%s' "$key" | grep -Eq '^[-._a-zA-Z][-._a-zA-Z0-9]*$'; then
+                  echo "ERROR: Invalid secret key from vault: ${key}" >&2
+                  rm -f "$sanitized_env"
+                  exit 1
+                fi
+
+                printf '%s=%s\n' "$key" "$value" >>"$sanitized_env"
+              done < /vault/secrets/secrets
+
+              if [ ! -s "$sanitized_env" ]; then
+                echo "ERROR: Sanitized env file is empty"
+                rm -f "$sanitized_env"
+                exit 1
+              fi
+
+              secret_yaml="$(mktemp)"
+              {
+                echo "apiVersion: v1"
+                echo "kind: Secret"
+                echo "metadata:"
+                echo "  name: {{ .Values.vault.secretName }}"
+                echo "  namespace: {{ .Release.Namespace }}"
+                echo "type: Opaque"
+                echo "data:"
+                while IFS= read -r kv_line || [ -n "$kv_line" ]; do
+                  key="${kv_line%%=*}"
+                  value="${kv_line#*=}"
+                  encoded="$(printf '%s' "$value" | base64 | tr -d '\n')"
+                  printf '  %s: %s\n' "$key" "$encoded"
+                done < "$sanitized_env"
+              } >"$secret_yaml"
+
+              kubectl apply -f "$secret_yaml"
+              rm -f "$sanitized_env" "$secret_yaml"
 
               echo "Secret {{ .Values.vault.secretName }} created successfully"
               kubectl get secret {{ .Values.vault.secretName }} -n {{ .Release.Namespace }}
