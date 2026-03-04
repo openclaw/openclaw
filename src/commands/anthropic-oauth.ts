@@ -46,7 +46,7 @@ export async function loginAnthropicOAuth(params: {
         }
 
         spin.update(localBrowserMessage ?? "Complete sign-in in browser…");
-        openUrl(url).catch(() => {});
+        openUrl(url).catch((err) => runtime.error(String(err)));
         runtime.log(`Open: ${url}`);
       },
       async () => {
