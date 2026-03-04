@@ -207,7 +207,7 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("preserves non-empty agent apiKey but applies config baseUrl for matching providers in merge mode", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
@@ -216,7 +216,7 @@ describe("models-config", () => {
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
 

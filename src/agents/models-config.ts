@@ -162,7 +162,10 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    const hasConfigBaseUrl =
+      typeof newEntry.baseUrl === "string" && newEntry.baseUrl.trim().length > 0;
+    // Keep existing baseUrl only when config does not provide one.
+    if (!hasConfigBaseUrl && typeof existing.baseUrl === "string" && existing.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
