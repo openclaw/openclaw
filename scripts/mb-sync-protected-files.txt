@@ -16,6 +16,8 @@ src/agents/pi-embedded-helpers.ts
 src/agents/pi-embedded-helpers/errors.ts
 src/agents/models-config.providers.ts
 src/agents/tools/apprenticeship-hunter-tool.ts
+src/agents/tools/web-search.ts
+src/gateway/server-methods/chat.ts
 
 # UI customizations
 ui/src/ui/app-settings.ts
