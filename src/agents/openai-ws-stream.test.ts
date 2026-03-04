@@ -594,6 +594,23 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content).toEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
+
+  it("ignores malformed message content entries", () => {
+    const response = makeResponseObject("resp_8", "Hello");
+    const messageItem = response.output?.find((item) => item.type === "message");
+    if (!messageItem || messageItem.type !== "message") {
+      throw new Error("missing message output item");
+    }
+    messageItem.content = [
+      null as unknown as (typeof messageItem.content)[number],
+      ...messageItem.content,
+    ];
+
+    expect(() => buildAssistantMessageFromResponse(response, modelInfo)).not.toThrow();
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const textBlock = msg.content.find((c) => c.type === "text") as { text?: string } | undefined;
+    expect(textBlock?.text).toBe("Hello");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

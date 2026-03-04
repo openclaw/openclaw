@@ -293,8 +293,16 @@ export function buildAssistantMessageFromResponse(
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       for (const part of item.content ?? []) {
-        if (part.type === "output_text" && part.text) {
-          content.push({ type: "text", text: part.text });
+        if (
+          !part ||
+          typeof part !== "object" ||
+          (part as { type?: unknown }).type !== "output_text"
+        ) {
+          continue;
+        }
+        const text = (part as { text?: unknown }).text;
+        if (typeof text === "string" && text.length > 0) {
+          content.push({ type: "text", text });
         }
       }
     } else if (item.type === "function_call") {
