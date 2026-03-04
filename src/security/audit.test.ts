@@ -150,6 +150,7 @@ describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let channelSecurityRoot = "";
+  let sharedChannelSecurityStateDir = "";
   let sharedCodeSafetyStateDir = "";
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
@@ -161,12 +162,24 @@ describe("security audit", () => {
     return dir;
   };
 
+  const createFilesystemAuditFixture = async (label: string) => {
+    const tmp = await makeTmpDir(label);
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    if (!isWindows) {
+      await fs.chmod(configPath, 0o600);
+    }
+    return { tmp, stateDir, configPath };
+  };
+
   const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
-    const channelSecurityStateDir = path.join(channelSecurityRoot, `state-${caseId++}`);
-    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    const credentialsDir = path.join(sharedChannelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: channelSecurityStateDir }, () =>
-      fn(channelSecurityStateDir),
+    await withEnvAsync({ OPENCLAW_STATE_DIR: sharedChannelSecurityStateDir }, () =>
+      fn(sharedChannelSecurityStateDir),
     );
   };
 
@@ -214,6 +227,11 @@ description: test skill
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
+    sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
+    await fs.mkdir(path.join(sharedChannelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
     const codeSafetyFixture = await createSharedCodeSafetyFixture();
     sharedCodeSafetyStateDir = codeSafetyFixture.stateDir;
     sharedCodeSafetyWorkspaceDir = codeSafetyFixture.workspaceDir;
@@ -283,6 +301,24 @@ description: test skill
         process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
       }
     }
+  });
+
+  it("does not flag non-loopback bind without auth when gateway password uses SecretRef", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          password: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.bind_no_auth");
   });
 
   it("evaluates gateway auth rate-limit warning based on configuration", async () => {
@@ -682,12 +718,7 @@ description: test skill
   });
 
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels");
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
@@ -736,12 +767,7 @@ description: test skill
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels-skip");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels-skip");
 
     const execDockerRawFn = (async () => {
       throw new Error("spawn docker ENOENT");
@@ -761,12 +787,9 @@ description: test skill
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {
-    const tmp = await makeTmpDir("browser-non-loopback-publish");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture(
+      "browser-non-loopback-publish",
+    );
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
@@ -1256,6 +1279,27 @@ description: test skill
     expectNoFinding(res, "browser.control_no_auth");
   });
 
+  it("does not flag browser control auth when gateway password uses SecretRef", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: {
+          password: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "browser.control_no_auth");
+  });
+
   it("warns when remote CDP uses HTTP", async () => {
     const cfg: OpenClawConfig = {
       browser: {
@@ -1404,6 +1448,24 @@ description: test skill
         feishu: {
           appId: "cli_test",
           appSecret: "secret_test",
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
+  });
+
+  it("treats Feishu SecretRef appSecret as configured for doc tool risk detection", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: {
+            source: "env",
+            provider: "default",
+            id: "FEISHU_APP_SECRET",
+          },
         },
       },
     };
@@ -2695,6 +2757,50 @@ description: test skill
       const cfg: OpenClawConfig = {
         channels: {
           discord: { enabled: true, token: "t" },
+        },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+        execDockerRawFn: execDockerRawUnavailable,
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "plugins.extensions_no_allowlist",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
+    }
+  });
+
+  it("treats SecretRef channel credentials as configured for extension allowlist severity", async () => {
+    const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
+    delete process.env.DISCORD_BOT_TOKEN;
+    const stateDir = sharedExtensionsStateDir;
+
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: {
+              source: "env",
+              provider: "default",
+              id: "DISCORD_BOT_TOKEN",
+            } as unknown as string,
+          },
         },
       };
       const res = await runSecurityAudit({

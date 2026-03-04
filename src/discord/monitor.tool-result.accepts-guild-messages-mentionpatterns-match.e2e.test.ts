@@ -138,6 +138,14 @@ function createDefaultThreadConfig(): LoadedConfig {
   } as LoadedConfig;
 }
 
+function createGuildChannelPolicyConfig(requireMention: boolean) {
+  return {
+    dm: { enabled: true, policy: "open" as const },
+    groupPolicy: "open" as const,
+    guilds: { "*": { requireMention } },
+  };
+}
+
 function createMentionRequiredGuildConfig(
   params: {
     messages?: LoadedConfig["messages"];
@@ -151,13 +159,7 @@ function createMentionRequiredGuildConfig(
       },
     },
     session: { store: "/tmp/openclaw-sessions.json" },
-    channels: {
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        groupPolicy: "open",
-        guilds: { "*": { requireMention: true } },
-      },
-    },
+    channels: { discord: createGuildChannelPolicyConfig(true) },
     ...(params.messages ? { messages: params.messages } : {}),
   } as LoadedConfig;
 }
@@ -177,18 +179,13 @@ function createGuildMessageEvent(params: {
   messagePatch?: Record<string, unknown>;
   eventPatch?: Record<string, unknown>;
 }) {
+  const messageBase = createDiscordMessageMeta();
   return {
     message: {
       id: params.messageId,
       content: params.content,
       channelId: "c1",
-      timestamp: new Date().toISOString(),
-      type: MessageType.Default,
-      attachments: [],
-      embeds: [],
-      mentionedEveryone: false,
-      mentionedUsers: [],
-      mentionedRoles: [],
+      ...messageBase,
       author: { id: "u1", bot: false, username: "Ada" },
       ...params.messagePatch,
     },
@@ -197,6 +194,18 @@ function createGuildMessageEvent(params: {
     guild: { id: "g1", name: "Guild" },
     guild_id: "g1",
     ...params.eventPatch,
+  };
+}
+
+function createDiscordMessageMeta() {
+  return {
+    timestamp: new Date().toISOString(),
+    type: MessageType.Default,
+    attachments: [],
+    embeds: [],
+    mentionedEveryone: false,
+    mentionedUsers: [],
+    mentionedRoles: [],
   };
 }
 
@@ -245,19 +254,14 @@ function createThreadClient(
 }
 
 function createThreadEvent(messageId: string, channel?: unknown) {
+  const messageBase = createDiscordMessageMeta();
   return {
     message: {
       id: messageId,
       content: "thread reply",
       channelId: "t1",
       channel,
-      timestamp: new Date().toISOString(),
-      type: MessageType.Default,
-      attachments: [],
-      embeds: [],
-      mentionedEveryone: false,
-      mentionedUsers: [],
-      mentionedRoles: [],
+      ...messageBase,
       author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
     },
     author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
@@ -265,6 +269,15 @@ function createThreadEvent(messageId: string, channel?: unknown) {
     guild: { id: "g1", name: "Guild" },
     guild_id: "g1",
   };
+}
+
+function captureThreadDispatchCtx() {
+  return captureNextDispatchCtx<{
+    SessionKey?: string;
+    ParentSessionKey?: string;
+    ThreadStarterBody?: string;
+    ThreadLabel?: string;
+  }>();
 }
 
 describe("discord tool result dispatch", () => {
@@ -361,13 +374,7 @@ describe("discord tool result dispatch", () => {
             id: "m2",
             channelId: "c1",
             content: "bot reply",
-            timestamp: new Date().toISOString(),
-            type: MessageType.Default,
-            attachments: [],
-            embeds: [],
-            mentionedEveryone: false,
-            mentionedUsers: [],
-            mentionedRoles: [],
+            ...createDiscordMessageMeta(),
             author: { id: "bot-id", bot: true, username: "OpenClaw" },
           },
         },
@@ -393,12 +400,7 @@ describe("discord tool result dispatch", () => {
   });
 
   it("forks thread sessions and injects starter context", async () => {
-    const getCapturedCtx = captureNextDispatchCtx<{
-      SessionKey?: string;
-      ParentSessionKey?: string;
-      ThreadStarterBody?: string;
-      ThreadLabel?: string;
-    }>();
+    const getCapturedCtx = captureThreadDispatchCtx();
     const cfg = createDefaultThreadConfig();
     const handler = await createHandler(cfg);
     const threadChannel = createThreadChannel({ includeStarter: true });
@@ -441,23 +443,10 @@ describe("discord tool result dispatch", () => {
   });
 
   it("treats forum threads as distinct sessions without channel payloads", async () => {
-    const getCapturedCtx = captureNextDispatchCtx<{
-      SessionKey?: string;
-      ParentSessionKey?: string;
-      ThreadStarterBody?: string;
-      ThreadLabel?: string;
-    }>();
+    const getCapturedCtx = captureThreadDispatchCtx();
 
     const cfg = {
-      agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: { "*": { requireMention: false } },
-        },
-      },
+      ...createDefaultThreadConfig(),
       routing: { allowFrom: [] },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

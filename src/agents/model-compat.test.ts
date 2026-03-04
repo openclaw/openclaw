@@ -139,7 +139,7 @@ describe("normalizeModelCompat", () => {
   it("forces supportsDeveloperRole off for DashScope provider ids", () => {
     const model = {
       ...baseModel(),
-      provider: "dashscope",
+      provider: "bailian",
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     };
     delete (model as { compat?: unknown }).compat;

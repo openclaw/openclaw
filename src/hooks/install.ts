@@ -58,6 +58,30 @@ export type HookNpmIntegrityDriftParams = {
 
 const defaultLogger: HookInstallLogger = {};
 
+type HookInstallForwardParams = {
+  hooksDir?: string;
+  timeoutMs?: number;
+  logger?: HookInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedHookPackId?: string;
+};
+
+type HookPackageInstallParams = { packageDir: string } & HookInstallForwardParams;
+type HookArchiveInstallParams = { archivePath: string } & HookInstallForwardParams;
+type HookPathInstallParams = { path: string } & HookInstallForwardParams;
+
+function buildHookInstallForwardParams(params: HookInstallForwardParams): HookInstallForwardParams {
+  return {
+    hooksDir: params.hooksDir,
+    timeoutMs: params.timeoutMs,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
+    expectedHookPackId: params.expectedHookPackId,
+  };
+}
+
 function validateHookId(hookId: string): string | null {
   if (!hookId) {
     return "invalid hook name: missing";
@@ -113,6 +137,54 @@ async function resolveInstallTargetDir(
   });
 }
 
+async function resolveAvailableHookInstallTarget(params: {
+  id: string;
+  hooksDir?: string;
+  mode: "install" | "update";
+  alreadyExistsError: (targetDir: string) => string;
+}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
+  const targetDirResult = await resolveInstallTargetDir(params.id, params.hooksDir);
+  if (!targetDirResult.ok) {
+    return targetDirResult;
+  }
+  const targetDir = targetDirResult.targetDir;
+  const availability = await ensureInstallTargetAvailable({
+    mode: params.mode,
+    targetDir,
+    alreadyExistsError: params.alreadyExistsError(targetDir),
+  });
+  if (!availability.ok) {
+    return availability;
+  }
+  return { ok: true, targetDir };
+}
+
+async function installFromResolvedHookDir(
+  resolvedDir: string,
+  params: HookInstallForwardParams,
+): Promise<InstallHooksResult> {
+  const manifestPath = path.join(resolvedDir, "package.json");
+  if (await fileExists(manifestPath)) {
+    return await installHookPackageFromDir({
+      packageDir: resolvedDir,
+      hooksDir: params.hooksDir,
+      timeoutMs: params.timeoutMs,
+      logger: params.logger,
+      mode: params.mode,
+      dryRun: params.dryRun,
+      expectedHookPackId: params.expectedHookPackId,
+    });
+  }
+  return await installHookFromDir({
+    hookDir: resolvedDir,
+    hooksDir: params.hooksDir,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
+    expectedHookPackId: params.expectedHookPackId,
+  });
+}
+
 async function resolveHookNameFromDir(hookDir: string): Promise<string> {
   const hookMdPath = path.join(hookDir, "HOOK.md");
   if (!(await fileExists(hookMdPath))) {
@@ -139,15 +211,9 @@ async function validateHookDir(hookDir: string): Promise<void> {
   }
 }
 
-async function installHookPackageFromDir(params: {
-  packageDir: string;
-  hooksDir?: string;
-  timeoutMs?: number;
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedHookPackId?: string;
-}): Promise<InstallHooksResult> {
+async function installHookPackageFromDir(
+  params: HookPackageInstallParams,
+): Promise<InstallHooksResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
 
   const manifestPath = path.join(params.packageDir, "package.json");
@@ -182,19 +248,16 @@ async function installHookPackageFromDir(params: {
     };
   }
 
-  const targetDirResult = await resolveInstallTargetDir(hookPackId, params.hooksDir);
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  const targetDir = targetDirResult.targetDir;
-  const availability = await ensureInstallTargetAvailable({
+  const target = await resolveAvailableHookInstallTarget({
+    id: hookPackId,
+    hooksDir: params.hooksDir,
     mode,
-    targetDir,
-    alreadyExistsError: `hook pack already exists: ${targetDir} (delete it first)`,
+    alreadyExistsError: (targetDir) => `hook pack already exists: ${targetDir} (delete it first)`,
   });
-  if (!availability.ok) {
-    return availability;
+  if (!target.ok) {
+    return target;
   }
+  const targetDir = target.targetDir;
 
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
@@ -277,19 +340,16 @@ async function installHookFromDir(params: {
     };
   }
 
-  const targetDirResult = await resolveInstallTargetDir(hookName, params.hooksDir);
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  const targetDir = targetDirResult.targetDir;
-  const availability = await ensureInstallTargetAvailable({
+  const target = await resolveAvailableHookInstallTarget({
+    id: hookName,
+    hooksDir: params.hooksDir,
     mode,
-    targetDir,
-    alreadyExistsError: `hook already exists: ${targetDir} (delete it first)`,
+    alreadyExistsError: (targetDir) => `hook already exists: ${targetDir} (delete it first)`,
   });
-  if (!availability.ok) {
-    return availability;
+  if (!target.ok) {
+    return target;
   }
+  const targetDir = target.targetDir;
 
   if (dryRun) {
     return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
@@ -312,15 +372,9 @@ async function installHookFromDir(params: {
   return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
 }
 
-export async function installHooksFromArchive(params: {
-  archivePath: string;
-  hooksDir?: string;
-  timeoutMs?: number;
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedHookPackId?: string;
-}): Promise<InstallHooksResult> {
+export async function installHooksFromArchive(
+  params: HookArchiveInstallParams,
+): Promise<InstallHooksResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
   const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
@@ -334,29 +388,18 @@ export async function installHooksFromArchive(params: {
     tempDirPrefix: "openclaw-hook-",
     timeoutMs,
     logger,
-    onExtracted: async (rootDir) => {
-      const manifestPath = path.join(rootDir, "package.json");
-      if (await fileExists(manifestPath)) {
-        return await installHookPackageFromDir({
-          packageDir: rootDir,
+    onExtracted: async (rootDir) =>
+      await installFromResolvedHookDir(
+        rootDir,
+        buildHookInstallForwardParams({
           hooksDir: params.hooksDir,
           timeoutMs,
           logger,
           mode: params.mode,
           dryRun: params.dryRun,
           expectedHookPackId: params.expectedHookPackId,
-        });
-      }
-
-      return await installHookFromDir({
-        hookDir: rootDir,
-        hooksDir: params.hooksDir,
-        logger,
-        mode: params.mode,
-        dryRun: params.dryRun,
-        expectedHookPackId: params.expectedHookPackId,
-      });
-    },
+        }),
+      ),
   });
 }
 
@@ -386,54 +429,36 @@ export async function installHooksFromNpmSpec(params: {
       logger.warn?.(message);
     },
     installFromArchive: installHooksFromArchive,
-    archiveInstallParams: {
+    archiveInstallParams: buildHookInstallForwardParams({
       hooksDir: params.hooksDir,
       timeoutMs,
       logger,
       mode,
       dryRun,
       expectedHookPackId,
-    },
+    }),
   });
 }
 
-export async function installHooksFromPath(params: {
-  path: string;
-  hooksDir?: string;
-  timeoutMs?: number;
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedHookPackId?: string;
-}): Promise<InstallHooksResult> {
+export async function installHooksFromPath(
+  params: HookPathInstallParams,
+): Promise<InstallHooksResult> {
   const pathResult = await resolveExistingInstallPath(params.path);
   if (!pathResult.ok) {
     return pathResult;
   }
   const { resolvedPath: resolved, stat } = pathResult;
+  const forwardParams = buildHookInstallForwardParams({
+    hooksDir: params.hooksDir,
+    timeoutMs: params.timeoutMs,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
+    expectedHookPackId: params.expectedHookPackId,
+  });
 
   if (stat.isDirectory()) {
-    const manifestPath = path.join(resolved, "package.json");
-    if (await fileExists(manifestPath)) {
-      return await installHookPackageFromDir({
-        packageDir: resolved,
-        hooksDir: params.hooksDir,
-        timeoutMs: params.timeoutMs,
-        logger: params.logger,
-        mode: params.mode,
-        dryRun: params.dryRun,
-        expectedHookPackId: params.expectedHookPackId,
-      });
-    }
-
-    return await installHookFromDir({
-      hookDir: resolved,
-      hooksDir: params.hooksDir,
-      logger: params.logger,
-      mode: params.mode,
-      dryRun: params.dryRun,
-      expectedHookPackId: params.expectedHookPackId,
-    });
+    return await installFromResolvedHookDir(resolved, forwardParams);
   }
 
   if (!resolveArchiveKind(resolved)) {
@@ -442,11 +467,6 @@ export async function installHooksFromPath(params: {
 
   return await installHooksFromArchive({
     archivePath: resolved,
-    hooksDir: params.hooksDir,
-    timeoutMs: params.timeoutMs,
-    logger: params.logger,
-    mode: params.mode,
-    dryRun: params.dryRun,
-    expectedHookPackId: params.expectedHookPackId,
+    ...forwardParams,
   });
 }

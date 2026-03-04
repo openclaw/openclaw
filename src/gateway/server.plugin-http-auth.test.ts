@@ -17,6 +17,7 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
@@ -212,6 +213,93 @@ describe("gateway plugin HTTP auth boundary", () => {
         expectUnauthorizedResponse(unauthenticatedPublic);
 
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/mattermost/command") {
+        res.statusCode = 200;
+        res.end("ok:mm-callback");
+        return true;
+      }
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/mattermost/command" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-callback-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const slashCallback = await sendRequest(server, {
+          path: "/api/channels/mattermost/command",
+          method: "POST",
+        });
+        expect(slashCallback.res.statusCode).toBe(200);
+        expect(slashCallback.getBody()).toBe("ok:mm-callback");
+
+        const otherChannelUnauthed = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+        });
+        expect(otherChannelUnauthed.res.statusCode).toBe(401);
+        expect(otherChannelUnauthed.getBody()).toContain("Unauthorized");
+      },
+    });
+  });
+
+  test("does not bypass auth when mattermost callbackPath points to non-mattermost channel routes", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/api/channels/nostr/default/profile") {
+        res.statusCode = 200;
+        res.end("ok:nostr");
+        return true;
+      }
+      return false;
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/nostr/default/profile" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-misconfig-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { handlePluginRequest },
+        });
+
+        const unauthenticated = await sendRequest(server, {
+          path: "/api/channels/nostr/default/profile",
+          method: "POST",
+        });
+
+        expect(unauthenticated.res.statusCode).toBe(401);
+        expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

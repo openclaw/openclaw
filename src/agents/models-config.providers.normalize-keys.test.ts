@@ -10,8 +10,8 @@ describe("normalizeProviders", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-        " dashscope-vision ": {
-          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        " bailian-vision ": {
+          baseUrl: "https://bailian.aliyuncs.com/compatible-mode/v1",
           api: "openai-completions",
           apiKey: "DASHSCOPE_API_KEY",
           models: [
@@ -29,8 +29,8 @@ describe("normalizeProviders", () => {
       };
 
       const normalized = normalizeProviders({ providers, agentDir });
-      expect(Object.keys(normalized ?? {})).toEqual(["dashscope-vision"]);
-      expect(normalized?.["dashscope-vision"]?.models?.[0]?.id).toBe("qwen-vl-max");
+      expect(Object.keys(normalized ?? {})).toEqual(["bailian-vision"]);
+      expect(normalized?.["bailian-vision"]?.models?.[0]?.id).toBe("qwen-vl-max");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

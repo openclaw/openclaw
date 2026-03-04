@@ -15,6 +15,7 @@ import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
+export { BAILIAN_DEFAULT_MODEL_REF } from "../agents/bailian-models.js";
 export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
@@ -298,6 +299,19 @@ export async function setByteplusApiKey(
   upsertAuthProfile({
     profileId: "byteplus:default",
     credential: buildApiKeyCredential("byteplus", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setBailianApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions & { baseUrl?: string },
+) {
+  const metadata = options?.baseUrl ? { baseUrl: options.baseUrl } : undefined;
+  upsertAuthProfile({
+    profileId: "bailian:default",
+    credential: buildApiKeyCredential("bailian", key, metadata, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

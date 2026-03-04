@@ -1,4 +1,11 @@
 import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
+import {
+  BAILIAN_PAYG_BASE_URL_CN,
+  BAILIAN_PAYG_BASE_URL_INTL,
+  BAILIAN_PAYG_BASE_URL_US,
+  BAILIAN_CODING_BASE_URL_CN,
+  BAILIAN_CODING_BASE_URL_INTL,
+} from "../../../agents/bailian-models.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -36,6 +43,7 @@ import {
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
+  setBailianApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
@@ -468,6 +476,72 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyPrimaryModel(nextConfig, "byteplus-plan/ark-code-latest");
+  }
+
+  // Bailian (Alibaba Cloud) - 5 auth choices for different modes and regions
+  if (
+    authChoice === "bailian-payg-cn" ||
+    authChoice === "bailian-payg-intl" ||
+    authChoice === "bailian-payg-us" ||
+    authChoice === "bailian-coding-cn" ||
+    authChoice === "bailian-coding-intl"
+  ) {
+    let flagName: string;
+    let flagValue: string | undefined;
+    let baseUrl: string;
+
+    switch (authChoice) {
+      case "bailian-payg-cn":
+        flagName = "--bailian-payg-cn-api-key";
+        flagValue = opts.bailianPaygCnApiKey;
+        baseUrl = BAILIAN_PAYG_BASE_URL_CN;
+        break;
+      case "bailian-payg-intl":
+        flagName = "--bailian-payg-intl-api-key";
+        flagValue = opts.bailianPaygIntlApiKey;
+        baseUrl = BAILIAN_PAYG_BASE_URL_INTL;
+        break;
+      case "bailian-payg-us":
+        flagName = "--bailian-payg-us-api-key";
+        flagValue = opts.bailianPaygUsApiKey;
+        baseUrl = BAILIAN_PAYG_BASE_URL_US;
+        break;
+      case "bailian-coding-cn":
+        flagName = "--bailian-coding-cn-api-key";
+        flagValue = opts.bailianCodingCnApiKey;
+        baseUrl = BAILIAN_CODING_BASE_URL_CN;
+        break;
+      case "bailian-coding-intl":
+        flagName = "--bailian-coding-intl-api-key";
+        flagValue = opts.bailianCodingIntlApiKey;
+        baseUrl = BAILIAN_CODING_BASE_URL_INTL;
+        break;
+    }
+
+    const resolved = await resolveApiKey({
+      provider: "bailian",
+      cfg: baseConfig,
+      flagValue,
+      flagName,
+      envVar: "DASHSCOPE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setBailianApiKey(value, undefined, { ...apiKeyStorageOptions, baseUrl }),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "bailian:default",
+      provider: "bailian",
+      mode: "api_key",
+    });
+    return applyPrimaryModel(nextConfig, "bailian/qwen3.5-coder-plus");
   }
 
   if (authChoice === "qianfan-api-key") {

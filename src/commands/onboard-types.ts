@@ -49,6 +49,11 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "bailian-payg-cn"
+  | "bailian-payg-intl"
+  | "bailian-payg-us"
+  | "bailian-coding-cn"
+  | "bailian-coding-intl"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -78,6 +83,7 @@ export type AuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "bailian"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -134,6 +140,11 @@ export type OnboardOptions = {
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
+  bailianPaygCnApiKey?: string;
+  bailianPaygIntlApiKey?: string;
+  bailianPaygUsApiKey?: string;
+  bailianCodingCnApiKey?: string;
+  bailianCodingIntlApiKey?: string;
   qianfanApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;

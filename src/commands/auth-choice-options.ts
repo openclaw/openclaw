@@ -90,6 +90,18 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["byteplus-api-key"],
   },
   {
+    value: "bailian",
+    label: "Alibaba Cloud Bailian (百炼)",
+    hint: "Qwen models - Pay-as-you-go or Coding Plan",
+    choices: [
+      "bailian-payg-cn",
+      "bailian-payg-intl",
+      "bailian-payg-us",
+      "bailian-coding-cn",
+      "bailian-coding-intl",
+    ],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",
@@ -200,6 +212,11 @@ const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = 
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
   "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
+  "bailian-payg-cn": "Pay-as-you-go (China)",
+  "bailian-payg-intl": "Pay-as-you-go (International)",
+  "bailian-payg-us": "Pay-as-you-go (US)",
+  "bailian-coding-cn": "Coding Plan (China)",
+  "bailian-coding-intl": "Coding Plan (International)",
 };
 
 function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {

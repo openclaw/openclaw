@@ -557,12 +557,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
-        provider?: string;
-        model?: string;
-      };
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-5");
+      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
     });
   });
 
@@ -621,26 +616,18 @@ describe("runCronIsolatedAgentTurn", () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
-
-      const first = (
-        await runCronTurn(home, {
+      const runPingTurn = () =>
+        runCronTurn(home, {
           deps,
           jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
           message: "ping",
           mockTexts: ["ok"],
           storePath,
-        })
-      ).res;
+        });
 
-      const second = (
-        await runCronTurn(home, {
-          deps,
-          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
-          message: "ping",
-          mockTexts: ["ok"],
-          storePath,
-        })
-      ).res;
+      const first = (await runPingTurn()).res;
+
+      const second = (await runPingTurn()).res;
 
       expect(first.sessionId).toBeDefined();
       expect(second.sessionId).toBeDefined();

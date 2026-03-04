@@ -25,6 +25,11 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "bailianPaygCnApiKey"
+  | "bailianPaygIntlApiKey"
+  | "bailianPaygUsApiKey"
+  | "bailianCodingCnApiKey"
+  | "bailianCodingIntlApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -197,5 +202,40 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--byteplus-api-key",
     cliOption: "--byteplus-api-key <key>",
     description: "BytePlus API key",
+  },
+  {
+    optionKey: "bailianPaygCnApiKey",
+    authChoice: "bailian-payg-cn",
+    cliFlag: "--bailian-payg-cn-api-key",
+    cliOption: "--bailian-payg-cn-api-key <key>",
+    description: "Alibaba Cloud Bailian Pay-as-you-go (China) API key",
+  },
+  {
+    optionKey: "bailianPaygIntlApiKey",
+    authChoice: "bailian-payg-intl",
+    cliFlag: "--bailian-payg-intl-api-key",
+    cliOption: "--bailian-payg-intl-api-key <key>",
+    description: "Alibaba Cloud Bailian Pay-as-you-go (International) API key",
+  },
+  {
+    optionKey: "bailianPaygUsApiKey",
+    authChoice: "bailian-payg-us",
+    cliFlag: "--bailian-payg-us-api-key",
+    cliOption: "--bailian-payg-us-api-key <key>",
+    description: "Alibaba Cloud Bailian Pay-as-you-go (US) API key",
+  },
+  {
+    optionKey: "bailianCodingCnApiKey",
+    authChoice: "bailian-coding-cn",
+    cliFlag: "--bailian-coding-cn-api-key",
+    cliOption: "--bailian-coding-cn-api-key <key>",
+    description: "Alibaba Cloud Bailian Coding Plan (China) API key",
+  },
+  {
+    optionKey: "bailianCodingIntlApiKey",
+    authChoice: "bailian-coding-intl",
+    cliFlag: "--bailian-coding-intl-api-key",
+    cliOption: "--bailian-coding-intl-api-key <key>",
+    description: "Alibaba Cloud Bailian Coding Plan (International) API key",
   },
 ];
