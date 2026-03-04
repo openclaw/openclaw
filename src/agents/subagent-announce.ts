@@ -741,6 +741,7 @@ async function sendSubagentAnnounceDirectly(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
+  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -805,8 +806,12 @@ async function sendSubagentAnnounceDirectly(params: {
         // session routing while sibling or descendant runs are still pending.
         // Also route through parent when configured, so the orchestrator
         // can synthesize every sub-agent result before delivery.
+        // Cron job completions are excluded from completionRouteViaParent:
+        // they must stay on the direct-send path so delivery state is truthful
+        // (the agent path returns success even without outbound payload).
         const alwaysRouteViaParent =
-          cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+          cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true &&
+          params.announceType !== "cron job";
         if (pendingDescendantRuns > 0 || alwaysRouteViaParent) {
           shouldSendCompletionDirectly = false;
         }
@@ -925,6 +930,7 @@ async function deliverSubagentAnnouncement(params: {
   spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
   currentRunId?: string;
+  announceType?: SubagentAnnounceType;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
@@ -955,6 +961,7 @@ async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        announceType: params.announceType,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
@@ -1412,6 +1419,7 @@ export async function runSubagentAnnounceFlow(params: {
       spawnMode: params.spawnMode,
       directIdempotencyKey,
       currentRunId: params.childRunId,
+      announceType,
       signal: params.signal,
     });
     // Cron delivery state should only be marked as delivered when we have a
