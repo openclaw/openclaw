@@ -155,8 +155,16 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
-// Channels like Zalo treat `send.media` as a remote URL and cannot consume local file paths.
-const URL_ONLY_SEND_MEDIA_CHANNELS = new Set<ChannelId>(["zalo"]);
+// These channels treat `send.media` as a remote URL (or plain text fallback) and
+// do not consume local filesystem paths in their send action implementations.
+const URL_ONLY_SEND_MEDIA_CHANNELS = new Set<ChannelId>([
+  "zalo",
+  "line",
+  "irc",
+  "nextcloud-talk",
+  "synology-chat",
+  "tlon",
+]);
 
 export type AttachmentMediaPolicy =
   | {
