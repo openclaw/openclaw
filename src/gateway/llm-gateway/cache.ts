@@ -14,6 +14,11 @@ import type { CacheEntry, CacheConfig, GatewayRequest, GatewayResponse } from ".
  */
 class VectorStore {
   private entries: Array<{ key: string; embedding: number[]; value: GatewayResponse }> = [];
+  private maxSize: number;
+
+  constructor(maxSize: number = 1000) {
+    this.maxSize = maxSize;
+  }
 
   add(key: string, embedding: number[], value: GatewayResponse): void {
     if (this.entries.length >= this.maxSize) {
@@ -32,16 +37,16 @@ class VectorStore {
     for (const entry of this.entries) {
       const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
       if (similarity >= threshold) {
-        results.push({ entry, similarity: _similarity });
+        results.push({ entry, similarity });
       }
     }
 
     results.sort((a, b) => b.similarity - a.similarity);
 
-    return results.slice(0, maxResults).map(({ entry, similarity: _similarity }) => ({
+    return results.slice(0, maxResults).map(({ entry, similarity }) => ({
       key: entry.key,
       cached: true,
-      _similarity,
+      similarity,
     }));
   }
 

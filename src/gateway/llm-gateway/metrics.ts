@@ -2,6 +2,8 @@
  * LLM Gateway Metrics - Prometheus-compatible metrics collection
  */
 
+import type { GatewayMetrics, TierLevel, TokenUsage } from "./types.js";
+
 /**
  * Metrics collector with Prometheus export format
  */
@@ -181,8 +183,11 @@ export class MetricsCollector {
     lines.push("# HELP llm_gateway_tokens_total Token usage by tier");
     lines.push("# TYPE llm_gateway_tokens_total counter");
     for (const [tier, usage] of Object.entries(this.metrics.tokensByTier)) {
-      lines.push(`llm_gateway_tokens_total{tier="${tier}",type="prompt"} ${usage.prompt}`);
-      lines.push(`llm_gateway_tokens_total{tier="${tier}",type="completion"} ${usage.completion}`);
+      const typedUsage = usage as { prompt: number; completion: number };
+      lines.push(`llm_gateway_tokens_total{tier="${tier}",type="prompt"} ${typedUsage.prompt}`);
+      lines.push(
+        `llm_gateway_tokens_total{tier="${tier}",type="completion"} ${typedUsage.completion}`,
+      );
     }
 
     // Cost savings estimation (compared to always using premium)
@@ -293,7 +298,10 @@ export class MetricsCollector {
  * Prometheus HTTP handler
  */
 export function createPrometheusHandler(metrics: MetricsCollector) {
-  return async (req: unknown, res: unknown) => {
+  return async (
+    req: Record<string, unknown>,
+    res: { setHeader: (name: string, value: string) => void; send: (data: string) => void },
+  ) => {
     const prometheusOutput = metrics.exportPrometheus();
     res.setHeader("Content-Type", "text/plain; version=0.0.4");
     res.send(prometheusOutput);
@@ -304,7 +312,10 @@ export function createPrometheusHandler(metrics: MetricsCollector) {
  * Create JSON metrics handler
  */
 export function createJsonMetricsHandler(metrics: MetricsCollector) {
-  return async (req: unknown, res: unknown) => {
+  return async (
+    req: Record<string, unknown>,
+    res: { setHeader: (name: string, value: string) => void; send: (data: string) => void },
+  ) => {
     const jsonData = metrics.exportJSON();
     res.setHeader("Content-Type", "application/json");
     res.send(jsonData);

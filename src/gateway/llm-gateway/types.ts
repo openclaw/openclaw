@@ -161,6 +161,7 @@ export interface SecurityPolicy {
   killSwitchEnabled: boolean;
   blockedPatterns: string[];
   allowedModels: string[];
+  defaultModel?: string;
 }
 
 export interface RateLimitState {

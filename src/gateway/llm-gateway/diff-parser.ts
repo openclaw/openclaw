@@ -4,6 +4,29 @@
  * Parses unified diff format, validates patches, and calculates risk scores
  */
 
+// Type definitions
+export interface DiffLine {
+  type: "add" | "remove" | "context";
+  content: string;
+  lineNumber: number;
+}
+
+export interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: DiffLine[];
+}
+
+export interface ParsedDiff {
+  hunks: DiffHunk[];
+  files: string[];
+  additions: number;
+  deletions: number;
+  riskScore: number;
+}
+
 // Unified diff regex patterns
 const HUNK_HEADER_REGEX = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 const FILE_HEADER_REGEX = /^--- (a\/)?(.+)$/;
@@ -185,8 +208,8 @@ export function validateDiff(diffText: string): { valid: boolean; errors: string
 
   let hasFileHeader = false;
   let hasHunkHeader = false;
-  let _currentHunkLineCount = 0;
-  let _expectedHunkLines = 0;
+  let ___currentHunkLineCount = 0;
+  let ___expectedHunkLines = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -204,13 +227,13 @@ export function validateDiff(diffText: string): { valid: boolean; errors: string
     if (hunkMatch) {
       hasHunkHeader = true;
       // Reset line count for new hunk
-      currentHunkLineCount = 0;
-      expectedHunkLines = (parseInt(hunkMatch[4]) || 1) + (parseInt(hunkMatch[2]) || 1);
+      __currentHunkLineCount = 0;
+      __expectedHunkLines = (parseInt(hunkMatch[4]) || 1) + (parseInt(hunkMatch[2]) || 1);
     }
 
     // Count lines in hunk
     if (hasHunkHeader && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))) {
-      currentHunkLineCount++;
+      __currentHunkLineCount++;
     }
   }
 
@@ -329,7 +352,7 @@ export function generateDiff(
             delCount++;
           }
           if (l.type === "+") {
-            _addCount++;
+            __addCount++;
           }
         }
 
@@ -358,7 +381,7 @@ export function generateDiff(
         delCount++;
       }
       if (l.type === "+") {
-        _addCount++;
+        __addCount++;
       }
     }
 

@@ -31,7 +31,9 @@ export abstract class BaseProvider {
   ): Promise<GatewayResponse>;
 
   protected generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Use crypto for secure random ID generation
+    const crypto = require("crypto");
+    return `${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
   }
 
   protected calculateCost(usage: TokenUsage): number {
@@ -486,7 +488,10 @@ export class AnthropicProvider extends BaseProvider {
           text?: string;
           source?: { type: string; media_type: string; data: string };
         }>,
-  ) {
+  ): Array<
+    | { type: "text"; text: string }
+    | { type: "image"; source: { type: string; media_type: string; data: string } }
+  > {
     if (typeof content === "string") {
       return [{ type: "text" as const, text: content }];
     }
@@ -508,7 +513,7 @@ export class AnthropicProvider extends BaseProvider {
         }
         return null;
       })
-      .filter(Boolean);
+      .filter((b): b is NonNullable<typeof b> => b !== null);
   }
 
   private convertTools(tools?: GatewayRequest["tools"]) {
