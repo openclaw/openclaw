@@ -119,21 +119,25 @@ export function readTerminalSnapshotFromGatewayDedupe(params: {
   runId: string;
 }): AgentWaitTerminalSnapshot | null {
   const agentEntry = params.dedupe.get(`agent:${params.runId}`);
+  const agentSnapshot = agentEntry ? readTerminalSnapshotFromDedupeEntry(agentEntry) : null;
   if (agentEntry) {
-    const agentSnapshot = readTerminalSnapshotFromDedupeEntry(agentEntry);
-    if (agentSnapshot) {
-      return agentSnapshot;
+    if (!agentSnapshot) {
+      // If an agent run has an in-flight dedupe entry, never fall back to any
+      // stale chat dedupe record for the same run id.
+      return null;
     }
-    // If an agent run has an in-flight dedupe entry, never fall back to any
-    // stale chat dedupe record for the same run id.
-    return null;
   }
 
   const chatEntry = params.dedupe.get(`chat:${params.runId}`);
-  if (!chatEntry) {
-    return null;
+  const chatSnapshot = chatEntry ? readTerminalSnapshotFromDedupeEntry(chatEntry) : null;
+
+  if (agentSnapshot && chatSnapshot && agentEntry && chatEntry) {
+    // Reused idempotency keys can leave both records present. Prefer the
+    // freshest terminal snapshot so callers observe the latest run outcome.
+    return chatEntry.ts > agentEntry.ts ? chatSnapshot : agentSnapshot;
   }
-  return readTerminalSnapshotFromDedupeEntry(chatEntry);
+
+  return agentSnapshot ?? chatSnapshot;
 }
 
 export async function waitForTerminalGatewayDedupe(params: {

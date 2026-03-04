@@ -212,10 +212,12 @@ async function probeDiscordAcpBindingHealth(params: {
   lastActivityAt?: number;
 }): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {
   const manager = getAcpSessionManager();
+  const statusProbeAbortController = new AbortController();
   const statusPromise = manager
     .getSessionStatus({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      signal: statusProbeAbortController.signal,
     })
     .then((status) => ({ kind: "status" as const, status }))
     .catch((error: unknown) => ({ kind: "error" as const, error }));
@@ -231,6 +233,9 @@ async function probeDiscordAcpBindingHealth(params: {
   const result = await Promise.race([statusPromise, timeoutPromise]);
   if (timeoutTimer) {
     clearTimeout(timeoutTimer);
+  }
+  if (result.kind === "timeout") {
+    statusProbeAbortController.abort();
   }
   const runningForMs =
     params.storedState === "running" && Number.isFinite(params.lastActivityAt)

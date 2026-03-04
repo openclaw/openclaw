@@ -65,7 +65,11 @@ const {
       staleSessionKeys: [],
     })),
     createdBindingManagers,
-    getAcpSessionStatusMock: vi.fn(async () => ({ state: "idle" })),
+    getAcpSessionStatusMock: vi.fn(
+      async (_params: { cfg: OpenClawConfig; sessionKey: string; signal?: AbortSignal }) => ({
+        state: "idle",
+      }),
+    ),
     getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
     listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
       { name: "cmd", description: "built-in", acceptsArgs: false },
@@ -489,6 +493,51 @@ describe("monitorDiscordProvider", () => {
       status: "uncertain",
       reason: "status-error",
     });
+  });
+
+  it("aborts timed-out ACP status probes during startup thread-binding health checks", async () => {
+    vi.useFakeTimers();
+    try {
+      const { monitorDiscordProvider } = await import("./provider.js");
+      getAcpSessionStatusMock.mockImplementation(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      );
+
+      await monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      });
+
+      const probePromise = getHealthProbe()({
+        cfg: baseConfig(),
+        accountId: "default",
+        sessionKey: "agent:codex:acp:timeout",
+        binding: {} as never,
+        session: {
+          acp: {
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        } as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_100);
+      await expect(probePromise).resolves.toEqual({
+        status: "uncertain",
+        reason: "status-timeout",
+      });
+
+      const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
+        | { signal?: AbortSignal }
+        | undefined;
+      expect(firstCall?.signal).toBeDefined();
+      expect(firstCall?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to legacy missing-session message classification", async () => {

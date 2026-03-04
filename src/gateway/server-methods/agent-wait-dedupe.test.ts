@@ -97,6 +97,74 @@ describe("agent wait dedupe helper", () => {
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 
+  it("prefers the freshest terminal snapshot when agent/chat dedupe keys collide", () => {
+    const runId = "run-collision";
+    const dedupe = new Map();
+
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: { runId, status: "ok", startedAt: 10, endedAt: 20 },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 200,
+        ok: false,
+        payload: { runId, status: "error", startedAt: 30, endedAt: 40, error: "chat failed" },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 30,
+      endedAt: 40,
+      error: "chat failed",
+    });
+
+    const dedupeReverse = new Map();
+    setGatewayDedupeEntry({
+      dedupe: dedupeReverse,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: { runId, status: "ok", startedAt: 1, endedAt: 2 },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe: dedupeReverse,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: { runId, status: "timeout", startedAt: 3, endedAt: 4, error: "still running" },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe: dedupeReverse,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      startedAt: 3,
+      endedAt: 4,
+      error: "still running",
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";
