@@ -143,4 +143,14 @@ describe("shouldSuppressMessagingToolReplies", () => {
       }),
     ).toBe(true);
   });
+
+  it("suppresses telegram replies when chatId matches but target forms differ", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:group:-100123",
+        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+      }),
+    ).toBe(true);
+  });
 });

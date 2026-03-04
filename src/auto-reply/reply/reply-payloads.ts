@@ -216,7 +216,8 @@ function targetsMatchForSuppression(params: {
   if (!originThreadId && targetThreadId != null) {
     return false;
   }
-  return params.targetKey === params.originTarget;
+  // chatId already matched and neither side carries thread context.
+  return true;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {

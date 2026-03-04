@@ -71,6 +71,19 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "main",
+  "direct",
+  "dm",
+  "group",
+  "channel",
+  "cron",
+  "run",
+  "subagent",
+  "acp",
+  "thread",
+  "topic",
+]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -851,19 +864,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       const parsedSessionKey = parseAgentSessionKey(sessionKey);
       const sessionScopeHead = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean)[0];
       const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-      const isChannelAgnosticSessionScope = new Set([
-        "main",
-        "direct",
-        "dm",
-        "group",
-        "channel",
-        "cron",
-        "run",
-        "subagent",
-        "acp",
-        "thread",
-        "topic",
-      ]).has((sessionScopeHead ?? "").trim().toLowerCase());
+      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+        (sessionScopeHead ?? "").trim().toLowerCase(),
+      );
       // Only inherit prior external route metadata for channel-scoped sessions.
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
