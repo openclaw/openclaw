@@ -3,15 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadConfig = vi.fn();
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn();
-const resolveGatewayPort = vi.fn(() => 18789);
-const resolveIsNixMode = vi.fn(() => false);
-const isGatewayDaemonRuntime = vi.fn(() => true);
-const resolveGatewayAuth = vi.fn(() => ({
+const resolveGatewayPort = vi.fn((_cfg?: unknown) => 18789);
+const resolveIsNixMode = vi.fn((_env?: unknown) => false);
+const isGatewayDaemonRuntime = vi.fn((_value?: unknown) => true);
+const resolveGatewayAuth = vi.fn((_input?: unknown) => ({
   mode: "token",
   token: "cfg-token",
   allowTailscale: false,
 }));
-const buildGatewayInstallPlan = vi.fn(async () => ({
+const buildGatewayInstallPlan = vi.fn(async (_params?: unknown) => ({
   programArguments: ["node", "cli", "gateway"],
   workingDirectory: process.cwd(),
   environment: {},
