@@ -204,6 +204,8 @@ describe("external-content security", () => {
         ["\u27EE", "\u27EF"], // flattened parentheses
         ["\u276C", "\u276D"], // medium angle bracket ornaments
         ["\u276E", "\u276F"], // heavy angle quotation ornaments
+        ["\u02C2", "\u02C3"], // modifier letter left/right arrowhead
+        ["\u1438", "\u1439"], // canadian syllabics west-cree pwa/pwi
       ];
 
       for (const [left, right] of bracketPairs) {
