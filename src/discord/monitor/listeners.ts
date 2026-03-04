@@ -41,7 +41,11 @@ type Logger = ReturnType<typeof import("../../logging/subsystem.js").createSubsy
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
-export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
+export type DiscordMessageHandler = (
+  data: DiscordMessageEvent,
+  client: Client,
+  options?: { abortSignal?: AbortSignal },
+) => Promise<void>;
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
@@ -134,7 +138,7 @@ async function runDiscordListenerWithSlowLog(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
-  run: () => Promise<void>;
+  run: (abortSignal: AbortSignal) => Promise<void>;
   timeoutMs?: number;
   context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
@@ -144,8 +148,17 @@ async function runDiscordListenerWithSlowLog(params: {
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const logger = params.logger ?? discordEventQueueLog;
-  const runPromise = params.run().catch((err) => {
+  const abortController = new AbortController();
+  const runPromise = params.run(abortController.signal).catch((err) => {
     if (timedOut) {
+      const errorName =
+        err && typeof err === "object" && "name" in err ? String(err.name) : undefined;
+      if (abortController.signal.aborted && errorName === "AbortError") {
+        logger.warn(
+          `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
+        );
+        return;
+      }
       logger.error(
         danger(
           `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
@@ -167,6 +180,7 @@ async function runDiscordListenerWithSlowLog(params: {
     ]);
     if (result === "timeout") {
       timedOut = true;
+      abortController.abort();
       logger.error(
         danger(
           `discord handler timed out after ${formatDurationSeconds(timeoutMs, {
@@ -239,7 +253,7 @@ export class DiscordMessageListener extends MessageCreateListener {
         event: this.type,
         timeoutMs: this.listenerTimeoutMs,
         context,
-        run: () => this.handler(data, client),
+        run: (abortSignal) => this.handler(data, client, { abortSignal }),
         onError: (err) => {
           const logger = this.logger ?? discordEventQueueLog;
           logger.error(danger(`discord handler failed: ${String(err)}`));
@@ -297,7 +311,7 @@ async function runDiscordReactionHandler(params: {
     logger: params.handlerParams.logger,
     listener: params.listener,
     event: params.event,
-    run: () =>
+    run: async () =>
       handleDiscordReactionEvent({
         data: params.data,
         client: params.client,

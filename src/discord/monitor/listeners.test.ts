@@ -151,6 +151,60 @@ describe("DiscordMessageListener", () => {
     }
   });
 
+  it("aborts timed-out handlers and prevents late side effects", async () => {
+    vi.useFakeTimers();
+    try {
+      let abortReceived = false;
+      let lateSideEffect = false;
+      const handler = vi.fn(
+        async (
+          _data: unknown,
+          _client: unknown,
+          options?: {
+            abortSignal?: AbortSignal;
+          },
+        ) => {
+          await new Promise<void>((resolve) => {
+            if (options?.abortSignal?.aborted) {
+              abortReceived = true;
+              resolve();
+              return;
+            }
+            options?.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortReceived = true;
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          if (options?.abortSignal?.aborted) {
+            return;
+          }
+          lateSideEffect = true;
+        },
+      );
+      const logger = createLogger();
+      const listener = new DiscordMessageListener(handler as never, logger as never, undefined, {
+        timeoutMs: 50,
+      });
+
+      await listener.handle(fakeEvent("ch-1"), {} as never);
+      await listener.handle(fakeEvent("ch-1"), {} as never);
+
+      await vi.advanceTimersByTimeAsync(60);
+      await vi.waitFor(() => {
+        expect(handler).toHaveBeenCalledTimes(2);
+      });
+      expect(abortReceived).toBe(true);
+      expect(lateSideEffect).toBe(false);
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not emit slow-listener warnings when timeout already fired", async () => {
     vi.useFakeTimers();
     try {
