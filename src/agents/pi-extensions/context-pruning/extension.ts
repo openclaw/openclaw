@@ -1,5 +1,5 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { pruneContextMessages } from "./pruner.js";
+import { estimateContextUsageRatio, pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
 export default function contextPruningExtension(api: ExtensionAPI): void {
@@ -9,7 +9,21 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       return undefined;
     }
 
-    if (runtime.settings.mode === "cache-ttl") {
+    const contextWindowTokensOverride =
+      typeof runtime.contextWindowTokens === "number" &&
+      Number.isFinite(runtime.contextWindowTokens) &&
+      runtime.contextWindowTokens > 0
+        ? runtime.contextWindowTokens
+        : undefined;
+    const forcePruneRatio = runtime.settings.forcePruneRatio;
+    const bypassTtl =
+      typeof forcePruneRatio === "number" &&
+      estimateContextUsageRatio(
+        event.messages,
+        contextWindowTokensOverride ?? ctx.model?.contextWindow,
+      ) >= forcePruneRatio;
+
+    if (runtime.settings.mode === "cache-ttl" && !bypassTtl) {
       const ttlMs = runtime.settings.ttlMs;
       const lastTouch = runtime.lastCacheTouchAt ?? null;
       if (!lastTouch || ttlMs <= 0) {
@@ -25,7 +39,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       settings: runtime.settings,
       ctx,
       isToolPrunable: runtime.isToolPrunable,
-      contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
+      contextWindowTokensOverride,
     });
 
     if (next === event.messages) {
