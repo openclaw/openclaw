@@ -17,11 +17,34 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return false;
   }
 
+  // Try modern Clipboard API first
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
+    // Fallback for browsers/contexts where Clipboard API fails (e.g., some Windows Chrome configurations)
+    return fallbackCopyToClipboard(text);
+  }
+}
+
+// Fallback copy method using textarea and execCommand
+function fallbackCopyToClipboard(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    const success = document.execCommand("copy");
+    return success;
+  } catch {
     return false;
+  } finally {
+    document.body.removeChild(textarea);
   }
 }
 
