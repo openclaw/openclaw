@@ -7,14 +7,17 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -68,6 +71,20 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "main",
+  "direct",
+  "dm",
+  "group",
+  "channel",
+  "cron",
+  "run",
+  "subagent",
+  "acp",
+  "thread",
+  "topic",
+]);
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -185,25 +202,62 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   return { message: changed ? entry : message, changed };
 }
 
+/**
+ * Extract the visible text from an assistant history message for silent-token checks.
+ * Returns `undefined` for non-assistant messages or messages with no extractable text.
+ * When `entry.text` is present it takes precedence over `entry.content` to avoid
+ * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
+ */
+function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return undefined;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
-  const next = messages.map((message) => {
+  const next: unknown[] = [];
+  for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
-    return res.message;
-  });
-  return changed ? next : messages;
-}
-
-function jsonUtf8Bytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Buffer.byteLength(String(value), "utf8");
+    // Drop assistant messages whose entire visible text is the silent reply token.
+    const text = extractAssistantTextForSilentCheck(res.message);
+    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    next.push(res.message);
   }
+  return changed ? next : messages;
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
@@ -574,20 +628,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
-      if (configured) {
-        thinkingLevel = configured;
-      } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        const catalog = await context.loadGatewayModelCatalog();
-        thinkingLevel = resolveThinkingDefault({
-          cfg,
-          provider,
-          model,
-          catalog,
-        });
-      }
+      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const catalog = await context.loadGatewayModelCatalog();
+      thinkingLevel = resolveThinkingDefault({
+        cfg,
+        provider,
+        model,
+        catalog,
+      });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
@@ -806,6 +855,51 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const routeChannelCandidate = normalizeMessageChannel(
+        entry?.deliveryContext?.channel ?? entry?.lastChannel,
+      );
+      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
+      const routeAccountIdCandidate =
+        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
+      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const parsedSessionKey = parseAgentSessionKey(sessionKey);
+      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
+      const sessionScopeHead = sessionScopeParts[0];
+      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+        .map((part) => (part ?? "").trim().toLowerCase())
+        .filter(Boolean);
+      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+        (sessionScopeHead ?? "").trim().toLowerCase(),
+      );
+      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+      );
+      const hasLegacyChannelPeerShape =
+        !isChannelScopedSession &&
+        typeof sessionScopeParts[1] === "string" &&
+        sessionChannelHint === routeChannelCandidate;
+      // Only inherit prior external route metadata for channel-scoped sessions.
+      // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
+      // leak stale routes across surfaces.
+      const canInheritDeliverableRoute = Boolean(
+        sessionChannelHint &&
+        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+        !isChannelAgnosticSessionScope &&
+        (isChannelScopedSession || hasLegacyChannelPeerShape),
+      );
+      const hasDeliverableRoute =
+        canInheritDeliverableRoute &&
+        routeChannelCandidate &&
+        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+        typeof routeToCandidate === "string" &&
+        routeToCandidate.trim().length > 0;
+      const originatingChannel = hasDeliverableRoute
+        ? routeChannelCandidate
+        : INTERNAL_MESSAGE_CHANNEL;
+      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
+      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
+      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -820,7 +914,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+        OriginatingChannel: originatingChannel,
+        OriginatingTo: originatingTo,
+        AccountId: accountId,
+        MessageThreadId: messageThreadId,
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,

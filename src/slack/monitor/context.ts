@@ -12,47 +12,10 @@ import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
+import { normalizeSlackChannelType } from "./channel-type.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
-export function inferSlackChannelType(
-  channelId?: string | null,
-): SlackMessageEvent["channel_type"] | undefined {
-  const trimmed = channelId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("D")) {
-    return "im";
-  }
-  if (trimmed.startsWith("C")) {
-    return "channel";
-  }
-  if (trimmed.startsWith("G")) {
-    return "group";
-  }
-  return undefined;
-}
-
-export function normalizeSlackChannelType(
-  channelType?: string | null,
-  channelId?: string | null,
-): SlackMessageEvent["channel_type"] {
-  const normalized = channelType?.trim().toLowerCase();
-  const inferred = inferSlackChannelType(channelId);
-  if (
-    normalized === "im" ||
-    normalized === "mpim" ||
-    normalized === "channel" ||
-    normalized === "group"
-  ) {
-    // D-prefix channel IDs are always DMs — override a contradicting channel_type.
-    if (inferred === "im" && normalized !== "im") {
-      return "im";
-    }
-    return normalized;
-  }
-  return inferred ?? "channel";
-}
+export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type.js";
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
@@ -78,6 +41,7 @@ export type SlackMonitorContext = {
   groupDmChannels: string[];
   defaultRequireMention: boolean;
   channelsConfig?: SlackChannelConfigEntries;
+  channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
@@ -88,6 +52,7 @@ export type SlackMonitorContext = {
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
+  typingReaction: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 
@@ -150,6 +115,7 @@ export function createSlackMonitorContext(params: {
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
+  typingReaction: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 }): SlackMonitorContext {
@@ -170,7 +136,10 @@ export function createSlackMonitorContext(params: {
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
+  const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
   const defaultRequireMention = params.defaultRequireMention ?? true;
+  const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
+  const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
   const markMessageSeen = (channelId: string | undefined, ts?: string) => {
     if (!channelId || !ts) {
@@ -308,7 +277,6 @@ export function createSlackMonitorContext(params: {
     }
 
     if (isGroupDm && groupDmChannels.length > 0) {
-      const allowList = normalizeAllowListLower(groupDmChannels);
       const candidates = [
         p.channelId,
         p.channelName ? `#${p.channelName}` : undefined,
@@ -318,7 +286,8 @@ export function createSlackMonitorContext(params: {
         .filter((value): value is string => Boolean(value))
         .map((value) => value.toLowerCase());
       const permitted =
-        allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
+        groupDmChannelsLower.includes("*") ||
+        candidates.some((candidate) => groupDmChannelsLower.includes(candidate));
       if (!permitted) {
         return false;
       }
@@ -329,12 +298,12 @@ export function createSlackMonitorContext(params: {
         channelId: p.channelId,
         channelName: p.channelName,
         channels: params.channelsConfig,
+        channelKeys: channelsConfigKeys,
         defaultRequireMention,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
-      const channelAllowlistConfigured =
-        Boolean(params.channelsConfig) && Object.keys(params.channelsConfig ?? {}).length > 0;
+      const channelAllowlistConfigured = hasChannelAllowlistConfig;
       if (
         !isSlackChannelAllowedByPolicy({
           groupPolicy: params.groupPolicy,
@@ -365,9 +334,18 @@ export function createSlackMonitorContext(params: {
     if (!body || typeof body !== "object") {
       return false;
     }
-    const raw = body as { api_app_id?: unknown; team_id?: unknown };
+    const raw = body as {
+      api_app_id?: unknown;
+      team_id?: unknown;
+      team?: { id?: unknown };
+    };
     const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
-    const incomingTeamId = typeof raw.team_id === "string" ? raw.team_id : "";
+    const incomingTeamId =
+      typeof raw.team_id === "string"
+        ? raw.team_id
+        : typeof raw.team?.id === "string"
+          ? raw.team.id
+          : "";
 
     if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
       logVerbose(
@@ -403,6 +381,7 @@ export function createSlackMonitorContext(params: {
     groupDmChannels,
     defaultRequireMention,
     channelsConfig: params.channelsConfig,
+    channelsConfigKeys,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     reactionMode: params.reactionMode,
@@ -413,6 +392,7 @@ export function createSlackMonitorContext(params: {
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
+    typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     removeAckAfterReply: params.removeAckAfterReply,
     logger,

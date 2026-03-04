@@ -18,7 +18,8 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { normalizeSecretInputString } from "./secret-input.js";
+import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
 
@@ -229,7 +230,9 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
+    const configured =
+      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
+      hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
     return {
       channel,
       configured,
@@ -240,16 +243,12 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
   },
   configure: async ({ cfg, prompter }) => {
     const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
-    const hasConfigCreds = Boolean(
-      cfg.channels?.msteams?.appId?.trim() &&
-      cfg.channels?.msteams?.appPassword?.trim() &&
-      cfg.channels?.msteams?.tenantId?.trim(),
-    );
+    const hasConfigCreds = hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
     const canUseEnv = Boolean(
       !hasConfigCreds &&
-      process.env.MSTEAMS_APP_ID?.trim() &&
-      process.env.MSTEAMS_APP_PASSWORD?.trim() &&
-      process.env.MSTEAMS_TENANT_ID?.trim(),
+      normalizeSecretInputString(process.env.MSTEAMS_APP_ID) &&
+      normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) &&
+      normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
     );
 
     let next = cfg;
@@ -257,7 +256,7 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
     let appPassword: string | null = null;
     let tenantId: string | null = null;
 
-    if (!resolved) {
+    if (!resolved && !hasConfigCreds) {
       await noteMSTeamsCredentialHelp(prompter);
     }
 

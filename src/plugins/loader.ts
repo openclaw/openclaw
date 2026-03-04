@@ -22,6 +22,7 @@ import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
   OpenClawPluginDefinition,
@@ -91,6 +92,38 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const resolvePluginSdkCoreAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "core.ts", distFile: "core.js" });
+};
+
+const resolvePluginSdkTelegramAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "telegram.ts", distFile: "telegram.js" });
+};
+
+const resolvePluginSdkDiscordAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "discord.ts", distFile: "discord.js" });
+};
+
+const resolvePluginSdkSlackAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "slack.ts", distFile: "slack.js" });
+};
+
+const resolvePluginSdkSignalAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "signal.ts", distFile: "signal.js" });
+};
+
+const resolvePluginSdkIMessageAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "imessage.ts", distFile: "imessage.js" });
+};
+
+const resolvePluginSdkWhatsAppAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "whatsapp.ts", distFile: "whatsapp.js" });
+};
+
+const resolvePluginSdkLineAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "line.ts", distFile: "line.js" });
+};
+
 export const __testing = {
   resolvePluginSdkAliasFile,
 };
@@ -121,7 +154,7 @@ function validatePluginConfig(params: {
   if (result.ok) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
-  return { ok: false, errors: result.errors };
+  return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -176,7 +209,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpHandlers: 0,
+    httpRoutes: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
@@ -365,6 +398,11 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
+function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
+  setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry);
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -380,7 +418,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
-      setActivePluginRegistry(cached, cacheKey);
+      activatePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -388,7 +426,39 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Clear previously registered plugin commands before reloading
   clearPluginCommands();
 
-  const runtime = createPluginRuntime();
+  // Lazily initialize the runtime so startup paths that discover/skip plugins do
+  // not eagerly load every channel runtime dependency.
+  let resolvedRuntime: PluginRuntime | null = null;
+  const resolveRuntime = (): PluginRuntime => {
+    resolvedRuntime ??= createPluginRuntime();
+    return resolvedRuntime;
+  };
+  const runtime = new Proxy({} as PluginRuntime, {
+    get(_target, prop, receiver) {
+      return Reflect.get(resolveRuntime(), prop, receiver);
+    },
+    set(_target, prop, value, receiver) {
+      return Reflect.set(resolveRuntime(), prop, value, receiver);
+    },
+    has(_target, prop) {
+      return Reflect.has(resolveRuntime(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(resolveRuntime() as object);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    },
+    defineProperty(_target, prop, attributes) {
+      return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
+    },
+    deleteProperty(_target, prop) {
+      return Reflect.deleteProperty(resolveRuntime() as object, prop);
+    },
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(resolveRuntime() as object);
+    },
+  });
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,
@@ -430,17 +500,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
+    const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
+    const pluginSdkDiscordAlias = resolvePluginSdkDiscordAlias();
+    const pluginSdkSlackAlias = resolvePluginSdkSlackAlias();
+    const pluginSdkSignalAlias = resolvePluginSdkSignalAlias();
+    const pluginSdkIMessageAlias = resolvePluginSdkIMessageAlias();
+    const pluginSdkWhatsAppAlias = resolvePluginSdkWhatsAppAlias();
+    const pluginSdkLineAlias = resolvePluginSdkLineAlias();
+    const aliasMap = {
+      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+      ...(pluginSdkCoreAlias ? { "openclaw/plugin-sdk/core": pluginSdkCoreAlias } : {}),
+      ...(pluginSdkTelegramAlias ? { "openclaw/plugin-sdk/telegram": pluginSdkTelegramAlias } : {}),
+      ...(pluginSdkDiscordAlias ? { "openclaw/plugin-sdk/discord": pluginSdkDiscordAlias } : {}),
+      ...(pluginSdkSlackAlias ? { "openclaw/plugin-sdk/slack": pluginSdkSlackAlias } : {}),
+      ...(pluginSdkSignalAlias ? { "openclaw/plugin-sdk/signal": pluginSdkSignalAlias } : {}),
+      ...(pluginSdkIMessageAlias ? { "openclaw/plugin-sdk/imessage": pluginSdkIMessageAlias } : {}),
+      ...(pluginSdkWhatsAppAlias ? { "openclaw/plugin-sdk/whatsapp": pluginSdkWhatsAppAlias } : {}),
+      ...(pluginSdkLineAlias ? { "openclaw/plugin-sdk/line": pluginSdkLineAlias } : {}),
+      ...(pluginSdkAccountIdAlias
+        ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+        : {}),
+    };
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+      ...(Object.keys(aliasMap).length > 0
         ? {
-            alias: {
-              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-              ...(pluginSdkAccountIdAlias
-                ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
-                : {}),
-            },
+            alias: aliasMap,
           }
         : {}),
     });
@@ -502,6 +589,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
+    const pushPluginLoadError = (message: string) => {
+      record.status = "error";
+      record.error = message;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
+    };
 
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -512,16 +611,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (!manifestRecord.configSchema) {
-      record.status = "error";
-      record.error = "missing config schema";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("missing config schema");
       continue;
     }
 
@@ -530,22 +620,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       absolutePath: candidate.source,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
-      // Discovery stores rootDir as realpath but source may still be a lexical alias
-      // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
-      // still enforce containment; skip lexical pre-check to avoid false escapes.
+      rejectHardlinks: candidate.origin !== "bundled",
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
-      record.status = "error";
-      record.error = "plugin entry path escapes plugin root or fails alias checks";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
       continue;
     }
     const safeSource = opened.path;
@@ -629,16 +708,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      record.status = "error";
-      record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
       continue;
     }
 
@@ -650,16 +720,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (typeof register !== "function") {
       logger.error(`[plugins] ${record.id} missing register/activate export`);
-      record.status = "error";
-      record.error = "plugin export missing register/activate";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("plugin export missing register/activate");
       continue;
     }
 
@@ -711,8 +772,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
-  setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
+  activatePluginRegistry(registry, cacheKey);
   return registry;
 }
 

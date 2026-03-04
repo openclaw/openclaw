@@ -5,22 +5,45 @@ const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(),
 }));
 
+const TEST_WORKSPACE_ROOT = "/tmp/openclaw-test-workspace";
+
+function normalizeChannel(value?: string) {
+  return value?.trim().toLowerCase() ?? undefined;
+}
+
+function applyPluginAutoEnableForTests(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
+function createTelegramPlugin() {
+  return {
+    id: "telegram",
+    meta: { label: "Telegram" },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+  };
+}
+
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
+  normalizeChannelId: normalizeChannel,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  resolveAgentWorkspaceDir: () => TEST_WORKSPACE_ROOT,
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable(args: { config: unknown }) {
+    return applyPluginAutoEnableForTests(args.config);
+  },
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -29,6 +52,13 @@ import { resolveOutboundTarget } from "./targets.js";
 
 describe("resolveOutboundTarget channel resolution", () => {
   let registrySeq = 0;
+  const resolveTelegramTarget = () =>
+    resolveOutboundTarget({
+      channel: "telegram",
+      to: "123456",
+      cfg: { channels: { telegram: { botToken: "test-token" } } },
+      mode: "explicit",
+    });
 
   beforeEach(() => {
     registrySeq += 1;
@@ -38,39 +68,20 @@ describe("resolveOutboundTarget channel resolution", () => {
   });
 
   it("recovers telegram plugin resolution so announce delivery does not fail with Unsupported channel: telegram", () => {
-    const telegramPlugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
-      },
-    };
+    const telegramPlugin = createTelegramPlugin();
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
       .mockReturnValueOnce(telegramPlugin)
       .mockReturnValue(telegramPlugin);
 
-    const result = resolveOutboundTarget({
-      channel: "telegram",
-      to: "123456",
-      cfg: { channels: { telegram: { botToken: "test-token" } } },
-      mode: "explicit",
-    });
+    const result = resolveTelegramTarget();
 
     expect(result).toEqual({ ok: true, to: "123456" });
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   });
 
   it("retries bootstrap on subsequent resolve when the first bootstrap attempt fails", () => {
-    const telegramPlugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
-      },
-    };
+    const telegramPlugin = createTelegramPlugin();
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
       .mockReturnValueOnce(undefined)
@@ -83,18 +94,8 @@ describe("resolveOutboundTarget channel resolution", () => {
       })
       .mockImplementation(() => undefined);
 
-    const first = resolveOutboundTarget({
-      channel: "telegram",
-      to: "123456",
-      cfg: { channels: { telegram: { botToken: "test-token" } } },
-      mode: "explicit",
-    });
-    const second = resolveOutboundTarget({
-      channel: "telegram",
-      to: "123456",
-      cfg: { channels: { telegram: { botToken: "test-token" } } },
-      mode: "explicit",
-    });
+    const first = resolveTelegramTarget();
+    const second = resolveTelegramTarget();
 
     expect(first.ok).toBe(false);
     expect(second).toEqual({ ok: true, to: "123456" });

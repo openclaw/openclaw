@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
 
 const handleSlackActionMock = vi.fn();
@@ -15,6 +16,10 @@ vi.mock("./runtime.js", () => ({
 import { slackPlugin } from "./channel.js";
 
 describe("slackPlugin actions", () => {
+  it("prefers session lookup for announce target routing", () => {
+    expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
   it("forwards read threadId to Slack action handler", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     const handleAction = slackPlugin.actions?.handleAction;
@@ -102,5 +107,79 @@ describe("slackPlugin outbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-media" });
+  });
+
+  it("forwards mediaLocalRoots for sendMedia", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
+    const sendMedia = slackPlugin.outbound?.sendMedia;
+    expect(sendMedia).toBeDefined();
+    const mediaLocalRoots = ["/tmp/workspace"];
+
+    const result = await sendMedia!({
+      cfg,
+      to: "C999",
+      text: "caption",
+      mediaUrl: "/tmp/workspace/image.png",
+      mediaLocalRoots,
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C999",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots,
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
+  });
+});
+
+describe("slackPlugin config", () => {
+  it("treats HTTP mode accounts with bot token + signing secret as configured", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          mode: "http",
+          botToken: "xoxb-http",
+          signingSecret: "secret-http",
+        },
+      },
+    };
+
+    const account = slackPlugin.config.resolveAccount(cfg, "default");
+    const configured = slackPlugin.config.isConfigured?.(account, cfg);
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: undefined,
+    });
+
+    expect(configured).toBe(true);
+    expect(snapshot?.configured).toBe(true);
+  });
+
+  it("keeps socket mode requiring app token", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          mode: "socket",
+          botToken: "xoxb-socket",
+        },
+      },
+    };
+
+    const account = slackPlugin.config.resolveAccount(cfg, "default");
+    const configured = slackPlugin.config.isConfigured?.(account, cfg);
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: undefined,
+    });
+
+    expect(configured).toBe(false);
+    expect(snapshot?.configured).toBe(false);
   });
 });
