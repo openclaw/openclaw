@@ -240,7 +240,15 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
+  let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
+  const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
+    const next = draftLaneEventQueue.then(task);
+    draftLaneEventQueue = next.catch((err) => {
+      logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
+    });
+    return draftLaneEventQueue;
+  };
   type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
     segments: SplitLaneSegment[];
@@ -267,6 +275,7 @@ export const dispatchTelegramMessage = async ({
     lane.hasStreamedMessage = false;
   };
   const rotateAnswerLaneForNewAssistantMessage = async () => {
+    let didForceNewMessage = false;
     if (answerLane.hasStreamedMessage) {
       // Materialize the current streamed draft into a permanent message
       // so it remains visible across tool boundaries.
@@ -280,10 +289,14 @@ export const dispatchTelegramMessage = async ({
         });
       }
       answerLane.stream?.forceNewMessage();
+      didForceNewMessage = true;
     }
     resetDraftLaneState(answerLane);
-    // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
-    finalizedPreviewByLane.answer = false;
+    if (didForceNewMessage) {
+      // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
+      finalizedPreviewByLane.answer = false;
+    }
+    return didForceNewMessage;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const laneStream = lane.stream;
@@ -315,8 +328,7 @@ export const dispatchTelegramMessage = async ({
       // Some providers can emit the first partial of a new assistant message before
       // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
       // the previously finalized preview message with the next message's text.
-      await rotateAnswerLaneForNewAssistantMessage();
-      skipNextAnswerMessageStartRotation = true;
+      skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
     }
     for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
@@ -608,32 +620,35 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onPartialReply:
           answerLane.stream || reasoningLane.stream
-            ? async (payload) => {
-                await ingestDraftLaneSegments(payload.text);
-              }
+            ? (payload) =>
+                enqueueDraftLaneEvent(async () => {
+                  await ingestDraftLaneSegments(payload.text);
+                })
             : undefined,
         onReasoningStream: reasoningLane.stream
-          ? async (payload) => {
-              // Split between reasoning blocks only when the next reasoning
-              // stream starts. Splitting at reasoning-end can orphan the active
-              // preview and cause duplicate reasoning sends on reasoning final.
-              if (splitReasoningOnNextStream) {
-                reasoningLane.stream?.forceNewMessage();
-                resetDraftLaneState(reasoningLane);
-                splitReasoningOnNextStream = false;
-              }
-              await ingestDraftLaneSegments(payload.text);
-            }
+          ? (payload) =>
+              enqueueDraftLaneEvent(async () => {
+                // Split between reasoning blocks only when the next reasoning
+                // stream starts. Splitting at reasoning-end can orphan the active
+                // preview and cause duplicate reasoning sends on reasoning final.
+                if (splitReasoningOnNextStream) {
+                  reasoningLane.stream?.forceNewMessage();
+                  resetDraftLaneState(reasoningLane);
+                  splitReasoningOnNextStream = false;
+                }
+                await ingestDraftLaneSegments(payload.text);
+              })
           : undefined,
         onAssistantMessageStart: answerLane.stream
-          ? async () => {
-              reasoningStepState.resetForNextStep();
-              if (skipNextAnswerMessageStartRotation) {
-                skipNextAnswerMessageStartRotation = false;
-                return;
-              }
-              await rotateAnswerLaneForNewAssistantMessage();
-            }
+          ? () =>
+              enqueueDraftLaneEvent(async () => {
+                reasoningStepState.resetForNextStep();
+                if (skipNextAnswerMessageStartRotation) {
+                  skipNextAnswerMessageStartRotation = false;
+                  return;
+                }
+                await rotateAnswerLaneForNewAssistantMessage();
+              })
           : undefined,
         onReasoningEnd: reasoningLane.stream
           ? () => {
@@ -650,6 +665,9 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
+    // Upstream assistant callbacks are fire-and-forget; drain queued lane work
+    // before stream cleanup so boundary rotations/materialization complete first.
+    await draftLaneEventQueue;
     // Must stop() first to flush debounced content before clear() wipes state.
     const streamCleanupStates = new Map<
       NonNullable<DraftLaneState["stream"]>,

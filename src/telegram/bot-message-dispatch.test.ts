@@ -447,6 +447,84 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deleteMessageCalls).not.toContainEqual([123, 4321]);
   });
 
+  it("queues late partials behind async boundary materialization", async () => {
+    const answerDraftStream = createDraftStream(999);
+    let resolveMaterialize: ((value: number | undefined) => void) | undefined;
+    const materializePromise = new Promise<number | undefined>((resolve) => {
+      resolveMaterialize = resolve;
+    });
+    answerDraftStream.materialize.mockImplementation(() => materializePromise);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+
+      // Simulate provider fire-and-forget ordering: boundary callback starts
+      // and a new partial arrives before boundary materialization resolves.
+      const startPromise = replyOptions?.onAssistantMessageStart?.();
+      const nextPartialPromise = replyOptions?.onPartialReply?.({ text: "Message B early" });
+
+      expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+      resolveMaterialize?.(4321);
+
+      await startPromise;
+      await nextPartialPromise;
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B early");
+    const boundaryRotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(boundaryRotationOrder).toBeLessThan(secondUpdateOrder);
+  });
+
+  it("keeps final-only preview lane finalized until a real boundary rotation happens", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Final-only first response (no streamed partials).
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        // Simulate provider ordering bug: first chunk arrives before message-start callback.
+        await replyOptions?.onPartialReply?.({ text: "Message B early" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
   it("does not force new message on first assistant message start", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
