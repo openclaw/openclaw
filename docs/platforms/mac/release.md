@@ -45,6 +45,7 @@ SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
 # Zip for distribution (includes resource forks for Sparkle delta support)
+# If you want notarization/stapling in this step, use the NOTARIZE command below.
 ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.2.zip
 
 # Optional: also build a styled DMG for humans (drag to /Applications)
