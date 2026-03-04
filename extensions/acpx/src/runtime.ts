@@ -209,6 +209,12 @@ export class AcpxRuntime implements AcpRuntime {
           asOptionalString(event.acpxSessionId) ||
           asOptionalString(event.acpxRecordId),
       );
+      if (!ensuredEvent) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+        );
+      }
     }
 
     const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
