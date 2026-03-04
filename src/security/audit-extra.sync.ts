@@ -338,24 +338,24 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   const provider = cfg.tools?.web?.search?.provider;
   if (provider && provider !== "you") {
     const search = cfg.tools?.web?.search;
-    // Check provider sub-config key and all known env vars
+    // Check the top-level apiKey, provider sub-config key, and the env var(s)
+    // specific to the pinned provider — not all provider env vars.
     const sub =
       search && typeof search === "object"
         ? (search as Record<string, unknown>)[provider]
         : undefined;
     const subApiKey =
       sub && typeof sub === "object" ? (sub as Record<string, unknown>).apiKey : undefined;
-    const hasKey = Boolean(
-      search?.apiKey ||
-      subApiKey ||
-      env.BRAVE_API_KEY ||
-      env.PERPLEXITY_API_KEY ||
-      env.XAI_API_KEY ||
-      env.GEMINI_API_KEY ||
-      env.KIMI_API_KEY ||
-      env.MOONSHOT_API_KEY,
-    );
-    return hasKey;
+    const providerEnvKeys: Record<string, string[]> = {
+      brave: ["BRAVE_API_KEY"],
+      perplexity: ["PERPLEXITY_API_KEY"],
+      grok: ["XAI_API_KEY"],
+      gemini: ["GEMINI_API_KEY"],
+      kimi: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    };
+    const envKeys = providerEnvKeys[provider] ?? [];
+    const hasEnvKey = envKeys.some((k) => Boolean(env[k]));
+    return Boolean(search?.apiKey || subApiKey || hasEnvKey);
   }
   // No provider pinned or provider="you" → always available (You.com free tier)
   return true;
@@ -374,9 +374,8 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   if (enabled === false) {
     return false;
   }
-  if (enabled === true) {
-    return true;
-  }
+  // web_research always requires an API key to be internet-capable;
+  // without one createWebResearchTool only returns a missing-key error.
   const apiKey = cfg.tools?.web?.research?.apiKey || env.YDC_API_KEY;
   return Boolean(apiKey);
 }
