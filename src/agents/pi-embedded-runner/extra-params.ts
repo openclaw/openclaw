@@ -469,6 +469,14 @@ function normalizeRequiredToolChoiceWhenNoTools(payloadObj: {
   }
 }
 
+function isStoreSupportedForModel(model: { compat?: unknown }): boolean {
+  if (!model.compat || typeof model.compat !== "object") {
+    return true;
+  }
+  const supportsStore = (model.compat as { supportsStore?: unknown }).supportsStore;
+  return supportsStore !== false;
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -491,7 +499,7 @@ function createOpenAIResponsesContextManagementWrapper(
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          const supportsStore = model.compat?.supportsStore !== false;
+          const supportsStore = isStoreSupportedForModel(model);
           const payloadObj = payload as {
             store?: unknown;
             previous_response_id?: unknown;
