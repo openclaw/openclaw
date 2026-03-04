@@ -630,6 +630,37 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        heartbeat: {
+          showOk: true,
+          showAlerts: false,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      heartbeat?: unknown;
+      channels?: {
+        defaults?: {
+          heartbeat?: {
+            showOk?: boolean;
+            showAlerts?: boolean;
+            useIndicator?: boolean;
+          };
+        };
+      };
+    };
+    expect(cfg.heartbeat).toBeUndefined();
+    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
+      showOk: true,
+      showAlerts: false,
+    });
+  });
+
   it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

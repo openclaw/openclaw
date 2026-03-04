@@ -113,6 +113,24 @@ describe("legacy migrate heartbeat config", () => {
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
 
+  it("moves top-level heartbeat visibility into channels.defaults.heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        showOk: true,
+        showAlerts: false,
+        useIndicator: false,
+      },
+    });
+
+    expect(res.changes).toContain("Moved heartbeat visibility → channels.defaults.heartbeat.");
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
   it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
     const res = migrateLegacyConfig({
       heartbeat: {
@@ -138,6 +156,57 @@ describe("legacy migrate heartbeat config", () => {
       model: "anthropic/claude-3-5-haiku-20241022",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        showOk: true,
+        showAlerts: true,
+      },
+      channels: {
+        defaults: {
+          heartbeat: {
+            showOk: false,
+            useIndicator: false,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
+    );
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
+      showOk: false,
+      showAlerts: true,
+      useIndicator: false,
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("preserves agent.heartbeat precedence over top-level heartbeat legacy key", () => {
+    const res = migrateLegacyConfig({
+      agent: {
+        heartbeat: {
+          every: "1h",
+          target: "telegram",
+        },
+      },
+      heartbeat: {
+        every: "30m",
+        target: "discord",
+        model: "anthropic/claude-3-5-haiku-20241022",
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      every: "1h",
+      target: "telegram",
+      model: "anthropic/claude-3-5-haiku-20241022",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    expect((res.config as { agent?: unknown } | null)?.agent).toBeUndefined();
   });
 });
 

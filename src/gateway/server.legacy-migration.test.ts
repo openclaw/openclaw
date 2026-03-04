@@ -14,7 +14,7 @@ describe("gateway startup legacy migration fallback", () => {
       {
         path: "heartbeat",
         message:
-          "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+          "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
       },
     ];
     testState.legacyParsed = {
@@ -39,7 +39,7 @@ describe("gateway startup legacy migration fallback", () => {
     const message = String((thrown as Error).message);
     expect(message).toContain("Invalid config at");
     expect(message).toContain(
-      "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+      "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
     );
     expect(message).not.toContain("Legacy config entries detected but auto-migration failed.");
   });
@@ -49,7 +49,7 @@ describe("gateway startup legacy migration fallback", () => {
       {
         path: "heartbeat",
         message:
-          "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+          "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
       },
     ];
     // Simulate a parsed source that only contains include directives, while
@@ -76,7 +76,7 @@ describe("gateway startup legacy migration fallback", () => {
     const message = String((thrown as Error).message);
     expect(message).toContain("Invalid config at");
     expect(message).toContain(
-      "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat instead.",
+      "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
     );
     expect(message).not.toContain("Legacy config entries detected but auto-migration failed.");
   });
