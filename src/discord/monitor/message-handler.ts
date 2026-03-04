@@ -6,6 +6,7 @@ import {
 import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -27,11 +28,141 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
+  listenerTimeoutMs?: number;
 };
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
+
+const DEFAULT_DISCORD_RUN_TIMEOUT_MS = 120_000;
+const MAX_DISCORD_TIMEOUT_MS = 2_147_483_647;
+
+function normalizeDiscordRunTimeoutMs(timeoutMs?: number): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_DISCORD_RUN_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.min(Math.floor(timeoutMs), MAX_DISCORD_TIMEOUT_MS));
+}
+
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  return "name" in error && String((error as { name?: unknown }).name) === "AbortError";
+}
+
+function formatDiscordRunContextSuffix(ctx: DiscordMessagePreflightContext): string {
+  const eventData = ctx as {
+    data?: {
+      channel_id?: string;
+      message?: {
+        id?: string;
+      };
+    };
+  };
+  const channelId = ctx.messageChannelId?.trim() || eventData.data?.channel_id?.trim();
+  const messageId = eventData.data?.message?.id?.trim();
+  const details = [
+    channelId ? `channelId=${channelId}` : null,
+    messageId ? `messageId=${messageId}` : null,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (details.length === 0) {
+    return "";
+  }
+  return ` (${details.join(", ")})`;
+}
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const fallbackController = new AbortController();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      fallbackController.abort();
+      return fallbackController.signal;
+    }
+  }
+  const abortFallback = () => {
+    fallbackController.abort();
+    for (const signal of activeSignals) {
+      signal.removeEventListener("abort", abortFallback);
+    }
+  };
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", abortFallback, { once: true });
+  }
+  return fallbackController.signal;
+}
+
+async function processDiscordRunWithTimeout(params: {
+  ctx: DiscordMessagePreflightContext;
+  runtime: DiscordMessagePreflightParams["runtime"];
+  lifecycleSignal?: AbortSignal;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = normalizeDiscordRunTimeoutMs(params.timeoutMs);
+  const timeoutAbortController = new AbortController();
+  const combinedSignal = mergeAbortSignals([
+    params.ctx.abortSignal,
+    params.lifecycleSignal,
+    timeoutAbortController.signal,
+  ]);
+  const processCtx =
+    combinedSignal && combinedSignal !== params.ctx.abortSignal
+      ? { ...params.ctx, abortSignal: combinedSignal }
+      : params.ctx;
+  const contextSuffix = formatDiscordRunContextSuffix(params.ctx);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const processPromise = processDiscordMessage(processCtx).catch((error) => {
+    if (timedOut) {
+      if (timeoutAbortController.signal.aborted && isAbortError(error)) {
+        return;
+      }
+      params.runtime.error?.(
+        danger(`discord queued run failed after timeout: ${String(error)}${contextSuffix}`),
+      );
+      return;
+    }
+    throw error;
+  });
+
+  try {
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+      timeoutHandle.unref?.();
+    });
+    const result = await Promise.race([
+      processPromise.then(() => "completed" as const),
+      timeoutPromise,
+    ]);
+    if (result === "timeout") {
+      timedOut = true;
+      timeoutAbortController.abort();
+      params.runtime.error?.(
+        danger(
+          `discord queued run timed out after ${formatDurationSeconds(timeoutMs, {
+            decimals: 1,
+            unit: "seconds",
+          })}${contextSuffix}`,
+        ),
+      );
+    }
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string {
   const sessionKey = ctx.route.sessionKey?.trim();
@@ -75,7 +206,12 @@ export function createDiscordMessageHandler(
           if (!runState.isActive()) {
             return;
           }
-          await processDiscordMessage(ctx);
+          await processDiscordRunWithTimeout({
+            ctx,
+            runtime: params.runtime,
+            lifecycleSignal: params.abortSignal,
+            timeoutMs: params.listenerTimeoutMs,
+          });
         } finally {
           runState.onRunEnd();
         }

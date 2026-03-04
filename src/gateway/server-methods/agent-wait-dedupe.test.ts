@@ -97,6 +97,49 @@ describe("agent wait dedupe helper", () => {
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 
+  it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
+    const dedupe = new Map();
+    const runId = "run-nonterminal-agent-with-newer-chat";
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: {
+          runId,
+          status: "accepted",
+        },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 1,
+          endedAt: 2,
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 1,
+      endedAt: 2,
+      error: undefined,
+    });
+  });
+
   it("ignores stale agent snapshots when waiting for an active chat run", async () => {
     const dedupe = new Map();
     const runId = "run-chat-active-ignore-agent";

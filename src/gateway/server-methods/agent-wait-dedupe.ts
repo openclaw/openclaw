@@ -127,18 +127,21 @@ export function readTerminalSnapshotFromGatewayDedupe(params: {
     return readTerminalSnapshotFromDedupeEntry(chatEntry);
   }
 
+  const chatEntry = params.dedupe.get(`chat:${params.runId}`);
+  const chatSnapshot = chatEntry ? readTerminalSnapshotFromDedupeEntry(chatEntry) : null;
+
   const agentEntry = params.dedupe.get(`agent:${params.runId}`);
   const agentSnapshot = agentEntry ? readTerminalSnapshotFromDedupeEntry(agentEntry) : null;
   if (agentEntry) {
     if (!agentSnapshot) {
-      // If an agent run has an in-flight dedupe entry, never fall back to any
-      // stale chat dedupe record for the same run id.
+      // If agent is still in-flight, only trust chat if it was written after
+      // this agent entry (indicating a newer completed chat run reused runId).
+      if (chatSnapshot && chatEntry && chatEntry.ts > agentEntry.ts) {
+        return chatSnapshot;
+      }
       return null;
     }
   }
-
-  const chatEntry = params.dedupe.get(`chat:${params.runId}`);
-  const chatSnapshot = chatEntry ? readTerminalSnapshotFromDedupeEntry(chatEntry) : null;
 
   if (agentSnapshot && chatSnapshot && agentEntry && chatEntry) {
     // Reused idempotency keys can leave both records present. Prefer the
