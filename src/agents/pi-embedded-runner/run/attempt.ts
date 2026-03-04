@@ -235,35 +235,100 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    // Keep whitespace-only placeholders unchanged so they do not collapse to
-    // empty names (which can later surface as toolName="" loops).
+function resolveAllowedToolName(rawName: string, allowedToolNames?: Set<string>): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  if (allowedToolNames.has(rawName)) {
     return rawName;
   }
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return trimmed;
-  }
-  if (allowedToolNames.has(trimmed)) {
-    return trimmed;
-  }
-  const normalized = normalizeToolName(trimmed);
+  const normalized = normalizeToolName(rawName);
   if (allowedToolNames.has(normalized)) {
     return normalized;
   }
-  const folded = trimmed.toLowerCase();
+  const folded = rawName.toLowerCase();
   let caseInsensitiveMatch: string | null = null;
   for (const name of allowedToolNames) {
     if (name.toLowerCase() !== folded) {
       continue;
     }
     if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-      return trimmed;
+      return null;
     }
     caseInsensitiveMatch = name;
   }
-  return caseInsensitiveMatch ?? trimmed;
+  return caseInsensitiveMatch;
+}
+
+function inferToolNameFromToolCallId(
+  rawId: string | undefined,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!rawId || !allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const id = rawId.trim();
+  if (!id) {
+    return null;
+  }
+
+  const candidates = new Set<string>();
+  const addCandidate = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    candidates.add(trimmed);
+    candidates.add(trimmed.replace(/[:._-]\d+$/, ""));
+    candidates.add(trimmed.replace(/\d+$/, ""));
+  };
+
+  const preColon = id.split(":")[0] ?? id;
+  for (const seed of [id, preColon]) {
+    addCandidate(seed);
+    addCandidate(seed.replace(/^functions?[._-]?/i, ""));
+
+    const lastDot = seed.lastIndexOf(".");
+    if (lastDot >= 0 && lastDot + 1 < seed.length) {
+      addCandidate(seed.slice(lastDot + 1));
+    }
+
+    const unprefixed = seed.replace(/^functions?[._-]?/i, "");
+    const unprefixedDot = unprefixed.lastIndexOf(".");
+    if (unprefixedDot >= 0 && unprefixedDot + 1 < unprefixed.length) {
+      addCandidate(unprefixed.slice(unprefixedDot + 1));
+    }
+  }
+
+  for (const candidate of candidates) {
+    const matched = resolveAllowedToolName(candidate, allowedToolNames);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return null;
+}
+
+function normalizeToolCallNameForDispatch(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+  rawToolCallId?: string,
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged unless we can safely infer
+    // a canonical name from toolCallId and allowlist.
+    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+  const direct = resolveAllowedToolName(trimmed, allowedToolNames);
+  if (direct) {
+    return direct;
+  }
+  return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -354,13 +419,21 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
       continue;
     }
-    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
-    if (normalized !== typedBlock.name) {
-      typedBlock.name = normalized;
+    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (typeof typedBlock.name === "string") {
+      const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames, rawId);
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+      continue;
+    }
+    const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
+    if (inferred) {
+      typedBlock.name = inferred;
     }
   }
   normalizeToolCallIdsInMessage(message);

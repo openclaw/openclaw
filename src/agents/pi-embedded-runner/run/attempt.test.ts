@@ -224,6 +224,61 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
+  it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
+    const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
+    const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
+    const finalToolCallB: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functionswrite4",
+    };
+    const finalToolCallC = { type: "functionCall", id: "functions.exec2", name: "" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [finalToolCallA, finalToolCallB, finalToolCallC],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallC.name).toBe("exec");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not infer names from malformed toolCallId when allowlist is absent", async () => {
+    const finalToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functionsread3",
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBeUndefined();
+  });
+
   it("does not collapse whitespace-only tool names to empty strings", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
