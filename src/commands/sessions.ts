@@ -15,7 +15,6 @@ import {
   formatSessionModelCell,
   resolveSessionDisplayDefaults,
   resolveSessionDisplayModelRef,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
