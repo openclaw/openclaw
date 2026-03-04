@@ -23,6 +23,7 @@ import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { withTimeout } from "../../utils/with-timeout.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
@@ -706,7 +707,7 @@ export async function compactEmbeddedPiSessionDirect(
         let pluginSummary: string | undefined;
         if (hookRunner?.hasHooks("provide_compaction_summary")) {
           try {
-            const summaryResult = await Promise.race([
+            const summaryResult = await withTimeout(
               hookRunner.runProvideCompactionSummary(
                 {
                   messageCount: preCompactionMessages.length,
@@ -716,10 +717,13 @@ export async function compactEmbeddedPiSessionDirect(
                 },
                 hookCtx,
               ),
-              new Promise<undefined>((resolve) =>
-                setTimeout(() => resolve(undefined), EMBEDDED_COMPACTION_TIMEOUT_MS),
-              ),
-            ]);
+              EMBEDDED_COMPACTION_TIMEOUT_MS,
+            ).catch((err: unknown): Promise<undefined> | undefined => {
+              if ((err as Error)?.message === "timeout") {
+                return undefined;
+              }
+              throw err;
+            });
             if (summaryResult?.skipCompaction) {
               pluginSkipped = true;
             }
