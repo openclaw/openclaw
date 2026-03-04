@@ -628,6 +628,28 @@ describe("native PDF provider API calls", () => {
     expect(body.contents[0].parts[1].text).toBe("Summarize this");
   });
 
+  it("geminiAnalyzePdf avoids /v1beta/v1beta duplication when baseUrl already includes /v1beta", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    // baseUrl already includes /v1beta - should NOT duplicate
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    // Should have single /v1beta, not /v1beta/v1beta
+    expect(url).toContain("/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta/");
+  });
+
   it("geminiAnalyzePdf throws on API error", async () => {
     const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
     mockFetchResponse({
