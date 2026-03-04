@@ -153,6 +153,23 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
+## 8.1) SSH logout survival check (systemd user services)
+
+If your setup uses a systemd **user** service (`openclaw-gateway[-<profile>].service`), make sure lingering is enabled so SSH logout does not stop the service.
+
+```bash
+# Check user service status
+systemctl --user status openclaw-gateway --no-pager
+
+# Check lingering state
+loginctl show-user "$USER" --property=Linger
+
+# If Linger=no, enable it
+sudo loginctl enable-linger "$USER"
+```
+
+If you are running a system service (`sudo systemctl ...`), lingering is not required.
+
 ## 9) Access the Dashboard
 
 Since the Pi is headless, use an SSH tunnel:
