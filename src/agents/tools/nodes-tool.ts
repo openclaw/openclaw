@@ -161,6 +161,7 @@ export function createNodesTool(options?: {
   currentThreadTs?: string | number;
   config?: OpenClawConfig;
   modelHasVision?: boolean;
+  allowMediaInvokeCommands?: boolean;
 }): AnyAgentTool {
   const sessionKey = options?.agentSessionKey?.trim() || undefined;
   const turnSourceChannel = options?.agentChannel?.trim() || undefined;
@@ -754,7 +755,7 @@ export function createNodesTool(options?: {
             const invokeCommandNormalized = invokeCommand.trim().toLowerCase();
             const dedicatedAction =
               MEDIA_INVOKE_ACTIONS[invokeCommandNormalized as keyof typeof MEDIA_INVOKE_ACTIONS];
-            if (dedicatedAction) {
+            if (dedicatedAction && !options?.allowMediaInvokeCommands) {
               throw new Error(
                 `invokeCommand "${invokeCommand}" returns media payloads and is blocked to prevent base64 context bloat; use action="${dedicatedAction}"`,
               );
