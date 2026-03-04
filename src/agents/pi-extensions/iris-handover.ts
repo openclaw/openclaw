@@ -12,6 +12,7 @@ import {
   computeAdaptiveChunkRatio,
   SAFETY_MARGIN,
 } from "../compaction.js";
+import { loadConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 import { getHandoverRuntime } from "./iris-handover-runtime.js";
 
@@ -259,6 +260,24 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
  * If handoverCfg.model is set (e.g. "google/gemini-2.5-pro"), use that model
  * with the corresponding API key from env. Otherwise fall back to session model.
  */
+/**
+ * Read handover model override from plugins.entries.iris-handover.config.model
+ * in openclaw.json. Falls back to null if not configured.
+ */
+function resolveHandoverModelFromPluginConfig(): string | undefined {
+  try {
+    const cfg = loadConfig();
+    const pluginEntries = (cfg as any)?.plugins?.entries?.["iris-handover"];
+    const model = pluginEntries?.config?.model;
+    if (typeof model === "string" && model.includes("/")) {
+      return model;
+    }
+  } catch {
+    // Config load failure is non-critical
+  }
+  return undefined;
+}
+
 async function resolveHandoverModel(
   sessionModel: Model<any>,
   modelOverride: string | undefined,
@@ -323,10 +342,12 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
       };
     }
 
-    // Check for handover model override (e.g. "google/gemini-2.5-pro")
+    // Check for handover model override (e.g. "google/gemini-3.1-pro-preview")
+    // Sources: 1) handover runtime config, 2) plugin config (iris-handover), 3) session model
     const runtime = getHandoverRuntime(ctx.sessionManager);
     const handoverCfg = runtime?.handoverConfig;
-    const { model, apiKey } = await resolveHandoverModel(sessionModel, handoverCfg?.model, ctx);
+    const modelOverride = handoverCfg?.model ?? resolveHandoverModelFromPluginConfig();
+    const { model, apiKey } = await resolveHandoverModel(sessionModel, modelOverride, ctx);
     if (!apiKey) {
       return {
         compaction: {
