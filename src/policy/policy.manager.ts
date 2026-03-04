@@ -335,21 +335,24 @@ async function computePolicyState(
   }
 
   const lastAcceptedSerial = persistedState.state?.lastAcceptedSerial;
-  if (config.enforceMonotonicSerial && Number.isFinite(lastAcceptedSerial)) {
+  const hasLastAcceptedSerial =
+    typeof lastAcceptedSerial === "number" && Number.isFinite(lastAcceptedSerial);
+  if (config.enforceMonotonicSerial && hasLastAcceptedSerial) {
+    const acceptedSerial = lastAcceptedSerial;
     if (loaded.policy.policySerial == null) {
       return {
         ...baseState,
         valid: false,
         lockdown: config.failClosed,
-        reason: `policySerial is required after anti-rollback state is established (last accepted serial ${lastAcceptedSerial})`,
+        reason: `policySerial is required after anti-rollback state is established (last accepted serial ${acceptedSerial})`,
       };
     }
-    if (loaded.policy.policySerial < lastAcceptedSerial) {
+    if (loaded.policy.policySerial < acceptedSerial) {
       return {
         ...baseState,
         valid: false,
         lockdown: config.failClosed,
-        reason: `policy rollback detected: policySerial ${loaded.policy.policySerial} < ${lastAcceptedSerial}`,
+        reason: `policy rollback detected: policySerial ${loaded.policy.policySerial} < ${acceptedSerial}`,
       };
     }
   }

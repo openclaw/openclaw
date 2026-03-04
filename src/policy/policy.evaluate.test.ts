@@ -15,7 +15,11 @@ function buildState(policy: SignedPolicy): PolicyManagerState {
     failClosed: true,
     policyPath: "/tmp/POLICY.json",
     sigPath: "/tmp/POLICY.sig",
+    statePath: "/tmp/POLICY.state.json",
     publicKey: "public",
+    publicKeys: {},
+    strictFilePermissions: false,
+    enforceMonotonicSerial: true,
     policy,
   };
 }
