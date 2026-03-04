@@ -61,7 +61,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   // The default test env isolates HOME to avoid touching real state.
   if (live) {
     loadProfileEnv();
-    return { cleanup: () => {}, tempHome: process.env.HOME ?? "" };
+    return { cleanup: () => cleanupTrackedTempDirs(), tempHome: process.env.HOME ?? "" };
   }
 
   const restore: RestoreEntry[] = [
