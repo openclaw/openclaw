@@ -21,7 +21,10 @@ type ResolveTelegramTokenOpts = {
   logMissingFile?: (message: string) => void;
 };
 
-function resolveTelegramSecretInputToken(params: { value: unknown; path: string }): string | undefined {
+function resolveTelegramSecretInputToken(params: {
+  value: unknown;
+  path: string;
+}): string | undefined {
   const { ref } = resolveSecretInputRef({
     value: params.value,
     defaults: { env: DEFAULT_SECRET_PROVIDER_ALIAS },
