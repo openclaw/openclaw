@@ -252,9 +252,9 @@ describeLive("Binance Testnet E2E", () => {
         cancelOrder: (id: string, symbol: string) => Promise<{ id: string; status: string }>;
       };
 
-      // Place a limit order far below market price (won't fill)
+      // Place a limit order below market price (won't fill, but within PERCENT_PRICE_BY_SIDE range)
       const ticker = await instance.fetchTicker("BTC/USDT");
-      const farBelowPrice = Math.floor(ticker.last * 0.5);
+      const farBelowPrice = Math.floor(ticker.last * 0.8);
       const order = await instance.createLimitBuyOrder("BTC/USDT", 0.001, farBelowPrice);
 
       expect(order.id).toBeDefined();
