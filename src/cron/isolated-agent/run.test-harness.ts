@@ -60,6 +60,7 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 
 vi.mock("../../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
+  DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-test/workspace",
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -166,6 +167,8 @@ vi.mock("../../security/external-content.js", () => ({
   detectSuspiciousPatterns: vi.fn().mockReturnValue([]),
   getHookType: vi.fn().mockReturnValue("unknown"),
   isExternalHookSession: vi.fn().mockReturnValue(false),
+  wrapWebContent: vi.fn((content: string) => content),
+  wrapExternalContent: vi.fn((content: string) => content),
 }));
 
 vi.mock("../delivery.js", () => ({
