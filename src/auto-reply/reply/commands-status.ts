@@ -48,7 +48,7 @@ function truncateChannelHealthError(message: string): string {
   if (message.length <= CHANNEL_HEALTH_ERROR_MAX) {
     return message;
   }
-  return message.slice(0, CHANNEL_HEALTH_ERROR_MAX);
+  return `${message.slice(0, CHANNEL_HEALTH_ERROR_MAX)}…`;
 }
 
 function formatChannelHealthEntry(entry: ChannelHealthEntry): string | null {
@@ -58,7 +58,7 @@ function formatChannelHealthEntry(entry: ChannelHealthEntry): string | null {
   }
 
   const snapshot = entry.snapshot;
-  if (snapshot.configured === false) {
+  if (!snapshot.configured) {
     return null;
   }
 
@@ -163,9 +163,9 @@ export async function buildStatusReply(params: {
     }
   }
 
-  const channelHealthEntries: ChannelHealthEntry[] = [];
-  for (const plugin of listChannelPlugins()) {
-    try {
+  const channelPlugins = listChannelPlugins();
+  const channelHealthResults = await Promise.allSettled(
+    channelPlugins.map(async (plugin) => {
       const accountIds = plugin.config.listAccountIds(cfg);
       const accountId = resolveChannelDefaultAccountId({
         plugin,
@@ -177,14 +177,14 @@ export async function buildStatusReply(params: {
         cfg,
         accountId,
       });
-      channelHealthEntries.push({
-        id: plugin.id,
-        snapshot,
-      });
-    } catch {
-      // Ignore channel snapshot failures in /status.
-    }
-  }
+      return { id: plugin.id, snapshot } satisfies ChannelHealthEntry;
+    }),
+  );
+  const channelHealthEntries = channelHealthResults
+    .filter((result): result is PromiseFulfilledResult<ChannelHealthEntry> =>
+      result.status === "fulfilled",
+    )
+    .map((result) => result.value);
   const channelsLine = buildChannelHealthSummaryLine(channelHealthEntries);
 
   const queueSettings = resolveQueueSettings({

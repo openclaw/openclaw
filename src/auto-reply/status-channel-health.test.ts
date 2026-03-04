@@ -18,6 +18,21 @@ describe("buildChannelHealthSummaryLine", () => {
     expect(line).toBeUndefined();
   });
 
+  it("omits channels with configured: undefined (plugins without isConfigured)", () => {
+    const line = buildChannelHealthSummaryLine([
+      {
+        id: "whatsapp",
+        snapshot: { configured: true, enabled: true, connected: true, running: true },
+      },
+      {
+        id: "zalouser",
+        snapshot: { enabled: true },
+      },
+    ]);
+
+    expect(line).toBe("📡 Channels: ✅ whatsapp");
+  });
+
   it("renders healthy channels with checkmarks", () => {
     const line = buildChannelHealthSummaryLine([
       {
@@ -93,7 +108,7 @@ describe("buildChannelHealthSummaryLine", () => {
       },
     ]);
 
-    expect(line).toBe("📡 Channels: ❌ telegram (123456789012345678901234567890)");
+    expect(line).toBe("📡 Channels: ❌ telegram (123456789012345678901234567890…)");
   });
 });
 
