@@ -86,7 +86,7 @@ To enable the PolarDB-powered memory system, follow these steps:
 
 # Security & Privacy
 - **Data Isolation**: Memories are strictly isolated by `MEM0_ORG_ID` and `user_id`. No cross-user data leakage is possible.
-- **Encryption**: All data transmitted to `mem0.polar-db.com` is encrypted via TLS 1.3.
+- **Encryption**: All data transmitted to `mem0test01.polardb.com` is encrypted via TLS 1.3.
 - **Compliance**: Powered by Alibaba Cloud PolarDB, adhering to global data protection standards.
 
 # Tags
