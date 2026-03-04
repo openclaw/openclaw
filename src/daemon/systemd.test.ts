@@ -184,6 +184,17 @@ describe("splitArgsPreservingQuotes", () => {
       }),
     ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
   });
+
+  it("preserves explicit empty quoted args", () => {
+    expect(splitArgsPreservingQuotes('node gateway.js --display-name "" --port 18789')).toEqual([
+      "node",
+      "gateway.js",
+      "--display-name",
+      "",
+      "--port",
+      "18789",
+    ]);
+  });
 });
 
 describe("parseSystemdExecStart", () => {

@@ -11,6 +11,9 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
 
 function systemdEscapeArg(value: string): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
+  if (value === "") {
+    return '""';
+  }
   if (!/[\s"\\]/.test(value)) {
     return value;
   }

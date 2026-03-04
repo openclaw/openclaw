@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemdUnit } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
   it("quotes arguments with whitespace", () => {
@@ -22,5 +22,23 @@ describe("buildSystemdUnit", () => {
         },
       }),
     ).toThrow(/CR or LF/);
+  });
+
+  it("round-trips explicit empty args in ExecStart", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "--display-name", "", "--port", "18789"],
+      environment: {},
+    });
+    const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
+    expect(execStart).toBe('ExecStart=/usr/bin/openclaw gateway --display-name "" --port 18789');
+    expect(parseSystemdExecStart(execStart!.slice("ExecStart=".length))).toEqual([
+      "/usr/bin/openclaw",
+      "gateway",
+      "--display-name",
+      "",
+      "--port",
+      "18789",
+    ]);
   });
 });
