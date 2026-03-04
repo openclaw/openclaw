@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk";
+import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/compat";
 
 export type MiniMaxRegion = "cn" | "global";
 

@@ -4,7 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 
 export type { DmPolicy, GroupPolicy };
 

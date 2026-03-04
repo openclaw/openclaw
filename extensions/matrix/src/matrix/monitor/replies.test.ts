@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/compat";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue({ messageId: "mx-1" }));
