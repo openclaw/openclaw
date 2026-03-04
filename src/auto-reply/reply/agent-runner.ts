@@ -86,18 +86,51 @@ function clearContinuationGeneration(sessionKey: string): void {
 }
 
 /**
- * Cancel any pending continuation timer for the given session.
- * Call this from early-return paths (inline actions, slash commands) that
- * bypass runReplyAgent but still represent real user input that should
- * preempt a running continuation chain.
+ * Cancel any pending continuation timer for the given session AND reset
+ * chain metadata. Call this from early-return paths (inline actions, slash
+ * commands, directive replies) that bypass runReplyAgent but still represent
+ * real user input that should preempt a running continuation chain.
  *
- * We only bump (not clear) to avoid generation reuse: if we cleared the map
+ * We only bump (not clear) generations to avoid reuse: if we cleared the map
  * entry, a subsequent chain could reuse a generation value that matches a
- * stale in-flight timer callback. The bump alone invalidates all pending
- * callbacks without creating a reuse window.
+ * stale in-flight timer callback.
  */
-export function cancelContinuationTimer(sessionKey: string): void {
+export function cancelContinuationTimer(
+  sessionKey: string,
+  sessionCtx?: {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    storePath?: string;
+  },
+): void {
   bumpContinuationGeneration(sessionKey);
+
+  // Reset chain metadata so stale counters don't block future chains.
+  if (sessionCtx?.sessionEntry && (sessionCtx.sessionEntry.continuationChainCount ?? 0) > 0) {
+    sessionCtx.sessionEntry.continuationChainCount = 0;
+    sessionCtx.sessionEntry.continuationChainStartedAt = undefined;
+    sessionCtx.sessionEntry.continuationChainTokens = undefined;
+  }
+  if (sessionCtx?.sessionStore?.[sessionKey]) {
+    sessionCtx.sessionStore[sessionKey] = {
+      ...sessionCtx.sessionStore[sessionKey],
+      continuationChainCount: 0,
+      continuationChainStartedAt: undefined,
+      continuationChainTokens: undefined,
+    };
+  }
+  if (sessionCtx?.storePath) {
+    void updateSessionStore(sessionCtx.storePath, (store) => {
+      const entry = store[sessionKey];
+      if (entry && (entry.continuationChainCount ?? 0) > 0) {
+        entry.continuationChainCount = 0;
+        entry.continuationChainStartedAt = undefined;
+        entry.continuationChainTokens = undefined;
+      }
+    }).catch(() => {
+      // Best-effort — chain state will be reset on next runReplyAgent entry.
+    });
+  }
 }
 
 export async function runReplyAgent(params: {
@@ -177,7 +210,8 @@ export async function runReplyAgent(params: {
     // External (non-heartbeat) message — reset chain tracking and cancel timers.
     // Regular heartbeats (including periodic polls) must NOT preempt pending
     // continuation timers; only real user/external messages should.
-    if (activeSessionEntry && (activeSessionEntry.continuationChainCount ?? 0) > 0) {
+    const hadActiveChain = (activeSessionEntry?.continuationChainCount ?? 0) > 0;
+    if (activeSessionEntry && hadActiveChain) {
       activeSessionEntry.continuationChainCount = 0;
       activeSessionEntry.continuationChainStartedAt = undefined;
       activeSessionEntry.continuationChainTokens = undefined;
@@ -187,7 +221,7 @@ export async function runReplyAgent(params: {
     // bump would produce 1 which could match a stale timer's captured generation.
     // Bump-only monotonically advances past all stale callbacks.
     bumpContinuationGeneration(sessionKey);
-    if (activeSessionStore && activeSessionEntry) {
+    if (hadActiveChain && activeSessionStore && activeSessionEntry) {
       activeSessionStore[sessionKey] = {
         ...activeSessionEntry,
         continuationChainCount: 0,
@@ -195,8 +229,9 @@ export async function runReplyAgent(params: {
         continuationChainTokens: undefined,
       };
     }
-    // Persist reset to disk so stale chain state doesn't survive reload
-    if (storePath) {
+    // Persist reset to disk only when a chain was actually active — avoids
+    // unnecessary lock + disk write on every normal message.
+    if (hadActiveChain && storePath) {
       try {
         await updateSessionStore(storePath, (store) => {
           const entry = store[sessionKey];
