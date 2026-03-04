@@ -11,6 +11,21 @@ on:
       - ".agents/**"
       - "skills/**"
   workflow_dispatch:
+    inputs:
+      update_infra:
+        description: "Trigger morpho-infra-helm image update"
+        required: false
+        type: boolean
+        default: true
+      environment:
+        description: "Infra environment(s) to update"
+        required: false
+        type: choice
+        options:
+          - dev
+          - prd
+          - both
+        default: dev
 
 concurrency:
   group: ecr-release-${{ github.workflow }}-${{ github.ref }}
@@ -104,9 +119,25 @@ jobs:
             .build-context
           docker push "${{ steps.image.outputs.uri }}"
 
+      - name: Resolve infra update environments
+        id: infra
+        run: |
+          set -euo pipefail
+          envs="dev"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.environment }}" in
+              dev) envs="dev" ;;
+              prd) envs="prd" ;;
+              both) envs="dev,prd" ;;
+              *) echo "::error::Invalid environment selection: ${{ inputs.environment }}"; exit 1 ;;
+            esac
+          fi
+          echo "environments=$envs" >> "$GITHUB_OUTPUT"
+
       - name: Update morpho-infra-helm image tag
-        uses: morpho-org/update-infra-image-tag@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.update_infra == true }}
+        uses: morpho-org/update-infra-image-tag@v4
         with:
           app_id: ${{ secrets.INFRA_DEPLOYER_APP_ID }}
           app_private_key: ${{ secrets.INFRA_DEPLOYER_SECRET_KEY }}
-          environments: dev
+          environments: ${{ steps.infra.outputs.environments }}
