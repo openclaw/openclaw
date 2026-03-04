@@ -27,10 +27,7 @@ else
 fi
 MORPHO_INFRA_DIR="${MORPHO_INFRA_DIR:-/Users/florian/morpho/morpho-infra}"
 MORPHO_INFRA_HELM_DIR="${MORPHO_INFRA_HELM_DIR:-/Users/florian/morpho/morpho-infra-helm}"
-DEFAULT_HELM_CHART_DIR="$ROOT_DIR/deploy/eks/charts/openclaw-sre"
-if [[ -d "$MORPHO_INFRA_HELM_DIR/charts/openclaw-sre" ]]; then
-  DEFAULT_HELM_CHART_DIR="$MORPHO_INFRA_HELM_DIR/charts/openclaw-sre"
-fi
+DEFAULT_HELM_CHART_DIR="$MORPHO_INFRA_HELM_DIR/charts/openclaw-sre"
 HELM_CHART_DIR="${HELM_CHART_DIR:-$DEFAULT_HELM_CHART_DIR}"
 HELM_RELEASE="${HELM_RELEASE:-openclaw-sre}"
 DEPLOY_REPLICAS="${DEPLOY_REPLICAS:-1}"
