@@ -697,6 +697,7 @@ export async function startGatewayServer(
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        timing: cfgAtStart.gateway?.healthMonitor?.timing,
       });
 
   if (!minimalTestGateway) {
@@ -906,8 +907,8 @@ export async function startGatewayServer(
           logChannels,
           logCron,
           logReload,
-          createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+          createHealthMonitor: (checkIntervalMs: number, timing?: Partial<import("./channel-health-monitor.js").ChannelHealthTimingPolicy>) =>
+            startChannelHealthMonitor({ channelManager, checkIntervalMs, timing }),
         });
 
         return startGatewayConfigReloader({
