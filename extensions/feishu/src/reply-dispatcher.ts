@@ -36,6 +36,8 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
+export type GroupReplyMode = "reply" | "create" | "auto";
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
@@ -53,6 +55,13 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /**
+   * Controls how the bot sends messages in group chats.
+   * - "reply": All messages use im.message.reply() (default, current behavior).
+   * - "create": All messages use im.message.create() (standalone, pre-2026.3.1 behavior).
+   * - "auto": First message per turn uses reply, subsequent use create.
+   */
+  groupReplyMode?: GroupReplyMode;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -68,10 +77,56 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     mentionTargets,
     accountId,
+    groupReplyMode = "reply",
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+
+  // Track whether the first message has been sent (for "auto" mode).
+  let firstMessageSent = false;
+
+  /**
+   * Resolve whether this delivery should use reply or create, based on groupReplyMode.
+   * Returns the effective replyToMessageId (undefined = use create, string = use reply).
+   */
+  const resolveEffectiveReplyTo = (): string | undefined => {
+    if (groupReplyMode === "create") {
+      return undefined;
+    }
+    if (groupReplyMode === "auto") {
+      if (firstMessageSent) {
+        return undefined; // subsequent messages → create (standalone)
+      }
+      firstMessageSent = true;
+      return sendReplyToMessageId; // first message → reply
+    }
+    // "reply" mode (default): always reply
+    return sendReplyToMessageId;
+  };
+
+  /**
+   * Resolve whether streaming card should use reply context, based on groupReplyMode.
+   * For "create" mode: no reply context (standalone card, pre-2026.3.1 behavior).
+   * For "auto" mode: first streaming card uses reply, subsequent don't.
+   * For "reply" mode: always use reply context.
+   */
+  const resolveStreamingReplyOptions = (): {
+    replyToMessageId?: string;
+    replyInThread?: boolean;
+    rootId?: string;
+  } => {
+    if (groupReplyMode === "create") {
+      return {}; // standalone card
+    }
+    if (groupReplyMode === "auto" && firstMessageSent) {
+      return {}; // subsequent cards → standalone
+    }
+    if (groupReplyMode === "auto") {
+      firstMessageSent = true;
+    }
+    return { replyToMessageId, replyInThread: effectiveReplyInThread, rootId };
+  };
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -194,11 +249,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
-          replyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          rootId,
-        });
+        await streaming.start(chatId, resolveReceiveIdType(chatId), resolveStreamingReplyOptions());
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
@@ -254,6 +305,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        // Resolve reply target based on groupReplyMode (may be undefined for "create" / "auto" subsequent).
+        const deliveryReplyTo = resolveEffectiveReplyTo();
+        const deliveryReplyInThread = deliveryReplyTo ? effectiveReplyInThread : undefined;
+
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
@@ -294,8 +349,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   cfg,
                   to: chatId,
                   mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
+                  replyToMessageId: deliveryReplyTo,
+                  replyInThread: deliveryReplyInThread,
                   accountId,
                 });
               }
@@ -314,8 +369,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
+                replyToMessageId: deliveryReplyTo,
+                replyInThread: deliveryReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -335,8 +390,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
+                replyToMessageId: deliveryReplyTo,
+                replyInThread: deliveryReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -354,8 +409,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               cfg,
               to: chatId,
               mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
+              replyToMessageId: deliveryReplyTo,
+              replyInThread: deliveryReplyInThread,
               accountId,
             });
           }

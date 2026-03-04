@@ -131,6 +131,16 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Controls how the bot sends messages in group chats.
+ * - "reply" (default): Messages use `im.message.reply()` to associate with the triggering message.
+ * - "create": Messages use `im.message.create()` as standalone messages (pre-2026.3.1 behavior).
+ *   Avoids Feishu auto-collapsing multiple replies into a topic thread.
+ * - "auto": First message per agent turn uses `reply`, subsequent messages use `create`.
+ *   Preserves reply context while preventing topic auto-collapse on multi-turn responses.
+ */
+const GroupReplyModeSchema = z.enum(["reply", "create", "auto"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -142,6 +152,7 @@ export const FeishuGroupSchema = z
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     replyInThread: ReplyInThreadSchema,
+    groupReplyMode: GroupReplyModeSchema,
   })
   .strict();
 
@@ -171,6 +182,7 @@ const FeishuSharedConfigShape = {
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
+  groupReplyMode: GroupReplyModeSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
