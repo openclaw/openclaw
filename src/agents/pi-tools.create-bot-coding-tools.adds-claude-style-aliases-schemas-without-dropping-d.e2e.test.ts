@@ -4,6 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
+import type { SandboxContext } from "./sandbox.js";
 import { createBotCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -74,7 +75,7 @@ describe("createBotCodingTools", () => {
   });
   it("filters tools by sandbox policy", () => {
     const sandboxDir = path.join(os.tmpdir(), "bot-sandbox");
-    const sandbox = {
+    const sandbox: SandboxContext = {
       enabled: true,
       sessionKey: "sandbox:test",
       workspaceDir: sandboxDir,
@@ -107,7 +108,7 @@ describe("createBotCodingTools", () => {
   });
   it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
     const sandboxDir = path.join(os.tmpdir(), "bot-sandbox");
-    const sandbox = {
+    const sandbox: SandboxContext = {
       enabled: true,
       sessionKey: "sandbox:test",
       workspaceDir: sandboxDir,

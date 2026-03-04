@@ -9,16 +9,25 @@ import type { IncomingMessage, ServerResponse } from "node:http";
  * existing /v1/chat/completions endpoint.
  */
 import { randomUUID } from "node:crypto";
-import type { MarketplaceConfig } from "../config/types.gateway.js";
+import type { GatewayIamConfig, MarketplaceConfig } from "../config/types.gateway.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { MarketplaceProxyDonePayload } from "./marketplace/events.js";
 import type { MarketplaceScheduler } from "./marketplace/scheduler.js";
 import type { NodeRegistry } from "./node-registry.js";
+import { validateIamToken } from "./auth-iam.js";
+import { authorizeHttpGatewayConnect } from "./auth.js";
 import { checkBillingAllowance } from "./billing/billing-gate.js";
 import { reportUsage } from "./billing/usage-reporter.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
-import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import {
+  sendJson,
+  sendMethodNotAllowed,
+  sendGatewayAuthFailure,
+  readJsonBodyOrError,
+  setSseHeaders,
+  writeDone,
+} from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import { calculateMarketplacePrice, type MarketplaceTransaction } from "./marketplace/billing.js";
 import { marketplaceEventBus, type MarketplaceProxyEvent } from "./marketplace/event-bus.js";
 import { resolveTenantContext } from "./tenant-context.js";
@@ -35,8 +44,9 @@ function isComingSoonMode(config: MarketplaceConfig): boolean {
 export type MarketplaceHttpOptions = {
   auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
-  iamConfig?: import("../config/config.js").GatewayIamConfig;
+  iamConfig?: GatewayIamConfig;
   nodeRegistry: NodeRegistry;
   scheduler: MarketplaceScheduler;
   marketplaceConfig: MarketplaceConfig;
@@ -72,18 +82,35 @@ export async function handleMarketplaceHttpRequest(
     return true;
   }
 
-  // Use the shared endpoint helper for path matching, auth, and JSON parsing.
-  const handled = await handleGatewayPostJsonEndpoint(req, res, {
-    pathname: MARKETPLACE_PATH,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    rateLimiter: opts.rateLimiter,
-    maxBodyBytes: 1024 * 1024,
-  });
-  if (handled === false) {
+  // Path matching.
+  if (url.pathname !== MARKETPLACE_PATH) {
     return false;
   }
-  if (!handled) {
+
+  // Method check.
+  if (req.method !== "POST") {
+    sendMethodNotAllowed(res);
+    return true;
+  }
+
+  // Auth check.
+  const rawToken = getBearerToken(req) ?? undefined;
+  const authResult: GatewayAuthResult = await authorizeHttpGatewayConnect({
+    auth: opts.auth,
+    connectAuth: rawToken ? { token: rawToken, password: rawToken } : null,
+    req,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (!authResult.ok) {
+    sendGatewayAuthFailure(res, authResult);
+    return true;
+  }
+
+  // Read JSON body.
+  const body = await readJsonBodyOrError(req, res, 1024 * 1024);
+  if (body === undefined) {
     return true;
   }
 
@@ -100,15 +127,19 @@ export async function handleMarketplaceHttpRequest(
   }
 
   // Resolve tenant context for billing.
+  // If IAM config is present and we have a bearer token, validate it to get IAM claims.
   let tenant: import("./tenant-context.js").TenantContext | undefined;
-  if (handled.authResult?.iamResult && handled.authResult.iamResult.ok) {
-    tenant = resolveTenantContext({ iamResult: handled.authResult.iamResult }) ?? undefined;
+  if (opts.iamConfig && rawToken) {
+    const iamResult = await validateIamToken(rawToken, opts.iamConfig);
+    if (iamResult.ok) {
+      tenant = resolveTenantContext({ iamResult }) ?? undefined;
+    }
   }
 
   // Token-auth fallback: when auth succeeded via gateway token (not IAM JWT)
   // and billing gate is in warn/open mode, allow requests with a service tenant.
   // This supports internal testing and the TRY FREE flow.
-  if (!tenant && handled.authResult?.method === "token") {
+  if (!tenant && authResult.method === "token") {
     const gateMode = process.env.BILLING_GATE_MODE;
     if (gateMode === "open" || gateMode === "warn") {
       tenant = { orgId: "hanzo", userId: "service-marketplace", userName: "z@hanzo.ai" };
@@ -124,7 +155,7 @@ export async function handleMarketplaceHttpRequest(
   const billingResult = await checkBillingAllowance({
     iamConfig: opts.iamConfig,
     tenant,
-    token: handled.authResult?.rawToken,
+    token: rawToken,
   });
   if (!billingResult.allowed) {
     sendJson(res, 402, {
@@ -136,12 +167,11 @@ export async function handleMarketplaceHttpRequest(
     return true;
   }
 
-  const body =
-    typeof handled.body === "object" && handled.body !== null
-      ? (handled.body as Record<string, unknown>)
-      : {};
-  const model = typeof body.model === "string" ? body.model : "claude-sonnet-4-20250514";
-  const stream = body.stream === true;
+  const parsedBody =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const model =
+    typeof parsedBody.model === "string" ? parsedBody.model : "claude-sonnet-4-20250514";
+  const stream = parsedBody.stream === true;
   const requestId = randomUUID();
 
   // Pick a seller.
@@ -170,11 +200,11 @@ export async function handleMarketplaceHttpRequest(
   const proxyParams = {
     requestId,
     model,
-    messages: body.messages,
+    messages: parsedBody.messages,
     stream,
-    maxTokens: typeof body.max_tokens === "number" ? body.max_tokens : undefined,
-    temperature: typeof body.temperature === "number" ? body.temperature : undefined,
-    system: typeof body.system === "string" ? body.system : undefined,
+    maxTokens: typeof parsedBody.max_tokens === "number" ? parsedBody.max_tokens : undefined,
+    temperature: typeof parsedBody.temperature === "number" ? parsedBody.temperature : undefined,
+    system: typeof parsedBody.system === "string" ? parsedBody.system : undefined,
   };
 
   const invokeResult = await opts.nodeRegistry.invoke({

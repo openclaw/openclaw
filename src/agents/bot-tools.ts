@@ -89,7 +89,6 @@ export function createBotTools(options?: {
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
             : undefined,
         modelHasVision: options?.modelHasVision,
-        workspaceOnly: options?.workspaceOnly,
       })
     : null;
   const pdfTool = options?.agentDir?.trim()

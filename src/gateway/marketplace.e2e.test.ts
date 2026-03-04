@@ -334,7 +334,7 @@ describe("marketplace e2e", () => {
     scheduler.updateSellerStatus(sellerNodeId, "idle", { maxConcurrent: 5 });
 
     const marketplaceOpts: MarketplaceHttpOptions = {
-      auth: { mode: "token", token },
+      auth: { mode: "token", token, allowTailscale: false },
       nodeRegistry: {
         invoke: async (params: { nodeId: string; command: string; params?: unknown }) => {
           if (params.command === "marketplace.proxy") {

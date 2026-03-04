@@ -6,19 +6,21 @@ function fallbackTmp(uid = 501) {
   return path.join("/var/fallback", `bot-${uid}`);
 }
 
+type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredBotTmpDir>[0]>;
+
 function resolveWithMocks(params: {
   lstatSync: ReturnType<typeof vi.fn>;
   accessSync?: ReturnType<typeof vi.fn>;
   uid?: number;
   tmpdirPath?: string;
 }) {
-  const accessSync = params.accessSync ?? vi.fn();
-  const mkdirSync = vi.fn();
+  const accessSync = (params.accessSync ?? vi.fn()) as NonNullable<TmpDirOptions["accessSync"]>;
+  const mkdirSync = vi.fn() as unknown as NonNullable<TmpDirOptions["mkdirSync"]>;
   const getuid = vi.fn(() => params.uid ?? 501);
   const tmpdir = vi.fn(() => params.tmpdirPath ?? "/var/fallback");
   const resolved = resolvePreferredBotTmpDir({
     accessSync,
-    lstatSync: params.lstatSync,
+    lstatSync: params.lstatSync as NonNullable<TmpDirOptions["lstatSync"]>,
     mkdirSync,
     getuid,
     tmpdir,
@@ -55,12 +57,12 @@ describe("resolvePreferredBotTmpDir", () => {
       err.code = "ENOENT";
       throw err;
     });
-    lstatSync.mockImplementationOnce(() => ({
+    lstatSync.mockImplementationOnce((() => ({
       isDirectory: () => true,
       isSymbolicLink: () => false,
       uid: 501,
       mode: 0o40700,
-    }));
+    })) as never);
 
     const { resolved, accessSync, mkdirSync, tmpdir } = resolveWithMocks({ lstatSync });
 

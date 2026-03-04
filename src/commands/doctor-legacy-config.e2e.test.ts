@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues as normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 
 describe("normalizeLegacyConfigValues", () => {
   let previousOauthDir: string | undefined;

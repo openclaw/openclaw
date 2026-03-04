@@ -709,6 +709,44 @@ function resolveFirecrawlEndpoint(baseUrl: string): string {
   }
 }
 
+type WebConfig = NonNullable<BotConfig["tools"]>["web"];
+
+/**
+ * Resolve the URL allowlist from the web tools config (fetch scope).
+ * Returns undefined when no allowlist is configured or the list is empty.
+ */
+export function resolveFetchUrlAllowlist(webConfig: WebConfig | undefined): string[] | undefined {
+  const list = webConfig?.urlAllowlist;
+  if (!list || list.length === 0) {
+    return undefined;
+  }
+  return list;
+}
+
+/**
+ * Check whether a URL is allowed by a hostname allowlist.
+ * Returns true when the allowlist is empty (no restriction).
+ */
+export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
+  if (allowlist.length === 0) {
+    return true;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  const lowerHost = hostname.toLowerCase();
+  return allowlist.some((pattern) => {
+    const lower = pattern.toLowerCase();
+    if (lower.startsWith("*.")) {
+      return lowerHost.endsWith(`.${lower.slice(2)}`);
+    }
+    return lowerHost === lower;
+  });
+}
+
 export function createWebFetchTool(options?: {
   config?: BotConfig;
   sandboxed?: boolean;

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BotConfig } from "../../config/config.js";
 import { parseKmsSecretReference, resolveSecretReferenceValue } from "./kms.js";
 
 describe("kms secret reference resolver", () => {
@@ -62,7 +63,7 @@ describe("kms secret reference resolver", () => {
           cacheTtlMs: 60_000,
         },
       },
-    } as const;
+    } as unknown as BotConfig;
 
     const resolved1 = await resolveSecretReferenceValue({
       value: "kms://OPENAI_API_KEY",

@@ -107,7 +107,7 @@ describe("createBotCodingTools safeBins", () => {
     })();
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
-    expect(result.details.status).toBe("completed");
+    expect((result.details as { status: string }).status).toBe("completed");
     expect(text).toContain(marker);
   });
 
@@ -149,7 +149,7 @@ describe("createBotCodingTools safeBins", () => {
     });
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
-    expect(result.details.status).toBe("completed");
+    expect((result.details as { status: string }).status).toBe("completed");
     expect(text).not.toContain(secret);
   });
 });

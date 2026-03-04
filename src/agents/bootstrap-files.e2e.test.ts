@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceBootstrapFileName } from "./workspace.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -18,7 +19,7 @@ describe("resolveBootstrapFilesForRun", () => {
       context.bootstrapFiles = [
         ...context.bootstrapFiles,
         {
-          name: "EXTRA.md",
+          name: "EXTRA.md" as WorkspaceBootstrapFileName,
           path: path.join(context.workspaceDir, "EXTRA.md"),
           content: "extra",
           missing: false,
@@ -29,7 +30,7 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("bot-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.name === "EXTRA.md")).toBe(true);
+    expect(files.some((file) => (file.name as string) === "EXTRA.md")).toBe(true);
   });
 });
 
@@ -43,7 +44,7 @@ describe("resolveBootstrapContextForRun", () => {
       context.bootstrapFiles = [
         ...context.bootstrapFiles,
         {
-          name: "EXTRA.md",
+          name: "EXTRA.md" as WorkspaceBootstrapFileName,
           path: path.join(context.workspaceDir, "EXTRA.md"),
           content: "extra",
           missing: false,

@@ -423,7 +423,14 @@ describe("installPluginFromDir", () => {
 
     const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    });
 
     const { installPluginFromDir } = await import("./install.js");
     const res = await installPluginFromDir({
@@ -468,9 +475,17 @@ describe("installPluginFromNpmSpec", () => {
     const packedName = "voice-call-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(opts?.cwd ?? "");
+        const cwd = typeof opts === "object" ? opts?.cwd : undefined;
+        packTmpDir = String(cwd ?? "");
         await packToArchive({ pkgDir, outDir: packTmpDir, outName: packedName });
-        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+        return {
+          code: 0,
+          stdout: `${packedName}\n`,
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -493,7 +508,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     const [argv, options] = packCall;
     expect(argv).toEqual(["npm", "pack", "@bot/voice-call@0.0.1", "--ignore-scripts"]);
-    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    const optionsObj = typeof options === "object" ? options : undefined;
+    expect(optionsObj?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import type { BotConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -166,5 +167,5 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["+1222"] } },
     session: { store: path.join(home, "sessions.json") },
-  } as const;
+  } as BotConfig;
 }

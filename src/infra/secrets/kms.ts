@@ -5,6 +5,23 @@ import {
 } from "../../utils/normalize-secret-input.js";
 import { resolveFetch } from "../fetch.js";
 
+type KmsSecretsExtension = {
+  kms?: {
+    siteUrl?: string;
+    projectId?: string;
+    projectSlug?: string;
+    environment?: string;
+    secretPath?: string;
+    accessToken?: string;
+    machineIdentity?: {
+      clientId?: string;
+      clientSecret?: string;
+    };
+    cacheTtlMs?: number;
+    requestTimeoutMs?: number;
+  };
+};
+
 const DEFAULT_SITE_URL = "https://kms.hanzo.ai";
 const DEFAULT_SECRET_PATH = "/";
 const DEFAULT_CACHE_TTL_MS = 15_000;
@@ -138,7 +155,8 @@ function resolveEffectiveKmsConfig(params: {
   ref: ParsedKmsSecretRef;
 }): EffectiveKmsConfig {
   const env = params.env ?? process.env;
-  const kmsCfg = params.cfg?.secrets?.kms;
+  const secrets = params.cfg?.secrets as (BotConfig["secrets"] & KmsSecretsExtension) | undefined;
+  const kmsCfg = secrets?.kms;
 
   const projectId = firstDefined(
     params.ref.projectId,

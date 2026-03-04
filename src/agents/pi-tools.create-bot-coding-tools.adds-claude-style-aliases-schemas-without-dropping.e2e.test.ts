@@ -512,7 +512,7 @@ describe("createBotCodingTools", () => {
       senderIsOwner: true,
     });
     for (const tool of googleTools) {
-      const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
+      const violations = findUnsupportedKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(violations).toEqual([]);
     }
   });

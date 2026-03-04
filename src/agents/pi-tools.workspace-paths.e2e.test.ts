@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { SandboxContext } from "./sandbox.js";
 import { createBotCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -157,7 +158,7 @@ describe("sandboxed workspace paths", () => {
   it("uses sandbox workspace for relative read/write/edit", async () => {
     await withTempDir("bot-sandbox-", async (sandboxDir) => {
       await withTempDir("bot-workspace-", async (workspaceDir) => {
-        const sandbox = {
+        const sandbox: SandboxContext = {
           enabled: true,
           sessionKey: "sandbox:test",
           workspaceDir: sandboxDir,

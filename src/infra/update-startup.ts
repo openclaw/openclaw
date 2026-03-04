@@ -76,8 +76,15 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   return false;
 }
 
+type UpdateAutoConfig = {
+  enabled?: boolean;
+  stableDelayHours?: number;
+  stableJitterHours?: number;
+  betaCheckIntervalHours?: number;
+};
+
 function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdatePolicy {
-  const auto = cfg.update?.auto;
+  const auto = (cfg.update as (typeof cfg.update & { auto?: UpdateAutoConfig }) | undefined)?.auto;
   const stableDelayHours =
     typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
       ? Math.max(0, auto.stableDelayHours)

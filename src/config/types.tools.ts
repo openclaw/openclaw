@@ -437,6 +437,12 @@ export type ToolsConfig = {
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
+    /**
+     * Optional hostname allowlist for web search and fetch tools.
+     * Supports exact hosts and `*.example.com` wildcards.
+     * When set, only matching URLs are allowed; others are filtered/blocked.
+     */
+    urlAllowlist?: string[];
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;

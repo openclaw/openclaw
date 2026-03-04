@@ -495,7 +495,7 @@ export function createBotCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
-      requesterSenderId: options?.senderId,
+      requesterSenderId: options?.senderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
     }),

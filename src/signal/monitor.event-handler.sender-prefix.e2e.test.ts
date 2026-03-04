@@ -64,7 +64,7 @@ describe("signal event handler sender prefix", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => undefined,
       resolveSignalReactionTargets: () => [],
-      isSignalReactionMessage: () => false,
+      isSignalReactionMessage: (() => false) as never,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "",
     });

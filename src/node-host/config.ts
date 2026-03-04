@@ -64,3 +64,9 @@ export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {
   await saveNodeHostConfig(normalized);
   return normalized;
 }
+
+export type NodeHostMarketplaceConfig = {
+  claudeApiKey?: string;
+  idleThresholdSec?: number;
+  maxConcurrent?: number;
+};

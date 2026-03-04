@@ -4,7 +4,9 @@ import { onSpy } from "./bot.media.e2e-harness.js";
 async function createMessageHandlerAndReplySpy() {
   const { createTelegramBot } = await import("./bot.js");
   const replyModule = await import("../auto-reply/reply.js");
-  const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+  const replySpy = (replyModule as unknown as Record<string, unknown>).__replySpy as ReturnType<
+    typeof vi.fn
+  >;
 
   onSpy.mockReset();
   replySpy.mockReset();

@@ -45,7 +45,6 @@ function stubMinimaxOkFetch() {
       base_resp: { status_code: 0, status_msg: "" },
     }),
   });
-  // @ts-expect-error partial global
   global.fetch = fetch;
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   return fetch;
@@ -96,7 +95,6 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -153,8 +151,24 @@ describe("image tool implicit imageModel config", () => {
         providers: {
           acme: {
             models: [
-              { id: "text-1", input: ["text"] },
-              { id: "vision-1", input: ["text", "image"] },
+              {
+                id: "text-1",
+                name: "Text 1",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+              {
+                id: "vision-1",
+                name: "Vision 1",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
             ],
           },
         },
@@ -197,7 +211,17 @@ describe("image tool implicit imageModel config", () => {
       models: {
         providers: {
           acme: {
-            models: [{ id: "vision-1", input: ["text", "image"] }],
+            models: [
+              {
+                id: "vision-1",
+                name: "Vision 1",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+            ],
           },
         },
       },
@@ -321,7 +345,6 @@ describe("image tool implicit imageModel config", () => {
         base_resp: { status_code: 0, status_msg: "" },
       }),
     });
-    // @ts-expect-error partial global
     global.fetch = fetch;
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
 
@@ -381,7 +404,6 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -396,7 +418,6 @@ describe("image tool MiniMax VLM routing", () => {
         base_resp: baseResp,
       }),
     });
-    // @ts-expect-error partial global
     global.fetch = fetch;
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-minimax-vlm-"));

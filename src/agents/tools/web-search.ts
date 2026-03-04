@@ -1335,6 +1335,58 @@ async function runWebSearch(params: {
   return payload;
 }
 
+type WebConfig = NonNullable<BotConfig["tools"]>["web"];
+
+/**
+ * Resolve the URL allowlist from the web tools config (search scope).
+ * Returns undefined when no allowlist is configured or the list is empty.
+ */
+export function resolveUrlAllowlist(webConfig: WebConfig | undefined): string[] | undefined {
+  const list = webConfig?.urlAllowlist;
+  if (!list || list.length === 0) {
+    return undefined;
+  }
+  return list;
+}
+
+function matchesHostPattern(hostname: string, pattern: string): boolean {
+  const lowerHost = hostname.toLowerCase();
+  const lowerPattern = pattern.toLowerCase();
+  if (lowerPattern.startsWith("*.")) {
+    const suffix = lowerPattern.slice(2);
+    return lowerHost.endsWith(`.${suffix}`);
+  }
+  return lowerHost === lowerPattern;
+}
+
+function isHostnameAllowed(hostname: string, allowlist: string[]): boolean {
+  return allowlist.some((pattern) => matchesHostPattern(hostname, pattern));
+}
+
+/**
+ * Filter search results by URL allowlist.
+ * Results without a URL are always kept; all results pass when allowlist is empty.
+ */
+export function filterResultsByAllowlist<T extends { url?: string }>(
+  results: T[],
+  allowlist: string[],
+): T[] {
+  if (allowlist.length === 0) {
+    return results;
+  }
+  return results.filter((entry) => {
+    if (!entry.url) {
+      return true;
+    }
+    try {
+      const hostname = new URL(entry.url).hostname;
+      return isHostnameAllowed(hostname, allowlist);
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function createWebSearchTool(options?: {
   config?: BotConfig;
   sandboxed?: boolean;

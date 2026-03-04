@@ -1,6 +1,7 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { BotConfig } from "../config/config.js";
 import {
   installDirectiveBehaviorE2EHooks,
   loadModelCatalog,
@@ -9,7 +10,7 @@ import {
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
-function makeThinkConfig(home: string) {
+function makeThinkConfig(home: string): BotConfig {
   return {
     agents: {
       defaults: {
@@ -18,10 +19,10 @@ function makeThinkConfig(home: string) {
       },
     },
     session: { store: path.join(home, "sessions.json") },
-  } as const;
+  } as BotConfig;
 }
 
-function makeWhatsAppConfig(home: string) {
+function makeWhatsAppConfig(home: string): BotConfig {
   return {
     agents: {
       defaults: {
@@ -31,7 +32,7 @@ function makeWhatsAppConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: path.join(home, "sessions.json") },
-  } as const;
+  } as BotConfig;
 }
 
 async function runReplyToCurrentCase(home: string, text: string) {

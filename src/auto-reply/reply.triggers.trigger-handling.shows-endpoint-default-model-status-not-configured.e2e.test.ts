@@ -47,7 +47,7 @@ describe("trigger handling", () => {
             },
           },
         },
-      };
+      } as unknown as ReturnType<typeof makeCfg>;
       const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;

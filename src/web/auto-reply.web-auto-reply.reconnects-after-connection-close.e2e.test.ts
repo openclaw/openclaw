@@ -120,7 +120,7 @@ describe("web auto-reply", () => {
       );
       const { controller, run } = startMonitorWebChannel({
         monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory,
+        listenerFactory: listenerFactory as never,
         sleep,
       });
 
@@ -138,6 +138,10 @@ describe("web auto-reply", () => {
         from: "+1",
         to: "+2",
         id: "m1",
+        conversationId: "+1",
+        accountId: "default",
+        chatType: "direct",
+        chatId: "+1",
         sendComposing,
         reply,
         sendMedia,
@@ -174,7 +178,7 @@ describe("web auto-reply", () => {
 
     const run = monitorWebChannel(
       false,
-      listenerFactory,
+      listenerFactory as never,
       true,
       async () => ({ text: "ok" }),
       runtime as never,
@@ -236,7 +240,7 @@ describe("web auto-reply", () => {
         session: { store: store.storePath },
       }));
 
-      await monitorWebChannel(false, listenerFactory, false, resolver);
+      await monitorWebChannel(false, listenerFactory as never, false, resolver);
       expect(capturedOnMessage).toBeDefined();
 
       // Two messages from the same sender with fixed timestamps
@@ -245,6 +249,10 @@ describe("web auto-reply", () => {
         from: "+1",
         to: "+2",
         id: "m1",
+        conversationId: "+1",
+        accountId: "default",
+        chatType: "direct",
+        chatId: "+1",
         timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
         sendComposing,
         reply,
@@ -255,6 +263,10 @@ describe("web auto-reply", () => {
         from: "+1",
         to: "+2",
         id: "m2",
+        conversationId: "+1",
+        accountId: "default",
+        chatType: "direct",
+        chatId: "+1",
         timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
         sendComposing,
         reply,
