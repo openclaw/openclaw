@@ -2582,11 +2582,13 @@ export async function runEmbeddedAttempt(
 
       // Subscribe for loop iteration tracking hooks
       let hookTurnIteration = 0;
+      let hookTurnMessageCount = 0;
       const hookEventUnsub =
         hookRunner?.hasHooks("loop_iteration_start") || hookRunner?.hasHooks("loop_iteration_end")
           ? activeSession.subscribe((event) => {
               if (event.type === "turn_start") {
                 hookTurnIteration++;
+                hookTurnMessageCount = activeSession.messages.length;
                 hookRunner
                   .runLoopIterationStart(
                     {
@@ -2604,6 +2606,7 @@ export async function runEmbeddedAttempt(
                     {
                       iteration: hookTurnIteration,
                       toolCallsMade: toolResults.length,
+                      newMessagesAdded: activeSession.messages.length - hookTurnMessageCount,
                       hasToolResults: toolResults.length > 0,
                     },
                     hookCtx,
