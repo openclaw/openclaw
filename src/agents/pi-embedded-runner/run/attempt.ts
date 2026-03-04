@@ -2770,7 +2770,13 @@ export async function runEmbeddedAttempt(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
         }
-        hookEventUnsub?.();
+        try {
+          hookEventUnsub?.();
+        } catch (err) {
+          log.error(
+            `CRITICAL: hookEventUnsub failed, possible resource leak: runId=${params.runId} ${String(err)}`,
+          );
+        }
         try {
           unsubscribe();
         } catch (err) {
