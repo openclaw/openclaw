@@ -14,6 +14,12 @@ import {
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import {
+  isReadHttpMethod,
+  respondNotFound as respondControlUiNotFound,
+  respondPlainText,
+} from "./control-ui-http-utils.js";
+import { classifyControlUiRequest } from "./control-ui-routing.js";
+import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
@@ -21,6 +27,8 @@ import {
 } from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
+const CONTROL_UI_ASSETS_MISSING_MESSAGE =
+  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -111,6 +119,31 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function respondControlUiAssetsUnavailable(
+  res: ServerResponse,
+  options?: { configuredRootPath?: string },
+) {
+  if (options?.configuredRootPath) {
+    respondPlainText(
+      res,
+      503,
+      `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
+    );
+    return;
+  }
+  respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
+}
+
+function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
+  if (req.method !== "HEAD") {
+    return false;
+  }
+  res.statusCode = 200;
+  setStaticFileHeaders(res, filePath);
+  res.end();
+  return true;
+}
+
 function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
@@ -124,7 +157,7 @@ export function handleControlUiAvatarRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
+  if (!isReadHttpMethod(req.method)) {
     return false;
   }
 
@@ -143,7 +176,7 @@ export function handleControlUiAvatarRequest(
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
   if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
@@ -161,21 +194,17 @@ export function handleControlUiAvatarRequest(
 
   const resolved = opts.resolveAvatar(agentId);
   if (resolved.kind !== "local") {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
   const safeAvatar = resolveSafeAvatarFile(resolved.filePath);
   if (!safeAvatar) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
   try {
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", contentTypeForExt(path.extname(safeAvatar.path).toLowerCase()));
-      res.setHeader("Cache-Control", "no-cache");
-      res.end();
+    if (respondHeadForFile(req, res, safeAvatar.path)) {
       return true;
     }
 
@@ -184,12 +213,6 @@ export function handleControlUiAvatarRequest(
   } finally {
     fs.closeSync(safeAvatar.fd);
   }
-}
-
-function respondNotFound(res: ServerResponse) {
-  res.statusCode = 404;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Not Found");
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
@@ -205,7 +228,24 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  opts?: { injectAuthToken?: string },
+) {
+  if (opts?.injectAuthToken) {
+    // Escape for safe embedding in a JS string literal inside an inline <script>.
+    const safeToken = opts.injectAuthToken.replace(/[\\'"<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const snippet = [
+      "<script>",
+      "try{",
+      `var k="openclaw.control.settings.v1",s=JSON.parse(localStorage.getItem(k)||"{}");`,
+      `if(!s.token){s.token="${safeToken}";localStorage.setItem(k,JSON.stringify(s))}`,
+      "}catch(e){}",
+      "</script>",
+    ].join("");
+    body = body.replace("</head>", `${snippet}</head>`);
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
@@ -266,6 +306,29 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+/**
+ * When the gateway runs in local mode with allowInsecureAuth enabled,
+ * return the configured auth token so it can be injected into the
+ * served index.html — letting the Control UI auto-connect without
+ * the user manually entering the token.
+ */
+function resolveInjectableAuthToken(config?: OpenClawConfig): string | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const gwCfg = config.gateway;
+  const isLocal = gwCfg?.mode === "local";
+  const allowInsecure = gwCfg?.controlUi?.allowInsecureAuth === true;
+  if (!isLocal && !allowInsecure) {
+    return undefined;
+  }
+  const auth = gwCfg?.auth;
+  if (auth?.mode === "token" && typeof auth.token === "string" && auth.token) {
+    return auth.token;
+  }
+  return undefined;
+}
+
 export function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -275,36 +338,29 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-
-  if (!basePath) {
-    if (pathname === "/ui" || pathname.startsWith("/ui/")) {
-      applyControlUiSecurityHeaders(res);
-      respondNotFound(res);
-      return true;
-    }
+  const route = classifyControlUiRequest({
+    basePath,
+    pathname,
+    search: url.search,
+    method: req.method,
+  });
+  if (route.kind === "not-control-ui") {
+    return false;
   }
-
-  if (basePath) {
-    if (pathname === basePath) {
-      applyControlUiSecurityHeaders(res);
-      res.statusCode = 302;
-      res.setHeader("Location", `${basePath}/${url.search}`);
-      res.end();
-      return true;
-    }
-    if (!pathname.startsWith(`${basePath}/`)) {
-      return false;
-    }
+  if (route.kind === "not-found") {
+    applyControlUiSecurityHeaders(res);
+    respondControlUiNotFound(res);
+    return true;
+  }
+  if (route.kind === "redirect") {
+    applyControlUiSecurityHeaders(res);
+    res.statusCode = 302;
+    res.setHeader("Location", route.location);
+    res.end();
+    return true;
   }
 
   applyControlUiSecurityHeaders(res);
@@ -340,19 +396,11 @@ export function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      `Control UI assets not found at ${rootState.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
-    );
+    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
     return true;
   }
   if (rootState?.kind === "missing") {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -365,11 +413,7 @@ export function handleControlUiHttpRequest(
           cwd: process.cwd(),
         });
   if (!root) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -384,11 +428,7 @@ export function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -407,27 +447,28 @@ export function handleControlUiHttpRequest(
   const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
   const filePath = path.resolve(root, fileRel);
   if (!isWithinDir(root, filePath)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
+
+  // In local dev mode with allowInsecureAuth, inject the auth token into the
+  // served index.html so the Control UI can auto-connect without manual entry.
+  const injectAuthToken = resolveInjectableAuthToken(opts?.config);
 
   const safeFile = resolveSafeControlUiFile(rootReal, filePath);
   if (safeFile) {
     try {
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        setStaticFileHeaders(res, safeFile.path);
-        res.end();
+      if (respondHeadForFile(req, res, safeFile.path)) {
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"), { injectAuthToken });
         return true;
       }
       serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
@@ -443,7 +484,7 @@ export function handleControlUiHttpRequest(
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
   if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
@@ -452,19 +493,16 @@ export function handleControlUiHttpRequest(
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
   if (safeIndex) {
     try {
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        setStaticFileHeaders(res, safeIndex.path);
-        res.end();
+      if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"), { injectAuthToken });
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);
     }
   }
 
-  respondNotFound(res);
+  respondControlUiNotFound(res);
   return true;
 }

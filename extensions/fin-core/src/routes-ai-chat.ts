@@ -7,12 +7,10 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { HttpReq, HttpRes, RuntimeServices } from "./types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "./types-http.js";
 
-export function registerAiChatRoute(
-  api: OpenClawPluginApi,
-  runtime: RuntimeServices,
-): void {
+export function registerAiChatRoute(api: OpenClawPluginApi, runtime: RuntimeServices): void {
   // POST /api/v1/finance/ai/chat -- Unified AI chat for dashboard panels
   api.registerHttpRoute({
+    auth: "gateway",
     path: "/api/v1/finance/ai/chat",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {

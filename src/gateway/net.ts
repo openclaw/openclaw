@@ -322,16 +322,14 @@ export function isValidIPv4(host: string): boolean {
  * Note: 0.0.0.0 and :: are NOT loopback - they bind to all interfaces.
  */
 export function isLoopbackHost(host: string): boolean {
-  if (!host) {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
     return false;
   }
-  const h = host.trim().toLowerCase();
-  if (h === "localhost") {
+  if (parsed.isLocalhost) {
     return true;
   }
-  // Handle bracketed IPv6 addresses like [::1]
-  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
-  return isLoopbackAddress(unbracket);
+  return isLoopbackAddress(parsed.unbracketedHost);
 }
 
 /**
@@ -348,16 +346,74 @@ export function isLocalishHost(hostHeader?: string): boolean {
 }
 
 /**
+ * Check if a hostname or IP refers to a private or loopback address.
+ * Handles the same hostname formats as isLoopbackHost, but also accepts
+ * RFC 1918, link-local, CGNAT, and IPv6 ULA/link-local addresses.
+ */
+export function isPrivateOrLoopbackHost(host: string): boolean {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.isLocalhost) {
+    return true;
+  }
+  const normalized = normalizeIp(parsed.unbracketedHost);
+  if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
+    return false;
+  }
+  // isPrivateOrLoopbackAddress reuses SSRF-blocking ranges for IPv6, which
+  // include unspecified (::) and multicast (ff00::/8). Exclude these —
+  // they are not private/loopback unicast endpoints. (Multicast is UDP-only
+  // so TCP/WebSocket connections would fail regardless.)
+  if (net.isIP(normalized) === 6) {
+    if (normalized.startsWith("ff")) {
+      return false;
+    }
+    if (normalized === "::") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseHostForAddressChecks(
+  host: string,
+): { isLocalhost: boolean; unbracketedHost: string } | null {
+  if (!host) {
+    return null;
+  }
+  const normalizedHost = host.trim().toLowerCase();
+  if (normalizedHost === "localhost") {
+    return { isLocalhost: true, unbracketedHost: normalizedHost };
+  }
+  return {
+    isLocalhost: false,
+    // Handle bracketed IPv6 addresses like [::1]
+    unbracketedHost:
+      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
+        ? normalizedHost.slice(1, -1)
+        : normalizedHost,
+  };
+}
+
+/**
  * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is secure only for loopback addresses by default
+ * - optional break-glass: private ws:// can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(
+  url: string,
+  opts?: {
+    allowPrivateWs?: boolean;
+  },
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -373,6 +429,13 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // Default policy stays strict: loopback-only plaintext ws://.
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-network overlays.
+  if (opts?.allowPrivateWs) {
+    return isPrivateOrLoopbackHost(parsed.hostname);
+  }
+  return false;
 }

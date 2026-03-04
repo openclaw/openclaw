@@ -1,5 +1,14 @@
-/** Supported exchange identifiers. */
-export type ExchangeId = "hyperliquid" | "binance" | "okx" | "bybit";
+/** Supported CCXT crypto exchange identifiers. */
+export type CryptoExchangeId = "hyperliquid" | "binance" | "okx" | "bybit";
+
+/** Supported broker types for traditional markets. */
+export type BrokerId = "alpaca" | "futu";
+
+/** Union of all supported exchange/broker identifiers. */
+export type ExchangeId = CryptoExchangeId | BrokerId;
+
+/** Market classification. */
+export type MarketType = "crypto" | "us-equity" | "hk-equity";
 
 /** Credentials and connection config for a single exchange. */
 export type ExchangeConfig = {
@@ -11,6 +20,16 @@ export type ExchangeConfig = {
   subaccount?: string;
   /** Default market type. Defaults to "spot". */
   defaultType?: "spot" | "swap" | "future";
+  /** Market classification. Inferred from exchange if not set. */
+  market?: MarketType;
+  /** Alpaca: use paper trading endpoint. */
+  paper?: boolean;
+  /** Futu: OpenD gateway host. */
+  host?: string;
+  /** Futu: OpenD gateway port. */
+  port?: number;
+  /** Futu: trading account ID. */
+  accountId?: string;
 };
 
 /** Risk limits for automated trading. */
@@ -85,3 +104,53 @@ export type Balance = {
   used: number;
   usdValue?: number;
 };
+
+/** Standardized order result from exchange. */
+export type OrderResult = {
+  orderId: string;
+  exchangeId: string;
+  symbol: string;
+  side: "buy" | "sell";
+  type: "market" | "limit";
+  amount: number;
+  filledAmount: number;
+  price: number;
+  avgFillPrice?: number;
+  status: "open" | "closed" | "canceled" | "rejected";
+  timestamp: number;
+  fee?: { cost: number; currency: string };
+};
+
+/** Ticker data from exchange. */
+export type TickerData = {
+  symbol: string;
+  last: number;
+  bid?: number;
+  ask?: number;
+  volume24h?: number;
+  change24hPct?: number;
+  timestamp: number;
+};
+
+const CRYPTO_EXCHANGES: ReadonlySet<string> = new Set<string>([
+  "hyperliquid",
+  "binance",
+  "okx",
+  "bybit",
+]);
+
+/** Infer MarketType from an ExchangeId or ExchangeConfig. */
+export function inferMarketType(exchangeOrConfig: ExchangeId | ExchangeConfig): MarketType {
+  if (typeof exchangeOrConfig === "string") {
+    if (CRYPTO_EXCHANGES.has(exchangeOrConfig)) return "crypto";
+    if (exchangeOrConfig === "alpaca") return "us-equity";
+    if (exchangeOrConfig === "futu") return "hk-equity";
+    return "crypto"; // default fallback
+  }
+  return exchangeOrConfig.market ?? inferMarketType(exchangeOrConfig.exchange);
+}
+
+/** Check if an exchange ID is a CCXT crypto exchange. */
+export function isCryptoExchange(id: string): id is CryptoExchangeId {
+  return CRYPTO_EXCHANGES.has(id);
+}

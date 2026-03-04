@@ -601,6 +601,7 @@ const plugin = {
     // ── HTTP REST Routes ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/status",
       handler: async (
         _req: unknown,
@@ -627,6 +628,7 @@ const plugin = {
     });
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/leaderboard",
       handler: async (
         _req: unknown,
@@ -642,6 +644,7 @@ const plugin = {
     });
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/risk",
       handler: async (
         _req: unknown,
@@ -665,6 +668,7 @@ const plugin = {
     });
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/allocations",
       handler: async (
         _req: unknown,
@@ -691,6 +695,7 @@ const plugin = {
     // ── Performance Snapshots API ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/performance",
       handler: async (
         _req: unknown,
@@ -708,6 +713,7 @@ const plugin = {
     // ── Capital Flows API ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/capital-flows",
       handler: async (
         _req: unknown,
@@ -725,6 +731,7 @@ const plugin = {
     // ── SSE Stream ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/fund/stream",
       handler: async (
         req: { on: (event: string, cb: () => void) => void },
@@ -823,6 +830,7 @@ const plugin = {
     // ── Dashboard Route ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/dashboard/fund",
       handler: async (
         _req: unknown,

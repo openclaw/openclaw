@@ -272,6 +272,55 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
   return { ...mc, config };
 }
 
+/** Gather strategy arena data (L0-L2 pipeline + raceboard + agent events). */
+export function gatherStrategyArenaData(deps: DataGatheringDeps) {
+  const { runtime, eventStore, riskConfig } = deps;
+
+  const trading = gatherTradingData(deps);
+  const events = {
+    events: eventStore.listEvents(),
+    pendingCount: eventStore.pendingCount(),
+  };
+
+  // Partition strategies by level for pipeline counts
+  const strategies = trading.strategies;
+  const pipeline = {
+    l0: strategies.filter((s) => s.level === "L0" || s.level === "INCUBATE").length,
+    l1: strategies.filter((s) => s.level === "L1" || s.level === "BACKTEST").length,
+    l2: strategies.filter((s) => s.level === "L2" || s.level === "PAPER").length,
+    l3: strategies.filter((s) => s.level === "L3" || s.level === "LIVE").length,
+  };
+
+  // Promotion gate thresholds (defaults)
+  const gates = {
+    l0ToL1: { auto: true, label: "Auto after creation" },
+    l1ToL2: { sharpeMin: 1.0, maxDdMax: -15, label: "Sharpe > 1.0, MaxDD < -15%" },
+    l2ToL3: {
+      paperDays: 14,
+      sharpeMin: 1.2,
+      requiresApproval: true,
+      label: "14d paper, Sharpe > 1.2, requires approval",
+    },
+  };
+
+  const alertEngine = runtime.services?.get?.("fin-alert-engine") as AlertEngineLike | undefined;
+  const alerts = alertEngine?.listAlerts() ?? [];
+
+  return {
+    trading,
+    events,
+    alerts,
+    pipeline,
+    gates,
+    risk: {
+      enabled: riskConfig.enabled,
+      maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
+      confirmThresholdUsd: riskConfig.confirmThresholdUsd,
+      maxDailyLossUsd: riskConfig.maxDailyLossUsd,
+    },
+  };
+}
+
 /** Gather strategy lab data (strategies + backtests + fund allocations). */
 export function gatherStrategyLabData(deps: DataGatheringDeps) {
   const { runtime } = deps;
