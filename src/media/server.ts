@@ -29,7 +29,7 @@ export function attachMediaRoutes(
   app: Express,
   ttlMs = DEFAULT_TTL_MS,
   _runtime: RuntimeEnv = defaultRuntime,
-) {
+): { cleanupTimer: ReturnType<typeof setInterval> } {
   const mediaDir = getMediaDir();
 
   app.get("/media/:id", async (req, res) => {
@@ -94,10 +94,12 @@ export function attachMediaRoutes(
     }
   });
 
-  // periodic cleanup
-  setInterval(() => {
+  // periodic cleanup — return handle so callers can clearInterval on shutdown
+  const cleanupTimer = setInterval(() => {
     void cleanOldMedia(ttlMs);
-  }, ttlMs).unref();
+  }, ttlMs);
+  cleanupTimer.unref();
+  return { cleanupTimer };
 }
 
 export async function startMediaServer(
