@@ -1,7 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
+import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
 
 export const feishuMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -9,7 +9,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const actions: ChannelMessageActionName[] = ["react"];
+    const actions: ChannelMessageActionName[] = ["react", "reactions"];
     return actions;
   },
 
@@ -34,21 +34,11 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
 
       const remove = typeof params.remove === "boolean" ? params.remove : false;
 
-      const emoji =
-        readStringParam(params, "emoji") ??
-        readStringParam(params, "emojiName") ??
-        readStringParam(params, "emojiType");
-
-      const emojiType = normalizeFeishuEmoji(emoji ?? "THUMBSUP");
-
       if (remove) {
-        // To remove a reaction, we need the reactionId. The Feishu API requires
-        // reactionId for deletion, but the caller may only have messageId + emoji.
-        // For now, require reactionId explicitly for removal.
         const reactionId = readStringParam(params, "reactionId");
         if (!reactionId) {
           throw new Error(
-            "reactionId is required to remove a reaction. Use message(action='reactions') to list reaction IDs first.",
+            'reactionId is required to remove a reaction. Use message(action="reactions") to list reaction IDs first.',
           );
         }
         await removeReactionFeishu({
@@ -60,6 +50,13 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         return jsonResult({ ok: true, action: "react", removed: true, messageId, reactionId });
       }
 
+      const rawEmoji =
+        readStringParam(params, "emoji") ??
+        readStringParam(params, "emojiName") ??
+        readStringParam(params, "emojiType");
+
+      const emojiType = normalizeFeishuEmoji(rawEmoji);
+
       const result = await addReactionFeishu({
         cfg,
         messageId,
@@ -68,6 +65,29 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
       });
 
       return jsonResult({ ok: true, action: "react", messageId, emojiType, ...result });
+    }
+
+    if (action === "reactions") {
+      const messageId =
+        readStringParam(params, "messageId") ??
+        readStringParam(params, "message_id") ??
+        (ctx.toolContext?.currentMessageId != null
+          ? String(ctx.toolContext.currentMessageId)
+          : undefined);
+
+      if (!messageId) {
+        throw new Error("messageId is required to list reactions.");
+      }
+
+      const emojiType = readStringParam(params, "emojiType");
+      const reactions = await listReactionsFeishu({
+        cfg,
+        messageId,
+        emojiType,
+        accountId: resolvedAccountId,
+      });
+
+      return jsonResult({ ok: true, action: "reactions", messageId, reactions });
     }
 
     throw new Error(`Unsupported feishu action: ${action}`);
@@ -79,9 +99,17 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
  * Feishu uses UPPER_CASE emoji type names like "THUMBSUP", "HEART", "SMILE".
  * This helper accepts common aliases and maps them to Feishu's format.
  *
+ * If no emoji is provided, defaults to THUMBSUP.
+ * If the input normalizes to an empty string (e.g., unsupported unicode emoji),
+ * throws an error instead of silently defaulting.
+ *
  * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
  */
-function normalizeFeishuEmoji(input: string): string {
+function normalizeFeishuEmoji(input: string | undefined): string {
+  if (!input) {
+    return "THUMBSUP";
+  }
+
   const upper = input.toUpperCase().replace(/[^A-Z0-9_]/g, "");
 
   const aliases: Record<string, string> = {
@@ -100,6 +128,11 @@ function normalizeFeishuEmoji(input: string): string {
     return aliases[upper];
   }
 
-  // If already a valid Feishu emoji type, return as-is
-  return upper || "THUMBSUP";
+  if (!upper) {
+    throw new Error(
+      `Unrecognized emoji: "${input}". Use Feishu emoji type names like THUMBSUP, HEART, SMILE, FIRE, etc.`,
+    );
+  }
+
+  return upper;
 }

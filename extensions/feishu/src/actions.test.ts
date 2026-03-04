@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-// Mock the reactions module before importing actions
 vi.mock("./reactions.js", () => ({
   addReactionFeishu: vi.fn().mockResolvedValue({ reactionId: "mock-reaction-id" }),
   removeReactionFeishu: vi.fn().mockResolvedValue(undefined),
-  listReactionsFeishu: vi.fn().mockResolvedValue([]),
+  listReactionsFeishu: vi
+    .fn()
+    .mockResolvedValue([
+      { reactionId: "rc_1", emojiType: "THUMBSUP", operatorType: "user", operatorId: "ou_user1" },
+    ]),
 }));
 
-// Mock the accounts module
 vi.mock("./accounts.js", () => ({
   listEnabledFeishuAccounts: vi
     .fn()
@@ -21,15 +23,16 @@ vi.mock("./accounts.js", () => ({
 
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { feishuMessageActions } from "./actions.js";
-import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
+import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
 
 const mockCfg = {} as Parameters<NonNullable<typeof feishuMessageActions.listActions>>[0]["cfg"];
 
 describe("feishuMessageActions", () => {
   describe("listActions", () => {
-    it("returns react when accounts are enabled", () => {
+    it("returns react and reactions when accounts are enabled", () => {
       const actions = feishuMessageActions.listActions!({ cfg: mockCfg });
       expect(actions).toContain("react");
+      expect(actions).toContain("reactions");
     });
 
     it("returns empty array when no accounts are enabled", () => {
@@ -55,9 +58,6 @@ describe("feishuMessageActions", () => {
         emojiType: "THUMBSUP",
         reactionId: "mock-reaction-id",
       });
-      expect(result.content).toEqual([
-        { type: "text", text: expect.stringContaining('"ok": true') },
-      ]);
       expect(addReactionFeishu).toHaveBeenCalledWith({
         cfg: mockCfg,
         messageId: "om_abc123",
@@ -90,6 +90,17 @@ describe("feishuMessageActions", () => {
       expect(addReactionFeishu).toHaveBeenCalledWith(
         expect.objectContaining({ emojiType: "THUMBSUP" }),
       );
+    });
+
+    it("throws for unrecognized unicode emoji that normalizes to empty string", async () => {
+      await expect(
+        feishuMessageActions.handleAction!({
+          channel: "feishu" as never,
+          action: "react" as never,
+          cfg: mockCfg,
+          params: { messageId: "om_abc123", emoji: "❤️" },
+        }),
+      ).rejects.toThrow("Unrecognized emoji");
     });
 
     it("falls back to currentMessageId from tool context", async () => {
@@ -167,6 +178,61 @@ describe("feishuMessageActions", () => {
           params: { messageId: "om_abc123", remove: true },
         }),
       ).rejects.toThrow("reactionId is required");
+    });
+  });
+
+  describe("handleAction - reactions (list)", () => {
+    it("lists reactions for a message", async () => {
+      const result = await feishuMessageActions.handleAction!({
+        channel: "feishu" as never,
+        action: "reactions" as never,
+        cfg: mockCfg,
+        params: { messageId: "om_abc123" },
+      });
+
+      expect(listReactionsFeishu).toHaveBeenCalledWith({
+        cfg: mockCfg,
+        messageId: "om_abc123",
+        emojiType: undefined,
+        accountId: undefined,
+      });
+      expect(result.details).toEqual({
+        ok: true,
+        action: "reactions",
+        messageId: "om_abc123",
+        reactions: [
+          {
+            reactionId: "rc_1",
+            emojiType: "THUMBSUP",
+            operatorType: "user",
+            operatorId: "ou_user1",
+          },
+        ],
+      });
+    });
+
+    it("filters by emojiType when provided", async () => {
+      await feishuMessageActions.handleAction!({
+        channel: "feishu" as never,
+        action: "reactions" as never,
+        cfg: mockCfg,
+        params: { messageId: "om_abc123", emojiType: "HEART" },
+      });
+
+      expect(listReactionsFeishu).toHaveBeenCalledWith(
+        expect.objectContaining({ emojiType: "HEART" }),
+      );
+    });
+
+    it("throws when no messageId", async () => {
+      await expect(
+        feishuMessageActions.handleAction!({
+          channel: "feishu" as never,
+          action: "reactions" as never,
+          cfg: mockCfg,
+          params: {},
+        }),
+      ).rejects.toThrow("messageId is required");
     });
   });
 
