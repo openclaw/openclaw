@@ -110,7 +110,7 @@ export async function runOnboardingWizard(
           "",
           "Docs: https://docs.openclaw.ai/gateway/configuration",
         ].join("\n"),
-        "Config issues",
+        t("wizard.configIssuesTitle"),
       );
     }
     await prompter.outro(
@@ -160,15 +160,15 @@ export async function runOnboardingWizard(
   if (snapshot.exists) {
     await prompter.note(
       onboardHelpers.summarizeExistingConfig(baseConfig),
-      "Existing config detected",
+      t("wizard.existingConfigDetectedTitle"),
     );
 
     const action = await prompter.select({
-      message: "Config handling",
+      message: t("wizard.configHandlingQuestion"),
       options: [
-        { value: "keep", label: "Use existing values" },
-        { value: "modify", label: "Update values" },
-        { value: "reset", label: "Reset" },
+        { value: "keep", label: t("wizard.configHandlingUseExisting") },
+        { value: "modify", label: t("wizard.configHandlingUpdate") },
+        { value: "reset", label: t("wizard.configHandlingReset") },
       ],
     });
 
@@ -176,16 +176,16 @@ export async function runOnboardingWizard(
       const workspaceDefault =
         baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE;
       const resetScope = (await prompter.select({
-        message: "Reset scope",
+        message: t("wizard.resetScopeQuestion"),
         options: [
-          { value: "config", label: "Config only" },
+          { value: "config", label: t("wizard.resetScopeConfigOnly") },
           {
             value: "config+creds+sessions",
-            label: "Config + creds + sessions",
+            label: t("wizard.resetScopeConfigCredsSessions"),
           },
           {
             value: "full",
-            label: "Full reset (config + creds + sessions + workspace)",
+            label: t("wizard.resetScopeFull"),
           },
         ],
       })) as ResetScope;
@@ -341,23 +341,25 @@ export async function runOnboardingWizard(
     (flow === "quickstart"
       ? "local"
       : ((await prompter.select({
-          message: "What do you want to set up?",
+          message: t("wizard.setupTargetQuestion"),
           options: [
             {
               value: "local",
-              label: "Local gateway (this machine)",
+              label: t("wizard.setupTargetLocal"),
               hint: localProbe.ok
-                ? `Gateway reachable (${localUrl})`
-                : `No gateway detected (${localUrl})`,
+                ? cliT("wizard.setupTargetLocalReachableHint", process.env, { url: localUrl })
+                : cliT("wizard.setupTargetLocalUnreachableHint", process.env, { url: localUrl }),
             },
             {
               value: "remote",
-              label: "Remote gateway (info-only)",
+              label: t("wizard.setupTargetRemote"),
               hint: !remoteUrl
-                ? "No remote URL configured yet"
+                ? t("wizard.setupTargetRemoteNoConfigHint")
                 : remoteProbe?.ok
-                  ? `Gateway reachable (${remoteUrl})`
-                  : `Configured but unreachable (${remoteUrl})`,
+                  ? cliT("wizard.setupTargetRemoteReachableHint", process.env, { url: remoteUrl })
+                  : cliT("wizard.setupTargetRemoteUnreachableHint", process.env, {
+                      url: remoteUrl,
+                    }),
             },
           ],
         })) as OnboardMode));
@@ -380,7 +382,7 @@ export async function runOnboardingWizard(
     (flow === "quickstart"
       ? (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
-          message: "Workspace directory",
+          message: t("wizard.workspaceDirectoryQuestion"),
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
@@ -465,7 +467,7 @@ export async function runOnboardingWizard(
   const settings = gateway.settings;
 
   if (opts.skipChannels ?? opts.skipProviders) {
-    await prompter.note("Skipping channel setup.", "Channels");
+    await prompter.note(t("wizard.skipChannelsNote"), t("wizard.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
     const { setupChannels } = await import("../commands/onboard-channels.js");
@@ -493,7 +495,7 @@ export async function runOnboardingWizard(
   });
 
   if (opts.skipSkills) {
-    await prompter.note("Skipping skills setup.", "Skills");
+    await prompter.note(t("wizard.skipSkillsNote"), t("wizard.skillsTitle"));
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);

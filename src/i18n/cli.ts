@@ -13,6 +13,29 @@ type CliMessageKey =
   | "wizard.quickstartTitle"
   | "wizard.quickstartSwitchToManual"
   | "wizard.configInvalidOutro"
+  | "wizard.existingConfigDetectedTitle"
+  | "wizard.configIssuesTitle"
+  | "wizard.configHandlingQuestion"
+  | "wizard.configHandlingUseExisting"
+  | "wizard.configHandlingUpdate"
+  | "wizard.configHandlingReset"
+  | "wizard.resetScopeQuestion"
+  | "wizard.resetScopeConfigOnly"
+  | "wizard.resetScopeConfigCredsSessions"
+  | "wizard.resetScopeFull"
+  | "wizard.setupTargetQuestion"
+  | "wizard.setupTargetLocal"
+  | "wizard.setupTargetLocalReachableHint"
+  | "wizard.setupTargetLocalUnreachableHint"
+  | "wizard.setupTargetRemote"
+  | "wizard.setupTargetRemoteNoConfigHint"
+  | "wizard.setupTargetRemoteReachableHint"
+  | "wizard.setupTargetRemoteUnreachableHint"
+  | "wizard.workspaceDirectoryQuestion"
+  | "wizard.skipChannelsNote"
+  | "wizard.channelsTitle"
+  | "wizard.skipSkillsNote"
+  | "wizard.skillsTitle"
   | "wizard.remoteConfigured";
 
 type CliMessages = Record<CliMessageKey, string>;
@@ -35,6 +58,29 @@ const EN_MESSAGES: CliMessages = {
     "QuickStart only supports local gateways. Switching to Manual mode.",
   "wizard.configInvalidOutro":
     "Config invalid. Run `{doctorCommand}` to repair it, then re-run onboarding.",
+  "wizard.existingConfigDetectedTitle": "Existing config detected",
+  "wizard.configIssuesTitle": "Config issues",
+  "wizard.configHandlingQuestion": "Config handling",
+  "wizard.configHandlingUseExisting": "Use existing values",
+  "wizard.configHandlingUpdate": "Update values",
+  "wizard.configHandlingReset": "Reset",
+  "wizard.resetScopeQuestion": "Reset scope",
+  "wizard.resetScopeConfigOnly": "Config only",
+  "wizard.resetScopeConfigCredsSessions": "Config + creds + sessions",
+  "wizard.resetScopeFull": "Full reset (config + creds + sessions + workspace)",
+  "wizard.setupTargetQuestion": "What do you want to set up?",
+  "wizard.setupTargetLocal": "Local gateway (this machine)",
+  "wizard.setupTargetLocalReachableHint": "Gateway reachable ({url})",
+  "wizard.setupTargetLocalUnreachableHint": "No gateway detected ({url})",
+  "wizard.setupTargetRemote": "Remote gateway (info-only)",
+  "wizard.setupTargetRemoteNoConfigHint": "No remote URL configured yet",
+  "wizard.setupTargetRemoteReachableHint": "Gateway reachable ({url})",
+  "wizard.setupTargetRemoteUnreachableHint": "Configured but unreachable ({url})",
+  "wizard.workspaceDirectoryQuestion": "Workspace directory",
+  "wizard.skipChannelsNote": "Skipping channel setup.",
+  "wizard.channelsTitle": "Channels",
+  "wizard.skipSkillsNote": "Skipping skills setup.",
+  "wizard.skillsTitle": "Skills",
   "wizard.remoteConfigured": "Remote gateway configured.",
 };
 
@@ -51,6 +97,29 @@ const ZH_CN_MESSAGES: CliMessages = {
   "wizard.quickstartTitle": "快速开始",
   "wizard.quickstartSwitchToManual": "快速开始仅支持本地网关，已切换到手动模式。",
   "wizard.configInvalidOutro": "配置文件无效。请先运行 `{doctorCommand}` 修复，再重新执行初始化。",
+  "wizard.existingConfigDetectedTitle": "检测到已有配置",
+  "wizard.configIssuesTitle": "配置问题",
+  "wizard.configHandlingQuestion": "如何处理现有配置",
+  "wizard.configHandlingUseExisting": "沿用现有配置",
+  "wizard.configHandlingUpdate": "更新配置",
+  "wizard.configHandlingReset": "重置",
+  "wizard.resetScopeQuestion": "重置范围",
+  "wizard.resetScopeConfigOnly": "仅重置配置",
+  "wizard.resetScopeConfigCredsSessions": "重置配置 + 凭据 + 会话",
+  "wizard.resetScopeFull": "完全重置（配置 + 凭据 + 会话 + 工作区）",
+  "wizard.setupTargetQuestion": "你想配置哪一种",
+  "wizard.setupTargetLocal": "本地网关（当前机器）",
+  "wizard.setupTargetLocalReachableHint": "网关可达（{url}）",
+  "wizard.setupTargetLocalUnreachableHint": "未检测到网关（{url}）",
+  "wizard.setupTargetRemote": "远程网关（仅信息配置）",
+  "wizard.setupTargetRemoteNoConfigHint": "尚未配置远程 URL",
+  "wizard.setupTargetRemoteReachableHint": "网关可达（{url}）",
+  "wizard.setupTargetRemoteUnreachableHint": "已配置但不可达（{url}）",
+  "wizard.workspaceDirectoryQuestion": "工作区目录",
+  "wizard.skipChannelsNote": "已跳过频道配置。",
+  "wizard.channelsTitle": "频道",
+  "wizard.skipSkillsNote": "已跳过技能配置。",
+  "wizard.skillsTitle": "技能",
   "wizard.remoteConfigured": "远程网关已配置完成。",
 };
 
