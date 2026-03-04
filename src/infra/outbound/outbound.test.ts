@@ -166,6 +166,10 @@ describe("delivery-queue", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: msteams",
+      "Telegram send failed: message is too long (chat_id=user:123)",
+      "message to be replied not found",
+      "character limit exceeded",
+      "400: Bad Request",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -176,6 +180,7 @@ describe("delivery-queue", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "429: Too Many Requests",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
