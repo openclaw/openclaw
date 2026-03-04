@@ -84,7 +84,14 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  return evt.toLowerCase().includes("exec finished");
+  const lower = evt.toLowerCase();
+  // Match both "exec completed" (bash-tools.exec-runtime notify format) and
+  // "exec finished" (legacy / alternate paths).
+  return (
+    lower.includes("exec completed") ||
+    lower.includes("exec failed") ||
+    lower.includes("exec finished")
+  );
 }
 
 // Returns true when a system event should be treated as real cron reminder content.

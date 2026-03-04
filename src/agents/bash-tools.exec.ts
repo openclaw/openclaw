@@ -1123,6 +1123,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
       : undefined,
     "Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+    'Use onComplete="notify" for long-running background tasks — you will receive a completion notification automatically instead of polling.',
   ]
     .filter(Boolean)
     .join(" ");
@@ -1236,6 +1237,7 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        onComplete?: string;
       };
 
       if (!params.command) {
@@ -1246,7 +1248,12 @@ export function createExecTool(
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
       let execCommandOverride: string | undefined;
-      const backgroundRequested = params.background === true;
+      const onCompleteNotify =
+        typeof params.onComplete === "string" &&
+        params.onComplete.trim().toLowerCase() === "notify";
+      // onComplete="notify" implies background mode — the process runs independently
+      // and the agent receives a system event when it finishes.
+      const backgroundRequested = params.background === true || onCompleteNotify;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
         warnings.push("Warning: background execution is disabled; running synchronously.");
@@ -1538,6 +1545,11 @@ export function createExecTool(
       // before we execute and burn tokens in cron loops.
       await validateScriptFileForShellBleed({ command: params.command, workdir });
 
+      // onComplete="notify" forces exit notification so the agent is woken
+      // when the background process finishes.
+      const effectiveNotifyOnExit = onCompleteNotify || notifyOnExit;
+      const effectiveNotifyOnExitEmptySuccess = onCompleteNotify || notifyOnExitEmptySuccess;
+
       const run = await runExecProcess({
         command: params.command,
         execCommand: execCommandOverride,
@@ -1549,8 +1561,9 @@ export function createExecTool(
         warnings,
         maxOutput,
         pendingMaxOutput,
-        notifyOnExit,
-        notifyOnExitEmptySuccess,
+        notifyOnExit: effectiveNotifyOnExit,
+        notifyOnExitEmptySuccess: effectiveNotifyOnExitEmptySuccess,
+        explicitOnComplete: onCompleteNotify,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,
@@ -1575,14 +1588,17 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () =>
-          resolve({
+        const resolveRunning = () => {
+          const completionHint = onCompleteNotify
+            ? " A completion notification will be delivered automatically when the process exits — no need to poll."
+            : " Use process (list/poll/log/write/kill/clear/remove) for follow-up.";
+          return resolve({
             content: [
               {
                 type: "text",
                 text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                   run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
+                }).${completionHint}`,
               },
             ],
             details: {
@@ -1594,6 +1610,7 @@ export function createExecTool(
               tail: run.session.tail,
             },
           });
+        };
 
         const onYieldNow = () => {
           if (yieldTimer) {
