@@ -1055,6 +1055,58 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBe("42");
   });
 
+  it("keeps group/topic requester on agent turn even when hook would force bound direct-send", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: "42",
+      },
+    });
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-topic-bound",
+      },
+      "agent:main:telegram:group:-100123:topic:42": {
+        sessionId: "requester-session-topic-bound",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastThreadId: 42,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-topic-bound-hook",
+      requesterSessionKey: "agent:main:telegram:group:-100123:topic:42",
+      requesterDisplayKey: "telegram:group:-100123:topic:42",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:42");
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("-100123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
   it("uses hook-provided thread target across requester thread variants", async () => {
     const cases = [
       {
