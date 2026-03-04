@@ -357,6 +357,25 @@ async function ensureDefaultWorkspacePath(
   });
 }
 
+async function ensureSubagentDefaults(openclawCommand: string, profile: string): Promise<void> {
+  const settings: Array<[string, string]> = [
+    ["agents.defaults.subagents.maxConcurrent", "8"],
+    ["agents.defaults.subagents.maxSpawnDepth", "2"],
+    ["agents.defaults.subagents.maxChildrenPerAgent", "10"],
+    ["agents.defaults.subagents.archiveAfterMinutes", "180"],
+    ["agents.defaults.subagents.runTimeoutSeconds", "0"],
+    ["tools.subagents.tools.deny", "[]"],
+  ];
+  for (const [key, value] of settings) {
+    await runOpenClawOrThrow({
+      openclawCommand,
+      args: ["--profile", profile, "config", "set", key, value],
+      timeoutMs: 10_000,
+      errorMessage: `Failed to set ${key}=${value}.`,
+    });
+  }
+}
+
 async function probeForWebApp(port: number): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1_500);
@@ -1354,6 +1373,8 @@ export async function bootstrapCommand(
   // Persist the assigned port so all runtime clients (including web) resolve
   // the same gateway target on subsequent requests.
   await ensureGatewayPort(openclawCommand, profile, gatewayPort);
+
+  await ensureSubagentDefaults(openclawCommand, profile);
 
   let gatewayProbe = await probeGateway(openclawCommand, profile, gatewayPort);
   let gatewayAutoFix: GatewayAutoFixResult | undefined;
