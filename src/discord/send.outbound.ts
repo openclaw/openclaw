@@ -24,6 +24,8 @@ import {
   createDiscordClient,
   normalizeDiscordPollInput,
   normalizeStickerIds,
+  DISCORD_UNKNOWN_CHANNEL,
+  getDiscordErrorCode,
   parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
@@ -262,12 +264,11 @@ export async function sendMessageDiscord(
     );
   }
 
-  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
-  try {
+  const sendToChannel = async (targetChannelId: string) => {
     if (opts.mediaUrl) {
-      result = await sendDiscordMedia(
+      return sendDiscordMedia(
         rest,
-        channelId,
+        targetChannelId,
         textWithMentions,
         opts.mediaUrl,
         opts.mediaLocalRoots,
@@ -279,21 +280,50 @@ export async function sendMessageDiscord(
         chunkMode,
         opts.silent,
       );
-    } else {
-      result = await sendDiscordText(
-        rest,
-        channelId,
-        textWithMentions,
-        opts.replyTo,
-        request,
-        accountInfo.config.maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
-        chunkMode,
-        opts.silent,
-      );
     }
+    return sendDiscordText(
+      rest,
+      targetChannelId,
+      textWithMentions,
+      opts.replyTo,
+      request,
+      accountInfo.config.maxLinesPerMessage,
+      opts.components,
+      opts.embeds,
+      chunkMode,
+      opts.silent,
+    );
+  };
+
+  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
+  try {
+    result = await sendToChannel(channelId);
   } catch (err) {
+    if (recipient.kind === "channel" && getDiscordErrorCode(err) === DISCORD_UNKNOWN_CHANNEL) {
+      const dmFallback = await resolveChannelId(
+        rest,
+        { kind: "user", id: recipient.id },
+        request,
+      ).catch(() => null);
+      if (dmFallback?.channelId) {
+        try {
+          result = await sendToChannel(dmFallback.channelId);
+        } catch (retryErr) {
+          throw await buildDiscordSendError(retryErr, {
+            channelId: dmFallback.channelId,
+            rest,
+            token,
+            hasMedia: Boolean(opts.mediaUrl),
+          });
+        }
+        recordChannelActivity({
+          channel: "discord",
+          accountId: accountInfo.accountId,
+          direction: "outbound",
+        });
+        return toDiscordSendResult(result, dmFallback.channelId);
+      }
+    }
     throw await buildDiscordSendError(err, {
       channelId,
       rest,

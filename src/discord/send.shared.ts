@@ -28,6 +28,7 @@ const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
 const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
+const DISCORD_UNKNOWN_CHANNEL = 10003;
 
 type DiscordRequest = RetryRunner;
 
@@ -492,6 +493,8 @@ export {
   buildDiscordSendError,
   buildReactionIdentifier,
   createDiscordClient,
+  DISCORD_UNKNOWN_CHANNEL,
+  getDiscordErrorCode,
   formatReactionEmoji,
   normalizeDiscordPollInput,
   normalizeEmojiName,
