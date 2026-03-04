@@ -166,32 +166,34 @@ export async function gatherDaemonStatus(
     rpc: GatewayRpcOpts;
     probe: boolean;
     deep?: boolean;
+    env?: NodeJS.ProcessEnv;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
+  const env = opts.env ?? process.env;
   const service = resolveGatewayService();
   const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
-    service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service.isLoaded({ env }).catch(() => false),
+    service.readCommand(env).catch(() => null),
+    service.readRuntime(env).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
-    env: process.env,
+    env,
     command,
   });
 
   const serviceEnv = command?.environment ?? undefined;
   const mergedDaemonEnv = {
-    ...(process.env as Record<string, string | undefined>),
+    ...(env as Record<string, string | undefined>),
     ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
-  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
+  const cliConfigPath = resolveConfigPath(env, resolveStateDir(env));
   const daemonConfigPath = resolveConfigPath(
     mergedDaemonEnv as NodeJS.ProcessEnv,
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
 
-  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const cliIO = createConfigIO({ env, configPath: cliConfigPath });
   const daemonIO = createConfigIO({
     env: mergedDaemonEnv,
     configPath: daemonConfigPath,
@@ -247,7 +249,7 @@ export async function gatherDaemonStatus(
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
 
-  const cliPort = resolveGatewayPort(cliCfg, process.env);
+  const cliPort = resolveGatewayPort(cliCfg, env);
   const [portDiagnostics, portCliDiagnostics] = await Promise.all([
     inspectPortUsage(daemonPort).catch(() => null),
     cliPort !== daemonPort ? inspectPortUsage(cliPort).catch(() => null) : null,
@@ -269,10 +271,9 @@ export async function gatherDaemonStatus(
       }
     : undefined;
 
-  const extraServices = await findExtraGatewayServices(
-    process.env as Record<string, string | undefined>,
-    { deep: Boolean(opts.deep) },
-  ).catch(() => []);
+  const extraServices = await findExtraGatewayServices(env as Record<string, string | undefined>, {
+    deep: Boolean(opts.deep),
+  }).catch(() => []);
 
   const timeoutMsRaw = Number.parseInt(String(opts.rpc.timeout ?? "10000"), 10);
   const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
