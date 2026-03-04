@@ -472,7 +472,15 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
+  const hasDryRunBufferedMedia = dryRun && params.__dryRunBufferedMediaReady === true;
+  if (
+    !message.trim() &&
+    !mediaUrl &&
+    mergedMediaUrls.length === 0 &&
+    !hasCard &&
+    !hasComponents &&
+    !hasDryRunBufferedMedia
+  ) {
     throw new Error("send requires text or media");
   }
   params.message = message;

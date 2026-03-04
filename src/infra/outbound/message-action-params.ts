@@ -317,6 +317,8 @@ export async function hydrateBufferedSendParams(params: {
   }
 
   if (params.dryRun) {
+    // Preserve attachment-only dry-run behavior without touching disk.
+    params.args.__dryRunBufferedMediaReady = true;
     return;
   }
 

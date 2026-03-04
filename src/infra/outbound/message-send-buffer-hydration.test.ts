@@ -77,6 +77,35 @@ describe("runMessageAction send buffer hydration", () => {
     expect(result.sendResult?.mediaUrl).toBeNull();
   });
 
+  it("allows attachment-only Slack dry-run sends when buffer is present", async () => {
+    const saveMediaBufferSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
+    );
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "",
+        buffer: Buffer.from("hello").toString("base64"),
+        filename: "test-buffer.txt",
+        contentType: "text/plain",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.handledBy).toBe("core");
+    expect(saveMediaBufferSpy).not.toHaveBeenCalled();
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult?.dryRun).toBe(true);
+  });
+
   it("skips sandbox buffer materialization for Telegram dry-run sends", async () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
