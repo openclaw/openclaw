@@ -249,7 +249,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
+    // answerCallbackQuery is now called in a pre-sequentialize middleware (bot.ts),
+    // not inside the callback_query handler, so the spy won't fire here.
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
   });
 
   it("blocks DM model-selection callbacks for unpaired users when inline buttons are DM-scoped", async () => {
@@ -359,7 +361,9 @@ describe("createTelegramBot", () => {
 
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+    // answerCallbackQuery is now called in a pre-sequentialize middleware (bot.ts),
+    // not inside the callback_query handler, so the spy won't fire here.
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
   });
 
   it("clears approval buttons without re-editing callback message text", async () => {
@@ -669,7 +673,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
+    // answerCallbackQuery is now called in a pre-sequentialize middleware (bot.ts),
+    // not inside the callback_query handler, so the spy won't fire here.
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
   });
 
   it("routes compact model callbacks by inferring provider", async () => {
