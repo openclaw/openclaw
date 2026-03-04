@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,12 @@ async function makeCaseDir(): Promise<string> {
   return dir;
 }
 
+function expectedLockPath(targetPath: string, kind: "file" | "dir"): string {
+  const normalized = path.resolve(targetPath);
+  const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
+  return path.join(path.dirname(normalized), ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
+}
+
 describe("workspace lock manager", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-locks-"));
@@ -25,7 +32,7 @@ describe("workspace lock manager", () => {
   it("enforces contention for file locks", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "state.json");
-    const lockPath = `${target}.lock`;
+    const lockPath = expectedLockPath(target, "file");
 
     const livePayload = {
       token: "live-token",
@@ -35,6 +42,7 @@ describe("workspace lock manager", () => {
       targetPath: target,
       kind: "file",
     };
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
     await fs.writeFile(lockPath, JSON.stringify(livePayload), "utf8");
 
     await expect(
@@ -51,7 +59,7 @@ describe("workspace lock manager", () => {
     const dir = await makeCaseDir();
     const workspaceDir = path.join(dir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    const lockPath = path.join(workspaceDir, ".openclaw.workspace.lock");
+    const lockPath = expectedLockPath(workspaceDir, "dir");
 
     const stalePayload = {
       token: "stale-token",
@@ -61,6 +69,7 @@ describe("workspace lock manager", () => {
       targetPath: workspaceDir,
       kind: "dir",
     };
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
     await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
 
     const lock = await acquireWorkspaceLock(workspaceDir, {
@@ -104,7 +113,7 @@ describe("workspace lock manager", () => {
       pollIntervalMs: 5,
       ttlMs: 5_000,
     });
-    expect(lock.lockPath).toBe(`${target}.lock`);
+    expect(lock.lockPath).toBe(expectedLockPath(target, "file"));
     await lock.release();
   });
 
@@ -136,5 +145,25 @@ describe("workspace lock manager", () => {
     expect(persisted.token).toBe("foreign-owner");
 
     await fs.rm(lock.lockPath, { force: true });
+  });
+
+  it("never collides with real <target>.lock files", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "report.json");
+    const adjacentDataPath = `${target}.lock`;
+    await fs.writeFile(adjacentDataPath, "important-data", "utf8");
+
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    expect(lock.lockPath).not.toBe(adjacentDataPath);
+    expect(lock.lockPath).toBe(expectedLockPath(target, "file"));
+
+    await lock.release();
+    await expect(fs.readFile(adjacentDataPath, "utf8")).resolves.toBe("important-data");
   });
 });
