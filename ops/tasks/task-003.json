@@ -9,5 +9,5 @@
     "script still executes successfully",
     "gate_archive PASS"
   ],
-  "status": "running"
+  "status": "complete"
 }
