@@ -76,17 +76,8 @@ function loadMonolithicSdk() {
   return monolithicSdk;
 }
 
-function tryLoadMonolithicSdk() {
-  try {
-    return loadMonolithicSdk();
-  } catch {
-    return null;
-  }
-}
-
 const fastExports = {
   emptyPluginConfigSchema,
-  resolveControlCommandGate,
 };
 
 const rootProxy = new Proxy(fastExports, {
@@ -169,7 +160,7 @@ const rootProxy = new Proxy(fastExports, {
         enumerable: descriptor.enumerable ?? true,
         get: descriptor.get
           ? function getLegacyValue() {
-              return descriptor.get.call(monolithic);
+              return descriptor.get.call(monolithicSdk);
             }
           : undefined,
         set: descriptor.set
