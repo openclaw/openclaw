@@ -155,6 +155,11 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
+function parseBearer(value: unknown): string {
+  const header = typeof value === "string" ? value : "";
+  return header.toLowerCase().startsWith("bearer ") ? header.slice("bearer ".length).trim() : "";
+}
+
 export async function handleGoogleChatWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -173,10 +178,7 @@ export async function handleGoogleChatWebhookRequest(
     return true;
   }
 
-  const authHeader = String(req.headers.authorization ?? "");
-  const bearer = authHeader.toLowerCase().startsWith("bearer ")
-    ? authHeader.slice("bearer ".length)
-    : "";
+  let effectiveBearer = parseBearer(req.headers?.authorization);
 
   const body = await readJsonBody(req, 1024 * 1024);
   if (!body.ok) {
@@ -215,9 +217,9 @@ export async function handleGoogleChatWebhookRequest(
     };
 
     // For Add-ons, the bearer token may be in authorizationEventObject.systemIdToken
-    const systemIdToken = rawObj.authorizationEventObject?.systemIdToken;
-    if (!bearer && systemIdToken) {
-      Object.assign(req.headers, { authorization: `Bearer ${systemIdToken}` });
+    const systemIdToken = rawObj.authorizationEventObject?.systemIdToken?.trim();
+    if (!effectiveBearer && systemIdToken) {
+      effectiveBearer = systemIdToken;
     }
   }
 
@@ -242,12 +244,6 @@ export async function handleGoogleChatWebhookRequest(
       return true;
     }
   }
-
-  // Re-extract bearer in case it was updated from Add-on format
-  const authHeaderNow = String(req.headers.authorization ?? "");
-  const effectiveBearer = authHeaderNow.toLowerCase().startsWith("bearer ")
-    ? authHeaderNow.slice("bearer ".length)
-    : bearer;
 
   let selected: WebhookTarget | undefined;
   for (const target of targets) {

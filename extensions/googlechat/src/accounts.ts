@@ -17,9 +17,16 @@ export type ResolvedGoogleChatAccount = {
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.["googlechat"]?.accounts;
-  if (!accounts || typeof accounts !== "object") {
+  const accounts = asRecord(cfg.channels?.["googlechat"]?.accounts);
+  if (!accounts) {
     return [];
   }
   return Object.keys(accounts).filter(Boolean);
@@ -49,20 +56,17 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): GoogleChatAccountConfig | undefined {
-  const accounts = cfg.channels?.["googlechat"]?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId];
+  const accounts = asRecord(cfg.channels?.["googlechat"]?.accounts);
+  return asRecord(accounts?.[accountId]) as GoogleChatAccountConfig | undefined;
 }
 
 function mergeGoogleChatAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): GoogleChatAccountConfig {
-  const raw = cfg.channels?.["googlechat"] ?? {};
+  const raw = asRecord(cfg.channels?.["googlechat"]) ?? {};
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const account = asRecord(resolveAccountConfig(cfg, accountId)) ?? {};
   return { ...base, ...account } as GoogleChatAccountConfig;
 }
 
