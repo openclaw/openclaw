@@ -40,10 +40,13 @@ export async function fetchJsonWithRetry(
     return res;
   }
 
+  let lastFailedRes: Response = res;
+
   return retryWithBackoff(
     async () => {
       const retryRes = await fetchJson(url, init, timeoutMs, fetchFn);
       if (!retryRes.ok) {
+        lastFailedRes = retryRes;
         throw await parseProviderError(provider, retryRes);
       }
       return retryRes;
@@ -55,14 +58,9 @@ export async function fetchJsonWithRetry(
     if (
       typeof err === "object" &&
       err !== null &&
-      "httpStatus" in err &&
-      "raw" in err
+      "httpStatus" in err
     ) {
-      const provErr = err as { httpStatus: number; raw: unknown };
-      return new Response(JSON.stringify(provErr.raw ?? null), {
-        status: provErr.httpStatus,
-        headers: {},
-      });
+      return lastFailedRes;
     }
     throw err;
   });

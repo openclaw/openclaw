@@ -105,6 +105,11 @@ export async function parseProviderError(
     retryable = false;
     retryAfterMs = null;
     message = `${label} Bad request (400).`;
+  } else if (httpStatus === 500 || httpStatus === 502 || httpStatus === 504) {
+    category = "resource-exhaustion";
+    retryable = true;
+    retryAfterMs = null;
+    message = `${label} Server error (${httpStatus}). Retrying with backoff...`;
   } else {
     category = "unknown";
     retryable = false;
@@ -166,10 +171,10 @@ export async function retryWithBackoff<T>(
 
   // Attempts 2..maxRetries
   for (let attempt = 2; attempt <= maxRetries; attempt++) {
-    const delayMs = Math.min(
-      baseDelayMs * Math.pow(backoffMultiplier, attempt - 1),
-      maxDelayMs,
-    );
+    const delayMs =
+      lastError.retryAfterMs !== null
+        ? lastError.retryAfterMs
+        : Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
 
     onRetry?.(attempt, maxRetries, delayMs, lastError);
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));

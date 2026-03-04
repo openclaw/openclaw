@@ -113,9 +113,32 @@ describe("parseProviderError", () => {
     });
   });
 
-  describe("unknown (5xx etc)", () => {
-    it("500 → unknown, not retryable", async () => {
+  describe("transient server errors (500/502/504)", () => {
+    it("500 → resource-exhaustion, retryable = true", async () => {
       const res = mockResponse(500);
+      const err = await parseProviderError("openai", res);
+      expect(err.category).toBe("resource-exhaustion");
+      expect(err.retryable).toBe(true);
+      expect(err.retryAfterMs).toBeNull();
+      expect(err.message).toContain("500");
+    });
+
+    it("502 → resource-exhaustion, retryable = true", async () => {
+      const res = mockResponse(502);
+      const err = await parseProviderError("openai", res);
+      expect(err.category).toBe("resource-exhaustion");
+      expect(err.retryable).toBe(true);
+    });
+
+    it("504 → resource-exhaustion, retryable = true", async () => {
+      const res = mockResponse(504);
+      const err = await parseProviderError("openai", res);
+      expect(err.category).toBe("resource-exhaustion");
+      expect(err.retryable).toBe(true);
+    });
+
+    it("501 → unknown, retryable = false", async () => {
+      const res = mockResponse(501);
       const err = await parseProviderError("openai", res);
       expect(err.category).toBe("unknown");
       expect(err.retryable).toBe(false);
@@ -272,6 +295,31 @@ describe("retryWithBackoff", () => {
     await promise;
     expect((caught as Error).message).toBe("unexpected failure");
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects retryAfterMs on attempt 2 when retry error has retryAfterMs set", async () => {
+    // First error has no retryAfterMs (backoff path)
+    const firstErr = makeRetryableError({ retryAfterMs: null });
+    // Error thrown on attempt 1 has retryAfterMs set
+    const secondErr = makeRetryableError({ retryAfterMs: 8000 });
+    const delays: number[] = [];
+    let fnCalls = 0;
+    const fn = vi.fn(async (): Promise<string> => {
+      fnCalls++;
+      if (fnCalls === 1) throw secondErr; // attempt 1 retry: fails with 8000ms retry-after
+      return "ok";               // attempt 2 retry: succeeds
+    });
+
+    const promise = retryWithBackoff(fn, DEFAULT_RETRY_POLICY, firstErr, (_attempt, _max, delayMs) => {
+      delays.push(delayMs);
+    });
+    await vi.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBe("ok");
+    // attempt 1: no retryAfterMs → backoff = 2000
+    expect(delays[0]).toBe(2000);
+    // attempt 2: lastError.retryAfterMs = 8000 → delay = 8000
+    expect(delays[1]).toBe(8000);
   });
 
   it("DEFAULT_RETRY_POLICY has correct values", () => {
