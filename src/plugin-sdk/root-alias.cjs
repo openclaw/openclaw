@@ -4,6 +4,8 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 let monolithicSdk = null;
+let jiti = null;
+const legacyFastExportCache = Object.create(null);
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -36,24 +38,57 @@ function loadMonolithicSdk() {
     return monolithicSdk;
   }
 
-  const { createJiti } = require("jiti");
-  const jiti = createJiti(__filename, {
-    interopDefault: true,
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-  });
+  const loader = getJiti();
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = loader(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = loader(path.join(__dirname, "index.ts"));
   return monolithicSdk;
+}
+
+function getJiti() {
+  if (jiti) {
+    return jiti;
+  }
+
+  const { createJiti } = require("jiti");
+  jiti = createJiti(__filename, {
+    interopDefault: true,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+  });
+
+  return jiti;
+}
+
+const legacyFastExportLoaders = {
+  resolveControlCommandGate: () => {
+    const mod = getJiti()(path.join(__dirname, "..", "channels", "command-gating.ts"));
+    return mod.resolveControlCommandGate;
+  },
+};
+
+function hasLegacyFastExport(prop) {
+  return (
+    typeof prop === "string" && Object.prototype.hasOwnProperty.call(legacyFastExportLoaders, prop)
+  );
+}
+
+function loadLegacyFastExport(prop) {
+  if (!hasLegacyFastExport(prop)) {
+    return undefined;
+  }
+  if (!(prop in legacyFastExportCache)) {
+    legacyFastExportCache[prop] = legacyFastExportLoaders[prop]();
+  }
+  return legacyFastExportCache[prop];
 }
 
 const fastExports = {
@@ -71,6 +106,9 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return Reflect.get(target, prop, receiver);
     }
+    if (hasLegacyFastExport(prop)) {
+      return loadLegacyFastExport(prop);
+    }
     return loadMonolithicSdk()[prop];
   },
   has(target, prop) {
@@ -80,15 +118,23 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
+    if (hasLegacyFastExport(prop)) {
+      return true;
+    }
     return prop in loadMonolithicSdk();
   },
   ownKeys(target) {
     const keys = new Set([
       ...Reflect.ownKeys(target),
-      ...Reflect.ownKeys(loadMonolithicSdk()),
+      ...Object.keys(legacyFastExportLoaders),
       "default",
       "__esModule",
     ]);
+    if (monolithicSdk) {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
+        keys.add(key);
+      }
+    }
     return [...keys];
   },
   getOwnPropertyDescriptor(target, prop) {
@@ -111,6 +157,15 @@ const rootProxy = new Proxy(fastExports, {
     const own = Object.getOwnPropertyDescriptor(target, prop);
     if (own) {
       return own;
+    }
+    if (hasLegacyFastExport(prop)) {
+      return {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return loadLegacyFastExport(prop);
+        },
+      };
     }
     const descriptor = Object.getOwnPropertyDescriptor(loadMonolithicSdk(), prop);
     if (!descriptor) {
