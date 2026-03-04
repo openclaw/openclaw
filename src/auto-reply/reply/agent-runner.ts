@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -535,8 +536,22 @@ export async function runReplyAgent(params: {
     const finalReplyPayloads =
       reactionFailed && cfg.channels?.defaults?.errorPolicy === "react-only"
         ? buildReplyPayloads({
-            ...params,
             payloads: payloadArray,
+            isHeartbeat: params.isHeartbeat,
+            didLogHeartbeatStrip: params.didLogHeartbeatStrip,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline: params.blockReplyPipeline,
+            directlySentBlockKeys: params.directlySentBlockKeys,
+            replyToMode: params.replyToMode,
+            replyToChannel: params.replyToChannel,
+            currentMessageId: params.currentMessageId,
+            messageProvider: params.messageProvider,
+            messagingToolSentTexts: params.messagingToolSentTexts,
+            messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
+            messagingToolSentTargets: params.messagingToolSentTargets,
+            originatingChannel: params.originatingChannel,
+            originatingTo: params.originatingTo,
+            accountId: params.accountId,
             errorPolicy: undefined, // Disable filtering to restore errors
           }).replyPayloads
         : replyPayloads;
