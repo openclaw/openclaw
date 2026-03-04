@@ -58,6 +58,8 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
+
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
     cfg,
@@ -430,6 +432,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         error: err,
       });
     },
+    // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
+    maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
   });
 
   // --- Discord draft stream (edit-based preview streaming) ---
