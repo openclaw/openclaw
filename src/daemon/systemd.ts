@@ -146,6 +146,14 @@ function readSystemctlDetail(result: { stdout: string; stderr: string }): string
   return (result.stderr || result.stdout || "").trim();
 }
 
+/**
+ * Combines stdout and stderr for pattern matching.
+ * systemctl may return status info in stdout while stderr contains wrapper errors.
+ */
+function readSystemctlFullOutput(result: { stdout: string; stderr: string }): string {
+  return `${result.stdout ?? ""} ${result.stderr ?? ""}`.trim();
+}
+
 function isSystemctlMissing(detail: string): boolean {
   if (!detail) {
     return false;
@@ -172,6 +180,24 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
     normalized.includes("failed to get unit file state")
+  );
+}
+
+/**
+ * Checks if systemctl itself is broken (not just a missing/disabled service).
+ * These errors indicate systemd user session issues, not normal "service doesn't exist" states.
+ */
+function isSystemctlBroken(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("not been booted with systemd") ||
+    (normalized.includes("no such file or directory") && normalized.includes("bus")) ||
+    normalized.includes("connection refused") ||
+    normalized.includes("org.freedesktop.dbus.error")
   );
 }
 
@@ -351,8 +377,19 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
+  // Check both stdout and stderr for patterns - systemctl may return "disabled" in stdout
+  // while stderr contains exec wrapper errors like "Command failed: ...".
+  const fullOutput = readSystemctlFullOutput(res);
+  if (isSystemctlMissing(fullOutput) || isSystemdUnitNotEnabled(fullOutput)) {
+    return false;
+  }
+  // Exit code 1 is normal for non-existent/disabled services in systemd.
+  // Only throw if we have strong evidence that systemctl itself is broken,
+  // not just that the service doesn't exist.
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (res.code === 1 && !isSystemctlBroken(fullOutput)) {
+    // Treat exit code 1 as "not enabled" when systemctl is functioning.
+    // This handles containers and environments where error messages vary.
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());

@@ -90,6 +90,35 @@ describe("isSystemdServiceEnabled", () => {
       "systemctl is-enabled unavailable: Failed to connect to bus",
     );
   });
+
+  it("returns false when stdout contains disabled but stderr has command wrapper error", async () => {
+    // This is the container bug: systemctl returns "disabled" in stdout (normal for non-existent
+    // service) but the exec wrapper puts "Command failed: ..." in stderr. The fix checks both.
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("Command failed: systemctl --user is-enabled") as Error & {
+        code?: number;
+      };
+      err.code = 1;
+      cb(err, "disabled", "Command failed: systemctl --user is-enabled openclaw-gateway.service");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
+  it("returns false for exit code 1 when systemctl is functioning", async () => {
+    // In system containers (LXD/Incus), systemctl works but returns exit code 1 for
+    // non-existent services. This should be treated as "not enabled", not an error.
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("exit code 1") as Error & { code?: number };
+      err.code = 1;
+      // Some systemd versions return just empty output for non-existent units
+      cb(err, "", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {
