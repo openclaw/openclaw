@@ -190,6 +190,13 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("keeps an existing proxy-like global dispatcher", async () => {
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("all_proxy", "");
+
     getGlobalDispatcherState.value = {
       constructor: { name: "ProxyAgent" },
     };
