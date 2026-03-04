@@ -143,7 +143,11 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  // Combine both streams so patterns like "not-found" (stdout) or
+  // "Failed to get unit file state" (stderr) are detected regardless
+  // of which stream systemctl writes to.
+  const parts = [result.stderr, result.stdout].filter(Boolean);
+  return parts.join("\n").trim();
 }
 
 function isSystemctlMissing(detail: string): boolean {
