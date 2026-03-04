@@ -147,6 +147,35 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("calls triggerOpenClawRestart on win32 with Windows task marker", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "schtasks" });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns failed when win32 schtasks restart fails", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "schtasks",
+      detail: "unsafe task name",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("unsafe task name");
+  });
+
   it("returns failed when spawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
