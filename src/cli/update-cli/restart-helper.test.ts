@@ -234,7 +234,7 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
       });
       // The plist path must contain the resolved home dir, not literal $HOME
-      expect(content).toContain("/Users/testuser/Library/LaunchAgents/");
+      expect(content).toMatch(/[\\/]Users[\\/]testuser[\\/]Library[\\/]LaunchAgents[\\/]/);
       expect(content).not.toContain("$HOME");
       await cleanupScript(scriptPath);
     });
@@ -247,7 +247,7 @@ describe("restart-helper", () => {
         HOME: "/Users/envhome",
         OPENCLAW_PROFILE: "default",
       });
-      expect(content).toContain("/Users/envhome/Library/LaunchAgents/");
+      expect(content).toMatch(/[\\/]Users[\\/]envhome[\\/]Library[\\/]LaunchAgents[\\/]/);
       await cleanupScript(scriptPath);
     });
 
