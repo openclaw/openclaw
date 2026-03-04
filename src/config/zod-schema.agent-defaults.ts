@@ -87,6 +87,12 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        thinking: z
+          .union([z.literal("off"), z.literal("on")])
+          .optional()
+          .describe(
+            'Thinking override for compaction summarization. Defaults to "off" — compaction always runs without extended thinking regardless of the session model, preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set to "on" to inherit the session model\'s current thinking level.',
+          ),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
