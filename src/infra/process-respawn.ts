@@ -37,7 +37,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // bypass ThrottleInterval delays for intentional restarts.
     if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
       const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
+      // Be defensive: if helper unexpectedly returns undefined/null,
+      // keep supervisor-based restart behavior instead of crashing.
+      if (restart && !restart.ok) {
         return {
           mode: "failed",
           detail: restart.detail ?? "launchctl kickstart failed",
