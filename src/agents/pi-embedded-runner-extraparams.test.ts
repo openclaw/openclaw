@@ -176,8 +176,8 @@ describe("applyExtraParamsToAgent", () => {
   }) {
     const payload: Record<string, unknown> = {
       store: false,
-      ...(params.payload ?? {}),
-      ...(params.initialPayload ?? {}),
+      ...params.payload,
+      ...params.initialPayload,
     };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
@@ -1604,5 +1604,43 @@ describe("applyExtraParamsToAgent", () => {
         content: [{ type: "output_text", text: "assistant output" }],
       },
     ]);
+  });
+
+  it("preserves string input for sub2api codex responses", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.3-codex-spark",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.3-codex-spark",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        instructions: "",
+        input: "hello from string",
+      },
+    });
+
+    expect(payload.store).toBe(true);
+    expect(payload.input).toBe("hello from string");
+    expect(payload.instructions).toBe("You are a helpful assistant.");
+  });
+
+  it("does not force store=true for sub2api codex on openai-codex-responses", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-codex-responses",
+        provider: "sub2api",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-codex-responses">,
+      initialPayload: {
+        store: false,
+      },
+    });
+
+    expect(payload.store).toBe(false);
   });
 });

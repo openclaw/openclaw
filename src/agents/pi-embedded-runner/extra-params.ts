@@ -299,7 +299,9 @@ function shouldApplySub2apiCodexCompat(model: {
   if (model.provider !== "sub2api") {
     return false;
   }
-  if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+  // Keep codex-responses behavior unchanged (store=false); this compat layer is
+  // only for sub2api passthrough on openai-responses.
+  if (model.api !== "openai-responses") {
     return false;
   }
   if (typeof model.id !== "string") {
@@ -329,9 +331,9 @@ function isRsReference(value: unknown): boolean {
   return typeof value === "string" && /^rs_/i.test(value);
 }
 
-function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): unknown[] {
+function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): unknown {
   if (!Array.isArray(input)) {
-    return [];
+    return input;
   }
   const normalized: unknown[] = [];
 
@@ -417,10 +419,12 @@ function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): 
       })
       .filter((part) => part != null);
 
-    normalized.push({
-      ...entry,
-      content,
-    });
+    if (content.length > 0) {
+      normalized.push({
+        ...entry,
+        content,
+      });
+    }
   }
 
   return normalized;
