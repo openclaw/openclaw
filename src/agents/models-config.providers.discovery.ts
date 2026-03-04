@@ -9,27 +9,26 @@ import {
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import {
+  OLLAMA_DEFAULT_CONTEXT_WINDOW,
+  OLLAMA_DEFAULT_COST,
+  OLLAMA_DEFAULT_MAX_TOKENS,
+  isReasoningModelHeuristic,
+  resolveOllamaApiBase,
+  type OllamaTagsResponse,
+} from "./ollama-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+
+export { resolveOllamaApiBase } from "./ollama-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const log = createSubsystemLogger("agents/model-providers");
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
-const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
-const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-const OLLAMA_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -41,43 +40,11 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-interface OllamaModel {
-  name: string;
-  modified_at: string;
-  size: number;
-  digest: string;
-  details?: {
-    family?: string;
-    parameter_size?: string;
-  };
-}
-
-interface OllamaTagsResponse {
-  models: OllamaModel[];
-}
-
 type VllmModelsResponse = {
   data?: Array<{
     id?: string;
   }>;
 };
-
-/**
- * Derive the Ollama native API base URL from a configured base URL.
- *
- * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
- * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
- * The native Ollama API lives at the root (e.g. `/api/tags`), so we
- * strip the `/v1` suffix when present.
- */
-export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
-  if (!configuredBaseUrl) {
-    return OLLAMA_API_BASE_URL;
-  }
-  // Strip trailing slash, then strip /v1 suffix if present
-  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
-}
 
 async function queryOllamaContextWindow(
   apiBase: string,
@@ -147,12 +114,10 @@ async function discoverOllamaModels(
         batch.map(async (model) => {
           const modelId = model.name;
           const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
-          const isReasoning =
-            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
           return {
             id: modelId,
             name: modelId,
-            reasoning: isReasoning,
+            reasoning: isReasoningModelHeuristic(modelId),
             input: ["text"],
             cost: OLLAMA_DEFAULT_COST,
             contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -204,13 +169,10 @@ async function discoverVllmModels(
       .filter((model) => Boolean(model.id))
       .map((model) => {
         const modelId = model.id;
-        const lower = modelId.toLowerCase();
-        const isReasoning =
-          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
         return {
           id: modelId,
           name: modelId,
-          reasoning: isReasoning,
+          reasoning: isReasoningModelHeuristic(modelId),
           input: ["text"],
           cost: VLLM_DEFAULT_COST,
           contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
