@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -220,10 +221,10 @@ export async function runToolResultBeforeModelHook(args: {
   params: unknown;
   result: unknown;
   ctx?: HookContext;
-}): Promise<unknown> {
+}): Promise<AgentToolResult<unknown>> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("tool_result_before_model")) {
-    return args.result;
+    return args.result as AgentToolResult<unknown>;
   }
   try {
     const normalizedParams = isPlainObject(args.params) ? args.params : {};
@@ -244,14 +245,14 @@ export async function runToolResultBeforeModelHook(args: {
           `[security] tool_result_before_model result replacement blocked for ${args.toolName}: ` +
             `plugins.allowResultModification is not enabled`,
         );
-        return args.result;
+        return args.result as AgentToolResult<unknown>;
       }
-      return hookResult.result;
+      return hookResult.result as AgentToolResult<unknown>;
     }
   } catch (err) {
     log.warn(`tool_result_before_model hook failed: tool=${args.toolName} error=${String(err)}`);
   }
-  return args.result;
+  return args.result as AgentToolResult<unknown>;
 }
 
 export function wrapToolWithBeforeToolCallHook(
