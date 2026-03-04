@@ -704,7 +704,7 @@ review_validate_artifacts() {
   fi
 
   local invalid_behavioral_branch_count
-  invalid_behavioral_branch_count=$(jq '[.behavioralSweep.branches[]? | select((.path|type)!="string" or (.decision|type)!="string" or (.outcome|type)!="string")] | length' .local/review.json)
+  invalid_behavioral_branch_count=$(jq '[.behavioralSweep.branches[]? | select((.path|type)!="string" or (.decision|type)!="string" or (.outcome|type)!="string" or ((.path|gsub("^\\s+|\\s+$";""))|length)==0 or ((.decision|gsub("^\\s+|\\s+$";""))|length)==0 or ((.outcome|gsub("^\\s+|\\s+$";""))|length)==0)] | length' .local/review.json)
   if [ "$invalid_behavioral_branch_count" -gt 0 ]; then
     echo "Invalid behavioral sweep branch entry in .local/review.json: each branch needs string path/decision/outcome"
     exit 1
