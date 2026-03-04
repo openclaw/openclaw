@@ -253,4 +253,30 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     );
     expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
   });
+
+  it("passes ssrfPolicy with allowedHostnames for remote URL fetch", async () => {
+    await sendBlueBubblesMedia({
+      cfg: createConfig({ serverUrl: "http://127.0.0.1:1234", password: "test" }),
+      to: "chat:123",
+      mediaUrl: "https://example.com/file.png",
+    });
+
+    const fetchArgs = runtimeMocks.fetchRemoteMedia.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(fetchArgs.ssrfPolicy).toEqual({ allowedHostnames: ["127.0.0.1"] });
+  });
+
+  it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
+    await sendBlueBubblesMedia({
+      cfg: createConfig({
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        allowPrivateNetwork: true,
+      }),
+      to: "chat:123",
+      mediaUrl: "http://localhost:1234/api/v1/attachment/some-guid/download",
+    });
+
+    const fetchArgs = runtimeMocks.fetchRemoteMedia.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(fetchArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
 });

@@ -13,6 +13,34 @@ import { sendMessageBlueBubbles } from "./send.js";
 const HTTP_URL_RE = /^https?:\/\//i;
 const MB = 1024 * 1024;
 
+/** Extract hostname from a URL, returning undefined on failure. */
+function safeExtractHostname(url: string): string | undefined {
+  try {
+    const hostname = new URL(url).hostname.trim();
+    return hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build an SSRF policy for outbound media fetches.
+ * When allowPrivateNetwork is configured, fully bypass private-network checks.
+ * Otherwise, auto-allowlist the configured BB server hostname so attachment
+ * URLs that point at the local BB instance are not blocked.
+ */
+function resolveMediaFetchSsrfPolicy(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): { allowPrivateNetwork: true } | { allowedHostnames: string[] } | undefined {
+  const account = resolveBlueBubblesAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (account.config.allowPrivateNetwork === true) {
+    return { allowPrivateNetwork: true };
+  }
+  const trustedHostname = account.baseUrl ? safeExtractHostname(account.baseUrl) : undefined;
+  return trustedHostname ? { allowedHostnames: [trustedHostname] } : undefined;
+}
+
 function assertMediaWithinLimit(sizeBytes: number, maxBytes?: number): void {
   if (typeof maxBytes !== "number" || maxBytes <= 0) {
     return;
@@ -253,9 +281,12 @@ export async function sendBlueBubblesMedia(params: {
       throw new Error("BlueBubbles media delivery requires mediaUrl, mediaPath, or mediaBuffer.");
     }
     if (HTTP_URL_RE.test(source)) {
+      // Pass SSRF policy so URLs pointing at the local BB server are not blocked
+      const ssrfPolicy = resolveMediaFetchSsrfPolicy({ cfg, accountId });
       const fetched = await core.channel.media.fetchRemoteMedia({
         url: source,
         maxBytes: typeof maxBytes === "number" && maxBytes > 0 ? maxBytes : undefined,
+        ssrfPolicy,
       });
       buffer = fetched.buffer;
       resolvedContentType = resolvedContentType ?? fetched.contentType ?? undefined;
