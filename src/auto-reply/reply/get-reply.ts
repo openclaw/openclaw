@@ -7,8 +7,10 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -23,7 +25,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { stripMentions } from "./mentions.js";
+import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
@@ -125,6 +127,33 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+  const commandAuthorized = finalized.CommandAuthorized;
+  const commandAuth = resolveCommandAuthorization({
+    ctx: finalized,
+    cfg,
+    commandAuthorized,
+  });
+  const sessionCtxForState =
+    targetSessionKey && targetSessionKey !== finalized.SessionKey
+      ? { ...finalized, SessionKey: targetSessionKey }
+      : finalized;
+  const normalizedChatType = normalizeChatType(finalized.ChatType);
+  const isGroupForLiveness =
+    normalizedChatType != null && normalizedChatType !== "direct"
+      ? true
+      : Boolean(resolveGroupSessionKey(sessionCtxForState));
+  const commandSource =
+    finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body ?? "";
+  const triggerBodyNormalizedForLiveness = stripStructuralPrefixes(commandSource).trim();
+  const livenessTriggers = sessionCfg?.livenessTriggers;
+  if (commandAuth.isAuthorizedSender && livenessTriggers?.length) {
+    const mentionStripped = isGroupForLiveness
+      ? stripMentions(triggerBodyNormalizedForLiveness, finalized, cfg, agentId)
+      : undefined;
+    if (checkLivenessTrigger(triggerBodyNormalizedForLiveness, livenessTriggers, mentionStripped)) {
+      return { text: buildLivenessResponse() };
+    }
+  }
 
   if (!isFastTestEnv) {
     await applyMediaUnderstanding({
@@ -142,13 +171,6 @@ export async function getReplyFromConfig(
     ctx: finalized,
     cfg,
     isFastTestEnv,
-  });
-
-  const commandAuthorized = finalized.CommandAuthorized;
-  const commandAuth = resolveCommandAuthorization({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
   });
   const sessionState = await initSessionState({
     ctx: finalized,
@@ -173,15 +195,6 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
-  const livenessTriggers = sessionCfg?.livenessTriggers;
-  if (commandAuth.isAuthorizedSender && livenessTriggers?.length) {
-    const mentionStripped = isGroup
-      ? stripMentions(triggerBodyNormalized, finalized, cfg, agentId)
-      : undefined;
-    if (checkLivenessTrigger(triggerBodyNormalized, livenessTriggers, mentionStripped)) {
-      return { text: buildLivenessResponse() };
-    }
-  }
 
   await applyResetModelOverride({
     cfg,
