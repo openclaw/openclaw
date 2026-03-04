@@ -30,18 +30,36 @@ describe("probeSignal", () => {
     expect(res.status).toBe(200);
   });
 
-  it("returns ok=false when /check fails", async () => {
+  it("returns ok=false when /check fails and JSON-RPC is also unavailable", async () => {
     signalCheckMock.mockResolvedValueOnce({
       ok: false,
       status: 503,
       error: "HTTP 503",
     });
+    signalRpcRequestMock.mockRejectedValueOnce(new Error("connection refused"));
 
     const res = await probeSignal("http://127.0.0.1:8080", 1000);
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
+  });
+
+  it("returns ok=true via JSON-RPC fallback when REST check is unavailable", async () => {
+    // Regression test for: signal-cli JSON-RPC-only daemons where
+    // GET /api/v1/check returns 404/fetch-failed but POST /api/v1/rpc works.
+    signalCheckMock.mockResolvedValueOnce({
+      ok: false,
+      status: null,
+      error: "fetch failed",
+    });
+    signalRpcRequestMock.mockResolvedValueOnce({ version: "0.13.24" });
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe(null);
+    expect(res.version).toBe("0.13.24");
   });
 });
 

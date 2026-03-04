@@ -31,12 +31,30 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
   };
   const check = await signalCheck(baseUrl, timeoutMs);
   if (!check.ok) {
-    return {
-      ...result,
-      status: check.status ?? null,
-      error: check.error ?? "unreachable",
-      elapsedMs: Date.now() - started,
-    };
+    // REST health check unavailable — fall back to a JSON-RPC version probe so
+    // that signal-cli daemons running in JSON-RPC-only mode (where
+    // GET /api/v1/check returns 404) are still reported as healthy when the
+    // RPC endpoint responds successfully.
+    try {
+      const version = await signalRpcRequest("version", undefined, {
+        baseUrl,
+        timeoutMs,
+      });
+      return {
+        ...result,
+        ok: true,
+        status: null,
+        version: parseSignalVersion(version),
+        elapsedMs: Date.now() - started,
+      };
+    } catch {
+      return {
+        ...result,
+        status: check.status ?? null,
+        error: check.error ?? "unreachable",
+        elapsedMs: Date.now() - started,
+      };
+    }
   }
   try {
     const version = await signalRpcRequest("version", undefined, {
