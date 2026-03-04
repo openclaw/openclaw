@@ -475,16 +475,27 @@ export async function finalizeOnboardingWizard(
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   if (webSearchProvider && webSearchEnabled !== false) {
-    const { SEARCH_PROVIDER_OPTIONS } = await import("../commands/onboard-search.js");
+    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
+    const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
+    const envAvailable = entry ? hasKeyInEnv(entry) : false;
+    const keySource = storedKey
+      ? "API key: stored in config."
+      : envAvailable
+        ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
+        : undefined;
     await prompter.note(
       [
         "Web search is enabled, so your agent can look things up online when needed.",
         "",
         `Provider: ${label}`,
+        keySource,
         "Docs: https://docs.openclaw.ai/tools/web",
-      ].join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
       "Web search",
     );
   } else {
