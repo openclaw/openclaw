@@ -52,7 +52,11 @@ import {
   TOGETHER_MODEL_CATALOG,
   buildTogetherModelDefinition,
 } from "./together-models.js";
-import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import {
+  buildVeniceModelDefinition,
+  VENICE_BASE_URL,
+  VENICE_MODEL_CATALOG,
+} from "./venice-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -756,8 +760,8 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
-async function buildVeniceProvider(): Promise<ProviderConfig> {
-  const models = await discoverVeniceModels();
+function buildVeniceProvider(): ProviderConfig {
+  const models = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   return {
     baseUrl: VENICE_BASE_URL,
     api: "openai-completions",
@@ -969,7 +973,7 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("venice") ??
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
-    providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+    providers.venice = { ...buildVeniceProvider(), apiKey: veniceKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
