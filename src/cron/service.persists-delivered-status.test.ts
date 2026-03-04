@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
+  createFinishedBarrier,
   createStartedCronServiceWithFinishedBarrier,
   createCronStoreHarness,
   createNoopLogger,
@@ -11,112 +12,174 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
-describe("CronService persists delivered status", () => {
-  it("persists lastDelivered=true when isolated job reports delivered", async () => {
-    const store = await makeStorePath();
-    const finished = {
-      resolvers: new Map<string, () => void>(),
-      waitForOk(jobId: string) {
-        return new Promise<void>((resolve) => {
-          this.resolvers.set(jobId, resolve);
+type CronAddInput = Parameters<CronService["add"]>[0];
+
+function buildIsolatedAgentTurnJob(name: string): CronAddInput {
+  return {
+    name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "test" },
+    delivery: { mode: "none" },
+  };
+}
+
+function buildMainSessionSystemEventJob(name: string): CronAddInput {
+  return {
+    name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "tick" },
+  };
+}
+
+function createIsolatedCronWithFinishedBarrier(params: {
+  storePath: string;
+  delivered?: boolean;
+  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+}) {
+  const finished = createFinishedBarrier();
+  const cron = new CronService({
+    storePath: params.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+    })),
+    onEvent: (evt) => {
+      if (evt.action === "finished") {
+        params.onFinished?.({
+          jobId: evt.jobId,
+          delivered: evt.delivered,
+          deliveryStatus: evt.deliveryStatus,
         });
-      },
-    };
+      }
+      finished.onEvent(evt);
+    },
+  });
+  return { cron, finished };
+}
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "done",
-        delivered: true,
-      })),
-      onEvent: (evt) => {
-        if (evt.action === "finished" && evt.status === "ok") {
-          finished.resolvers.get(evt.jobId)?.();
-          finished.resolvers.delete(evt.jobId);
-        }
-      },
-    });
+async function runSingleJobAndReadState(params: {
+  cron: CronService;
+  finished: ReturnType<typeof createFinishedBarrier>;
+  job: CronAddInput;
+}) {
+  const job = await params.cron.add(params.job);
+  vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
+  await vi.runOnlyPendingTimersAsync();
+  await params.finished.waitForOk(job.id);
 
-    await cron.start();
-    const job = await cron.add({
-      name: "delivered-true",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
-      delivery: { mode: "none" },
-    });
+  const jobs = await params.cron.list({ includeDisabled: true });
+  return { job, updated: jobs.find((entry) => entry.id === job.id) };
+}
 
-    vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
-    await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(job.id);
+function expectSuccessfulCronRun(
+  updated:
+    | {
+        state: {
+          lastStatus?: string;
+          lastRunStatus?: string;
+          [key: string]: unknown;
+        };
+      }
+    | undefined,
+) {
+  expect(updated?.state.lastStatus).toBe("ok");
+  expect(updated?.state.lastRunStatus).toBe("ok");
+}
 
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((j) => j.id === job.id);
+function expectDeliveryNotRequested(
+  updated:
+    | {
+        state: {
+          lastDelivered?: boolean;
+          lastDeliveryStatus?: string;
+          lastDeliveryError?: string;
+        };
+      }
+    | undefined,
+) {
+  expectSuccessfulCronRun(updated);
+  expect(updated?.state.lastDelivered).toBeUndefined();
+  expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+  expect(updated?.state.lastDeliveryError).toBeUndefined();
+}
 
-    expect(updated?.state.lastStatus).toBe("ok");
-    expect(updated?.state.lastDelivered).toBe(true);
-
-    cron.stop();
+async function runIsolatedJobAndReadState(params: {
+  job: CronAddInput;
+  delivered?: boolean;
+  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+}) {
+  const store = await makeStorePath();
+  const { cron, finished } = createIsolatedCronWithFinishedBarrier({
+    storePath: store.storePath,
+    ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
-  it("persists lastDelivered=undefined when isolated job does not deliver", async () => {
-    const store = await makeStorePath();
-    const finished = {
-      resolvers: new Map<string, () => void>(),
-      waitForOk(jobId: string) {
-        return new Promise<void>((resolve) => {
-          this.resolvers.set(jobId, resolve);
-        });
-      },
-    };
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "done",
-      })),
-      onEvent: (evt) => {
-        if (evt.action === "finished" && evt.status === "ok") {
-          finished.resolvers.get(evt.jobId)?.();
-          finished.resolvers.delete(evt.jobId);
-        }
-      },
+  await cron.start();
+  try {
+    const { updated } = await runSingleJobAndReadState({
+      cron,
+      finished,
+      job: params.job,
     });
-
-    await cron.start();
-    const job = await cron.add({
-      name: "no-delivery",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
-      delivery: { mode: "none" },
-    });
-
-    vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
-    await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(job.id);
-
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((j) => j.id === job.id);
-
-    expect(updated?.state.lastStatus).toBe("ok");
-    expect(updated?.state.lastDelivered).toBeUndefined();
-
+    return updated;
+  } finally {
     cron.stop();
+  }
+}
+
+describe("CronService persists delivered status", () => {
+  it("persists lastDelivered=true when isolated job reports delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivered-true"),
+      delivered: true,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(true);
+    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivered-false"),
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists not-requested delivery state when delivery is not configured", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("no-delivery"),
+    });
+    expectDeliveryNotRequested(updated);
+  });
+
+  it("persists unknown delivery state when delivery is requested but the runner omits delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("delivery-unknown"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
   it("does not set lastDelivered for main session jobs", async () => {
@@ -127,84 +190,30 @@ describe("CronService persists delivered status", () => {
     });
 
     await cron.start();
-    const job = await cron.add({
-      name: "main-session",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
+    const { updated } = await runSingleJobAndReadState({
+      cron,
+      finished,
+      job: buildMainSessionSystemEventJob("main-session"),
     });
 
-    vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
-    await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(job.id);
-
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((j) => j.id === job.id);
-
-    expect(updated?.state.lastStatus).toBe("ok");
-    expect(updated?.state.lastDelivered).toBeUndefined();
+    expectDeliveryNotRequested(updated);
     expect(enqueueSystemEvent).toHaveBeenCalled();
 
     cron.stop();
   });
 
   it("emits delivered in the finished event", async () => {
-    const store = await makeStorePath();
-    let capturedEvent: { jobId: string; delivered?: boolean } | undefined;
-    const finished = {
-      resolvers: new Map<string, () => void>(),
-      waitForOk(jobId: string) {
-        return new Promise<void>((resolve) => {
-          this.resolvers.set(jobId, resolve);
-        });
-      },
-    };
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "done",
-        delivered: true,
-      })),
-      onEvent: (evt) => {
-        if (evt.action === "finished") {
-          capturedEvent = { jobId: evt.jobId, delivered: evt.delivered };
-          if (evt.status === "ok") {
-            finished.resolvers.get(evt.jobId)?.();
-            finished.resolvers.delete(evt.jobId);
-          }
-        }
+    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
+    await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("event-test"),
+      delivered: true,
+      onFinished: (evt) => {
+        capturedEvent = evt;
       },
     });
-
-    await cron.start();
-    const job = await cron.add({
-      name: "event-test",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
-      delivery: { mode: "none" },
-    });
-
-    vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
-    await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(job.id);
 
     expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
-
-    // Flush pending store writes before stopping so the temp file is released
-    // (prevents ENOTEMPTY on Windows when afterAll removes the fixture dir).
-    await cron.list({ includeDisabled: true });
-    cron.stop();
+    expect(capturedEvent?.deliveryStatus).toBe("delivered");
   });
 });

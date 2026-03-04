@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
@@ -13,14 +14,69 @@ export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
-const MERGE_SUMMARIES_INSTRUCTIONS =
-  "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
-  " TODOs, open questions, and any constraints.";
+const MERGE_SUMMARIES_INSTRUCTIONS = [
+  "Merge these partial summaries into a single cohesive summary.",
+  "",
+  "MUST PRESERVE:",
+  "- Active tasks and their current status (in-progress, blocked, pending)",
+  "- Batch operation progress (e.g., '5/17 items completed')",
+  "- The last thing the user requested and what was being done about it",
+  "- Decisions made and their rationale",
+  "- TODOs, open questions, and constraints",
+  "- Any commitments or follow-ups promised",
+  "",
+  "PRIORITIZE recent context over older history. The agent needs to know",
+  "what it was doing, not just what was discussed.",
+].join("\n");
+const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
+  "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
+  "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
+
+export type CompactionSummarizationInstructions = {
+  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  identifierInstructions?: string;
+};
+
+function resolveIdentifierPreservationInstructions(
+  instructions?: CompactionSummarizationInstructions,
+): string | undefined {
+  const policy = instructions?.identifierPolicy ?? "strict";
+  if (policy === "off") {
+    return undefined;
+  }
+  if (policy === "custom") {
+    const custom = instructions?.identifierInstructions?.trim();
+    return custom && custom.length > 0 ? custom : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
+  }
+  return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
+}
+
+export function buildCompactionSummarizationInstructions(
+  customInstructions?: string,
+  instructions?: CompactionSummarizationInstructions,
+): string | undefined {
+  const custom = customInstructions?.trim();
+  const identifierPreservation = resolveIdentifierPreservationInstructions(instructions);
+  if (!identifierPreservation && !custom) {
+    return undefined;
+  }
+  if (!custom) {
+    return identifierPreservation;
+  }
+  if (!identifierPreservation) {
+    return `Additional focus:\n${custom}`;
+  }
+  return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
+}
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+}
+
+function estimateCompactionMessageTokens(message: AgentMessage): number {
+  return estimateMessagesTokens([message]);
 }
 
 function normalizeParts(parts: number, messageCount: number): number {
@@ -49,7 +105,7 @@ export function splitMessagesByTokenShare(
   let currentTokens = 0;
 
   for (const message of messages) {
-    const messageTokens = estimateTokens(message);
+    const messageTokens = estimateCompactionMessageTokens(message);
     if (
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
@@ -93,7 +149,7 @@ export function chunkMessagesByMaxTokens(
   let currentTokens = 0;
 
   for (const message of messages) {
-    const messageTokens = estimateTokens(message);
+    const messageTokens = estimateCompactionMessageTokens(message);
     if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
@@ -148,7 +204,7 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
  * If single message > 50% of context, it can't be summarized safely.
  */
 export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateTokens(msg) * SAFETY_MARGIN;
+  const tokens = estimateCompactionMessageTokens(msg) * SAFETY_MARGIN;
   return tokens > contextWindow * 0.5;
 }
 
@@ -160,6 +216,7 @@ async function summarizeChunks(params: {
   reserveTokens: number;
   maxChunkTokens: number;
   customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
 }): Promise<string> {
   if (params.messages.length === 0) {
@@ -170,7 +227,10 @@ async function summarizeChunks(params: {
   const safeMessages = stripToolResultDetails(params.messages);
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
-
+  const effectiveInstructions = buildCompactionSummarizationInstructions(
+    params.customInstructions,
+    params.summarizationInstructions,
+  );
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
@@ -180,7 +240,7 @@ async function summarizeChunks(params: {
           params.reserveTokens,
           params.apiKey,
           params.signal,
-          params.customInstructions,
+          effectiveInstructions,
           summary,
         ),
       {
@@ -210,6 +270,7 @@ export async function summarizeWithFallback(params: {
   maxChunkTokens: number;
   contextWindow: number;
   customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
 }): Promise<string> {
   const { messages, contextWindow } = params;
@@ -236,7 +297,7 @@ export async function summarizeWithFallback(params: {
   for (const msg of messages) {
     if (isOversizedForSummary(msg, contextWindow)) {
       const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateTokens(msg);
+      const tokens = estimateCompactionMessageTokens(msg);
       oversizedNotes.push(
         `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
       );
@@ -278,6 +339,7 @@ export async function summarizeInStages(params: {
   maxChunkTokens: number;
   contextWindow: number;
   customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
@@ -321,8 +383,9 @@ export async function summarizeInStages(params: {
     timestamp: Date.now(),
   }));
 
-  const mergeInstructions = params.customInstructions
-    ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\nAdditional focus:\n${params.customInstructions}`
+  const custom = params.customInstructions?.trim();
+  const mergeInstructions = custom
+    ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
   return summarizeWithFallback({

@@ -6,7 +6,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
+  getNostrProfileRateLimitStateSizeForTest,
+  isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
 
@@ -136,6 +139,7 @@ function mockSuccessfulProfileImport() {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNostrProfileRateLimitStateForTest();
   });
 
   describe("route matching", () => {
@@ -204,6 +208,23 @@ describe("nostr-profile-http", () => {
   });
 
   describe("PUT /api/channels/nostr/:accountId/profile", () => {
+    async function expectPrivatePictureRejected(pictureUrl: string) {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
+        name: "hacker",
+        picture: pictureUrl,
+      });
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(false);
+      expect(data.error).toContain("private");
+    }
+
     it("validates profile and publishes", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
@@ -263,37 +284,11 @@ describe("nostr-profile-http", () => {
     });
 
     it("rejects private IP in picture URL (SSRF protection)", async () => {
-      const ctx = createMockContext();
-      const handler = createNostrProfileHttpHandler(ctx);
-      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
-        name: "hacker",
-        picture: "https://127.0.0.1/evil.jpg",
-      });
-      const res = createMockResponse();
-
-      await handler(req, res);
-
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
-      expect(data.error).toContain("private");
+      await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
 
     it("rejects ISATAP-embedded private IPv4 in picture URL", async () => {
-      const ctx = createMockContext();
-      const handler = createNostrProfileHttpHandler(ctx);
-      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
-        name: "hacker",
-        picture: "https://[2001:db8:1234::5efe:127.0.0.1]/evil.jpg",
-      });
-      const res = createMockResponse();
-
-      await handler(req, res);
-
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
-      expect(data.error).toContain("private");
+      await expectPrivatePictureRejected("https://[2001:db8:1234::5efe:127.0.0.1]/evil.jpg");
     });
 
     it("rejects non-https URLs", async () => {
@@ -366,6 +361,25 @@ describe("nostr-profile-http", () => {
           expect(data.error).toContain("Rate limit");
         }
       }
+    });
+
+    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
+      const now = 1_000_000;
+      for (let i = 0; i < 2_500; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
+    });
+
+    it("prunes stale rate-limit keys after the window elapses", () => {
+      const now = 2_000_000;
+      for (let i = 0; i < 100; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
+
+      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
     });
   });
 

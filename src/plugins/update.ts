@@ -1,11 +1,17 @@
-import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
-import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
-import { recordPluginInstall } from "./installs.js";
-import { loadPluginManifest } from "./manifest.js";
+import { resolveBundledPluginSources } from "./bundled-sources.js";
+import {
+  installPluginFromNpmSpec,
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+  resolvePluginInstallDir,
+} from "./install.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -52,11 +58,17 @@ export type PluginChannelSyncResult = {
   summary: PluginChannelSyncSummary;
 };
 
-type BundledPluginSource = {
+function formatNpmInstallFailure(params: {
   pluginId: string;
-  localPath: string;
-  npmSpec?: string;
-};
+  spec: string;
+  phase: "check" | "update";
+  result: Extract<InstallPluginResult, { ok: false }>;
+}): string {
+  if (params.result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND) {
+    return `Failed to ${params.phase} ${params.pluginId}: npm package not found for ${params.spec}.`;
+  }
+  return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
+}
 
 type InstallIntegrityDrift = {
   spec: string;
@@ -69,47 +81,24 @@ type InstallIntegrityDrift = {
 };
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifestPath = path.join(dir, "package.json");
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "installed plugin directory",
+  });
+  if (!opened.ok) {
+    return undefined;
+  }
   try {
-    const raw = await fs.readFile(`${dir}/package.json`, "utf-8");
+    const raw = fsSync.readFileSync(opened.fd, "utf-8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
+  } finally {
+    fsSync.closeSync(opened.fd);
   }
-}
-
-function resolveBundledPluginSources(params: {
-  workspaceDir?: string;
-}): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
-  const bundled = new Map<string, BundledPluginSource>();
-
-  for (const candidate of discovery.candidates) {
-    if (candidate.origin !== "bundled") {
-      continue;
-    }
-    const manifest = loadPluginManifest(candidate.rootDir);
-    if (!manifest.ok) {
-      continue;
-    }
-    const pluginId = manifest.manifest.id;
-    if (bundled.has(pluginId)) {
-      continue;
-    }
-
-    const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
-      undefined;
-
-    bundled.set(pluginId, {
-      pluginId,
-      localPath: candidate.rootDir,
-      npmSpec,
-    });
-  }
-
-  return bundled;
 }
 
 function pathsEqual(left?: string, right?: string): boolean {
@@ -278,7 +267,12 @@ export async function updateNpmInstalledPlugins(params: {
         outcomes.push({
           pluginId,
           status: "error",
-          message: `Failed to check ${pluginId}: ${probe.error}`,
+          message: formatNpmInstallFailure({
+            pluginId,
+            spec: record.spec,
+            phase: "check",
+            result: probe,
+          }),
         });
         continue;
       }
@@ -332,7 +326,12 @@ export async function updateNpmInstalledPlugins(params: {
       outcomes.push({
         pluginId,
         status: "error",
-        message: `Failed to update ${pluginId}: ${result.error}`,
+        message: formatNpmInstallFailure({
+          pluginId,
+          spec: record.spec,
+          phase: "update",
+          result: result,
+        }),
       });
       continue;
     }
@@ -344,12 +343,7 @@ export async function updateNpmInstalledPlugins(params: {
       spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedVersion: result.npmResolution?.version,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
-      shasum: result.npmResolution?.shasum,
-      resolvedAt: result.npmResolution?.resolvedAt,
+      ...buildNpmResolutionInstallFields(result.npmResolution),
     });
     changed = true;
 
@@ -473,12 +467,7 @@ export async function syncPluginsForUpdateChannel(params: {
         spec,
         installPath: result.targetDir,
         version: result.version,
-        resolvedName: result.npmResolution?.name,
-        resolvedVersion: result.npmResolution?.version,
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-        integrity: result.npmResolution?.integrity,
-        shasum: result.npmResolution?.shasum,
-        resolvedAt: result.npmResolution?.resolvedAt,
+        ...buildNpmResolutionInstallFields(result.npmResolution),
         sourcePath: undefined,
       });
       summary.switchedToNpm.push(pluginId);

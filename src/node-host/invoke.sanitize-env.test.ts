@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { sanitizeEnv } from "./invoke.js";
+import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
@@ -12,17 +12,35 @@ describe("node-host sanitizeEnv", () => {
   });
 
   it("blocks dangerous env keys/prefixes", () => {
-    withEnv({ PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined }, () => {
+    withEnv(
+      { PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined, SHELLOPTS: undefined },
+      () => {
+        const env = sanitizeEnv({
+          PYTHONPATH: "/tmp/pwn",
+          LD_PRELOAD: "/tmp/pwn.so",
+          BASH_ENV: "/tmp/pwn.sh",
+          SHELLOPTS: "xtrace",
+          PS4: "$(touch /tmp/pwned)",
+          FOO: "bar",
+        });
+        expect(env.FOO).toBe("bar");
+        expect(env.PYTHONPATH).toBeUndefined();
+        expect(env.LD_PRELOAD).toBeUndefined();
+        expect(env.BASH_ENV).toBeUndefined();
+        expect(env.SHELLOPTS).toBeUndefined();
+        expect(env.PS4).toBeUndefined();
+      },
+    );
+  });
+
+  it("blocks dangerous override-only env keys", () => {
+    withEnv({ HOME: "/Users/trusted", ZDOTDIR: "/Users/trusted/.zdot" }, () => {
       const env = sanitizeEnv({
-        PYTHONPATH: "/tmp/pwn",
-        LD_PRELOAD: "/tmp/pwn.so",
-        BASH_ENV: "/tmp/pwn.sh",
-        FOO: "bar",
+        HOME: "/tmp/evil-home",
+        ZDOTDIR: "/tmp/evil-zdotdir",
       });
-      expect(env.FOO).toBe("bar");
-      expect(env.PYTHONPATH).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-      expect(env.BASH_ENV).toBeUndefined();
+      expect(env.HOME).toBe("/Users/trusted");
+      expect(env.ZDOTDIR).toBe("/Users/trusted/.zdot");
     });
   });
 
@@ -32,6 +50,36 @@ describe("node-host sanitizeEnv", () => {
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
     });
+  });
+});
+
+describe("node-host output decoding", () => {
+  it("parses code pages from chcp output text", () => {
+    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
+    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
+    expect(parseWindowsCodePage("no code page")).toBeNull();
+  });
+
+  it("decodes GBK output on Windows when code page is known", () => {
+    let supportsGbk = true;
+    try {
+      void new TextDecoder("gbk");
+    } catch {
+      supportsGbk = false;
+    }
+
+    const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
+    const decoded = decodeCapturedOutputBuffer({
+      buffer: raw,
+      platform: "win32",
+      windowsEncoding: "gbk",
+    });
+
+    if (!supportsGbk) {
+      expect(decoded).toContain("�");
+      return;
+    }
+    expect(decoded).toBe("测试～；");
   });
 });
 

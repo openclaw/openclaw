@@ -1,6 +1,10 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  __resetDiscordDirectoryCacheForTest,
+  rememberDiscordDirectoryUser,
+} from "./directory-cache.js";
+import {
   deleteMessageDiscord,
   editMessageDiscord,
   fetchChannelPermissionsDiscord,
@@ -48,8 +52,21 @@ describe("sendMessageDiscord", () => {
     };
   }
 
+  function setupForumSend(secondResponse: { id: string; channel_id: string }) {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    postMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        message: { id: "starter1", channel_id: "thread1" },
+      })
+      .mockResolvedValueOnce(secondResponse);
+    return { rest, postMock };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("sends basic channel messages", async () => {
@@ -68,6 +85,29 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledWith(
       Routes.channelMessages("789"),
       expect.objectContaining({ body: { content: "hello world" } }),
+    );
+  });
+
+  it("rewrites cached @username mentions to id-based mentions", async () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789012345678",
+      handles: ["Alice"],
+    });
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @Alice", {
+      rest,
+      token: "t",
+      accountId: "default",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
     );
   });
 
@@ -97,14 +137,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("posts media as a follow-up message in forum channels", async () => {
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "media1", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
       rest,
       token: "t",
@@ -133,14 +166,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("chunks long forum posts into follow-up messages", async () => {
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "msg2", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
     await sendMessageDiscord("channel:forum1", longText, {
       rest,

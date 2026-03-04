@@ -5,7 +5,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 
@@ -233,6 +233,11 @@ export type HookAgentPayload = {
   timeoutSeconds?: number;
 };
 
+export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
+  sessionKey: string;
+  allowUnsafeExternalContent?: boolean;
+};
+
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";
@@ -325,6 +330,25 @@ export function resolveHookSessionKey(params: {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
   return { ok: true, value: generated };
+}
+
+export function normalizeHookDispatchSessionKey(params: {
+  sessionKey: string;
+  targetAgentId: string | undefined;
+}): string {
+  const trimmed = params.sessionKey.trim();
+  if (!trimmed || !params.targetAgentId) {
+    return trimmed;
+  }
+  const parsed = parseAgentSessionKey(trimmed);
+  if (!parsed) {
+    return trimmed;
+  }
+  const targetAgentId = normalizeAgentId(params.targetAgentId);
+  if (parsed.agentId !== targetAgentId) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
+  }
+  return parsed.rest;
 }
 
 export function normalizeAgentPayload(payload: Record<string, unknown>):

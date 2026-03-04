@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
+import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const callGatewayMock = vi.fn();
@@ -13,10 +14,7 @@ vi.mock("../gateway/call.js", () => ({
 
 let storeTemplatePath = "";
 let configOverride: Record<string, unknown> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
+  session: createPerSenderSessionConfig(),
 };
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -35,11 +33,7 @@ function writeStore(agentId: string, store: Record<string, unknown>) {
 
 function setSubagentLimits(subagents: Record<string, unknown>) {
   configOverride = {
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-      store: storeTemplatePath,
-    },
+    session: createPerSenderSessionConfig({ store: storeTemplatePath }),
     agents: {
       defaults: {
         subagents,
@@ -69,17 +63,13 @@ function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
 describe("sessions_spawn depth + child limits", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     storeTemplatePath = path.join(
       os.tmpdir(),
       `openclaw-subagent-depth-${Date.now()}-${Math.random().toString(16).slice(2)}-{agentId}.json`,
     );
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        store: storeTemplatePath,
-      },
+      session: createPerSenderSessionConfig({ store: storeTemplatePath }),
     };
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -177,11 +167,7 @@ describe("sessions_spawn depth + child limits", () => {
 
   it("rejects when active children for requester session reached maxChildrenPerAgent", async () => {
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        store: storeTemplatePath,
-      },
+      session: createPerSenderSessionConfig({ store: storeTemplatePath }),
       agents: {
         defaults: {
           subagents: {
@@ -214,11 +200,7 @@ describe("sessions_spawn depth + child limits", () => {
 
   it("does not use subagent maxConcurrent as a per-parent spawn gate", async () => {
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        store: storeTemplatePath,
-      },
+      session: createPerSenderSessionConfig({ store: storeTemplatePath }),
       agents: {
         defaults: {
           subagents: {

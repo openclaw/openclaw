@@ -12,6 +12,16 @@ const {
 } = tailscale;
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
+function createRuntimeWithExitError() {
+  return {
+    error: vi.fn(),
+    log: vi.fn(),
+    exit: ((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never,
+  };
+}
+
 describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -46,29 +56,45 @@ describe("tailscale helpers", () => {
   it("ensureGoInstalled installs when missing and user agrees", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
     const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
+    const runtime = createRuntimeWithExitError();
     await ensureGoInstalled(exec as never, prompt, runtime);
     expect(exec).toHaveBeenCalledWith("brew", ["install", "go"]);
+  });
+
+  it("ensureGoInstalled exits when missing and user declines install", async () => {
+    const exec = vi.fn().mockRejectedValueOnce(new Error("no go"));
+    const prompt = vi.fn().mockResolvedValue(false);
+    const runtime = createRuntimeWithExitError();
+
+    await expect(ensureGoInstalled(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Go is required to build tailscaled from source. Aborting.",
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
     const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
+    const runtime = createRuntimeWithExitError();
     await ensureTailscaledInstalled(exec as never, prompt, runtime);
     expect(exec).toHaveBeenCalledWith("brew", ["install", "tailscale"]);
+  });
+
+  it("ensureTailscaledInstalled exits when missing and user declines install", async () => {
+    const exec = vi.fn().mockRejectedValueOnce(new Error("missing"));
+    const prompt = vi.fn().mockResolvedValue(false);
+    const runtime = createRuntimeWithExitError();
+
+    await expect(ensureTailscaledInstalled(exec as never, prompt, runtime)).rejects.toThrow(
+      "exit 1",
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "tailscaled is required for user-space funnel. Aborting.",
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("enableTailscaleServe attempts normal first, then sudo", async () => {

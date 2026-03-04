@@ -11,9 +11,20 @@ vi.mock("../memory/index.js", () => ({
 
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
+function createQmdConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+  return {
+    agents,
+    memory: { backend: "qmd", qmd: {} },
+  } as OpenClawConfig;
+}
+
+function createGatewayLogMock() {
+  return { info: vi.fn(), warn: vi.fn() };
+}
+
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
-    getMemorySearchManagerMock.mockReset();
+    getMemorySearchManagerMock.mockClear();
   });
 
   it("skips initialization when memory backend is not qmd", async () => {
@@ -31,11 +42,8 @@ describe("startGatewayMemoryBackend", () => {
   });
 
   it("initializes qmd backend for each configured agent", async () => {
-    const cfg = {
-      agents: { list: [{ id: "ops", default: true }, { id: "main" }] },
-      memory: { backend: "qmd", qmd: {} },
-    } as OpenClawConfig;
-    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = createQmdConfig({ list: [{ id: "ops", default: true }, { id: "main" }] });
+    const log = createGatewayLogMock();
     getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
 
     await startGatewayMemoryBackend({ cfg, log });
@@ -55,11 +63,8 @@ describe("startGatewayMemoryBackend", () => {
   });
 
   it("logs a warning when qmd manager init fails and continues with other agents", async () => {
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
-      memory: { backend: "qmd", qmd: {} },
-    } as OpenClawConfig;
-    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = createQmdConfig({ list: [{ id: "main", default: true }, { id: "ops" }] });
+    const log = createGatewayLogMock();
     getMemorySearchManagerMock
       .mockResolvedValueOnce({ manager: null, error: "qmd missing" })
       .mockResolvedValueOnce({ manager: { search: vi.fn() } });
@@ -75,17 +80,14 @@ describe("startGatewayMemoryBackend", () => {
   });
 
   it("skips agents with memory search disabled", async () => {
-    const cfg = {
-      agents: {
-        defaults: { memorySearch: { enabled: true } },
-        list: [
-          { id: "main", default: true },
-          { id: "ops", memorySearch: { enabled: false } },
-        ],
-      },
-      memory: { backend: "qmd", qmd: {} },
-    } as OpenClawConfig;
-    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = createQmdConfig({
+      defaults: { memorySearch: { enabled: true } },
+      list: [
+        { id: "main", default: true },
+        { id: "ops", memorySearch: { enabled: false } },
+      ],
+    });
+    const log = createGatewayLogMock();
     getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
 
     await startGatewayMemoryBackend({ cfg, log });

@@ -48,3 +48,11 @@ openclaw onboard --non-interactive \
 If the Gateway runs as a daemon (launchd/systemd), make sure `AI_GATEWAY_API_KEY`
 is available to that process (for example, in `~/.openclaw/.env` or via
 `env.shellEnv`).
+
+## Model ID shorthand
+
+OpenClaw accepts Vercel Claude shorthand model refs and normalizes them at
+runtime:
+
+- `vercel-ai-gateway/claude-opus-4.6` -> `vercel-ai-gateway/anthropic/claude-opus-4.6`
+- `vercel-ai-gateway/opus-4.6` -> `vercel-ai-gateway/anthropic/claude-opus-4-6`

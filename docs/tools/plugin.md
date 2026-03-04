@@ -90,6 +90,72 @@ Notes:
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS is not supported for telephony.
 
+For STT/transcription, plugins can call:
+
+```ts
+const { text } = await api.runtime.stt.transcribeAudioFile({
+  filePath: "/tmp/inbound-audio.ogg",
+  cfg: api.config,
+  // Optional when MIME cannot be inferred reliably:
+  mime: "audio/ogg",
+});
+```
+
+Notes:
+
+- Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
+- Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
+
+## Plugin SDK import paths
+
+Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
+authoring plugins:
+
+- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers.
+- `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
+- `openclaw/plugin-sdk/telegram` for Telegram channel plugins.
+- `openclaw/plugin-sdk/discord` for Discord channel plugins.
+- `openclaw/plugin-sdk/slack` for Slack channel plugins.
+- `openclaw/plugin-sdk/signal` for Signal channel plugins.
+- `openclaw/plugin-sdk/imessage` for iMessage channel plugins.
+- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugins.
+- `openclaw/plugin-sdk/line` for LINE channel plugins.
+- `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
+- Bundled extension-specific subpaths are also available:
+  `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
+  `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
+  `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
+  `openclaw/plugin-sdk/feishu`,
+  `openclaw/plugin-sdk/google-gemini-cli-auth`, `openclaw/plugin-sdk/googlechat`,
+  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
+  `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
+  `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
+  `openclaw/plugin-sdk/memory-lancedb`,
+  `openclaw/plugin-sdk/minimax-portal-auth`,
+  `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
+  `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
+  `openclaw/plugin-sdk/qwen-portal-auth`, `openclaw/plugin-sdk/synology-chat`,
+  `openclaw/plugin-sdk/talk-voice`, `openclaw/plugin-sdk/test-utils`,
+  `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
+  `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
+  `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+
+Compatibility note:
+
+- `openclaw/plugin-sdk` remains supported for existing external plugins.
+- New and migrated bundled plugins should use channel or extension-specific
+  subpaths; use `core` for generic surfaces and `compat` only when broader
+  shared helpers are required.
+
+Performance note:
+
+- Plugin discovery and manifest metadata use short in-process caches to reduce
+  bursty startup/reload work.
+- Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
+  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+- Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
+  `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
+
 ## Discovery & precedence
 
 OpenClaw scans, in order:
@@ -108,13 +174,21 @@ OpenClaw scans, in order:
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-4. Bundled extensions (shipped with OpenClaw, **disabled by default**)
+4. Bundled extensions (shipped with OpenClaw, mostly disabled by default)
 
 - `<openclaw>/extensions/*`
 
-Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
-or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
-but can be disabled the same way.
+Most bundled plugins must be enabled explicitly via
+`plugins.entries.<id>.enabled` or `openclaw plugins enable <id>`.
+
+Default-on bundled plugin exceptions:
+
+- `device-pair`
+- `phone-control`
+- `talk-voice`
+- active memory slot plugin (default slot: `memory-core`)
+
+Installed plugins are enabled by default, but can be disabled the same way.
 
 Hardening notes:
 
@@ -330,22 +404,29 @@ Plugins export either:
 
 ## Plugin hooks
 
-Plugins can ship hooks and register them at runtime. This lets a plugin bundle
-event-driven automation without a separate hook pack install.
+Plugins can register hooks at runtime. This lets a plugin bundle event-driven
+automation without a separate hook pack install.
 
 ### Example
 
-```
-import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
-
+```ts
 export default function register(api) {
-  registerPluginHooksFromDir(api, "./hooks");
+  api.registerHook(
+    "command:new",
+    async () => {
+      // Hook logic here.
+    },
+    {
+      name: "my-plugin.command-new",
+      description: "Runs when /new is invoked",
+    },
+  );
 }
 ```
 
 Notes:
 
-- Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
+- Register hooks explicitly via `api.registerHook(...)`.
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
@@ -444,6 +525,29 @@ Notes:
 - `meta.aliases` adds alternate ids for normalization and CLI inputs.
 - `meta.preferOver` lists channel ids to skip auto-enable when both are configured.
 - `meta.detailLabel` and `meta.systemImage` let UIs show richer channel labels/icons.
+
+### Channel onboarding hooks
+
+Channel plugins can define optional onboarding hooks on `plugin.onboarding`:
+
+- `configure(ctx)` is the baseline setup flow.
+- `configureInteractive(ctx)` can fully own interactive setup for both configured and unconfigured states.
+- `configureWhenConfigured(ctx)` can override behavior only for already configured channels.
+
+Hook precedence in the wizard:
+
+1. `configureInteractive` (if present)
+2. `configureWhenConfigured` (only when channel status is already configured)
+3. fallback to `configure`
+
+Context details:
+
+- `configureInteractive` and `configureWhenConfigured` receive:
+  - `configured` (`true` or `false`)
+  - `label` (user-facing channel name used by prompts)
+  - plus the shared config/runtime/prompter/options fields
+- Returning `"skip"` leaves selection and account tracking unchanged.
+- Returning `{ cfg, accountId? }` applies config updates and records account selection.
 
 ### Write a new messaging channel (step‑by‑step)
 

@@ -3,17 +3,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/lobster";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../../../src/plugins/types.js";
+import {
+  createWindowsCmdShimFixture,
+  restorePlatformPathEnv,
+  setProcessPlatform,
+  snapshotPlatformPathEnv,
+} from "./test-helpers.js";
 
 const spawnState = vi.hoisted(() => ({
   queue: [] as Array<{ stdout: string; stderr?: string; exitCode?: number }>,
   spawn: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnState.spawn(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnState.spawn(...args),
+  };
+});
 
 let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
 
@@ -28,7 +38,6 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     runtime: { version: "test" } as any,
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
-    registerHttpHandler() {},
     registerChannel() {},
     registerGatewayMethod() {},
     registerCli() {},
@@ -57,20 +66,9 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
-function setProcessPlatform(platform: NodeJS.Platform) {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
-}
-
 describe("lobster plugin tool", () => {
   let tempDir = "";
-  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  const originalPath = process.env.PATH;
-  const originalPathAlt = process.env.Path;
-  const originalPathExt = process.env.PATHEXT;
-  const originalPathExtAlt = process.env.Pathext;
+  const originalProcessState = snapshotPlatformPathEnv();
 
   beforeAll(async () => {
     ({ createLobsterTool } = await import("./lobster-tool.js"));
@@ -79,29 +77,7 @@ describe("lobster plugin tool", () => {
   });
 
   afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
-    if (originalPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = originalPath;
-    }
-    if (originalPathAlt === undefined) {
-      delete process.env.Path;
-    } else {
-      process.env.Path = originalPathAlt;
-    }
-    if (originalPathExt === undefined) {
-      delete process.env.PATHEXT;
-    } else {
-      process.env.PATHEXT = originalPathExt;
-    }
-    if (originalPathExtAlt === undefined) {
-      delete process.env.Pathext;
-    } else {
-      process.env.Pathext = originalPathExtAlt;
-    }
+    restorePlatformPathEnv(originalProcessState);
   });
 
   afterAll(async () => {
@@ -154,17 +130,6 @@ describe("lobster plugin tool", () => {
         requiresApproval: null,
       }),
     });
-  };
-
-  const createWindowsShimFixture = async (params: {
-    shimPath: string;
-    scriptPath: string;
-    scriptToken: string;
-  }) => {
-    await fs.mkdir(path.dirname(params.scriptPath), { recursive: true });
-    await fs.mkdir(path.dirname(params.shimPath), { recursive: true });
-    await fs.writeFile(params.scriptPath, "module.exports = {};\n", "utf8");
-    await fs.writeFile(params.shimPath, `@echo off\r\n"${params.scriptToken}" %*\r\n`, "utf8");
   };
 
   it("runs lobster and returns parsed envelope in details", async () => {
@@ -281,10 +246,10 @@ describe("lobster plugin tool", () => {
     setProcessPlatform("win32");
     const shimScriptPath = path.join(tempDir, "shim-dist", "lobster-cli.cjs");
     const shimPath = path.join(tempDir, "shim-bin", "lobster.cmd");
-    await createWindowsShimFixture({
+    await createWindowsCmdShimFixture({
       shimPath,
       scriptPath: shimScriptPath,
-      scriptToken: "%dp0%\\..\\shim-dist\\lobster-cli.cjs",
+      shimLine: `"%dp0%\\..\\shim-dist\\lobster-cli.cjs" %*`,
     });
     process.env.PATHEXT = ".CMD;.EXE";
     process.env.PATH = `${path.dirname(shimPath)};${process.env.PATH ?? ""}`;

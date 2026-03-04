@@ -19,7 +19,7 @@ const { clearInternalHooks, createInternalHookEvent, registerInternalHook, trigg
 
 describe("boot-md startup hook integration", () => {
   beforeEach(() => {
-    runBootOnce.mockReset();
+    runBootOnce.mockClear();
     clearInternalHooks();
   });
 

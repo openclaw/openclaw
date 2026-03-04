@@ -50,85 +50,118 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
-  it("renders/hides compaction and fallback indicators across recency states", () => {
-    const cases: Array<{
-      name: string;
-      nowMs?: number;
-      props: Partial<ChatProps>;
-      selector: string;
-      missing?: boolean;
-      expectedText?: string;
-    }> = [
-      {
-        name: "active compaction",
-        props: {
+  it("renders compacting indicator as a badge", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
           compactionStatus: {
             active: true,
-            startedAt: 1_000,
+            startedAt: Date.now(),
             completedAt: null,
           },
-        },
-        selector: ".compaction-indicator--active",
-        expectedText: "Compacting context...",
-      },
-      {
-        name: "recent compaction complete",
-        nowMs: 1_000,
-        props: {
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--active");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Compacting context...");
+  });
+
+  it("renders completion indicator shortly after compaction", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    render(
+      renderChat(
+        createProps({
           compactionStatus: {
             active: false,
             startedAt: 900,
             completedAt: 900,
           },
-        },
-        selector: ".compaction-indicator--complete",
-        expectedText: "Context compacted",
-      },
-      {
-        name: "stale compaction hidden",
-        nowMs: 10_000,
-        props: {
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--complete");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Context compacted");
+    nowSpy.mockRestore();
+  });
+
+  it("hides stale compaction completion indicator", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    render(
+      renderChat(
+        createProps({
           compactionStatus: {
             active: false,
             startedAt: 0,
             completedAt: 0,
           },
-        },
-        selector: ".compaction-indicator",
-        missing: true,
-      },
-      {
-        name: "recent fallback active",
-        nowMs: 1_000,
-        props: {
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".compaction-indicator")).toBeNull();
+    nowSpy.mockRestore();
+  });
+
+  it("renders fallback indicator shortly after fallback event", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    render(
+      renderChat(
+        createProps({
           fallbackStatus: {
             selected: "fireworks/minimax-m2p5",
             active: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: ["fireworks/minimax-m2p5: rate limit"],
             occurredAt: 900,
           },
-        },
-        selector: ".compaction-indicator--fallback",
-        expectedText: "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
-      },
-      {
-        name: "stale fallback hidden",
-        nowMs: 20_000,
-        props: {
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--fallback");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
+    nowSpy.mockRestore();
+  });
+
+  it("hides stale fallback indicator", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    render(
+      renderChat(
+        createProps({
           fallbackStatus: {
             selected: "fireworks/minimax-m2p5",
             active: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 0,
           },
-        },
-        selector: ".compaction-indicator--fallback",
-        missing: true,
-      },
-      {
-        name: "recent fallback cleared",
-        nowMs: 1_000,
-        props: {
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+    nowSpy.mockRestore();
+  });
+
+  it("renders fallback-cleared indicator shortly after transition", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    render(
+      renderChat(
+        createProps({
           fallbackStatus: {
             phase: "cleared",
             selected: "fireworks/minimax-m2p5",
@@ -137,26 +170,15 @@ describe("chat view", () => {
             attempts: [],
             occurredAt: 900,
           },
-        },
-        selector: ".compaction-indicator--fallback-cleared",
-        expectedText: "Fallback cleared: fireworks/minimax-m2p5",
-      },
-    ];
+        }),
+      ),
+      container,
+    );
 
-    for (const testCase of cases) {
-      const nowSpy =
-        testCase.nowMs === undefined ? null : vi.spyOn(Date, "now").mockReturnValue(testCase.nowMs);
-      const container = document.createElement("div");
-      render(renderChat(createProps(testCase.props)), container);
-      const indicator = container.querySelector(testCase.selector);
-      if (testCase.missing) {
-        expect(indicator, testCase.name).toBeNull();
-      } else {
-        expect(indicator, testCase.name).not.toBeNull();
-        expect(indicator?.textContent, testCase.name).toContain(testCase.expectedText ?? "");
-      }
-      nowSpy?.mockRestore();
-    }
+    const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+    nowSpy.mockRestore();
   });
 
   it("shows a stop button when aborting is available", () => {

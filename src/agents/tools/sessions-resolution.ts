@@ -75,6 +75,43 @@ export async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
+export function shouldVerifyRequesterSpawnedSessionVisibility(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+}): boolean {
+  return (
+    params.restrictToSpawned &&
+    !params.resolvedViaSessionId &&
+    params.requesterSessionKey !== params.targetSessionKey
+  );
+}
+
+export async function isResolvedSessionVisibleToRequester(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+  limit?: number;
+}): Promise<boolean> {
+  if (
+    !shouldVerifyRequesterSpawnedSessionVisibility({
+      requesterSessionKey: params.requesterSessionKey,
+      targetSessionKey: params.targetSessionKey,
+      restrictToSpawned: params.restrictToSpawned,
+      resolvedViaSessionId: params.resolvedViaSessionId,
+    })
+  ) {
+    return true;
+  }
+  return await isRequesterSpawnedSessionVisible({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: params.targetSessionKey,
+    limit: params.limit,
+  });
+}
+
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function looksLikeSessionId(value: string): boolean {
@@ -121,6 +158,19 @@ export type SessionReferenceResolution =
       resolvedViaSessionId: boolean;
     }
   | { ok: false; status: "error" | "forbidden"; error: string };
+
+export type VisibleSessionReferenceResolution =
+  | {
+      ok: true;
+      key: string;
+      displayKey: string;
+    }
+  | {
+      ok: false;
+      status: "forbidden";
+      error: string;
+      displayKey: string;
+    };
 
 async function resolveSessionKeyFromSessionId(params: {
   sessionId: string;
@@ -250,6 +300,31 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
   });
   return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+}
+
+export async function resolveVisibleSessionReference(params: {
+  resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
+  requesterSessionKey: string;
+  restrictToSpawned: boolean;
+  visibilitySessionKey: string;
+}): Promise<VisibleSessionReferenceResolution> {
+  const resolvedKey = params.resolvedSession.key;
+  const displayKey = params.resolvedSession.displayKey;
+  const visible = await isResolvedSessionVisibleToRequester({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: resolvedKey,
+    restrictToSpawned: params.restrictToSpawned,
+    resolvedViaSessionId: params.resolvedSession.resolvedViaSessionId,
+  });
+  if (!visible) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from this sandboxed agent session: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
+  return { ok: true, key: resolvedKey, displayKey };
 }
 
 export function normalizeOptionalKey(value?: string) {
