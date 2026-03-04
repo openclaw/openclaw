@@ -1,4 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -81,11 +83,18 @@ export async function statusCommand(
     return;
   }
 
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: resolvedCfg } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "status",
+    targetIds: getStatusCommandSecretTargetIds(),
+  });
+
   const [scan, securityAudit] = opts.json
     ? await Promise.all([
         scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
         runSecurityAudit({
-          config: loadConfig(),
+          config: resolvedCfg,
           deep: false,
           includeFilesystem: true,
           includeChannelSecurity: true,
@@ -101,7 +110,7 @@ export async function statusCommand(
           },
           async () =>
             await runSecurityAudit({
-              config: loadConfig(),
+              config: resolvedCfg,
               deep: false,
               includeFilesystem: true,
               includeChannelSecurity: true,
