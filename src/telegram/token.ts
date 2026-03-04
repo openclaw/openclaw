@@ -17,6 +17,18 @@ type ResolveTelegramTokenOpts = {
   logMissingFile?: (message: string) => void;
 };
 
+function resolveDollarEnvRef(rawToken: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
+  if (!rawToken) {
+    return undefined;
+  }
+  const match = /^\$([A-Z][A-Z0-9_]*)$/.exec(rawToken.trim());
+  if (!match) {
+    return rawToken;
+  }
+  const resolved = env[match[1]]?.trim();
+  return resolved && resolved.length > 0 ? resolved : rawToken;
+}
+
 export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
@@ -70,8 +82,9 @@ export function resolveTelegramToken(
     value: accountCfg?.botToken,
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
-  if (accountToken) {
-    return { token: accountToken, source: "config" };
+  const resolvedAccountToken = resolveDollarEnvRef(accountToken, process.env);
+  if (resolvedAccountToken) {
+    return { token: resolvedAccountToken, source: "config" };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -96,8 +109,9 @@ export function resolveTelegramToken(
     value: telegramCfg?.botToken,
     path: "channels.telegram.botToken",
   });
-  if (configToken) {
-    return { token: configToken, source: "config" };
+  const resolvedConfigToken = resolveDollarEnvRef(configToken, process.env);
+  if (resolvedConfigToken) {
+    return { token: resolvedConfigToken, source: "config" };
   }
 
   const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
