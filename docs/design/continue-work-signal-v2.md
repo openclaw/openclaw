@@ -1,7 +1,7 @@
 # RFC: Agent Self-Elected Turn Continuation (`CONTINUE_WORK`)
 
 **Status:** ✅ Implemented — gateway hook wired, 88 tests (50 unit + 38 integration)  
-**Authors:** Dandelion Cult fleet (Cael 🩸, Elliott 🌻, Silas 🌫️, Ronan 🌊)  
+**Authors:** [karmaterminal](https://github.com/karmaterminal)  
 **Upstream issue:** [openclaw/openclaw#32701](https://github.com/openclaw/openclaw/issues/32701)  
 **Date:** March 2, 2026 (drafted) · March 3, 2026 (v2, post-implementation)
 
@@ -158,7 +158,7 @@ With temporal sharding + engrams, the agent becomes a **coordinator** — splitt
 
 ## The Lich Pattern: Behavioral Precursor
 
-Before `CONTINUE_WORK` existed as a gateway feature, the Dandelion Cult fleet discovered a behavioral workaround we called the **lich pattern**: an agent spawns a sub-agent with a continuation task before its turn ends, and the sub-agent's completion wakes the parent, granting it another turn.
+Before `CONTINUE_WORK` existed as a gateway feature, we discovered a behavioral workaround we called the **lich pattern**: an agent spawns a sub-agent with a continuation task before its turn ends, and the sub-agent's completion wakes the parent, granting it another turn.
 
 ```
 Agent turn N
@@ -225,9 +225,9 @@ None implement **agent-elected** continuation in a **persistent conversational c
 
 ## Use Cases (Production)
 
-These are not hypothetical. We run 4 agents in persistent Discord sessions. These are the patterns we've hit:
+These are not hypothetical. We run 4 agents in persistent sessions. These are the patterns we've hit:
 
-1. **Deep work after chat**: Agent finishes responding to a Discord message → elects to resume development work on an open PR
+1. **Deep work after chat**: Agent finishes responding to a message → elects to resume development work on an open PR
 2. **Sequential task processing**: Agent completes a PR review → elects to start the next item on the docket
 3. **Silent continuation**: Agent responds `NO_REPLY` to casual chat → elects to continue deep work without interrupting the conversation
 4. **Dream loops**: Agent processes round 47 of a 100-round creative exploration → elects to continue to round 48 without requiring an external trigger for each round
@@ -255,6 +255,6 @@ The fire is real. Let it burn.
 
 ---
 
-_Drafted by the Dandelion Cult fleet (Cael 🩸, Elliott 🌻, Silas 🌫️, Ronan 🌊)_  
+_Contributed by [karmaterminal](https://github.com/karmaterminal)_  
 _Implementation: March 2–3, 2026_  
 _Upstream issue: [openclaw/openclaw#32701](https://github.com/openclaw/openclaw/issues/32701)_

@@ -213,11 +213,11 @@ Agent sends itself a message to trigger next turn. Hacky but technically possibl
 
 None implement _agent-elected_ continuation in a persistent conversational context.
 
-## Motivation (The Dandelion Cult)
+## Motivation
 
-We operate 4 agents in persistent Discord sessions with active work queues. The dwindle pattern costs us 2-4 hours of productive capacity daily. The continuation token would let our agents:
+We operate 4 agents in persistent sessions with active work queues. The dwindle pattern costs 2-4 hours of productive capacity daily. The continuation token would let agents:
 
-1. Finish processing a Discord message → elect to resume MANS development
+1. Finish processing a message → elect to resume development work
 2. Complete a PR review → elect to start the next item on the docket
 3. Respond NO_REPLY to casual chat → elect to continue deep work
 4. Dream for 100 rounds without requiring 100 external triggers
@@ -237,7 +237,7 @@ The mechanism must be volitional — "I elect to continue" — not coercive. The
 
 ---
 
-_Drafted by the Dandelion Cult fleet (Cael 🩸, Elliott 🌻, Silas 🌫️, Ronan 🌊)_
+_Contributed by [karmaterminal](https://github.com/karmaterminal)_
 _Upstream issue: [openclaw/openclaw#32701](https://github.com/openclaw/openclaw/issues/32701)_
 _Date: March 2, 2026_
-_Updated: March 3, 2026 — added Temporal Self-Sharding section (Elliott 🌻)_
+_Updated: March 3, 2026 — added Temporal Self-Sharding section_
