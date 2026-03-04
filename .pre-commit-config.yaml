@@ -19,7 +19,8 @@ repos:
         args: [--maxkb=500]
       - id: check-merge-conflict
       - id: detect-private-key
-        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
+        # ci.yml excluded: contains --exclude-lines regex with literal "BEGIN PRIVATE KEY" for detect-secrets
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|\.github/workflows/ci\.yml$|.*\.test\.ts$)'
 
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
