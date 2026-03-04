@@ -193,4 +193,34 @@ describe("memory manager mistral provider wiring", () => {
     expect(fallbackCall?.provider).toBe("ollama");
     expect(fallbackCall?.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
   });
+
+  it("does not consider embedding errors as fallback-eligible when fallback is none", async () => {
+    const openAiClient: OpenAiEmbeddingClient = {
+      baseUrl: "https://api.openai.com/v1",
+      headers: { authorization: "Bearer openai-key" },
+      model: "text-embedding-3-small",
+    };
+    createEmbeddingProviderMock.mockResolvedValueOnce({
+      requestedProvider: "openai",
+      provider: createProvider("openai"),
+      openAi: openAiClient,
+    } as EmbeddingProviderResult);
+
+    const cfg = buildConfig({ workspaceDir, indexPath, provider: "openai", fallback: "none" });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    if (!result.manager) {
+      throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
+    }
+    manager = result.manager as unknown as MemoryIndexManager;
+    const internal = manager as unknown as {
+      shouldFallbackOnError: (reason: string) => boolean;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      openAi?: OpenAiEmbeddingClient;
+    };
+
+    expect(internal.shouldFallbackOnError("embedding batch failed")).toBe(false);
+    await expect(internal.activateFallbackProvider("embedding batch failed")).resolves.toBe(false);
+    expect(internal.openAi).toBe(openAiClient);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -929,6 +929,9 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private shouldFallbackOnError(message: string): boolean {
+    if (this.settings.fallback === "none") {
+      return false;
+    }
     return /embedding|embeddings|batch/i.test(message);
   }
 
