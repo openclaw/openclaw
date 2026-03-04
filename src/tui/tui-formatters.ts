@@ -1,5 +1,6 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -199,6 +200,27 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
+function extractTopLevelText(record: Record<string, unknown>): string {
+  return typeof record.text === "string" ? sanitizeRenderableText(record.text).trim() : "";
+}
+
+function resolveAssistantTopLevelTextOverride(params: {
+  record: Record<string, unknown>;
+  extractedText: string;
+}): string {
+  if (params.record.role !== "assistant") {
+    return "";
+  }
+  const topLevelText = extractTopLevelText(params.record);
+  if (!topLevelText) {
+    return "";
+  }
+  if (!params.extractedText || isSilentReplyText(params.extractedText, SILENT_REPLY_TOKEN)) {
+    return topLevelText;
+  }
+  return "";
+}
+
 function collectSanitizedBlockStrings(params: {
   content: unknown;
   blockType: "text" | "thinking";
@@ -261,8 +283,16 @@ export function extractContentFromMessage(message: unknown): string {
     blockType: "text",
     valueKey: "text",
   });
-  if (parts.length > 0) {
-    return parts.join("\n").trim();
+  const extractedText = parts.join("\n").trim();
+  const topLevelTextOverride = resolveAssistantTopLevelTextOverride({
+    record,
+    extractedText,
+  });
+  if (topLevelTextOverride) {
+    return topLevelTextOverride;
+  }
+  if (extractedText) {
+    return extractedText;
   }
   return formatAssistantErrorFromRecord(record);
 }
@@ -306,10 +336,25 @@ export function extractTextFromMessage(
   }
   const text = extractTextBlocks(record.content, opts);
   if (text) {
+    const topLevelTextOverride = resolveAssistantTopLevelTextOverride({
+      record,
+      extractedText: text,
+    });
+    if (topLevelTextOverride) {
+      return topLevelTextOverride;
+    }
     if (record.role === "user") {
       return stripLeadingInboundMetadata(text);
     }
     return text;
+  }
+
+  const fallbackText = extractTopLevelText(record);
+  if (fallbackText) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(fallbackText);
+    }
+    return fallbackText;
   }
 
   const errorText = formatAssistantErrorFromRecord(record);

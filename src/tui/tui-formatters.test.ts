@@ -45,6 +45,16 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("first\nsecond");
   });
 
+  it("prefers assistant text field over stale NO_REPLY content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      text: "real text field reply",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+
+    expect(text).toBe("real text field reply");
+  });
+
   it("preserves internal newlines for string content", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -201,6 +211,16 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toContain("HTTP 429");
+  });
+
+  it("falls back to assistant text field when content only carries NO_REPLY", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      text: "real text field reply",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+
+    expect(text).toBe("real text field reply");
   });
 });
 
