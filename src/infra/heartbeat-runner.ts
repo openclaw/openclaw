@@ -246,7 +246,7 @@ export function resolveHeartbeatJitterMs(
   if (raw) {
     try {
       const ms = parseDurationMs(raw, { defaultUnit: "m" });
-      if (ms > 0) {
+      if (ms >= 0) {
         return ms;
       }
     } catch {

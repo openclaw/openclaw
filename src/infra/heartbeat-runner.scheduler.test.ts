@@ -297,4 +297,24 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("disables jitter when jitter is set to 0s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    pinRandom(0.5);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m", jitter: "0s" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // With jitter disabled, heartbeat should fire at exactly 30m
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
 });
