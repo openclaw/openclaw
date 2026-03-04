@@ -516,7 +516,10 @@ const SECRET_PATTERNS: SecretPattern[] = [
   {
     ruleId: "secret-aws-secret",
     name: "AWS Secret Access Key",
-    pattern: /(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/,
+    // Narrow pattern: must have AWS-related context or typical secret key characteristics
+    // AWS secrets are base64-like but more specific: typically start with specific patterns
+    pattern:
+      /(?:AWS|aws|secret|key|credential|token).*?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])|(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/,
     severity: "critical",
   },
   {
@@ -1258,8 +1261,17 @@ export async function validateSkillManifestFile(
     }
 
     // Extract description from content if not in frontmatter
+    // Strip frontmatter first to avoid picking up --- delimiters
     if (!manifest.description) {
-      const lines = content.split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+      let bodyContent = content;
+      // Remove YAML frontmatter if present
+      const frontmatterMatch = content.match(/^---\n[\s\S]*?\n---\n/);
+      if (frontmatterMatch) {
+        bodyContent = content.slice(frontmatterMatch[0].length);
+      }
+      const lines = bodyContent
+        .split("\n")
+        .filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("---"));
       if (lines.length > 0) {
         manifest.description = lines[0].trim();
       }

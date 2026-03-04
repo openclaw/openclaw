@@ -425,7 +425,16 @@ export class AnthropicProvider extends BaseProvider {
 
     for (const msg of messages) {
       if (msg.role === "system") {
-        system += (system ? "\n\n" : "") + (typeof msg.content === "string" ? msg.content : "");
+        // Handle both string and block-based content for system prompts
+        const systemContent =
+          typeof msg.content === "string"
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? msg.content
+                  .map((block) => (block.type === "text" ? block.text || "" : ""))
+                  .join("\n")
+              : "";
+        system += (system ? "\n\n" : "") + systemContent;
         continue;
       }
 
