@@ -44,7 +44,11 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
   process.env.OPENCLAW_STATE_DIR = stateDir;
   await fs.mkdir(cwdDir, { recursive: true });
   await fs.mkdir(stateDir, { recursive: true });
-  await run({ base, cwdDir, stateDir });
+  try {
+    await run({ base, cwdDir, stateDir });
+  } finally {
+    await fs.rm(base, { recursive: true, force: true });
+  }
 }
 
 describe("loadDotEnv", () => {
