@@ -278,14 +278,9 @@ describe("Ollama provider", () => {
 
     expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
-  it("registers ollama when explicitly configured even if discovery throws", async () => {
-    enableDiscoveryEnv();
+  it("registers ollama when explicitly configured even if discovery returns no models", async () => {
     const agentDir = createAgentDir();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.reject(new Error("network error"))),
-    );
-
+    // Discovery returns no models (test env skips fetch), but explicit config ensures registration
     const providers = await resolveImplicitProviders({
       agentDir,
       explicitProviders: {
