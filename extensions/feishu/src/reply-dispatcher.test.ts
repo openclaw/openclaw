@@ -185,7 +185,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses internal block payload delivery", async () => {
+  it("defers non-streamable block payloads instead of sending immediately", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
