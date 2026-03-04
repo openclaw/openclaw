@@ -149,6 +149,7 @@ export function buildAgentContext(
   agentFilesList: AgentsFilesListResult | null,
   defaultId: string | null,
   agentIdentity?: AgentIdentityResult | null,
+  t?: (key: string, params?: Record<string, string>) => string,
 ): AgentContext {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -167,12 +168,19 @@ export function buildAgentContext(
   const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
+  const skillsLabel = t
+    ? skillFilter
+      ? t("agents.overview.selectedCount", { count: String(skillCount) })
+      : t("agents.overview.allSkills")
+    : skillFilter
+      ? `${skillCount} selected`
+      : "all skills";
   return {
     workspace,
     model: modelLabel,
     identityName,
     identityEmoji,
-    skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
+    skillsLabel,
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
 }
