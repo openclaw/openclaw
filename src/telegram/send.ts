@@ -27,7 +27,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
@@ -488,7 +488,8 @@ export async function sendMessageTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -1094,7 +1095,8 @@ export async function sendPollTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -1213,7 +1215,8 @@ export async function createForumTopicTelegram(
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
