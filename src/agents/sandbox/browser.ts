@@ -298,14 +298,18 @@ export async function ensureSandboxBrowser(params: {
 
   // When using namespace join, browser ports live on the sandbox container's network
   // namespace and are published via the sandbox container's port mappings.
-  // Fall back to the browser container if the desired source has no mapping -- this
+  // Fall back to the other container if the desired source has no mapping -- this
   // handles the "hot" reuse path where config changed but the old container was kept.
+  // The fallback is bidirectional: sandbox→browser (namespace sharing turned off) and
+  // browser→sandbox (namespace sharing turned on with a pre-existing container).
   const portSourceContainer =
     useNamespaceJoin && params.sandboxContainerName ? params.sandboxContainerName : containerName;
+  const fallbackContainer =
+    portSourceContainer !== containerName ? containerName : (params.sandboxContainerName ?? null);
   const mappedCdp =
     (await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort)) ??
-    (portSourceContainer !== containerName
-      ? await readDockerPort(containerName, params.cfg.browser.cdpPort)
+    (fallbackContainer
+      ? await readDockerPort(fallbackContainer, params.cfg.browser.cdpPort)
       : null);
   if (!mappedCdp) {
     throw new Error(`Failed to resolve CDP port mapping for ${portSourceContainer}.`);
@@ -313,8 +317,8 @@ export async function ensureSandboxBrowser(params: {
 
   const mappedNoVnc = noVncEnabled
     ? ((await readDockerPort(portSourceContainer, params.cfg.browser.noVncPort)) ??
-      (portSourceContainer !== containerName
-        ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+      (fallbackContainer
+        ? await readDockerPort(fallbackContainer, params.cfg.browser.noVncPort)
         : null))
     : null;
   if (noVncEnabled && !noVncPassword) {
