@@ -177,6 +177,42 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain(" ls ");
   });
 
+  it("does not flag transcripts from other agents as orphaned in shared sessions dir", async () => {
+    // Multi-agent config where stores are separate files in the same sessions
+    // directory. Without checking all agent stores, transcripts belonging to
+    // non-default agents would be incorrectly flagged as orphans.
+    const sharedSessionsDir = path.join(tempHome, ".openclaw", "shared-sessions");
+    fs.mkdirSync(sharedSessionsDir, { recursive: true });
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+      session: {
+        store: path.join(sharedSessionsDir, "{agentId}-store.json"),
+      },
+    };
+    // Set up the main agent's store and sessions dir
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const mainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const opsStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    // Write main agent store with one session
+    fs.writeFileSync(
+      mainStorePath,
+      JSON.stringify({ "agent:main:main": { sessionId: "main-sess", updatedAt: Date.now() } }),
+    );
+    // Write ops agent store with a different session
+    fs.writeFileSync(
+      opsStorePath,
+      JSON.stringify({ "agent:ops:ops": { sessionId: "ops-sess", updatedAt: Date.now() } }),
+    );
+    // Create transcript files for both agents in the shared dir
+    fs.writeFileSync(path.join(sharedSessionsDir, "main-sess.jsonl"), '{"type":"session"}\n');
+    fs.writeFileSync(path.join(sharedSessionsDir, "ops-sess.jsonl"), '{"type":"session"}\n');
+    const text = await runStateIntegrityText(cfg);
+    // ops-sess.jsonl must NOT be flagged as orphan
+    expect(text).not.toContain("orphan transcript file");
+  });
+
   it("ignores slash-routing sessions for recent missing transcript warnings", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

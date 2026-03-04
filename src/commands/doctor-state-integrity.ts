@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -751,17 +751,29 @@ export async function noteStateIntegrity(
   }
 
   if (existsDir(sessionsDir)) {
+    // Collect referenced transcript paths from ALL agent stores, not just the
+    // default agent. In multi-agent setups agents may share a sessions directory,
+    // so we must check every store to avoid false-positive orphan warnings.
     const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
-      if (!entry?.sessionId) {
-        continue;
-      }
-      try {
-        referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
-        );
-      } catch {
-        // ignore invalid legacy paths
+    const allAgentIds = listAgentIds(cfg);
+    for (const aid of allAgentIds) {
+      const agentStorePath = resolveStorePath(cfg.session?.store, { agentId: aid });
+      const agentStore = aid === agentId ? store : loadSessionStore(agentStorePath);
+      const agentPathOpts = resolveSessionFilePathOptions({
+        agentId: aid,
+        storePath: agentStorePath,
+      });
+      for (const [, entry] of Object.entries(agentStore)) {
+        if (!entry?.sessionId) {
+          continue;
+        }
+        try {
+          referencedTranscriptPaths.add(
+            path.resolve(resolveSessionFilePath(entry.sessionId, entry, agentPathOpts)),
+          );
+        } catch {
+          // ignore invalid legacy paths
+        }
       }
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
