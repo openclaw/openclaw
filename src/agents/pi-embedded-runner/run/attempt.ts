@@ -2567,6 +2567,19 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
+      // Build hook context early so the subscription callback can close over it
+      // without a forward reference.
+      const hookAgentId = sessionAgentId;
+      const hookCtx = {
+        agentId: hookAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      };
+
       // Subscribe for loop iteration tracking hooks
       let hookTurnIteration = 0;
       const hookEventUnsub =
@@ -2695,18 +2708,6 @@ export async function runEmbeddedAttempt(
           });
         }
       }
-
-      // Hook runner was already obtained earlier before tool creation
-      const hookAgentId = sessionAgentId;
-      const hookCtx = {
-        agentId: hookAgentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        messageProvider: params.messageProvider ?? undefined,
-        trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-      };
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
@@ -2842,8 +2843,10 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          // Fire context_assembled hook — gives plugins a census of the full
-          // context the model will see (system prompt + messages + iteration).
+          // Fire context_assembled hook — gives plugins a snapshot of the full
+          // context before the first LLM call. Fires once per run (iteration: 1)
+          // because subsequent turns reuse the same session context with appended
+          // messages; use loop_iteration_start for per-turn tracking.
           if (hookRunner?.hasHooks("context_assembled")) {
             hookRunner
               .runContextAssembled(
