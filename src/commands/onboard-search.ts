@@ -139,6 +139,19 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
   };
 }
 
+function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
+  if (original.tools?.web?.search?.enabled !== false) {
+    return result;
+  }
+  return {
+    ...result,
+    tools: {
+      ...result.tools,
+      web: { ...result.tools?.web, search: { ...result.tools?.web?.search, enabled: false } },
+    },
+  };
+}
+
 export type SetupSearchOptions = {
   quickstartDefaults?: boolean;
 };
@@ -203,20 +216,10 @@ export async function setupSearch(
   const envAvailable = hasKeyInEnv(entry);
 
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
-    const wasDisabled = config.tools?.web?.search?.enabled === false;
-    let result = existingKey
+    const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applyProviderOnly(config, choice);
-    if (wasDisabled) {
-      result = {
-        ...result,
-        tools: {
-          ...result.tools,
-          web: { ...result.tools?.web, search: { ...result.tools?.web?.search, enabled: false } },
-        },
-      };
-    }
-    return result;
+    return preserveDisabledState(config, result);
   }
 
   const keyInput = await prompter.text({
@@ -234,11 +237,11 @@ export async function setupSearch(
   }
 
   if (existingKey) {
-    return applySearchKey(config, choice, existingKey);
+    return preserveDisabledState(config, applySearchKey(config, choice, existingKey));
   }
 
   if (keyConfigured || envAvailable) {
-    return applyProviderOnly(config, choice);
+    return preserveDisabledState(config, applyProviderOnly(config, choice));
   }
 
   await prompter.note(
