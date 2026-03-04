@@ -17,12 +17,17 @@ export function resolveRequiredReads(cfg?: OpenClawConfig): (string | RegExp)[] 
   if (!configured || configured.length === 0) {
     return DEFAULT_REQUIRED_READS;
   }
-  return configured.map((entry) => {
+  return configured.flatMap((entry) => {
     if (entry.startsWith("/") && entry.endsWith("/")) {
       // Treat slash-wrapped strings as regex: "/memory\/\d+\.md/"
-      return new RegExp(entry.slice(1, -1));
+      try {
+        return [new RegExp(entry.slice(1, -1))];
+      } catch {
+        // Malformed regex — skip rather than silently disabling the whole audit
+        return [];
+      }
     }
-    return entry;
+    return [entry];
   });
 }
 
@@ -139,7 +144,9 @@ export function getSessionFileOffset(sessionFile: string): number {
 
 /**
  * Extract file paths from Read tool calls in agent messages.
- * Looks for tool_use blocks with name="read" and extracts path/file_path args.
+ * Handles multiple tool-call block shapes used across providers:
+ *   - Anthropic canonical: { type: "tool_use", name, input: { file_path | path } }
+ *   - Transcript-repaired: { type: "toolCall" | "toolUse", name, input | arguments }
  */
 export function extractReadPaths(messages: Array<{ role: string; content: unknown }>): string[] {
   const paths: string[] = [];
@@ -147,16 +154,22 @@ export function extractReadPaths(messages: Array<{ role: string; content: unknow
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
       continue;
     }
-    for (const block of msg.content as Array<{
-      type: string;
-      name?: string;
-      input?: Record<string, unknown>;
-    }>) {
-      if (block.type === "tool_use" && block.name === "read") {
-        const filePath = block.input?.file_path ?? block.input?.path;
-        if (typeof filePath === "string") {
-          paths.push(filePath);
-        }
+    for (const block of msg.content as Array<Record<string, unknown>>) {
+      const type = block.type;
+      const isToolCall =
+        type === "tool_use" || type === "toolCall" || type === "toolUse" || type === "functionCall";
+      if (!isToolCall) {
+        continue;
+      }
+      const name = block.name ?? block.function;
+      if (typeof name !== "string" || name.toLowerCase() !== "read") {
+        continue;
+      }
+      // Support both `input` (Anthropic/canonical) and `arguments` (OpenAI/repaired)
+      const args = (block.input ?? block.arguments) as Record<string, unknown> | undefined;
+      const filePath = args?.file_path ?? args?.path;
+      if (typeof filePath === "string") {
+        paths.push(filePath);
       }
     }
   }

@@ -234,6 +234,37 @@ describe("extractReadPaths", () => {
     ];
     expect(extractReadPaths(messages)).toEqual([]);
   });
+
+  it("handles toolCall/toolUse block types from transcript repair", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "read",
+            input: { file_path: "WORKFLOW_AUTO.md" },
+          },
+          {
+            type: "toolUse",
+            name: "Read",
+            arguments: { path: "memory/2026-03-04.md" },
+          },
+        ],
+      },
+    ];
+    expect(extractReadPaths(messages)).toEqual(["WORKFLOW_AUTO.md", "memory/2026-03-04.md"]);
+  });
+
+  it("handles case-insensitive tool name matching", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", name: "Read", input: { file_path: "SOUL.md" } }],
+      },
+    ];
+    expect(extractReadPaths(messages)).toEqual(["SOUL.md"]);
+  });
 });
 
 describe("formatAuditWarning", () => {

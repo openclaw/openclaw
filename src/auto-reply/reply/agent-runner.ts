@@ -665,6 +665,30 @@ export async function runReplyAgent(params: {
       }
     }
 
+    // Run post-compaction audit BEFORE handling new compaction events.
+    // This ensures the audit runs on the turn AFTER compaction (not the same turn),
+    // giving the agent a full turn to read required files before being audited.
+    const pendingAuditOffset = sessionKey ? pendingPostCompactionAudits.get(sessionKey) : undefined;
+    if (sessionKey && pendingAuditOffset !== undefined) {
+      pendingPostCompactionAudits.delete(sessionKey);
+      try {
+        const sessionFile = activeSessionEntry?.sessionFile;
+        if (sessionFile) {
+          const requiredReads = resolveRequiredReads(cfg);
+          const audit = auditPostCompactionReads(
+            extractReadPaths(readSessionMessages(sessionFile, pendingAuditOffset)),
+            process.cwd(),
+            requiredReads,
+          );
+          if (!audit.passed) {
+            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+          }
+        }
+      } catch {
+        // Silent failure — audit is best-effort
+      }
+    }
+
     if (autoCompactionCompleted) {
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -709,28 +733,6 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
-    }
-
-    // Run post-compaction audit: check if agent read required files after last compaction
-    const pendingAuditOffset = sessionKey ? pendingPostCompactionAudits.get(sessionKey) : undefined;
-    if (sessionKey && pendingAuditOffset !== undefined) {
-      pendingPostCompactionAudits.delete(sessionKey);
-      try {
-        const sessionFile = activeSessionEntry?.sessionFile;
-        if (sessionFile) {
-          const requiredReads = resolveRequiredReads(cfg);
-          const audit = auditPostCompactionReads(
-            extractReadPaths(readSessionMessages(sessionFile, pendingAuditOffset)),
-            process.cwd(),
-            requiredReads,
-          );
-          if (!audit.passed) {
-            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
-          }
-        }
-      } catch {
-        // Silent failure — audit is best-effort
-      }
     }
 
     return finalizeWithFollowup(
