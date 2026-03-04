@@ -3,6 +3,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
+let deliverRuntimePromise: Promise<typeof import("../infra/outbound/deliver-runtime.js")> | null =
+  null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
+
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
 function formatEchoTranscript(transcript: string, format: string): string {
@@ -43,7 +51,7 @@ export async function sendTranscriptEcho(params: {
   const text = formatEchoTranscript(transcript, params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT);
 
   try {
-    const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
     await deliverOutboundPayloads({
       cfg,
       channel: normalizedChannel,

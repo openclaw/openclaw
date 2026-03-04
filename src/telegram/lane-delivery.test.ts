@@ -43,7 +43,11 @@ function createHarness(params?: {
   const log = vi.fn();
   const markDelivered = vi.fn();
   const finalizedPreviewByLane: Record<LaneName, boolean> = { answer: false, reasoning: false };
-  const archivedAnswerPreviews: Array<{ messageId: number; textSnapshot: string }> = [];
+  const archivedAnswerPreviews: Array<{
+    messageId: number;
+    textSnapshot: string;
+    deleteIfUnused?: boolean;
+  }> = [];
 
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -71,8 +75,10 @@ function createHarness(params?: {
     flushDraftLane,
     stopDraftLane,
     editPreview,
+    deletePreviewMessage,
     log,
     markDelivered,
+    archivedAnswerPreviews,
   };
 }
 
@@ -305,5 +311,27 @@ describe("createLaneTextDeliverer", () => {
       expect.objectContaining({ text: "Choose one" }),
     );
     expect(harness.markDelivered).not.toHaveBeenCalled();
+  });
+
+  it("deletes consumed boundary previews after fallback final send", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 4444,
+      textSnapshot: "Boundary preview",
+      deleteIfUnused: false,
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final with media",
+      payload: { text: "Final with media", mediaUrl: "file:///tmp/example.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Final with media", mediaUrl: "file:///tmp/example.png" }),
+    );
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(4444);
   });
 });
