@@ -336,6 +336,7 @@ export async function ensureAgentWorkspace(params?: {
   await fs.mkdir(dir, { recursive: true });
 
   if (!params?.ensureBootstrapFiles) {
+    await fs.mkdir(path.join(dir, "memory"), { recursive: true });
     return { dir };
   }
 
@@ -445,6 +446,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeWorkspaceOnboardingState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
+  await fs.mkdir(path.join(dir, "memory"), { recursive: true });
 
   return {
     dir,
