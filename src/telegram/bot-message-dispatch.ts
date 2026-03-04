@@ -209,7 +209,7 @@ export const dispatchTelegramMessage = async ({
                     if (!archivedReasoningPreviews.some((p) => p.messageId === preview.messageId)) {
                       archivedReasoningPreviews.push({
                         messageId: preview.messageId,
-                        textSnapshot: preview.textSnapshot ?? "",
+                        textSnapshot: preview.textSnapshot ?? reasoningLane.lastPartialText ?? "",
                       });
                     }
                     return;
@@ -704,7 +704,7 @@ export const dispatchTelegramMessage = async ({
           textSnapshot.trim().length > 0 ? textSnapshot : reasoningLane.lastPartialText || "";
         if (finalReasoningText.trim().length > 0) {
           // Wrap in spoiler tags so users can still view it if interested
-          const spoilerText = `<tg-spoiler>${renderTelegramHtmlText(finalReasoningText)}</tg-spoiler>`;
+          const spoilerText = `<tg-spoiler>${renderTelegramHtmlText(finalReasoningText, { tableMode })}</tg-spoiler>`;
           await bot.api.editMessageText(chatId, messageId, spoilerText, {
             parse_mode: "HTML",
           });
