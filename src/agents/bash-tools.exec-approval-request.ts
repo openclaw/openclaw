@@ -11,7 +11,7 @@ export type RequestExecApprovalDecisionParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  cwd: string;
+  cwd?: string;
   nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
@@ -154,7 +154,7 @@ type HostExecApprovalParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  workdir: string;
+  workdir?: string;
   host: "gateway" | "node";
   nodeId?: string;
   security: ExecSecurity;

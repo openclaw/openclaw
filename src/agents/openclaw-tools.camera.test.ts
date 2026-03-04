@@ -663,6 +663,50 @@ describe("nodes run", () => {
     });
   });
 
+  it("omits rawCommand in prepare for argv shell wrappers", async () => {
+    let prepareParams: unknown;
+    setupSystemRunGateway({
+      onRunInvoke: () => {
+        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
+      },
+    });
+    callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList({ commands: ["system.run"] });
+      }
+      if (method === "node.invoke") {
+        const command = (gatewayParams as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          prepareParams = gatewayParams;
+          return {
+            payload: {
+              cmdText: "Get-Date",
+              plan: {
+                argv: ["powershell", "-Command", "Get-Date"],
+                cwd: null,
+                rawCommand: null,
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
+        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    await executeNodes({
+      action: "run",
+      node: NODE_ID,
+      command: ["powershell", "-Command", "Get-Date"],
+    });
+
+    expect(
+      (prepareParams as { params?: { rawCommand?: unknown } } | undefined)?.params?.rawCommand,
+    ).toBeUndefined();
+  });
+
   it("requests approval and retries with allow-once decision", async () => {
     let invokeCalls = 0;
     let approvalId: string | null = null;

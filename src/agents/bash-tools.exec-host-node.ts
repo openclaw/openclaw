@@ -32,7 +32,7 @@ import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
-  workdir: string;
+  workdir?: string;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;

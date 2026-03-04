@@ -116,6 +116,40 @@ describe("exec approvals", () => {
       .toBe(approvalId);
   });
 
+  it("does not forward implicit local cwd when host=node", async () => {
+    let prepareParams: unknown;
+    let runParams: unknown;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          prepareParams = params;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          runParams = params;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-cwd", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(
+      (prepareParams as { params?: { cwd?: unknown } } | undefined)?.params?.cwd,
+    ).toBeUndefined();
+    expect((runParams as { params?: { cwd?: unknown } } | undefined)?.params?.cwd).toBeUndefined();
+  });
+
   it("skips approval when node allowlist is satisfied", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
     const binDir = path.join(tempDir, "bin");

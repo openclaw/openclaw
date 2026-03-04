@@ -345,19 +345,29 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
-      let workdir = rawWorkdir;
+      const configuredWorkdir = params.workdir?.trim() || defaults?.cwd;
+      let workdir: string;
+      let nodeWorkdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
-      if (sandbox) {
-        const resolved = await resolveSandboxWorkdir({
-          workdir: rawWorkdir,
-          sandbox,
-          warnings,
-        });
-        workdir = resolved.hostWorkdir;
-        containerWorkdir = resolved.containerWorkdir;
+      if (host === "node") {
+        // host=node runs remotely; avoid implicitly forwarding the local gateway cwd
+        // because it is often invalid on the node filesystem.
+        nodeWorkdir = configuredWorkdir ? resolveWorkdir(configuredWorkdir, warnings) : undefined;
+        workdir = nodeWorkdir ?? process.cwd();
       } else {
-        workdir = resolveWorkdir(rawWorkdir, warnings);
+        const rawWorkdir = configuredWorkdir || process.cwd();
+        workdir = rawWorkdir;
+        if (sandbox) {
+          const resolved = await resolveSandboxWorkdir({
+            workdir: rawWorkdir,
+            sandbox,
+            warnings,
+          });
+          workdir = resolved.hostWorkdir;
+          containerWorkdir = resolved.containerWorkdir;
+        } else {
+          workdir = resolveWorkdir(rawWorkdir, warnings);
+        }
       }
 
       const inheritedBaseEnv = coerceEnv(process.env);
@@ -401,7 +411,7 @@ export function createExecTool(
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
-          workdir,
+          workdir: nodeWorkdir,
           env,
           requestedEnv: params.env,
           requestedNode: params.node?.trim(),
