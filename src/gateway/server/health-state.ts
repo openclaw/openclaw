@@ -20,10 +20,6 @@ export function setRuntimeSnapshotOverlay(overlay: Record<string, unknown> | nul
   runtimeSnapshotOverlay = overlay;
 }
 
-export function getRuntimeSnapshotOverlay(): Record<string, unknown> | null {
-  return runtimeSnapshotOverlay;
-}
-
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -84,6 +80,8 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
         for (const [channelId, channelData] of Object.entries(snap.channels)) {
           const overlay = runtimeSnapshotOverlay[channelId];
           if (overlay && typeof overlay === "object" && channelData) {
+            // Note: shallow merge; overlay should contain only flat top-level fields
+            // to avoid replacing nested objects like `accounts` in ChannelHealthSummary
             snap.channels[channelId] = { ...channelData, ...overlay };
           }
         }
