@@ -26,6 +26,7 @@ public struct ConnectParams: Codable, Sendable {
     public let auth: [String: AnyCodable]?
     public let locale: String?
     public let useragent: String?
+    public let transports: [AnyCodable]?
 
     public init(
         minprotocol: Int,
@@ -40,7 +41,8 @@ public struct ConnectParams: Codable, Sendable {
         device: [String: AnyCodable]?,
         auth: [String: AnyCodable]?,
         locale: String?,
-        useragent: String?)
+        useragent: String?,
+        transports: [AnyCodable]?)
     {
         self.minprotocol = minprotocol
         self.maxprotocol = maxprotocol
@@ -55,6 +57,7 @@ public struct ConnectParams: Codable, Sendable {
         self.auth = auth
         self.locale = locale
         self.useragent = useragent
+        self.transports = transports
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -71,6 +74,7 @@ public struct ConnectParams: Codable, Sendable {
         case auth
         case locale
         case useragent = "userAgent"
+        case transports
     }
 }
 
@@ -83,6 +87,7 @@ public struct HelloOk: Codable, Sendable {
     public let canvashosturl: String?
     public let auth: [String: AnyCodable]?
     public let policy: [String: AnyCodable]
+    public let transport: AnyCodable?
 
     public init(
         type: String,
@@ -92,7 +97,8 @@ public struct HelloOk: Codable, Sendable {
         snapshot: Snapshot,
         canvashosturl: String?,
         auth: [String: AnyCodable]?,
-        policy: [String: AnyCodable])
+        policy: [String: AnyCodable],
+        transport: AnyCodable?)
     {
         self.type = type
         self._protocol = _protocol
@@ -102,6 +108,7 @@ public struct HelloOk: Codable, Sendable {
         self.canvashosturl = canvashosturl
         self.auth = auth
         self.policy = policy
+        self.transport = transport
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -113,6 +120,7 @@ public struct HelloOk: Codable, Sendable {
         case canvashosturl = "canvasHostUrl"
         case auth
         case policy
+        case transport
     }
 }
 
