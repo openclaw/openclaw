@@ -5,7 +5,7 @@
  * access to config, logging, and other platform services.
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
 let runtime: PluginRuntime | undefined;
 
