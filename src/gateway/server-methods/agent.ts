@@ -42,6 +42,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import type { DedupeEntry } from "../server-shared.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
@@ -56,6 +57,139 @@ import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const AGENT_WAIT_DEDUPE_POLL_MS = 50;
+
+type AgentWaitTerminalSnapshot = {
+  status: "ok" | "error" | "timeout";
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+};
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTerminalSnapshot | null {
+  const payload = entry.payload as
+    | {
+        status?: unknown;
+        startedAt?: unknown;
+        endedAt?: unknown;
+        error?: unknown;
+        summary?: unknown;
+      }
+    | undefined;
+  const status = typeof payload?.status === "string" ? payload.status : undefined;
+  if (status === "accepted" || status === "started" || status === "in_flight") {
+    return null;
+  }
+
+  const startedAt = asFiniteNumber(payload?.startedAt);
+  const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
+  const errorMessage =
+    typeof payload?.error === "string"
+      ? payload.error
+      : typeof payload?.summary === "string"
+        ? payload.summary
+        : entry.error?.message;
+
+  if (status === "ok" || status === "timeout") {
+    return {
+      status,
+      startedAt,
+      endedAt,
+      error: status === "timeout" ? errorMessage : undefined,
+    };
+  }
+  if (status === "error" || !entry.ok) {
+    return {
+      status: "error",
+      startedAt,
+      endedAt,
+      error: errorMessage,
+    };
+  }
+  return null;
+}
+
+function readTerminalSnapshotFromGatewayDedupe(params: {
+  dedupe: Map<string, DedupeEntry>;
+  runId: string;
+}): AgentWaitTerminalSnapshot | null {
+  for (const key of [`agent:${params.runId}`, `chat:${params.runId}`]) {
+    const entry = params.dedupe.get(key);
+    if (!entry) {
+      continue;
+    }
+    const snapshot = readTerminalSnapshotFromDedupeEntry(entry);
+    if (snapshot) {
+      return snapshot;
+    }
+  }
+  return null;
+}
+
+async function waitForTerminalGatewayDedupe(params: {
+  dedupe: Map<string, DedupeEntry>;
+  runId: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<AgentWaitTerminalSnapshot | null> {
+  const initial = readTerminalSnapshotFromGatewayDedupe(params);
+  if (initial) {
+    return initial;
+  }
+  if (params.timeoutMs <= 0 || params.signal?.aborted) {
+    return null;
+  }
+
+  return await new Promise((resolve) => {
+    const deadline = Date.now() + params.timeoutMs;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let onAbort: (() => void) | undefined;
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      if (onAbort) {
+        params.signal?.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const finish = (snapshot: AgentWaitTerminalSnapshot | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(snapshot);
+    };
+
+    const tick = () => {
+      const snapshot = readTerminalSnapshotFromGatewayDedupe(params);
+      if (snapshot) {
+        finish(snapshot);
+        return;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        finish(null);
+        return;
+      }
+      const delay = Math.max(1, Math.min(AGENT_WAIT_DEDUPE_POLL_MS, remaining));
+      timer = setTimeout(tick, delay);
+      timer.unref?.();
+    };
+
+    onAbort = () => finish(null);
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    tick();
+  });
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -729,7 +863,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }) ?? identity.avatar;
     respond(true, { ...identity, avatar: avatarValue }, undefined);
   },
-  "agent.wait": async ({ params, respond }) => {
+  "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {
       respond(
         false,
@@ -748,10 +882,54 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
 
-    const snapshot = await waitForAgentJob({
+    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
+      dedupe: context.dedupe,
+      runId,
+    });
+    if (cachedGatewaySnapshot) {
+      respond(true, {
+        runId,
+        status: cachedGatewaySnapshot.status,
+        startedAt: cachedGatewaySnapshot.startedAt,
+        endedAt: cachedGatewaySnapshot.endedAt,
+        error: cachedGatewaySnapshot.error,
+      });
+      return;
+    }
+
+    const lifecycleAbortController = new AbortController();
+    const dedupeAbortController = new AbortController();
+    const lifecyclePromise = waitForAgentJob({
       runId,
       timeoutMs,
+      signal: lifecycleAbortController.signal,
     });
+    const dedupePromise = waitForTerminalGatewayDedupe({
+      dedupe: context.dedupe,
+      runId,
+      timeoutMs,
+      signal: dedupeAbortController.signal,
+    });
+
+    const first = await Promise.race([
+      lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
+      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
+    ]);
+
+    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
+      first.snapshot;
+    if (snapshot) {
+      if (first.source === "lifecycle") {
+        dedupeAbortController.abort();
+      } else {
+        lifecycleAbortController.abort();
+      }
+    } else {
+      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
+      lifecycleAbortController.abort();
+      dedupeAbortController.abort();
+    }
+
     if (!snapshot) {
       respond(true, {
         runId,

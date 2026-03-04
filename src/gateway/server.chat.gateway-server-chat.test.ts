@@ -466,6 +466,40 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const runId = "idem-wait-chat-1";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/context list",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+      expect(sendRes.payload?.status).toBe("started");
+
+      const waitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(waitRes.ok).toBe(true);
+      expect(waitRes.payload?.status).toBe("ok");
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
