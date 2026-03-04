@@ -707,9 +707,20 @@ export async function runTui(opts: TuiOptions) {
     }
   };
 
+  const activityStatusDisplay: Record<string, string> = {
+    idle: "💤 idle",
+    sending: "📡 sending",
+    waiting: "🧠 thinking",
+    streaming: "📝 streaming",
+    running: "⚙️ running",
+    error: "❌ error",
+    aborted: "🛑 aborted",
+  };
+
   const setActivityStatus = (text: string) => {
     activityStatus = text;
     renderStatus();
+    updateFooter();
   };
 
   const updateFooter = () => {
@@ -729,6 +740,8 @@ export async function runTui(opts: TuiOptions) {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const statusIndicator =
+      activityStatusDisplay[activityStatus] ?? `❓ ${activityStatus ?? "unknown"}`;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
@@ -737,6 +750,7 @@ export async function runTui(opts: TuiOptions) {
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
+      statusIndicator,
     ].filter(Boolean);
     footer.setText(theme.dim(footerParts.join(" | ")));
   };
