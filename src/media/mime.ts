@@ -39,6 +39,13 @@ const MIME_BY_EXT: Record<string, string> = {
   // Additional extension aliases
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".ico": "image/x-icon",
+  ".xml": "application/xml",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
