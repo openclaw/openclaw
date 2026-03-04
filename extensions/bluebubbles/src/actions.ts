@@ -5,6 +5,7 @@ import {
   extractToolSend,
   jsonResult,
   readNumberParam,
+  readBooleanParam,
   readReactionParams,
   readStringParam,
   type ChannelMessageActionAdapter,
@@ -24,6 +25,7 @@ import {
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
@@ -50,23 +52,6 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
-}
-
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const raw = params[key];
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") {
-      return true;
-    }
-    if (trimmed === "false") {
-      return false;
-    }
-  }
-  return undefined;
 }
 
 /** Supported action names for BlueBubbles */
@@ -118,8 +103,8 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       cfg: cfg,
       accountId: accountId ?? undefined,
     });
-    const baseUrl = account.config.serverUrl?.trim();
-    const password = account.config.password?.trim();
+    const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+    const password = normalizeSecretInputString(account.config.password);
     const opts = { cfg: cfg, accountId: accountId ?? undefined };
     const assertPrivateApiEnabled = () => {
       if (getCachedBlueBubblesPrivateApiStatus(account.accountId) === false) {

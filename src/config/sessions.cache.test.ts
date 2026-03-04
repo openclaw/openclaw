@@ -69,21 +69,21 @@ describe("Session Store Cache", () => {
     expect(loaded).toEqual(testStore);
   });
 
-  it("should cache session store on first load when file is unchanged", async () => {
+  it("should serve freshly saved session stores from cache without disk reads", async () => {
     const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
 
     const readSpy = vi.spyOn(fs, "readFileSync");
 
-    // First load - from disk
+    // First load - served from write-through cache
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
 
-    // Second load - should return cached data (no extra disk read)
+    // Second load - should stay cached (still no disk read)
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(testStore);
-    expect(readSpy).toHaveBeenCalledTimes(1);
+    expect(readSpy).toHaveBeenCalledTimes(0);
     readSpy.mockRestore();
   });
 
@@ -197,5 +197,39 @@ describe("Session Store Cache", () => {
     // Should return empty store
     const loaded = loadSessionStore(storePath);
     expect(loaded).toEqual({});
+  });
+
+  it("should refresh cache when file is rewritten within the same mtime tick", async () => {
+    // This reproduces the CI flake where fast test writes complete within the
+    // same mtime granularity (typically 1s on HFS+/ext4), so mtime-only
+    // invalidation returns stale cached data.
+    const store1: Record<string, SessionEntry> = {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
+    };
+
+    await saveSessionStore(storePath, store1);
+
+    // Warm the cache
+    const loaded1 = loadSessionStore(storePath);
+    expect(loaded1["session:1"].displayName).toBe("Original");
+
+    // Rewrite the file directly (bypassing saveSessionStore's write-through
+    // cache) with different content but preserve the same mtime so only size
+    // changes.
+    const store2: Record<string, SessionEntry> = {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Added" }),
+    };
+    const preWriteStat = fs.statSync(storePath);
+    const json2 = JSON.stringify(store2, null, 2);
+    fs.writeFileSync(storePath, json2);
+
+    // Force mtime to match the cached value so only size differs
+    fs.utimesSync(storePath, preWriteStat.atime, preWriteStat.mtime);
+
+    // The cache should detect the size change and reload from disk
+    const loaded2 = loadSessionStore(storePath);
+    expect(loaded2["session:2"]).toBeDefined();
+    expect(loaded2["session:2"].displayName).toBe("Added");
   });
 });

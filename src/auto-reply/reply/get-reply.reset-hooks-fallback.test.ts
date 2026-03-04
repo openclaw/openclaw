@@ -105,6 +105,56 @@ function buildNativeResetContext(): MsgContext {
   };
 }
 
+function createContinueDirectivesResult(resetHookTriggered: boolean) {
+  return {
+    kind: "continue" as const,
+    result: {
+      commandSource: "/new",
+      command: {
+        surface: "telegram",
+        channel: "telegram",
+        channelId: "telegram",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        senderId: "123",
+        abortKey: "telegram:slash:123",
+        rawBodyNormalized: "/new",
+        commandBodyNormalized: "/new",
+        from: "telegram:123",
+        to: "slash:123",
+        resetHookTriggered,
+      },
+      allowTextCommands: true,
+      skillCommands: [],
+      directives: {},
+      cleanedBody: "/new",
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      defaultActivation: "always",
+      resolvedThinkLevel: undefined,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolvedElevatedLevel: "off",
+      execOverrides: undefined,
+      blockStreamingEnabled: false,
+      blockReplyChunking: undefined,
+      resolvedBlockStreamingBreak: undefined,
+      provider: "openai",
+      model: "gpt-4o-mini",
+      modelState: {
+        resolveDefaultThinkingLevel: async () => undefined,
+      },
+      contextTokens: 0,
+      inlineStatusRequested: false,
+      directiveAck: undefined,
+      perMessageQueueMode: undefined,
+      perMessageQueueOptions: undefined,
+    },
+  };
+}
+
 describe("getReplyFromConfig reset-hook fallback", () => {
   beforeEach(() => {
     mocks.resolveReplyDirectives.mockReset();
@@ -131,53 +181,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
       bodyStripped: "",
     });
 
-    mocks.resolveReplyDirectives.mockResolvedValue({
-      kind: "continue",
-      result: {
-        commandSource: "/new",
-        command: {
-          surface: "telegram",
-          channel: "telegram",
-          channelId: "telegram",
-          ownerList: [],
-          senderIsOwner: true,
-          isAuthorizedSender: true,
-          senderId: "123",
-          abortKey: "telegram:slash:123",
-          rawBodyNormalized: "/new",
-          commandBodyNormalized: "/new",
-          from: "telegram:123",
-          to: "slash:123",
-          resetHookTriggered: false,
-        },
-        allowTextCommands: true,
-        skillCommands: [],
-        directives: {},
-        cleanedBody: "/new",
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        elevatedFailures: [],
-        defaultActivation: "always",
-        resolvedThinkLevel: undefined,
-        resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "off",
-        resolvedElevatedLevel: "off",
-        execOverrides: undefined,
-        blockStreamingEnabled: false,
-        blockReplyChunking: undefined,
-        resolvedBlockStreamingBreak: undefined,
-        provider: "openai",
-        model: "gpt-4o-mini",
-        modelState: {
-          resolveDefaultThinkingLevel: async () => undefined,
-        },
-        contextTokens: 0,
-        inlineStatusRequested: false,
-        directiveAck: undefined,
-        perMessageQueueMode: undefined,
-        perMessageQueueOptions: undefined,
-      },
-    });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
   });
 
   it("emits reset hooks when inline actions return early without marking resetHookTriggered", async () => {
@@ -196,53 +200,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
 
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
-    mocks.resolveReplyDirectives.mockResolvedValue({
-      kind: "continue",
-      result: {
-        commandSource: "/new",
-        command: {
-          surface: "telegram",
-          channel: "telegram",
-          channelId: "telegram",
-          ownerList: [],
-          senderIsOwner: true,
-          isAuthorizedSender: true,
-          senderId: "123",
-          abortKey: "telegram:slash:123",
-          rawBodyNormalized: "/new",
-          commandBodyNormalized: "/new",
-          from: "telegram:123",
-          to: "slash:123",
-          resetHookTriggered: true,
-        },
-        allowTextCommands: true,
-        skillCommands: [],
-        directives: {},
-        cleanedBody: "/new",
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        elevatedFailures: [],
-        defaultActivation: "always",
-        resolvedThinkLevel: undefined,
-        resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "off",
-        resolvedElevatedLevel: "off",
-        execOverrides: undefined,
-        blockStreamingEnabled: false,
-        blockReplyChunking: undefined,
-        resolvedBlockStreamingBreak: undefined,
-        provider: "openai",
-        model: "gpt-4o-mini",
-        modelState: {
-          resolveDefaultThinkingLevel: async () => undefined,
-        },
-        contextTokens: 0,
-        inlineStatusRequested: false,
-        directiveAck: undefined,
-        perMessageQueueMode: undefined,
-        perMessageQueueOptions: undefined,
-      },
-    });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
 
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 
