@@ -199,13 +199,16 @@ export function resolveTuiSessionKey(params: {
       mainKey: params.sessionMainKey,
     });
   }
-  if (trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
+  // Lowercase to match gateway's canonical session key format (resolveSessionStoreKey).
+  // Without this, uppercase session names silently break real-time event routing (#33866).
+  const lower = trimmed.toLowerCase();
+  if (lower === "global" || lower === "unknown") {
+    return lower;
   }
-  if (trimmed.startsWith("agent:")) {
-    return trimmed;
+  if (lower.startsWith("agent:")) {
+    return lower;
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${lower}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
