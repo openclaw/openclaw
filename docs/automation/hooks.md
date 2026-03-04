@@ -351,13 +351,23 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 - **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
 
-### Future Events
+### Plugin Hook Names (Current)
 
-Planned event types:
+In addition to event-stream names like `command:new` and `message:received`, plugin hook handlers can target the following implemented hook names:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
-- **`agent:error`**: When an agent encounters an error
+- **`before_prompt_build`** (modifying)
+- **`before_agent_start`** (modifying, legacy compatibility path)
+- **`agent_end`** (void)
+- **`message_received`** (void)
+- **`message_sending`** (modifying)
+- **`message_sent`** (void)
+- **`before_tool_call`** (modifying)
+- **`after_tool_call`** (void)
+- **`session_start`** (void)
+- **`session_end`** (void)
+- **`subagent_ended`** (void)
+
+`agent:error` and other additional lifecycle events may be added in future releases.
 
 ## Creating Custom Hooks
 
