@@ -479,6 +479,30 @@ export const registerTelegramNativeCommands = ({
           if (shouldSkipUpdate(ctx)) {
             return;
           }
+          // Special handling for /groupid command (no auth required)
+          if (command.name === "groupid") {
+            // Build thread params from message context
+            const messageThreadId = msg.message_thread_id;
+            const groupidThreadParams = messageThreadId != null ? { message_thread_id: messageThreadId } : undefined;
+            
+            if (!msg.chat.type.includes("group") && !msg.chat.type.includes("supergroup")) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () => bot.api.sendMessage(chatId, "⚠️ This command only works in group chats.", groupidThreadParams),
+              });
+              return;
+            }
+            const groupIdText = `🆔 *Group Chat ID:* \`${chatId}\`\n\nYou can use this ID in your OpenClaw configuration.`;
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () => bot.api.sendMessage(chatId, groupIdText, { parse_mode: "Markdown", ...groupidThreadParams }),
+            });
+            return;
+          }
+
+          
           const auth = await resolveTelegramCommandAuth({
             msg,
             bot,
@@ -522,25 +546,6 @@ export const registerTelegramNativeCommands = ({
             chunkMode,
           });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
-
-          // Special handling for /groupid command
-          if (command.name === "groupid") {
-            if (!isGroup) {
-              await withTelegramApiErrorLogging({
-                operation: "sendMessage",
-                runtime,
-                fn: () => bot.api.sendMessage(chatId, "⚠️ This command only works in group chats.", threadParams),
-              });
-              return;
-            }
-            const groupIdText = `🆔 **Group Chat ID:** \`${chatId}\`\n\nYou can use this ID in your OpenClaw configuration.`;
-            await withTelegramApiErrorLogging({
-              operation: "sendMessage",
-              runtime,
-              fn: () => bot.api.sendMessage(chatId, groupIdText, { parse_mode: "Markdown", ...threadParams }),
-            });
-            return;
-          }
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
