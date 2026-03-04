@@ -572,7 +572,7 @@ export const registerTelegramNativeCommands = ({
                 runtime,
                 fn: () =>
                   bot.api.sendMessage(
-                    chatId,
+                    msg.chat.id,
                     "⚠️ This command only works in group chats.",
                     groupidThreadParams,
                   ),
@@ -585,7 +585,7 @@ export const registerTelegramNativeCommands = ({
               operation: "sendMessage",
               runtime,
               fn: () =>
-                bot.api.sendMessage(chatId, groupIdText, {
+                bot.api.sendMessage(msg.chat.id, groupIdText, {
                   parse_mode: "Markdown",
                   ...groupidThreadParams,
                 }),
