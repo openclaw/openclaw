@@ -162,8 +162,6 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/gif,image/webp";
-
 function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
   return new Promise((resolve) => {
     const reader = new FileReader();
