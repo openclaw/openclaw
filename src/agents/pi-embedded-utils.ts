@@ -199,6 +199,28 @@ export function stripDowngradedToolCallText(text: string): string {
 }
 
 /**
+ * Strip orphaned tool-call XML tags and template boundary delimiters that
+ * leak from some LLM providers (e.g., Kimi, nvidia models) into text content.
+ *
+ * Handles:
+ * - Orphaned tool XML: `</arg_value>`, `</tool_call>`, `<tool_call>`, etc.
+ * - Template delimiters: `<|assistant|>`, `<|tool_call_argument_begin|>`, etc.
+ */
+export function stripOrphanedToolXmlAndDelimiters(text: string): string {
+  if (!text || !text.includes("<")) {
+    return text;
+  }
+
+  // Strip template boundary delimiters: <|...|>
+  let cleaned = text.replace(/<\|[a-z_]+\|>/gi, "");
+
+  // Strip orphaned tool-call XML tags (opening and closing).
+  cleaned = cleaned.replace(/<\/?(?:tool_call|arg_value|tool_result|arguments)>/gi, "");
+
+  return cleaned;
+}
+
+/**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
@@ -212,7 +234,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripOrphanedToolXmlAndDelimiters(
+            stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
