@@ -189,6 +189,11 @@ export type SlackAccountConfig = {
   ackReaction?: string;
   /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
   typingReaction?: string;
+  /**
+   * Status text shown in Slack Assistant threads while the bot is processing.
+   * Slack automatically prepends the bot name. Default: "is typing…"
+   */
+  assistantStatus?: string;
 };
 
 export type SlackConfig = {

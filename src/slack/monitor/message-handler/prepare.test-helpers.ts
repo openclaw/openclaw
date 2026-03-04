@@ -47,6 +47,7 @@ export function createInboundSlackTestContext(params: {
     textLimit: 4000,
     ackReactionScope: "group-mentions",
     typingReaction: "",
+    assistantStatus: "is typing...",
     mediaMaxBytes: 1024,
     removeAckAfterReply: false,
   });
