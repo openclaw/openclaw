@@ -425,6 +425,41 @@ function buildCompactionStructureInstructions(
   return `${sectionsTemplate}\n\n${custom}`;
 }
 
+function hasRequiredSummarySections(summary: string): boolean {
+  const normalized = summary.toLowerCase();
+  return REQUIRED_SUMMARY_SECTIONS.every((heading) => normalized.includes(heading.toLowerCase()));
+}
+
+function buildStructuredFallbackSummary(
+  previousSummary: string | undefined,
+  summarizationInstructions?: CompactionSummarizationInstructions,
+): string {
+  const trimmedPreviousSummary = previousSummary?.trim() ?? "";
+  if (trimmedPreviousSummary && hasRequiredSummarySections(trimmedPreviousSummary)) {
+    return trimmedPreviousSummary;
+  }
+  const exactIdentifiersSummary =
+    summarizationInstructions?.identifierPolicy === "off"
+      ? "N/A (identifier policy off)."
+      : "None captured.";
+  return [
+    "## Decisions",
+    trimmedPreviousSummary || "No prior history.",
+    "",
+    "## Open TODOs",
+    "None.",
+    "",
+    "## Constraints/Rules",
+    "None.",
+    "",
+    "## Pending user asks",
+    "None.",
+    "",
+    "## Exact identifiers",
+    exactIdentifiersSummary,
+  ].join("\n");
+}
+
 function appendSummarySection(summary: string, section: string): string {
   if (!section) {
     return summary;
@@ -646,7 +681,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               summarizationInstructions,
               previousSummary: effectivePreviousSummary,
             })
-          : (effectivePreviousSummary?.trim() ?? "");
+          : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
       let summary = historySummary;
       if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
@@ -703,6 +738,7 @@ export const __testing = {
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
+  buildStructuredFallbackSummary,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,

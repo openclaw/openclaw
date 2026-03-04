@@ -29,6 +29,7 @@ const {
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
+  buildStructuredFallbackSummary,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,
@@ -682,6 +683,44 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(instructions).toContain("Exclude secrets and one-time tokens from summaries.");
   });
 
+  it("builds a structured fallback summary from legacy previous summary text", () => {
+    const summary = buildStructuredFallbackSummary("legacy summary without headings");
+    expect(summary).toContain("## Decisions");
+    expect(summary).toContain("## Open TODOs");
+    expect(summary).toContain("## Constraints/Rules");
+    expect(summary).toContain("## Pending user asks");
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("legacy summary without headings");
+  });
+
+  it("preserves an already-structured previous summary as-is", () => {
+    const structured = [
+      "## Decisions",
+      "done",
+      "",
+      "## Open TODOs",
+      "todo",
+      "",
+      "## Constraints/Rules",
+      "rules",
+      "",
+      "## Pending user asks",
+      "asks",
+      "",
+      "## Exact identifiers",
+      "ids",
+    ].join("\n");
+    expect(buildStructuredFallbackSummary(structured)).toBe(structured);
+  });
+
+  it("uses policy-off marker in fallback exact identifiers section", () => {
+    const summary = buildStructuredFallbackSummary(undefined, {
+      identifierPolicy: "off",
+    });
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("N/A (identifier policy off).");
+  });
+
   it("uses structured instructions when summarizing dropped history chunks", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("mock summary");
@@ -737,6 +776,64 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("keeps required headings when all turns are preserved and history is carried forward", async () => {
+    mockSummarizeInStages.mockReset();
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 12,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "latest user ask", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "legacy summary without headings",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    const summary = result.compaction?.summary ?? "";
+    expect(summary).toContain("## Decisions");
+    expect(summary).toContain("## Open TODOs");
+    expect(summary).toContain("## Constraints/Rules");
+    expect(summary).toContain("## Pending user asks");
+    expect(summary).toContain("## Exact identifiers");
+    expect(summary).toContain("legacy summary without headings");
   });
 });
 
