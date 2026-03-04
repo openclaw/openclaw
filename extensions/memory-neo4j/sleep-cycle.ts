@@ -32,6 +32,7 @@ import {
   isSemanticDuplicate,
   resolveConflict,
   runBackgroundExtraction,
+  stripCodeFences,
 } from "./extractor.js";
 import { callOpenRouter } from "./llm-client.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
@@ -303,7 +304,7 @@ Return JSON: {"classification": "lasting"|"noise", "reason": "brief explanation"
       return "lasting";
     }
 
-    const parsed = JSON.parse(content) as { classification?: string };
+    const parsed = JSON.parse(stripCodeFences(content)) as { classification?: string };
     if (parsed.classification === "noise") {
       return "noise";
     }
@@ -1499,6 +1500,16 @@ export async function runSleepCycle(
                 try {
                   embedding = await embeddings.embed(text);
                 } catch {
+                  continue;
+                }
+
+                // Dedup: skip if a very similar lesson already exists
+                const similar = await db.findSimilar(embedding, 0.9, 1, agentId);
+                if (similar.length > 0) {
+                  onProgress?.(
+                    "tipGeneration",
+                    `Skipped duplicate tip (${(similar[0].score * 100).toFixed(0)}% similar to existing)`,
+                  );
                   continue;
                 }
 

@@ -24,7 +24,7 @@ import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES, MEMORY_CATEGORIES } from "./s
  * Some providers (e.g. OpenRouter via Bedrock) ignore response_format: json_object
  * and return markdown-wrapped JSON, which breaks JSON.parse().
  */
-function stripCodeFences(text: string): string {
+export function stripCodeFences(text: string): string {
   const trimmed = text.trim();
   // Match ```json ... ``` or ``` ... ``` (with optional language tag)
   const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);

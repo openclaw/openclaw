@@ -2151,10 +2151,10 @@ export class Neo4jMemoryClient {
          WHERE m.text =~ $pattern
            AND m.category <> 'core'
            ${agentFilter}
-         WITH m LIMIT ${limit}
+         WITH m LIMIT $limit
          DETACH DELETE m
          RETURN count(*) AS removed`,
-        { pattern, agentId },
+        { pattern, agentId, limit: neo4j.int(limit) },
       );
       return (result.records[0]?.get("removed") as number) ?? 0;
     } finally {

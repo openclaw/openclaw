@@ -815,8 +815,8 @@ const memoryNeo4jPlugin = {
 // Layer 3: TASKS.md cache for auto-capture task tagging
 // ============================================================================
 
-/** Cached result of TASKS.md parsing for auto-capture task tagging. */
-let _taskLedgerCache: { activeTaskId: string | undefined; expiresAt: number } | null = null;
+/** Cached result of TASKS.md parsing for auto-capture task tagging, keyed by workspace dir. */
+const _taskLedgerCache = new Map<string, { activeTaskId: string | undefined; expiresAt: number }>();
 const TASK_LEDGER_CACHE_TTL_MS = 60_000; // 60 seconds
 
 /**
@@ -827,9 +827,11 @@ async function getActiveTaskIdForCapture(
   workspaceDir: string | undefined,
   logger: Logger,
 ): Promise<string | undefined> {
+  const cacheKey = workspaceDir ?? "__default__";
   const now = Date.now();
-  if (_taskLedgerCache && now < _taskLedgerCache.expiresAt) {
-    return _taskLedgerCache.activeTaskId;
+  const cached = _taskLedgerCache.get(cacheKey);
+  if (cached && now < cached.expiresAt) {
+    return cached.activeTaskId;
   }
 
   let activeTaskId: string | undefined;
@@ -849,7 +851,7 @@ async function getActiveTaskIdForCapture(
     }
   }
 
-  _taskLedgerCache = { activeTaskId, expiresAt: now + TASK_LEDGER_CACHE_TTL_MS };
+  _taskLedgerCache.set(cacheKey, { activeTaskId, expiresAt: now + TASK_LEDGER_CACHE_TTL_MS });
   return activeTaskId;
 }
 

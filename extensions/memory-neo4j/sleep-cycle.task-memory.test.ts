@@ -116,6 +116,17 @@ describe("classifyTaskMemory", () => {
     expect(result).toBe("lasting");
   });
 
+  it("handles code-fence-wrapped JSON from LLM", async () => {
+    mockCallOpenRouter.mockResolvedValueOnce(
+      '```json\n{"classification": "noise", "reason": "test"}\n```',
+    );
+
+    const result = await classifyTaskMemory("Some task progress note", "Some task", baseConfig);
+
+    expect(result).toBe("noise");
+    expect(mockCallOpenRouter).toHaveBeenCalledOnce();
+  });
+
   it("returns 'lasting' when config is disabled", async () => {
     const result = await classifyTaskMemory("Task progress memory", "Some task", disabledConfig);
 
