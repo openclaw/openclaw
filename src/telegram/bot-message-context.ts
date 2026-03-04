@@ -194,9 +194,9 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
-  const peerId = isGroup
-    ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
-    : resolveTelegramDirectPeerId({ chatId, senderId });
+  const directPeerId = resolveTelegramDirectPeerId({ chatId, senderId });
+  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : directPeerId;
+  const directDeliveryTargetId = isGroup ? String(chatId) : directPeerId;
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
@@ -719,8 +719,10 @@ export const buildTelegramMessageContext = async ({
     InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
-    From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
-    To: `telegram:${chatId}`,
+    From: isGroup
+      ? buildTelegramGroupFrom(chatId, resolvedThreadId)
+      : `telegram:${directDeliveryTargetId}`,
+    To: `telegram:${directDeliveryTargetId}`,
     SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
@@ -776,7 +778,7 @@ export const buildTelegramMessageContext = async ({
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
-    OriginatingTo: `telegram:${chatId}`,
+    OriginatingTo: `telegram:${directDeliveryTargetId}`,
   });
 
   const pinnedMainDmOwner = !isGroup
@@ -795,7 +797,7 @@ export const buildTelegramMessageContext = async ({
       ? {
           sessionKey: route.mainSessionKey,
           channel: "telegram",
-          to: `telegram:${chatId}`,
+          to: `telegram:${directDeliveryTargetId}`,
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
