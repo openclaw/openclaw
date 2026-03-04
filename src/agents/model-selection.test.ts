@@ -341,6 +341,55 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
       });
     });
+
+    it("resolves provider-scoped shorthand when the allowlist match is unique", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "nvidia/kimi",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "nvidia/moonshotai/kimi-k2.5",
+        ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
+      });
+    });
+
+    it("rejects provider-scoped shorthand when multiple allowlist matches exist", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": {},
+              "nvidia/custom/kimi-v1": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "nvidia/kimi",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        error:
+          "model shorthand ambiguous: nvidia/kimi (matches: custom/kimi-v1, moonshotai/kimi-k2.5)",
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {

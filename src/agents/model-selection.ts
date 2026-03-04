@@ -33,6 +33,68 @@ function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeShorthandToken(value: string): string {
+  return normalizeAliasKey(value).replace(/[^a-z0-9]/g, "");
+}
+
+function resolveProviderScopedModelShorthand(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  provider: string;
+  shorthandModel: string;
+  defaultProvider: string;
+  defaultModel?: string;
+}): { ref: ModelRef } | { error: string } | null {
+  const shorthandToken = normalizeShorthandToken(params.shorthandModel);
+  if (!shorthandToken || shorthandToken.length < 2) {
+    return null;
+  }
+
+  const allowed = buildAllowedModelSet({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  const providerPrefix = `${params.provider}/`;
+  const matches = new Set<string>();
+
+  for (const key of allowed.allowedKeys) {
+    if (!key.startsWith(providerPrefix)) {
+      continue;
+    }
+    const candidateModel = key.slice(providerPrefix.length);
+    if (!candidateModel) {
+      continue;
+    }
+    const candidateModelToken = normalizeShorthandToken(candidateModel);
+    const candidateBaseToken = normalizeShorthandToken(
+      candidateModel.split("/").pop() ?? candidateModel,
+    );
+    const isMatch =
+      candidateModelToken === shorthandToken ||
+      candidateBaseToken === shorthandToken ||
+      candidateModelToken.startsWith(shorthandToken) ||
+      candidateBaseToken.startsWith(shorthandToken);
+    if (isMatch) {
+      matches.add(candidateModel);
+    }
+  }
+
+  if (matches.size === 0) {
+    return null;
+  }
+  if (matches.size > 1) {
+    const candidates = [...matches].toSorted().slice(0, 5).join(", ");
+    return {
+      error: `model shorthand ambiguous: ${params.provider}/${params.shorthandModel} (matches: ${candidates})`,
+    };
+  }
+
+  const resolvedModel = matches.values().next().value;
+  return { ref: normalizeModelRef(params.provider, resolvedModel) };
+}
+
 export function modelKey(provider: string, model: string) {
   return `${provider}/${model}`;
 }
@@ -526,6 +588,33 @@ export function resolveAllowedModelRef(params: {
     defaultModel: params.defaultModel,
   });
   if (!status.allowed) {
+    const shouldTryProviderScopedShorthand =
+      trimmed.includes("/") && !resolved.ref.model.includes("/");
+    if (shouldTryProviderScopedShorthand) {
+      const shorthand = resolveProviderScopedModelShorthand({
+        cfg: params.cfg,
+        catalog: params.catalog,
+        provider: resolved.ref.provider,
+        shorthandModel: resolved.ref.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      });
+      if (shorthand && "error" in shorthand) {
+        return { error: shorthand.error };
+      }
+      if (shorthand && "ref" in shorthand) {
+        const shorthandStatus = getModelRefStatus({
+          cfg: params.cfg,
+          catalog: params.catalog,
+          ref: shorthand.ref,
+          defaultProvider: params.defaultProvider,
+          defaultModel: params.defaultModel,
+        });
+        if (shorthandStatus.allowed) {
+          return { ref: shorthand.ref, key: shorthandStatus.key };
+        }
+      }
+    }
     return { error: `model not allowed: ${status.key}` };
   }
 
