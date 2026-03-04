@@ -9,6 +9,7 @@ import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
 } from "./audit-extra.js";
+import { hasWebSearchKey } from "./audit-extra.sync.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
@@ -3210,6 +3211,64 @@ description: test skill
           expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
         }),
       );
+    });
+  });
+
+  describe("hasWebSearchKey", () => {
+    it("returns true for Brave key in config (legacy top-level)", () => {
+      const cfg: OpenClawConfig = { tools: { web: { search: { apiKey: "brave-key" } } } };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for Brave key in nested config path", () => {
+      const cfg: OpenClawConfig = {
+        tools: { web: { search: { brave: { apiKey: "brave-key" } } } },
+      };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for Perplexity key in config", () => {
+      const cfg: OpenClawConfig = {
+        tools: { web: { search: { perplexity: { apiKey: "perplexity-key" } } } },
+      };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for Gemini key in config (#34509)", () => {
+      const cfg: OpenClawConfig = {
+        tools: { web: { search: { gemini: { apiKey: "gemini-key" } } } },
+      };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for Grok key in config (#34509)", () => {
+      const cfg: OpenClawConfig = {
+        tools: { web: { search: { grok: { apiKey: "grok-key" } } } },
+      };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for Kimi key in config (#34509)", () => {
+      const cfg: OpenClawConfig = {
+        tools: { web: { search: { kimi: { apiKey: "kimi-key" } } } },
+      };
+      expect(hasWebSearchKey(cfg, {})).toBe(true);
+    });
+
+    it("returns true for GEMINI_API_KEY env var (#34509)", () => {
+      expect(hasWebSearchKey({}, { GEMINI_API_KEY: "gemini-key" })).toBe(true);
+    });
+
+    it("returns true for XAI_API_KEY env var (#34509)", () => {
+      expect(hasWebSearchKey({}, { XAI_API_KEY: "xai-key" })).toBe(true);
+    });
+
+    it("returns true for KIMI_API_KEY env var (#34509)", () => {
+      expect(hasWebSearchKey({}, { KIMI_API_KEY: "kimi-key" })).toBe(true);
+    });
+
+    it("returns false when no web search key is configured", () => {
+      expect(hasWebSearchKey({}, {})).toBe(false);
     });
   });
 });
