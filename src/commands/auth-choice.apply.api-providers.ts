@@ -468,7 +468,7 @@ export async function applyAuthChoiceApiProviders(
     let hasCredential = false;
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "moonshot") {
-      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir, "cn");
       hasCredential = true;
     }
 
@@ -479,7 +479,7 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+        await setMoonshotApiKey(envKey.apiKey, params.agentDir, "cn");
         hasCredential = true;
       }
     }
@@ -488,7 +488,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Moonshot API key (.cn)",
         validate: validateApiKeyInput,
       });
-      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir, "cn");
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",

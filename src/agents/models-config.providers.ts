@@ -53,6 +53,7 @@ const XIAOMI_DEFAULT_COST = {
 };
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
@@ -209,6 +210,23 @@ function resolveApiKeyFromProfiles(params: {
     }
   }
   return undefined;
+}
+
+function resolveMoonshotFromProfiles(store: ReturnType<typeof ensureAuthProfileStore>): {
+  apiKey?: string;
+  baseUrl: string;
+} {
+  const ids = listProfilesForProvider(store, "moonshot");
+  for (const id of ids) {
+    const cred = store.profiles[id];
+    if (!cred || cred.type !== "api_key") {
+      continue;
+    }
+    const endpoint =
+      typeof cred.metadata?.endpoint === "string" ? cred.metadata.endpoint.trim().toLowerCase() : "";
+    return { apiKey: cred.key, baseUrl: endpoint === "cn" ? MOONSHOT_CN_BASE_URL : MOONSHOT_BASE_URL };
+  }
+  return { baseUrl: MOONSHOT_BASE_URL };
 }
 
 export function normalizeGoogleModelId(id: string): string {
@@ -496,11 +514,15 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
-  const moonshotKey =
-    resolveEnvApiKeyVarName("moonshot") ??
-    resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
+  const moonshotEnvKey = resolveEnvApiKeyVarName("moonshot");
+  const moonshotFromProfile = resolveMoonshotFromProfiles(authStore);
+  const moonshotKey = moonshotEnvKey ?? moonshotFromProfile.apiKey;
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    providers.moonshot = {
+      ...buildMoonshotProvider(),
+      baseUrl: moonshotEnvKey ? MOONSHOT_BASE_URL : moonshotFromProfile.baseUrl,
+      apiKey: moonshotKey,
+    };
   }
 
   const syntheticKey =

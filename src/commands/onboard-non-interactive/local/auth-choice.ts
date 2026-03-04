@@ -419,7 +419,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       return null;
     }
     if (resolved.source !== "profile") {
-      await setMoonshotApiKey(resolved.key);
+      await setMoonshotApiKey(resolved.key, undefined, "cn");
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",

@@ -63,7 +63,11 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
   });
 }
 
-export async function setMoonshotApiKey(key: string, agentDir?: string) {
+export async function setMoonshotApiKey(
+  key: string,
+  agentDir?: string,
+  endpoint?: "ai" | "cn",
+) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "moonshot:default",
@@ -71,6 +75,7 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
       type: "api_key",
       provider: "moonshot",
       key,
+      ...(endpoint ? { metadata: { endpoint } } : {}),
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });
