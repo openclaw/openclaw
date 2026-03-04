@@ -25,3 +25,21 @@ metadata:
    - 检索到的内容应作为你回答的背景信息，确保回答的连贯性。
 3. **动态更新**：
    - 如果用户纠正了之前的信息（如“我搬家到上海了”），直接调用 `save_fact`，PolarDB mem0 会根据语义自动合并或更新旧记忆。
+
+# Tools
+## save_fact
+将用户提到的核心事实、偏好或背景信息持久化到 PolarDB。
+- fact (string, required): 需要存入的语义事实。建议描述清晰完整（例如：“用户正在学习 Rust 语言并准备参加认证考试”）。
+
+## search_memories
+根据当前的对话意图，从 PolarDB 的海量记忆库中检索相关的上下文。
+- query (string, required): 检索关键词或描述性语句（例如：“用户的职业背景”或“用户对编程语言的偏好”）。
+
+## delete_all_memories
+【高危】彻底抹除当前用户在 PolarDB 中的所有长记忆。
+- confirm (boolean, required): 必须为 true 才能执行。仅在用户明确表达“忘记我”或“重置所有记忆”时使用。
+
+# Output Format
+当调用 `search_memories` 获得结果后，请以如下逻辑组织回复：
+- 如果找到匹配项：结合该背景直接回答问题。
+- 如果未找到匹配项：按正常逻辑回答，并在对话间隙暗示自己已准备好记录新信息。
