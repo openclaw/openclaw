@@ -171,7 +171,11 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("masked") ||
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
-    normalized.includes("failed to get unit file state")
+    normalized.includes("failed to get unit file state") ||
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("no user bus") ||
+    normalized.includes("dbus") ||
+    normalized.includes("connection refused")
   );
 }
 
