@@ -57,7 +57,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
 ```
 
-详情：[安装器内部原理](/install/installer)。
+详情：[安装器内部原理](/zh-CN/install/installer)。
 
 非交互式（跳过新手引导）：
 
@@ -112,10 +112,10 @@ openclaw onboard --install-daemon
 
 ### 4）其他安装选项
 
-- Docker：[Docker](/install/docker)
-- Nix：[Nix](/install/nix)
-- Ansible：[Ansible](/install/ansible)
-- Bun（仅 CLI）：[Bun](/install/bun)
+- Docker：[Docker](/zh-CN/install/docker)
+- Nix：[Nix](/zh-CN/install/nix)
+- Ansible：[Ansible](/zh-CN/install/ansible)
+- Bun（仅 CLI）：[Bun](/zh-CN/install/bun)
 
 ## 安装后
 
@@ -188,6 +188,6 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 ## 更新/卸载
 
-- 更新：[更新](/install/updating)
-- 迁移到新机器：[迁移](/install/migrating)
-- 卸载：[卸载](/install/uninstall)
+- 更新：[更新](/zh-CN/install/updating)
+- 迁移到新机器：[迁移](/zh-CN/install/migrating)
+- 卸载：[卸载](/zh-CN/install/uninstall)

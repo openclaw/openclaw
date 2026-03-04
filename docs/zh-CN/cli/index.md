@@ -19,45 +19,45 @@ x-i18n:
 
 ## 命令页面
 
-- [`setup`](/cli/setup)
-- [`onboard`](/cli/onboard)
-- [`configure`](/cli/configure)
-- [`config`](/cli/config)
-- [`doctor`](/cli/doctor)
-- [`dashboard`](/cli/dashboard)
-- [`reset`](/cli/reset)
-- [`uninstall`](/cli/uninstall)
-- [`update`](/cli/update)
-- [`message`](/cli/message)
-- [`agent`](/cli/agent)
-- [`agents`](/cli/agents)
-- [`acp`](/cli/acp)
-- [`status`](/cli/status)
-- [`health`](/cli/health)
-- [`sessions`](/cli/sessions)
-- [`gateway`](/cli/gateway)
-- [`logs`](/cli/logs)
-- [`system`](/cli/system)
-- [`models`](/cli/models)
-- [`memory`](/cli/memory)
-- [`nodes`](/cli/nodes)
-- [`devices`](/cli/devices)
-- [`node`](/cli/node)
-- [`approvals`](/cli/approvals)
-- [`sandbox`](/cli/sandbox)
-- [`tui`](/cli/tui)
-- [`browser`](/cli/browser)
-- [`cron`](/cli/cron)
-- [`dns`](/cli/dns)
-- [`docs`](/cli/docs)
-- [`hooks`](/cli/hooks)
-- [`webhooks`](/cli/webhooks)
-- [`pairing`](/cli/pairing)
-- [`plugins`](/cli/plugins)（插件命令）
-- [`channels`](/cli/channels)
-- [`security`](/cli/security)
-- [`skills`](/cli/skills)
-- [`voicecall`](/cli/voicecall)（插件；如已安装）
+- [`setup`](/zh-CN/cli/setup)
+- [`onboard`](/zh-CN/cli/onboard)
+- [`configure`](/zh-CN/cli/configure)
+- [`config`](/zh-CN/cli/config)
+- [`doctor`](/zh-CN/cli/doctor)
+- [`dashboard`](/zh-CN/cli/dashboard)
+- [`reset`](/zh-CN/cli/reset)
+- [`uninstall`](/zh-CN/cli/uninstall)
+- [`update`](/zh-CN/cli/update)
+- [`message`](/zh-CN/cli/message)
+- [`agent`](/zh-CN/cli/agent)
+- [`agents`](/zh-CN/cli/agents)
+- [`acp`](/zh-CN/cli/acp)
+- [`status`](/zh-CN/cli/status)
+- [`health`](/zh-CN/cli/health)
+- [`sessions`](/zh-CN/cli/sessions)
+- [`gateway`](/zh-CN/cli/gateway)
+- [`logs`](/zh-CN/cli/logs)
+- [`system`](/zh-CN/cli/system)
+- [`models`](/zh-CN/cli/models)
+- [`memory`](/zh-CN/cli/memory)
+- [`nodes`](/zh-CN/cli/nodes)
+- [`devices`](/zh-CN/cli/devices)
+- [`node`](/zh-CN/cli/node)
+- [`approvals`](/zh-CN/cli/approvals)
+- [`sandbox`](/zh-CN/cli/sandbox)
+- [`tui`](/zh-CN/cli/tui)
+- [`browser`](/zh-CN/cli/browser)
+- [`cron`](/zh-CN/cli/cron)
+- [`dns`](/zh-CN/cli/dns)
+- [`docs`](/zh-CN/cli/docs)
+- [`hooks`](/zh-CN/cli/hooks)
+- [`webhooks`](/zh-CN/cli/webhooks)
+- [`pairing`](/zh-CN/cli/pairing)
+- [`plugins`](/zh-CN/cli/plugins)（插件命令）
+- [`channels`](/zh-CN/cli/channels)
+- [`security`](/zh-CN/cli/security)
+- [`skills`](/zh-CN/cli/skills)
+- [`voicecall`](/zh-CN/cli/voicecall)（插件；如已安装）
 
 ## 全局标志
 
@@ -262,7 +262,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins enable <id>` / `disable <id>` — 切换 `plugins.entries.<id>.enabled`。
 - `openclaw plugins doctor` — 报告插件加载错误。
 
-大多数插件更改需要重启 Gateway 网关。参见 [/plugin](/tools/plugin)。
+大多数插件更改需要重启 Gateway 网关。参见 [/plugin](/zh-CN/tools/plugin)。
 
 ## 记忆
 
@@ -274,7 +274,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ## 聊天斜杠命令
 
-聊天消息支持 `/...` 命令（文本和原生）。参见 [/tools/slash-commands](/tools/slash-commands)。
+聊天消息支持 `/...` 命令（文本和原生）。参见 [/tools/slash-commands](/zh-CN/tools/slash-commands)。
 
 亮点：
 
@@ -414,7 +414,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `--lines <n>`（默认 `200`）
 - `--json`
 
-更多详情：[/concepts/oauth](/concepts/oauth)
+更多详情：[/concepts/oauth](/zh-CN/concepts/oauth)
 
 示例：
 
@@ -455,7 +455,7 @@ openclaw status --deep
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/automation/gmail-pubsub)。
+Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/zh-CN/automation/gmail-pubsub)。
 
 子命令：
 
@@ -464,7 +464,7 @@ Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/auto
 
 ### `dns setup`
 
-广域发现 DNS 辅助工具（CoreDNS + Tailscale）。参见 [/gateway/discovery](/gateway/discovery)。
+广域发现 DNS 辅助工具（CoreDNS + Tailscale）。参见 [/gateway/discovery](/zh-CN/gateway/discovery)。
 
 选项：
 
@@ -476,7 +476,7 @@ Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/auto
 
 统一的出站消息 + 渠道操作。
 
-参见：[/cli/message](/cli/message)
+参见：[/cli/message](/zh-CN/cli/message)
 
 子命令：
 
@@ -556,7 +556,7 @@ Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/auto
 
 运行连接 IDE 到 Gateway 网关的 ACP 桥接。
 
-完整选项和示例参见 [`acp`](/cli/acp)。
+完整选项和示例参见 [`acp`](/zh-CN/cli/acp)。
 
 ### `status`
 
@@ -591,7 +591,7 @@ Gmail Pub/Sub 钩子设置 + 运行器。参见 [/automation/gmail-pubsub](/auto
 - 数据直接来自提供商用量端点（非估算）。
 - 提供商：Anthropic、GitHub Copilot、OpenAI Codex OAuth，以及启用这些提供商插件时的 Gemini CLI/Antigravity。
 - 如果没有匹配的凭证，用量会被隐藏。
-- 详情：参见[用量跟踪](/concepts/usage-tracking)。
+- 详情：参见[用量跟踪](/zh-CN/concepts/usage-tracking)。
 
 ### `health`
 
@@ -742,7 +742,7 @@ Gateway 网关 CLI 辅助工具（RPC 子命令使用 `--url`、`--token`、`--p
 
 ## 模型
 
-回退行为和扫描策略参见 [/concepts/models](/concepts/models)。
+回退行为和扫描策略参见 [/concepts/models](/zh-CN/concepts/models)。
 
 首选 Anthropic 认证（setup-token）：
 
@@ -890,7 +890,7 @@ openclaw models status
 
 ## 定时任务
 
-管理计划任务（Gateway 网关 RPC）。参见 [/automation/cron-jobs](/automation/cron-jobs)。
+管理计划任务（Gateway 网关 RPC）。参见 [/automation/cron-jobs](/zh-CN/automation/cron-jobs)。
 
 子命令：
 
@@ -908,7 +908,7 @@ openclaw models status
 
 ## 节点主机
 
-`node` 运行**无头节点主机**或将其作为后台服务管理。参见 [`openclaw node`](/cli/node)。
+`node` 运行**无头节点主机**或将其作为后台服务管理。参见 [`openclaw node`](/zh-CN/cli/node)。
 
 子命令：
 
@@ -921,7 +921,7 @@ openclaw models status
 
 ## 节点
 
-`nodes` 与 Gateway 网关通信并针对已配对的节点。参见 [/nodes](/nodes)。
+`nodes` 与 Gateway 网关通信并针对已配对的节点。参见 [/nodes](/zh-CN/nodes)。
 
 通用选项：
 
@@ -963,7 +963,7 @@ openclaw models status
 
 ## 浏览器
 
-浏览器控制 CLI（专用 Chrome/Brave/Edge/Chromium）。参见 [`openclaw browser`](/cli/browser) 和[浏览器工具](/tools/browser)。
+浏览器控制 CLI（专用 Chrome/Brave/Edge/Chromium）。参见 [`openclaw browser`](/zh-CN/cli/browser) 和[浏览器工具](/zh-CN/tools/browser)。
 
 通用选项：
 
