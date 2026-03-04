@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { dirname, resolve } from "node:path";
 import type { DashboardConfig } from "./config.js";
 import type { SupabaseClient } from "./supabase.js";
@@ -92,7 +93,7 @@ export async function generateHeartbeat(
   // Resolve output path relative to workspaceDir if provided
   const outputPath = workspaceDir
     ? resolve(workspaceDir, config.heartbeatOutputFile)
-    : resolve(process.cwd(), config.heartbeatOutputFile);
+    : resolve(os.homedir(), ".openclaw", config.heartbeatOutputFile);
 
   try {
     mkdirSync(dirname(outputPath), { recursive: true });
