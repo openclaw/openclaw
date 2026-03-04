@@ -1,4 +1,4 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -14,11 +14,18 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     const result = await send(to, text);
     return { channel: "msteams", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, deps }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
     const send =
       deps?.sendMSTeams ??
-      ((to, text, opts) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
-    const result = await send(to, text, { mediaUrl });
+      ((to, text, opts) =>
+        sendMessageMSTeams({
+          cfg,
+          to,
+          text,
+          mediaUrl: opts?.mediaUrl,
+          mediaLocalRoots: opts?.mediaLocalRoots,
+        }));
+    const result = await send(to, text, { mediaUrl, mediaLocalRoots });
     return { channel: "msteams", ...result };
   },
   sendPoll: async ({ cfg, to, poll }) => {

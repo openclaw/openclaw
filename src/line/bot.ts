@@ -5,7 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveLineAccount } from "./accounts.js";
-import { handleLineWebhookEvents } from "./bot-handlers.js";
+import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 import { startLineWebhook } from "./webhook.js";
@@ -41,6 +41,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     (async () => {
       logVerbose("line: no message handler configured");
     });
+  const replayCache = createLineWebhookReplayCache();
 
   const handleWebhook = async (body: WebhookRequestBody): Promise<void> => {
     if (!body.events || body.events.length === 0) {
@@ -53,6 +54,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       runtime,
       mediaMaxBytes,
       processMessage,
+      replayCache,
     });
   };
 
