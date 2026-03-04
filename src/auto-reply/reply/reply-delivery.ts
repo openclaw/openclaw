@@ -112,10 +112,15 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
 
-    if (blockPayload.text) {
-      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err) => {
-        logVerbose(`block reply typing signal failed: ${String(err)}`);
-      });
+    if (blockPayload.text || blockHasMedia) {
+      void params.typingSignals
+        .signalTextDelta(
+          blockPayload.text,
+          blockPayload.mediaUrls ?? (blockPayload.mediaUrl ? [blockPayload.mediaUrl] : undefined),
+        )
+        .catch((err) => {
+          logVerbose(`block reply typing signal failed: ${String(err)}`);
+        });
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
