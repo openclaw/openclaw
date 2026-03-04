@@ -750,7 +750,8 @@ jq \
     if has_agent($agent.id) then . else .agents.list = ((.agents.list // []) + [$agent]) end;
   .
   | del(.commands.ownerDisplay)
-  | del(.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback)
+  | .gateway = (.gateway | ensure_obj)
+  | .gateway.controlUi = ((.gateway.controlUi | ensure_obj) + { dangerouslyAllowHostHeaderOriginFallback: true })
   | .web = ((.web // {}) | .enabled = false)
   | .channels = {
       defaults: (.channels.defaults // {}),
