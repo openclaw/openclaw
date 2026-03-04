@@ -355,7 +355,10 @@ function stripDanglingToolUseBlocks(
     if (typeof hasText === "string" && hasText.trim().length > 0) {
       return { ...assistant, content: undefined } as unknown as AgentMessage;
     }
-    return { ...assistant, content: [{ type: "text", text: "(tool calls removed)" }] } as unknown as AgentMessage;
+    return {
+      ...assistant,
+      content: [{ type: "text", text: "(tool calls removed)" }],
+    } as unknown as AgentMessage;
   }
   return { ...assistant, content: filtered } as unknown as AgentMessage;
 }

@@ -257,9 +257,7 @@ describe("sanitizeToolUseResultPairing", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_only", name: "exec", arguments: {} },
-        ],
+        content: [{ type: "toolCall", id: "call_only", name: "exec", arguments: {} }],
         stopReason: "error",
       },
       { role: "user", content: "what now?" },
