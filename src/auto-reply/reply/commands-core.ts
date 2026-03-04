@@ -3,6 +3,7 @@ import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
@@ -175,17 +176,51 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
     const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
-    if (boundAcpSessionKey) {
+    const boundAcpKey =
+      boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
+        ? boundAcpSessionKey.trim()
+        : undefined;
+    if (boundAcpKey) {
       const resetResult = await resetAcpSessionInPlace({
         cfg: params.cfg,
-        sessionKey: boundAcpSessionKey,
+        sessionKey: boundAcpKey,
         reason: commandAction,
       });
       if (!resetResult.ok && !resetResult.skipped) {
         logVerbose(
-          `acp reset-in-place failed for ${boundAcpSessionKey}: ${resetResult.error ?? "unknown error"}`,
+          `acp reset-in-place failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`,
         );
       }
+      await emitResetCommandHooks({
+        action: commandAction,
+        ctx: params.ctx,
+        cfg: params.cfg,
+        command: params.command,
+        sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
+        previousSessionEntry: params.previousSessionEntry,
+        workspaceDir: params.workspaceDir,
+      });
+      if (resetResult.ok) {
+        return {
+          shouldContinue: false,
+          reply: { text: "✅ ACP session reset in place." },
+        };
+      }
+      if (resetResult.skipped) {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: "⚠️ ACP session reset unavailable for this bound conversation. Rebind with /acp bind or /acp spawn.",
+          },
+        };
+      }
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        },
+      };
     }
     await emitResetCommandHooks({
       action: commandAction,

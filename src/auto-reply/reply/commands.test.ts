@@ -104,6 +104,19 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const resetAcpSessionInPlaceMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: false, skipped: true }) as const),
+);
+vi.mock("../../acp/persistent-bindings.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
+    "../../acp/persistent-bindings.js",
+  );
+  return {
+    ...actual,
+    resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
+  };
+});
+
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -135,6 +148,11 @@ afterAll(async () => {
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
+
+beforeEach(() => {
+  resetAcpSessionInPlaceMock.mockReset();
+  resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, skipped: true } as const);
+});
 
 describe("handleCommands gating", () => {
   it("blocks gated commands when disabled or not elevated-allowlisted", async () => {
@@ -970,6 +988,85 @@ describe("handleCommands hooks", () => {
       }),
     );
     spy.mockRestore();
+  });
+});
+
+describe("handleCommands ACP-bound /new and /reset", () => {
+  const discordChannelId = "1478836151241412759";
+  const buildDiscordBoundConfig = (): OpenClawConfig =>
+    ({
+      commands: { text: true },
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+          guilds: {
+            "1459246755253325866": {
+              channels: {
+                [discordChannelId]: {
+                  bindings: {
+                    acp: {
+                      enabled: true,
+                      agentId: "codex",
+                      mode: "persistent",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+  const buildDiscordBoundParams = (body: string) => {
+    const params = buildParams(body, buildDiscordBoundConfig(), {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      AccountId: "default",
+      SenderId: "12345",
+      From: "discord:12345",
+      To: discordChannelId,
+      OriginatingTo: discordChannelId,
+      SessionKey: "agent:main:acp:binding:discord:default:feedface",
+    });
+    params.sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    return params;
+  };
+
+  it("handles /new as ACP in-place reset for bound conversations", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const result = await handleCommands(buildDiscordBoundParams("/new"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "new",
+    });
+  });
+
+  it("handles /reset failures without falling back to normal session reset flow", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset failed");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "reset",
+    });
+  });
+
+  it("keeps existing /new behavior for non-ACP sessions", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const result = await handleCommands(buildParams("/new", cfg));
+
+    expect(result.shouldContinue).toBe(true);
+    expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
   });
 });
 

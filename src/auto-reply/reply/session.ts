@@ -27,7 +27,7 @@ import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -140,6 +140,7 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
+  const shouldUseAcpInPlaceReset = isAcpSessionKey(sessionCtxForState.SessionKey);
 
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
@@ -155,6 +156,12 @@ export async function initSessionState(params: {
     }
     const triggerLower = trigger.toLowerCase();
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+      if (shouldUseAcpInPlaceReset) {
+        // ACP-bound conversations handle /new and /reset in command handling
+        // so the bound ACP runtime can be reset in place without rotating the
+        // normal OpenClaw session/transcript.
+        break;
+      }
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
@@ -165,6 +172,9 @@ export async function initSessionState(params: {
       trimmedBodyLower.startsWith(triggerPrefixLower) ||
       strippedForResetLower.startsWith(triggerPrefixLower)
     ) {
+      if (shouldUseAcpInPlaceReset) {
+        break;
+      }
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;
