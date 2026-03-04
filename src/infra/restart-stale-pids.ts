@@ -94,7 +94,24 @@ export function findGatewayPidsOnPortSync(
     encoding: "utf8",
     timeout: spawnTimeoutMs,
   });
-  if (res.error || res.status !== 0) {
+  if (res.error) {
+    const code = (res.error as NodeJS.ErrnoException).code;
+    const detail =
+      code && code.trim().length > 0
+        ? code
+        : res.error instanceof Error
+          ? res.error.message
+          : "unknown error";
+    restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
+    return [];
+  }
+  if (res.status === 1) {
+    return [];
+  }
+  if (res.status !== 0) {
+    restartLog.warn(
+      `lsof exited with status ${res.status} during initial stale-pid scan for port ${port}; skipping stale pid check`,
+    );
     return [];
   }
   return parsePidsFromLsofOutput(res.stdout);

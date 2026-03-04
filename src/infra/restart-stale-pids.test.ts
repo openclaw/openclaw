@@ -8,6 +8,7 @@ const isWindows = process.platform === "win32";
 
 const mockSpawnSync = vi.hoisted(() => vi.fn());
 const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
+const mockRestartWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
@@ -20,6 +21,14 @@ vi.mock("../config/paths.js", () => ({
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: vi.fn(() => "lsof"),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    warn: (...args: unknown[]) => mockRestartWarn(...args),
+    info: vi.fn(),
+    error: vi.fn(),
+  })),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
@@ -37,6 +46,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   beforeEach(() => {
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
+    mockRestartWarn.mockReset();
     mockResolveGatewayPort.mockReturnValue(18789);
     __testing.setSleepSyncOverride(() => {});
   });
@@ -56,6 +66,14 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
     });
 
+    it("logs warning when initial lsof scan exits with status > 1", () => {
+      mockSpawnSync.mockReturnValue({ error: null, status: 2, stdout: "", stderr: "lsof error" });
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(mockRestartWarn).toHaveBeenCalledWith(
+        expect.stringContaining("lsof exited with status 2"),
+      );
+    });
+
     it("returns [] when lsof returns an error object (e.g. ENOENT)", () => {
       mockSpawnSync.mockReturnValue({
         error: new Error("ENOENT"),
@@ -64,6 +82,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stderr: "",
       });
       expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+      expect(mockRestartWarn).toHaveBeenCalledWith(
+        expect.stringContaining("lsof failed during initial stale-pid scan"),
+      );
     });
 
     it("parses openclaw-gateway pids and excludes the current process", () => {

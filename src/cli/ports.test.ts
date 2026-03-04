@@ -83,6 +83,33 @@ describe("probePortFree", () => {
 });
 
 describe("waitForPortBindable", () => {
+  it("probes the provided host when waiting for bindability", async () => {
+    const listenCalls: Array<{ port: number; host: string }> = [];
+    const fakeServer = new EventEmitter() as unknown as net.Server;
+    (fakeServer as unknown as { close: (cb?: () => void) => net.Server }).close = (
+      cb?: () => void,
+    ) => {
+      cb?.();
+      return fakeServer;
+    };
+    (fakeServer as unknown as { unref: () => net.Server }).unref = () => fakeServer;
+    (fakeServer as unknown as { listen: (...args: unknown[]) => net.Server }).listen = (
+      ...args: unknown[]
+    ) => {
+      const [port, host] = args as [number, string];
+      listenCalls.push({ port, host });
+      const callback = args.find((a) => typeof a === "function") as (() => void) | undefined;
+      setImmediate(() => callback?.());
+      return fakeServer;
+    };
+    mockCreateServer.mockReturnValue(fakeServer);
+
+    await expect(
+      waitForPortBindable(9999, { timeoutMs: 100, intervalMs: 10, host: "127.0.0.1" }),
+    ).resolves.toBe(0);
+    expect(listenCalls[0]).toEqual({ port: 9999, host: "127.0.0.1" });
+  });
+
   it("propagates EACCES rejection immediately without retrying", async () => {
     // Every call to createServer will emit EACCES — so if waitForPortBindable retried,
     // mockCreateServer would be called many times. We assert it's called exactly once.

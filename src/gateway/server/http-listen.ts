@@ -5,6 +5,16 @@ import { sleep } from "../../utils.js";
 const EADDRINUSE_MAX_RETRIES = 4;
 const EADDRINUSE_RETRY_INTERVAL_MS = 500;
 
+async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
+  await new Promise<void>((resolve) => {
+    try {
+      httpServer.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
 export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;
@@ -32,6 +42,7 @@ export async function listenGatewayHttpServer(params: {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE" && attempt < EADDRINUSE_MAX_RETRIES) {
         // Port may still be in TIME_WAIT after a recent process exit; retry.
+        await closeServerQuietly(httpServer);
         await sleep(EADDRINUSE_RETRY_INTERVAL_MS);
         continue;
       }

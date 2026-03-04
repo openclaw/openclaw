@@ -366,20 +366,21 @@ export function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> 
  */
 export async function waitForPortBindable(
   port: number,
-  opts: { timeoutMs?: number; intervalMs?: number } = {},
+  opts: { timeoutMs?: number; intervalMs?: number; host?: string } = {},
 ): Promise<number> {
   const timeoutMs = Math.max(opts.timeoutMs ?? 3000, 0);
   const intervalMs = Math.max(opts.intervalMs ?? 150, 1);
+  const host = opts.host;
   let waited = 0;
   while (waited < timeoutMs) {
-    if (await probePortFree(port)) {
+    if (await probePortFree(port, host)) {
       return waited;
     }
     await sleep(intervalMs);
     waited += intervalMs;
   }
   // Final attempt
-  if (await probePortFree(port)) {
+  if (await probePortFree(port, host)) {
     return waited;
   }
   throw new Error(`port ${port} still not bindable after ${waited}ms (TIME_WAIT or kernel hold)`);

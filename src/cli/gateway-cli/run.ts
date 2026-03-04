@@ -186,6 +186,20 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
   }
+  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
+  const bind =
+    bindRaw === "loopback" ||
+    bindRaw === "lan" ||
+    bindRaw === "auto" ||
+    bindRaw === "custom" ||
+    bindRaw === "tailnet"
+      ? bindRaw
+      : null;
+  if (!bind) {
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.exit(1);
+    return;
+  }
   if (opts.force) {
     try {
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
@@ -209,9 +223,18 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       }
       // After killing, verify the port is actually bindable (handles TIME_WAIT).
+      const bindProbeHost =
+        bind === "loopback"
+          ? "127.0.0.1"
+          : bind === "lan"
+            ? "0.0.0.0"
+            : bind === "custom"
+              ? toOptionString(cfg.gateway?.customBindHost)
+              : undefined;
       const bindWaitMs = await waitForPortBindable(port, {
         timeoutMs: 3000,
         intervalMs: 150,
+        host: bindProbeHost,
       });
       if (bindWaitMs > 0) {
         gatewayLog.info(`force: waited ${bindWaitMs}ms for port ${port} to become bindable`);
@@ -265,21 +288,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
-  const bind =
-    bindRaw === "loopback" ||
-    bindRaw === "lan" ||
-    bindRaw === "auto" ||
-    bindRaw === "custom" ||
-    bindRaw === "tailnet"
-      ? bindRaw
-      : null;
-  if (!bind) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
-    defaultRuntime.exit(1);
-    return;
-  }
-
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
   const authOverride =
     authMode || passwordRaw || tokenRaw || authModeRaw
