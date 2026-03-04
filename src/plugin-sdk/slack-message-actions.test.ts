@@ -9,6 +9,34 @@ function createInvokeSpy() {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("maps read action with threadId to readMessages", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "read",
+        cfg: {},
+        params: {
+          channelId: "C123",
+          threadId: "123.456",
+          limit: 10,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C123",
+        threadId: "123.456",
+        limit: 10,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
 

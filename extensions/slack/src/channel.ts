@@ -276,7 +276,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       await handleSlackMessageAction({
         providerId: meta.id,
         ctx,
-        includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
           await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
       }),
