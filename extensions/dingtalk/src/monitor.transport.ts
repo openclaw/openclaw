@@ -55,4 +55,14 @@ export async function monitorStream(params: {
 
   // SDK 自带 autoReconnect，断开后自动重连 / SDK has built-in autoReconnect
   await client.connect();
+
+  // Keep the monitor alive until the abort signal fires; returning early
+  // causes the channel framework to treat the monitor as exited and restart.
+  await new Promise<void>((resolve) => {
+    if (abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+  });
 }

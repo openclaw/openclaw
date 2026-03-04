@@ -147,27 +147,30 @@ export async function handleDingtalkMessage(params: {
 
     if (dmPolicy === "pairing") {
       const pairing = createScopedPairingAccess({
+        core,
         channel: "dingtalk",
         accountId: account.accountId,
-        runtime: core,
       });
-      const allowlistMatch = configAllowFrom.some(
+      const storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
+      const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+      const allowed = effectiveAllowFrom.some(
         (entry) =>
           String(entry).trim() === ctx.senderStaffId ||
           String(entry).trim() === "*",
       );
-      if (!allowlistMatch) {
-        const paired = await pairing.isPaired(ctx.senderStaffId);
-        if (!paired) {
-          log(
-            `dingtalk[${account.accountId}]: sender ${ctx.senderStaffId} not paired, requesting pairing`,
-          );
-          await pairing.requestPairing({
-            id: ctx.senderStaffId,
-            displayName: ctx.senderNick,
-          });
-          return;
-        }
+      if (!allowed) {
+        log(
+          `dingtalk[${account.accountId}]: sender ${ctx.senderStaffId} not paired, requesting pairing`,
+        );
+        const { code } = await pairing.upsertPairingRequest({
+          id: ctx.senderStaffId,
+          meta: { name: ctx.senderNick },
+        });
+        // TODO: send pairing reply to user via DingTalk message
+        log(
+          `dingtalk[${account.accountId}]: pairing code ${code} for ${ctx.senderStaffId}`,
+        );
+        return;
       }
     }
   }
@@ -175,26 +178,60 @@ export async function handleDingtalkMessage(params: {
   // --- 构建消息体并分发给 agent / Build message body and dispatch to agent ---
   const messageBody = buildMessageBody(ctx);
 
-  // 确定会话 peerId / Determine session peerId
-  const peerId = isDirect ? ctx.senderStaffId : ctx.conversationId;
-  const peerKind = isDirect ? "direct" : "group";
+  const dingtalkFrom = `dingtalk:${ctx.senderStaffId}`;
+  const dingtalkTo = isGroup ? `chat:${ctx.conversationId}` : `user:${ctx.senderStaffId}`;
+  const peerId = isGroup ? ctx.conversationId : ctx.senderStaffId;
 
-  const dispatcher = createDingtalkReplyDispatcher({
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: "dingtalk",
+    accountId: account.accountId,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
+
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
+    Body: messageBody,
+    BodyForAgent: messageBody,
+    RawBody: ctx.content,
+    CommandBody: ctx.content,
+    From: dingtalkFrom,
+    To: dingtalkTo,
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId,
+    ChatType: isGroup ? "group" : "direct",
+    GroupSubject: isGroup ? ctx.conversationId : undefined,
+    SenderName: ctx.senderNick,
+    SenderId: ctx.senderStaffId,
+    Provider: "dingtalk" as const,
+    Surface: "dingtalk" as const,
+    MessageSid: ctx.messageId,
+    Timestamp: Date.now(),
+    WasMentioned: ctx.mentionedBot,
+    OriginatingChannel: "dingtalk" as const,
+    OriginatingTo: dingtalkTo,
+  });
+
+  const { dispatcher, replyOptions, markDispatchIdle } = createDingtalkReplyDispatcher({
     account,
     ctx,
     log,
   });
 
-  await core.channel.reply.dispatchReplyFromConfig({
-    cfg,
-    channel: "dingtalk",
-    accountId: account.accountId,
-    peerId,
-    peerKind,
-    messageBody,
-    senderDisplayName: ctx.senderNick,
-    senderId: ctx.senderStaffId,
+  log(`dingtalk[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+
+  await core.channel.reply.withReplyDispatcher({
     dispatcher,
+    onSettled: () => markDispatchIdle(),
+    run: () =>
+      core.channel.reply.dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions,
+      }),
   });
 }
 
@@ -202,14 +239,8 @@ export async function handleDingtalkMessage(params: {
  * 构建消息体 / Build message body for agent
  */
 function buildMessageBody(ctx: DingtalkMessageContext): string {
-  let body = ctx.content;
-
   if (ctx.contentType !== "text") {
-    body = `[${ctx.contentType} message] ${body}`;
+    return `[${ctx.contentType} message] ${ctx.content}`;
   }
-
-  // 添加消息 ID 元数据 / Add message ID metadata
-  body = `[message_id: ${ctx.messageId}]\n${body}`;
-
-  return body;
+  return ctx.content;
 }
