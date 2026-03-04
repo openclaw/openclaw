@@ -28,6 +28,9 @@ x-i18n:
 - 默认：`~/.openclaw/workspace`
 - 如果设置了 `OPENCLAW_PROFILE` 且不是 `"default"`，默认值变为
   `~/.openclaw/workspace-<profile>`。
+- 对于严格的本地媒体路径校验，推荐使用稳定的子目录布局（例如
+  `~/.openclaw/workspace/<profile>`）；如果使用后缀/自定义工作区，记得把路径加入
+  `tools.media.localRoots`。
 - 在 `~/.openclaw/openclaw.json` 中覆盖：
 
 ```json5
