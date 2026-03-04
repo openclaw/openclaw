@@ -1,3 +1,4 @@
+import * as child_process from "child_process";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
@@ -33,6 +34,7 @@ import {
   getZulipStreamId,
   registerZulipQueue,
   getZulipEvents,
+  sendZulipStreamMessage,
   sendZulipTyping,
   addZulipReaction,
   removeZulipReaction,
@@ -664,6 +666,131 @@ function extractXLinks(text: string, maxLinks: number): string[] {
   }
   return links;
 }
+
+// ── Tweet Expansion ─────────────────────────────────────────────────
+// When a Zulip message contains X/Twitter links, fetch the tweet text
+// via `bird read --json` and reply with a formatted quote block.
+// Tagged with [tweet-expand] so Neo4j/agents can filter these out.
+
+const TWEET_EXPAND_CACHE = new Map<string, number>(); // url → timestamp
+const TWEET_EXPAND_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours — don't re-expand same tweet
+const TWEET_EXPAND_TAG = "[tweet-expand]";
+
+function pruneTweetExpandCache(): void {
+  const now = Date.now();
+  for (const [key, ts] of TWEET_EXPAND_CACHE) {
+    if (now - ts > TWEET_EXPAND_TTL_MS) {
+      TWEET_EXPAND_CACHE.delete(key);
+    }
+  }
+}
+
+interface BirdTweet {
+  id: string;
+  text: string;
+  author?: { username?: string; name?: string };
+  createdAt?: string;
+  likeCount?: number;
+  retweetCount?: number;
+  replyCount?: number;
+}
+
+function birdReadTweet(url: string): Promise<BirdTweet | null> {
+  return new Promise((resolve) => {
+    child_process.execFile(
+      "bird",
+      ["read", "--json", url],
+      { timeout: 15_000, maxBuffer: 256 * 1024 },
+      (err, stdout) => {
+        if (err || !stdout?.trim()) {
+          resolve(null);
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout) as BirdTweet);
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+  });
+}
+
+function formatTweetQuote(tweet: BirdTweet, url: string): string {
+  const author = tweet.author?.name ?? tweet.author?.username ?? "Unknown";
+  const handle = tweet.author?.username ? `@${tweet.author.username}` : "";
+  const stats: string[] = [];
+  if (tweet.likeCount) {
+    stats.push(`${tweet.likeCount} likes`);
+  }
+  if (tweet.retweetCount) {
+    stats.push(`${tweet.retweetCount} RTs`);
+  }
+  if (tweet.replyCount) {
+    stats.push(`${tweet.replyCount} replies`);
+  }
+  const statsLine = stats.length > 0 ? `\n*${stats.join(" · ")}*` : "";
+
+  return [
+    TWEET_EXPAND_TAG,
+    `> **${author}** ${handle}`,
+    `> ${tweet.text.replace(/\n/g, "\n> ")}`,
+    `>${statsLine}`,
+    `> [original](${url})`,
+  ].join("\n");
+}
+
+async function expandTweetsInMessage(params: {
+  client: ZulipClient;
+  msg: ZulipMessage;
+  logVerbose: (msg: string) => void;
+}): Promise<void> {
+  const { client, msg, logVerbose } = params;
+  if (msg.type === "private") {
+    return;
+  } // only expand in streams
+  const rawText = msg.content ?? "";
+  if (rawText.includes(TWEET_EXPAND_TAG)) {
+    return;
+  } // skip our own expansions
+
+  const links = extractXLinks(rawText, 3);
+  if (links.length === 0) {
+    return;
+  }
+
+  pruneTweetExpandCache();
+
+  const stream = typeof msg.display_recipient === "string" ? msg.display_recipient : "";
+  const topic = msg.subject ?? "";
+  if (!stream || !topic) {
+    return;
+  }
+
+  for (const url of links) {
+    if (TWEET_EXPAND_CACHE.has(url)) {
+      logVerbose(`zulip: tweet already expanded recently: ${url}`);
+      continue;
+    }
+    TWEET_EXPAND_CACHE.set(url, Date.now());
+
+    const tweet = await birdReadTweet(url);
+    if (!tweet?.text) {
+      logVerbose(`zulip: bird read failed for ${url}`);
+      continue;
+    }
+
+    const content = formatTweetQuote(tweet, url);
+    try {
+      await sendZulipStreamMessage(client, { stream, topic, content });
+      logVerbose(`zulip: expanded tweet ${url} in ${stream}/${topic}`);
+    } catch (err) {
+      logVerbose(`zulip: failed to send tweet expansion: ${String(err)}`);
+    }
+  }
+}
+
+// ── End Tweet Expansion ─────────────────────────────────────────────
 
 function buildXCaseId(url: string): string {
   const statusMatch = url.match(/\/status\/(\d+)/);
@@ -1560,6 +1687,11 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       logVerbose(`zulip: skip bot message from ${msg.sender_email} (not mentioned)`);
       return;
     }
+
+    // Fire-and-forget: expand X/Twitter links into quote replies
+    void expandTweetsInMessage({ client, msg, logVerbose }).catch((err) =>
+      logVerbose(`zulip: tweet expansion error: ${err}`),
+    );
 
     const kind = messageKind(msg);
     const cType = chatType(kind);
