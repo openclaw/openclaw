@@ -109,6 +109,7 @@ Mattermost responds to DMs automatically. Channel behavior is controlled by `cha
 
 - `oncall` (default): respond only when @mentioned in channels.
 - `onmessage`: respond to every channel message.
+- `always`: same delivery intent as `onmessage` (always eligible in channels).
 - `onchar`: respond when a message starts with a trigger prefix.
 
 Config example:
@@ -128,6 +129,21 @@ Notes:
 
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
+- Current runtime behavior: for `onmessage`/`always`, set `groups."*".requireMention=false` to disable mention gating for channel replies.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      chatmode: "onmessage",
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: false },
+      },
+    },
+  },
+}
+```
 
 ## Access control (DMs)
 
@@ -194,6 +210,6 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 
 ## Troubleshooting
 
-- No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
+- No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or for `onmessage`/`always` also set `groups."*".requireMention=false`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
