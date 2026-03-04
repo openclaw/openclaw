@@ -29,6 +29,12 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapPromptWarning,
+  buildBootstrapTruncationReportMeta,
+  buildBootstrapInjectionStats,
+} from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -45,8 +51,10 @@ import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-strea
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
+  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
@@ -68,7 +76,6 @@ import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
@@ -98,6 +105,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
+import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -258,6 +266,79 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   return caseInsensitiveMatch ?? trimmed;
 }
 
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function normalizeToolCallIdsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  const usedIds = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+      continue;
+    }
+    const trimmedId = typedBlock.id.trim();
+    if (!trimmedId) {
+      continue;
+    }
+    usedIds.add(trimmedId);
+  }
+
+  let fallbackIndex = 1;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (typeof typedBlock.id === "string") {
+      const trimmedId = typedBlock.id.trim();
+      if (trimmedId) {
+        if (typedBlock.id !== trimmedId) {
+          typedBlock.id = trimmedId;
+        }
+        usedIds.add(trimmedId);
+        continue;
+      }
+    }
+
+    let fallbackId = "";
+    while (!fallbackId || usedIds.has(fallbackId)) {
+      fallbackId = `call_auto_${fallbackIndex++}`;
+    }
+    typedBlock.id = fallbackId;
+    usedIds.add(fallbackId);
+  }
+}
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim() ?? "";
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim() ?? "";
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
+}
+
 function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
@@ -282,6 +363,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = normalized;
     }
   }
+  normalizeToolCallIdsInMessage(message);
 }
 
 function wrapStreamTrimToolCallNames(
@@ -495,10 +577,11 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
-    const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
-      : [];
+    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+      workspaceDir: effectiveWorkspace,
+      config: params.config,
+      skillsSnapshot: params.skillsSnapshot,
+    });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
@@ -524,7 +607,26 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
       });
+    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
+    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+    const bootstrapAnalysis = analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles: hookAdjustedBootstrapFiles,
+        injectedFiles: contextFiles,
+      }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    });
+    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+    const bootstrapPromptWarning = buildBootstrapPromptWarning({
+      analysis: bootstrapAnalysis,
+      mode: bootstrapPromptWarningMode,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: params.bootstrapPromptWarningSignature,
+    });
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
@@ -566,7 +668,9 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -718,6 +822,7 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+      bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
@@ -728,12 +833,17 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
       model: params.modelId,
       workspaceDir: effectiveWorkspace,
-      bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+      bootstrapTruncation: buildBootstrapTruncationReportMeta({
+        analysis: bootstrapAnalysis,
+        warningMode: bootstrapPromptWarningMode,
+        warning: bootstrapPromptWarning,
+      }),
       sandbox: (() => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg: params.config,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
         });
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
@@ -840,7 +950,9 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -900,13 +1012,16 @@ export async function runEmbeddedAttempt(
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
-        // Use the resolved model baseUrl first so custom provider aliases work.
+        // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const modelBaseUrl =
-          typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+          typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
         const providerBaseUrl =
-          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
-        const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+        const ollamaBaseUrl = resolveOllamaBaseUrlForRun({
+          modelBaseUrl,
+          providerBaseUrl,
+        });
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
@@ -1001,6 +1116,29 @@ export async function runEmbeddedAttempt(
             return inner(model, context, options);
           }
           const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
+      if (
+        params.model.api === "openai-responses" ||
+        params.model.api === "openai-codex-responses"
+      ) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
           if (sanitized === messages) {
             return inner(model, context, options);
           }
@@ -1141,7 +1279,9 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
       });
 
       const {
@@ -1247,6 +1387,8 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
+          trigger: params.trigger,
+          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
@@ -1569,6 +1711,8 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         promptError,
         sessionIdUsed,
+        bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
+        bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,

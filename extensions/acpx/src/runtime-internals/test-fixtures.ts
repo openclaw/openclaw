@@ -14,12 +14,15 @@ export const NOOP_LOGGER = {
 };
 
 const tempDirs: string[] = [];
+let sharedMockCliScriptPath: Promise<string> | null = null;
+let logFileSequence = 0;
 
 const MOCK_CLI_SCRIPT = String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
 
 const args = process.argv.slice(2);
 const logPath = process.env.MOCK_ACPX_LOG;
+const openclawShell = process.env.OPENCLAW_SHELL || "";
 const writeLog = (entry) => {
   if (!logPath) return;
   fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
@@ -146,7 +149,14 @@ if (command === "sessions" && args[commandIndex + 1] === "close") {
 
 if (command === "prompt") {
   const stdinText = fs.readFileSync(0, "utf8");
-  writeLog({ kind: "prompt", agent, args, sessionName: sessionFromOption, stdinText });
+  writeLog({
+    kind: "prompt",
+    agent,
+    args,
+    sessionName: sessionFromOption,
+    stdinText,
+    openclawShell,
+  });
   const requestId = "req-1";
 
   emitJson({
@@ -255,14 +265,9 @@ export async function createMockRuntimeFixture(params?: {
   logPath: string;
   config: ResolvedAcpxPluginConfig;
 }> {
-  const dir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-acpx-runtime-test-"),
-  );
-  tempDirs.push(dir);
-  const scriptPath = path.join(dir, "mock-acpx.cjs");
-  const logPath = path.join(dir, "calls.log");
-  await writeFile(scriptPath, MOCK_CLI_SCRIPT, "utf8");
-  await chmod(scriptPath, 0o755);
+  const scriptPath = await ensureMockCliScriptPath();
+  const dir = path.dirname(scriptPath);
+  const logPath = path.join(dir, `calls-${logFileSequence++}.log`);
   process.env.MOCK_ACPX_LOG = logPath;
 
   const config: ResolvedAcpxPluginConfig = {
@@ -286,6 +291,23 @@ export async function createMockRuntimeFixture(params?: {
   };
 }
 
+async function ensureMockCliScriptPath(): Promise<string> {
+  if (sharedMockCliScriptPath) {
+    return await sharedMockCliScriptPath;
+  }
+  sharedMockCliScriptPath = (async () => {
+    const dir = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-acpx-runtime-test-"),
+    );
+    tempDirs.push(dir);
+    const scriptPath = path.join(dir, "mock-acpx.cjs");
+    await writeFile(scriptPath, MOCK_CLI_SCRIPT, "utf8");
+    await chmod(scriptPath, 0o755);
+    return scriptPath;
+  })();
+  return await sharedMockCliScriptPath;
+}
+
 export async function readMockRuntimeLogEntries(
   logPath: string,
 ): Promise<Array<Record<string, unknown>>> {
@@ -302,6 +324,8 @@ export async function readMockRuntimeLogEntries(
 
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
+  sharedMockCliScriptPath = null;
+  logFileSequence = 0;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) {

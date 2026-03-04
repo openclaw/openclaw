@@ -40,11 +40,7 @@ struct VoiceWakeSettings: View {
     }
 
     private var voiceWakeBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.swabbleEnabled },
-            set: { newValue in
-                Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
+        MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
     var body: some View {
@@ -534,30 +530,22 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func updateSelectedMicName() {
-        let selected = self.state.voiceWakeMicID
-        if selected.isEmpty {
-            self.state.voiceWakeMicName = ""
-            return
-        }
-        if let match = self.availableMics.first(where: { $0.uid == selected }) {
-            self.state.voiceWakeMicName = match.name
-        }
+        self.state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
+            selectedID: self.state.voiceWakeMicID,
+            in: self.availableMics,
+            uid: \.uid,
+            name: \.name)
     }
 
     private func startMicObserver() {
-        self.micObserver.start {
-            Task { @MainActor in
-                self.scheduleMicRefresh()
-            }
+        MicRefreshSupport.startObserver(self.micObserver) {
+            self.scheduleMicRefresh()
         }
     }
 
     @MainActor
     private func scheduleMicRefresh() {
-        self.micRefreshTask?.cancel()
-        self.micRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
+        MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
             await self.loadMicsIfNeeded(force: true)
             await self.restartMeter()
         }
