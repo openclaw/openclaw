@@ -460,7 +460,10 @@ export class AnthropicProvider extends BaseProvider {
               type: "tool_use" as const,
               id: tc.id,
               name: tc.function.name,
-              input: JSON.parse(tc.function.arguments),
+              input:
+                typeof tc.function.arguments === "string"
+                  ? JSON.parse(tc.function.arguments)
+                  : tc.function.arguments,
             })),
           ],
         });
