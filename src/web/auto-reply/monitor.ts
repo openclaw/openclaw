@@ -322,6 +322,12 @@ export async function monitorWebChannel(
               { connectionId, messagesHandled: handledMessages },
               "watchdog: listener map empty while status=connected — forcing reconnect",
             );
+            // Mirror the message-timeout path: call closeListener() first so the
+            // heartbeat and watchdog timers are stopped before we signal the socket
+            // to close — otherwise the timers keep firing on a dead connection.
+            void closeListener().catch((err) => {
+              logVerbose(`Close listener failed: ${formatError(err)}`);
+            });
             listener.signalClose?.({
               status: 499,
               isLoggedOut: false,
