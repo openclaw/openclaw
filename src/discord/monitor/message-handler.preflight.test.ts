@@ -814,6 +814,89 @@ describe("preflightDiscordMessage", () => {
     expect(result?.isGuildMessage).toBe(true);
   });
 
+  it("drops guild message without mention when channelInfo.type is stale DM (fixes #34353)", async () => {
+    const channelId = "channel-stale-dm-nomention";
+    const guildId = "guild-stale-dm-nomention";
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          // Stale or inconsistent channel info: reports DM even though the
+          // message carries a guild_id.
+          return {
+            id: channelId,
+            type: ChannelType.DM,
+            name: null,
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-stale-dm-nomention",
+      content: "hello world",
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {} as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      guildEntries: {
+        [guildId]: {
+          requireMention: true,
+        },
+      },
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Guild Stale DM NoMention",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    // This is the inverse of the "with mention" test above.  Before the fix,
+    // isDirectMessage=true (stale channelInfo) would bypass the requireMention
+    // gate entirely, letting this un-mentioned message through.  With the fix,
+    // guild_id takes precedence: isDirectMessage=false, no mention detected,
+    // and the message is correctly dropped by the mention gate.
+    expect(result).toBeNull();
+  });
+
   it("drops guild message without mention even when botUserId is absent (fixes #34353)", async () => {
     const channelId = "channel-no-botid";
     const guildId = "guild-no-botid";
