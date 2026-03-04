@@ -606,16 +606,7 @@ export function resolveAllowedModelRef(params: {
         return { error: shorthand.error };
       }
       if (shorthand && "ref" in shorthand) {
-        const shorthandStatus = getModelRefStatus({
-          cfg: params.cfg,
-          catalog: params.catalog,
-          ref: shorthand.ref,
-          defaultProvider: params.defaultProvider,
-          defaultModel: params.defaultModel,
-        });
-        if (shorthandStatus.allowed) {
-          return { ref: shorthand.ref, key: shorthandStatus.key };
-        }
+        return { ref: shorthand.ref, key: modelKey(shorthand.ref.provider, shorthand.ref.model) };
       }
     }
     return { error: `model not allowed: ${status.key}` };
