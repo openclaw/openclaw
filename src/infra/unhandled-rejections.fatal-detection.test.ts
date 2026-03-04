@@ -90,6 +90,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
+        new Error("Failed to get gateway information from Discord: fetch failed"),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
