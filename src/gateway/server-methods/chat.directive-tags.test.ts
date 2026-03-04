@@ -784,12 +784,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     attachmentParseState.releaseFirstCall?.();
     await firstCall;
 
-    const firstPayload = respondFirst.mock.calls.at(-1)?.[1] as
-      | { status?: string }
-      | undefined;
-    const secondPayload = respondSecond.mock.calls.at(-1)?.[1] as
-      | { status?: string }
-      | undefined;
+    const firstPayload = respondFirst.mock.calls.at(-1)?.[1] as { status?: string } | undefined;
+    const secondPayload = respondSecond.mock.calls.at(-1)?.[1] as { status?: string } | undefined;
 
     expect(firstPayload?.status).toBe("in_flight");
     expect(secondPayload?.status).toBe("started");
