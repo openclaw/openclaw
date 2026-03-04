@@ -84,7 +84,8 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     }
 
     return null;
-  } catch {
+  } catch (err) {
+    log.warn('Failed to parse Bitable URL:', { url, error: err });
     return null;
   }
 }
@@ -253,7 +254,8 @@ async function cleanupNewBitable(
 
   if (fieldsRes.code === 0 && fieldsRes.data?.items) {
     // Step 1a: Rename primary field to the table name (works for both Feishu and Lark)
-    const primaryField = fieldsRes.data.items.find((f) => f.is_primary);
+    const items = fieldsRes.data?.items ?? [];
+    const primaryField = items.find((f) => f.is_primary);
     if (primaryField?.field_id) {
       try {
         const newFieldName = tableName.length <= 20 ? tableName : "Name";
@@ -275,7 +277,8 @@ async function cleanupNewBitable(
     }
 
     // Step 1b: Delete default placeholder fields by type (works for both Feishu and Lark)
-    const defaultFieldsToDelete = fieldsRes.data.items.filter(
+    const items = fieldsRes.data?.items ?? [];
+    const defaultFieldsToDelete = items.filter(
       (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
     );
 
@@ -304,7 +307,8 @@ async function cleanupNewBitable(
   });
 
   if (recordsRes.code === 0 && recordsRes.data?.items) {
-    const emptyRecordIds = recordsRes.data.items
+    const items = recordsRes.data?.items ?? [];
+    const emptyRecordIds = items
       .filter((r) => !r.fields || Object.keys(r.fields).length === 0)
       .map((r) => r.record_id)
       .filter((id): id is string => Boolean(id));
@@ -316,7 +320,8 @@ async function cleanupNewBitable(
           data: { records: emptyRecordIds },
         });
         cleanedRows = emptyRecordIds.length;
-      } catch {
+      } catch (err) {
+        log.warn('Failed to batch delete records, trying one by one:', { error: err });
         // Fallback: delete one by one if batch API is unavailable
         for (const recordId of emptyRecordIds) {
           try {
