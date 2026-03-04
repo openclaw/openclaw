@@ -18,9 +18,6 @@ export function normalizeControlUiBasePath(basePath?: string): string {
     normalized = `/${normalized}`;
   }
   normalized = normalized.replace(/\/{2,}/g, "/");
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
   if (normalized === "/") {
     return "";
   }
