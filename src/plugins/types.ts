@@ -1402,7 +1402,10 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "context_assembled"
+  | "loop_iteration_start"
+  | "loop_iteration_end";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1875,6 +1878,35 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// Agent Loop Observability Hooks
+// ============================================================================
+
+// context_assembled hook (void — parallel)
+export type PluginHookContextAssembledEvent = {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  messageCount: number;
+  iteration: number;
+};
+
+// loop_iteration_start hook (void — parallel)
+export type PluginHookLoopIterationStartEvent = {
+  iteration: number;
+  /** Number of pending tool results awaiting processing. Undefined when not available. */
+  pendingToolResults?: number;
+  messageCount: number;
+};
+
+// loop_iteration_end hook (void — parallel)
+export type PluginHookLoopIterationEndEvent = {
+  iteration: number;
+  toolCallsMade: number;
+  /** Number of new messages added this iteration. Undefined when not available. */
+  newMessagesAdded?: number;
+  willContinue: boolean;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -1976,6 +2008,18 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  context_assembled: (
+    event: PluginHookContextAssembledEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  loop_iteration_start: (
+    event: PluginHookLoopIterationStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  loop_iteration_end: (
+    event: PluginHookLoopIterationEndEvent,
+    ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
 };
 

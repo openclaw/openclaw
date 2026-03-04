@@ -2567,6 +2567,39 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
+      // Subscribe for loop iteration tracking hooks
+      let hookTurnIteration = 0;
+      const hookEventUnsub =
+        hookRunner?.hasHooks("loop_iteration_start") || hookRunner?.hasHooks("loop_iteration_end")
+          ? activeSession.subscribe((event) => {
+              if (event.type === "turn_start") {
+                hookTurnIteration++;
+                hookRunner
+                  .runLoopIterationStart(
+                    {
+                      iteration: hookTurnIteration,
+                      messageCount: activeSession.messages.length,
+                    },
+                    hookCtx,
+                  )
+                  .catch((err) => log.warn(`loop_iteration_start hook: ${String(err)}`));
+              }
+              if (event.type === "turn_end") {
+                const toolResults = event.toolResults ?? [];
+                hookRunner
+                  .runLoopIterationEnd(
+                    {
+                      iteration: hookTurnIteration,
+                      toolCallsMade: toolResults.length,
+                      willContinue: toolResults.length > 0,
+                    },
+                    hookCtx,
+                  )
+                  .catch((err) => log.warn(`loop_iteration_end hook: ${String(err)}`));
+              }
+            })
+          : undefined;
+
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
@@ -2665,6 +2698,15 @@ export async function runEmbeddedAttempt(
 
       // Hook runner was already obtained earlier before tool creation
       const hookAgentId = sessionAgentId;
+      const hookCtx = {
+        agentId: hookAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+      };
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
@@ -2798,6 +2840,22 @@ export async function runEmbeddedAttempt(
                 `promptImages=${imageResult.images.length} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
+          }
+
+          // Fire context_assembled hook — gives plugins a census of the full
+          // context the model will see (system prompt + messages + iteration).
+          if (hookRunner?.hasHooks("context_assembled")) {
+            hookRunner
+              .runContextAssembled(
+                {
+                  systemPrompt: systemPromptText,
+                  messages: activeSession.messages,
+                  messageCount: activeSession.messages.length,
+                  iteration: 1,
+                },
+                hookCtx,
+              )
+              .catch((err) => log.warn(`context_assembled hook: ${String(err)}`));
           }
 
           if (hookRunner?.hasHooks("llm_input")) {
@@ -3103,6 +3161,7 @@ export async function runEmbeddedAttempt(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
         }
+        hookEventUnsub?.();
         try {
           unsubscribe();
         } catch (err) {
