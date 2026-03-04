@@ -1,0 +1,156 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing,
+  readTerminalSnapshotFromGatewayDedupe,
+  setGatewayDedupeEntry,
+  waitForTerminalGatewayDedupe,
+} from "./agent-wait-dedupe.js";
+
+describe("agent wait dedupe helper", () => {
+  beforeEach(() => {
+    __testing.resetWaiters();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    __testing.resetWaiters();
+    vi.useRealTimers();
+  });
+
+  it("unblocks waiters when a terminal chat dedupe entry is written", async () => {
+    const dedupe = new Map();
+    const runId = "run-chat-terminal";
+    const waiter = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(__testing.getWaiterCount(runId)).toBe(1);
+
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+        },
+      },
+    });
+
+    await expect(waiter).resolves.toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+    });
+    expect(__testing.getWaiterCount(runId)).toBe(0);
+  });
+
+  it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
+    const dedupe = new Map();
+    const runId = "run-stale-chat";
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+        },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "accepted",
+        },
+      },
+    });
+
+    const snapshot = readTerminalSnapshotFromGatewayDedupe({
+      dedupe,
+      runId,
+    });
+    expect(snapshot).toBeNull();
+
+    const blockedWait = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 25,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await expect(blockedWait).resolves.toBeNull();
+    expect(__testing.getWaiterCount(runId)).toBe(0);
+  });
+
+  it("resolves multiple waiters for the same run id", async () => {
+    const dedupe = new Map();
+    const runId = "run-multi";
+    const first = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+    const second = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(__testing.getWaiterCount(runId)).toBe(2);
+
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok" },
+      },
+    });
+
+    await expect(first).resolves.toEqual(
+      expect.objectContaining({
+        status: "ok",
+      }),
+    );
+    await expect(second).resolves.toEqual(
+      expect.objectContaining({
+        status: "ok",
+      }),
+    );
+    expect(__testing.getWaiterCount(runId)).toBe(0);
+  });
+
+  it("cleans up waiter registration on timeout", async () => {
+    const dedupe = new Map();
+    const runId = "run-timeout";
+    const wait = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 20,
+    });
+
+    await Promise.resolve();
+    expect(__testing.getWaiterCount(runId)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(wait).resolves.toBeNull();
+    expect(__testing.getWaiterCount(runId)).toBe(0);
+  });
+});
