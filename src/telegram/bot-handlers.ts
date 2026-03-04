@@ -48,6 +48,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  hasBotMention,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
@@ -495,6 +496,8 @@ export const registerTelegramHandlers = ({
     hasGroupAllowOverride: boolean;
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
+    msg?: Message;
+    botUsername?: string;
   }) => {
     const {
       isGroup,
@@ -507,7 +510,23 @@ export const registerTelegramHandlers = ({
       hasGroupAllowOverride,
       groupConfig,
       topicConfig,
+      msg,
+      botUsername,
     } = params;
+    
+    // Helper to send auth hint if bot is mentioned
+    const sendAuthHint = async (reason: string) => {
+      if (msg && botUsername && hasBotMention(msg, botUsername)) {
+        try {
+          await ctx.reply("You are not authorized to use this bot in this group.", {
+            reply_parameters: { message_id: msg.message_id },
+          });
+        } catch (err) {
+          logVerbose(`Failed to send auth hint: ${err}`);
+        }
+      }
+    };
+    
     const baseAccess = evaluateTelegramGroupBaseAccess({
       isGroup,
       groupConfig,
@@ -522,17 +541,20 @@ export const registerTelegramHandlers = ({
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
         logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+        await sendAuthHint(baseAccess.reason);
         return true;
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
           `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
         );
+        await sendAuthHint(baseAccess.reason);
         return true;
       }
       logVerbose(
         `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
       );
+      await sendAuthHint(baseAccess.reason);
       return true;
     }
     if (!isGroup) {
@@ -559,23 +581,28 @@ export const registerTelegramHandlers = ({
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
         logVerbose("Blocked telegram group message (groupPolicy: disabled)");
+        await sendAuthHint(policyAccess.reason);
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-no-sender") {
         logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
+        await sendAuthHint(policyAccess.reason);
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-empty") {
         logVerbose(
           "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
         );
+        await sendAuthHint(policyAccess.reason);
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
         logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
+        await sendAuthHint(policyAccess.reason);
         return true;
       }
       logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
+      await sendAuthHint(policyAccess.reason);
       return true;
     }
     return false;
@@ -1429,6 +1456,8 @@ export const registerTelegramHandlers = ({
           hasGroupAllowOverride,
           groupConfig,
           topicConfig,
+          msg: event.msg,
+          botUsername: ctx.me?.username,
         })
       ) {
         return;
