@@ -82,7 +82,10 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
-export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs = SPAWN_TIMEOUT_MS): number[] {
+export function findGatewayPidsOnPortSync(
+  port: number,
+  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+): number[] {
   if (process.platform === "win32") {
     return [];
   }
@@ -116,10 +119,7 @@ export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs = SPAWN_T
  *  3. A missing lsof binary (permanent) short-circuits cleanly rather than
  *     spinning the full budget pointlessly.
  */
-type PollResult =
-  | { free: true }
-  | { free: false }
-  | { free: null; permanent: boolean };
+type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
   try {
@@ -225,9 +225,7 @@ function waitForPortFreeSync(port: number): void {
     // result.free === null && !permanent: transient lsof error — keep polling.
     sleepSync(PORT_FREE_POLL_INTERVAL_MS);
   }
-  restartLog.warn(
-    `port ${port} still in use after ${PORT_FREE_TIMEOUT_MS}ms; proceeding anyway`,
-  );
+  restartLog.warn(`port ${port} still in use after ${PORT_FREE_TIMEOUT_MS}ms; proceeding anyway`);
 }
 
 /**

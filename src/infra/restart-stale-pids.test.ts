@@ -15,7 +15,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: (...args: unknown[]) => mockResolveGatewayPort(...args),
+  resolveGatewayPort: () => mockResolveGatewayPort(),
 }));
 
 vi.mock("./ports-lsof.js", () => ({
@@ -57,7 +57,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     });
 
     it("returns [] when lsof returns an error object (e.g. ENOENT)", () => {
-      mockSpawnSync.mockReturnValue({ error: new Error("ENOENT"), status: null, stdout: "", stderr: "" });
+      mockSpawnSync.mockReturnValue({
+        error: new Error("ENOENT"),
+        status: null,
+        stdout: "",
+        stderr: "",
+      });
       expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
     });
 
@@ -122,8 +127,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
-        } else {
-          delete (process as NodeJS.Process & Record<string, unknown>)["platform"];
         }
       }
     });
@@ -142,7 +145,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const pid1 = process.pid + 10;
       const pid2 = process.pid + 11;
       mockSpawnSync.mockReturnValue({
-        error: null, status: 0,
+        error: null,
+        status: 0,
         stdout: lsofOutput([
           { pid: pid1, cmd: "openclaw-gateway" },
           { pid: pid2, cmd: "openclaw-gateway" },
@@ -159,7 +163,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       // only tracks openclaw processes — non-openclaw listeners are ignored.
       const otherPid = process.pid + 50;
       mockSpawnSync.mockReturnValue({
-        error: null, status: 0,
+        error: null,
+        status: 0,
         stdout: lsofOutput([{ pid: otherPid, cmd: "caddy" }]),
         stderr: "",
       });
@@ -179,7 +184,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call === 1) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // Poll returns status 1 — no listeners
         return { error: null, status: 1, stdout: "", stderr: "" };
@@ -200,7 +210,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         call++;
         if (call === 1) {
           events.push("initial-find");
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         if (call === 2) {
           // Permission/runtime error — status 2, should NOT be treated as free
@@ -232,11 +247,21 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         spawnCount++;
         if (spawnCount === 1) {
           // Initial findGatewayPidsOnPortSync — returns stale pid
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         if (spawnCount === 2) {
           // First waitForPortFreeSync poll — status 0, port busy (should parse inline, not spawn again)
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // Port free on third call
         return { error: null, status: 0, stdout: "", stderr: "" };
@@ -261,11 +286,21 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         call++;
         if (call === 1) {
           // Initial scan: finds stale pid
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         if (call === 2) {
           // status 1 + openclaw pid in stdout — container-restricted lsof reports partial results
-          return { error: null, status: 1, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "lsof: WARNING: can't stat() fuse" };
+          return {
+            error: null,
+            status: 1,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "lsof: WARNING: can't stat() fuse",
+          };
         }
         // Third poll: port is genuinely free
         return { error: null, status: 1, stdout: "", stderr: "" };
@@ -290,7 +325,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
       mockSpawnSync.mockImplementationOnce(() => {
         // Initial scan: finds stale pid
-        return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+        return {
+          error: null,
+          status: 0,
+          stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+          stderr: "",
+        };
       });
 
       // Second call: poll — resolveLsofCommandSync throws
@@ -312,7 +352,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   // cleanStaleGatewayProcessesSync
   // -------------------------------------------------------------------------
   describe("cleanStaleGatewayProcessesSync", () => {
-
     it("returns [] and does not call process.kill when port has no listeners", () => {
       mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout: "", stderr: "" });
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -326,7 +365,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call === 1) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // waitForPortFreeSync polls: port free immediately
         return { error: null, status: 0, stdout: "", stderr: "" };
@@ -345,7 +389,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call <= 5) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         return { error: null, status: 0, stdout: "", stderr: "" };
       });
@@ -370,11 +419,21 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         call++;
         if (call === 1) {
           events.push("initial-find");
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         if (call <= 4) {
           events.push(`busy-poll-${call}`);
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         events.push("port-free");
         return { error: null, status: 0, stdout: "", stderr: "" };
@@ -400,7 +459,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         call++;
         if (call === 1) {
           events.push("initial-find");
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // Permanent ENOENT — lsof is not installed
         events.push(`enoent-poll-${call}`);
@@ -425,7 +489,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call === 1) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         const err = new Error("lsof eperm") as NodeJS.ErrnoException;
         err.code = "EPERM";
@@ -445,7 +514,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call === 1) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         const err = new Error("lsof permission denied") as NodeJS.ErrnoException;
         err.code = "EACCES";
@@ -469,7 +543,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         // Advance clock by PORT_FREE_TIMEOUT_MS + 1ms on first poll to trip the deadline.
         fakeNow += 2001;
-        return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+        return {
+          error: null,
+          status: 0,
+          stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+          stderr: "",
+        };
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
@@ -493,7 +572,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         if (call === 1) {
           // Initial scan: finds stale pid
           events.push("initial-find");
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // Port is already free on first poll — pid was dead before SIGTERM
         events.push("poll-free");
@@ -501,7 +585,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       });
 
       // All SIGTERMs throw ESRCH — pid already gone
-      vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); });
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+      });
 
       cleanStaleGatewayProcessesSync();
 
@@ -522,7 +608,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         call++;
         if (call === 1) {
           events.push("initial-find");
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         if (call === 2) {
           // Transient: spawnSync timeout (no ENOENT code)
@@ -550,7 +641,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     });
 
     it("returns gracefully when lsof is unavailable from the start", () => {
-      mockSpawnSync.mockReturnValue({ error: new Error("ENOENT"), status: null, stdout: "", stderr: "" });
+      mockSpawnSync.mockReturnValue({
+        error: new Error("ENOENT"),
+        status: null,
+        stdout: "",
+        stderr: "",
+      });
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
       expect(cleanStaleGatewayProcessesSync()).toEqual([]);
       expect(killSpy).not.toHaveBeenCalled();
@@ -626,10 +722,20 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       mockSpawnSync.mockImplementation(() => {
         call++;
         if (call === 1) {
-          return { error: null, status: 0, stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]), stderr: "" };
+          return {
+            error: null,
+            status: 0,
+            stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+            stderr: "",
+          };
         }
         // status 1 + non-openclaw output — should be treated as free:true for our purposes
-        return { error: null, status: 1, stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]), stderr: "" };
+        return {
+          error: null,
+          status: 1,
+          stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]),
+          stderr: "",
+        };
       });
       vi.spyOn(process, "kill").mockReturnValue(true);
       // Should complete cleanly — no openclaw pids in status-1 output → free
@@ -667,7 +773,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       // Atomics.wait throws in Worker threads and some sandboxed runtimes.
       // The catch branch must handle this without propagating the exception.
       const origWait = Atomics.wait;
-      Atomics.wait = () => { throw new Error("not on main thread"); };
+      Atomics.wait = () => {
+        throw new Error("not on main thread");
+      };
       __testing.setSleepSyncOverride(null);
       try {
         // 1ms is enough to exercise the busy-wait loop without slowing CI.
