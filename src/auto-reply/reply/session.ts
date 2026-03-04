@@ -60,8 +60,11 @@ function resolveSessionStoreMatch(
   if (!target) {
     return undefined;
   }
+  const exact = store[target];
+  if (exact) {
+    return { entry: exact, legacyKeys: [] };
+  }
   const normalized = target.toLowerCase();
-  let selectedKey: string | undefined;
   let selectedEntry: SessionEntry | undefined;
   const legacyKeys: string[] = [];
   for (const [key, entry] of Object.entries(store)) {
@@ -70,13 +73,10 @@ function resolveSessionStoreMatch(
     }
     if (!selectedEntry || (entry.updatedAt ?? 0) > (selectedEntry.updatedAt ?? 0)) {
       selectedEntry = entry;
-      selectedKey = key;
     }
-    if (key !== target) {
-      legacyKeys.push(key);
-    }
+    legacyKeys.push(key);
   }
-  if (!selectedEntry || !selectedKey) {
+  if (!selectedEntry) {
     return undefined;
   }
   return { entry: selectedEntry, legacyKeys };
