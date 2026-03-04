@@ -475,14 +475,13 @@ export async function finalizeOnboardingWizard(
 
   const search = nextConfig.tools?.web?.search;
   const webSearchKey = (search?.apiKey ?? "").trim();
-  const webSearchProviderKey = Boolean(
-    search?.perplexity?.apiKey ||
-    search?.grok?.apiKey ||
-    search?.gemini?.apiKey ||
-    search?.kimi?.apiKey ||
-    search?.parallel?.apiKey,
-  );
   const configuredProvider = search?.provider ?? "brave";
+  const webSearchProviderKey = Boolean(
+    configuredProvider === "brave"
+      ? undefined
+      : (search as Record<string, Record<string, unknown>> | undefined)?.[configuredProvider]
+          ?.apiKey,
+  );
   const providerEnvVar = PROVIDER_ENV_VARS[configuredProvider];
   const webSearchEnv = Boolean(providerEnvVar && (process.env[providerEnvVar] ?? "").trim());
   const hasWebSearchKey = Boolean(webSearchKey || webSearchProviderKey || webSearchEnv);
