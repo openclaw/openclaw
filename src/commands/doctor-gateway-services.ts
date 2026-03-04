@@ -11,6 +11,7 @@ import {
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -235,10 +236,30 @@ export async function maybeRepairGatewayServiceConfig(
     if (warning) {
       note(warning, "Gateway runtime");
     }
-    note(
-      "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
-      "Gateway runtime",
+    const isBunIssue = audit.issues.some(
+      (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun,
     );
+    if (isBunIssue) {
+      note(
+        "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun.",
+        "Gateway runtime",
+      );
+    } else if (systemNodeInfo) {
+      note(
+        "Upgrade system Node to 22+ and rerun doctor to migrate off version managers.",
+        "Gateway runtime",
+      );
+    } else if (isSupportedNodeVersion(process.versions.node)) {
+      note(
+        "No system-installed Node found. Install Node via Homebrew/apt/choco and rerun doctor to migrate off version managers.",
+        "Gateway runtime",
+      );
+    } else {
+      note(
+        "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off version managers.",
+        "Gateway runtime",
+      );
+    }
   }
 
   const port = resolveGatewayPort(cfg, process.env);

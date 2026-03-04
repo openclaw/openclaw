@@ -344,7 +344,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+            "No system-installed Node found. Install Node via Homebrew/apt/choco to avoid version-manager breakage.",
           level: "recommended",
         });
       }
