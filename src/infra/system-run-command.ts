@@ -81,9 +81,10 @@ export function validateSystemRunCommandConsistency(params: {
       ? params.rawCommand.trim()
       : null;
   const shellCommand = extractShellCommandFromArgv(params.argv);
-  const inferred = shellCommand ? shellCommand.trim() : formatExecCommand(params.argv);
+  const canonical = formatExecCommand(params.argv);
+  const inferred = shellCommand ? shellCommand.trim() : canonical;
 
-  if (raw && raw !== inferred) {
+  if (raw && raw !== inferred && raw !== canonical) {
     return {
       ok: false,
       message: "INVALID_REQUEST: rawCommand does not match command",

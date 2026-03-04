@@ -51,4 +51,12 @@ describe("system run command helpers", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  test("validateSystemRunCommandConsistency accepts rawCommand matching formatted sh wrapper argv", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: '/bin/sh -lc "echo hi"',
+    });
+    expect(res.ok).toBe(true);
+  });
 });
