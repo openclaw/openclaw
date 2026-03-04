@@ -47,6 +47,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       await line.pushMessageLine(id, "OpenClaw: your access has been approved.", {
         channelAccessToken: account.channelAccessToken,
+        cfg,
       });
     },
   },
@@ -357,6 +358,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const buildTemplate = runtime.channel.line.buildTemplateMessageFromPayload;
       const createQuickReplyItems = runtime.channel.line.createQuickReplyItems;
 
+      const sendOpts = { verbose: false, accountId: accountId ?? undefined, cfg };
       let lastResult: { messageId: string; chatId: string } | null = null;
       const quickReplies = lineData.quickReplies ?? [];
       const hasQuickReplies = quickReplies.length > 0;
@@ -370,10 +372,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         for (let i = 0; i < messages.length; i += 5) {
           // LINE SDK expects Message[] but we build dynamically
           const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
-          const result = await sendBatch(to, batch, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
+          const result = await sendBatch(to, batch, sendOpts);
           lastResult = { messageId: result.messageId, chatId: result.chatId };
         }
       };
@@ -397,36 +396,24 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         if (lineData.flexMessage) {
           // LINE SDK expects FlexContainer but we receive contents as unknown
           const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
+          lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, sendOpts);
         }
 
         if (lineData.templateMessage) {
           const template = buildTemplate(lineData.templateMessage);
           if (template) {
-            lastResult = await sendTemplate(to, template, {
-              verbose: false,
-              accountId: accountId ?? undefined,
-            });
+            lastResult = await sendTemplate(to, template, sendOpts);
           }
         }
 
         if (lineData.location) {
-          lastResult = await sendLocation(to, lineData.location, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
+          lastResult = await sendLocation(to, lineData.location, sendOpts);
         }
 
         for (const flexMsg of processed.flexMessages) {
           // LINE SDK expects FlexContainer but we receive contents as unknown
           const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
-          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-          });
+          lastResult = await sendFlex(to, flexMsg.altText, flexContents, sendOpts);
         }
       }
 
@@ -434,9 +421,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
         for (const url of mediaUrls) {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
-            verbose: false,
+            ...sendOpts,
             mediaUrl: url,
-            accountId: accountId ?? undefined,
           });
         }
       }
@@ -445,15 +431,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         for (let i = 0; i < chunks.length; i += 1) {
           const isLast = i === chunks.length - 1;
           if (isLast && hasQuickReplies) {
-            lastResult = await sendQuickReplies(to, chunks[i], quickReplies, {
-              verbose: false,
-              accountId: accountId ?? undefined,
-            });
+            lastResult = await sendQuickReplies(to, chunks[i], quickReplies, sendOpts);
           } else {
-            lastResult = await sendText(to, chunks[i], {
-              verbose: false,
-              accountId: accountId ?? undefined,
-            });
+            lastResult = await sendText(to, chunks[i], sendOpts);
           }
         }
       } else if (shouldSendQuickRepliesInline) {
@@ -511,9 +491,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && sendMediaAfterText) {
         for (const url of mediaUrls) {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
-            verbose: false,
+            ...sendOpts,
             mediaUrl: url,
-            accountId: accountId ?? undefined,
           });
         }
       }
@@ -523,10 +502,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       return { channel: "line", messageId: "empty", chatId: to };
     },
-    sendText: async ({ to, text, accountId }) => {
+    sendText: async ({ to, text, accountId, cfg }) => {
       const runtime = getLineRuntime();
       const sendText = runtime.channel.line.pushMessageLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
+      const sendOpts = { verbose: false, accountId: accountId ?? undefined, cfg };
 
       // Process markdown: extract tables/code blocks, strip formatting
       const processed = processLineMessage(text);
@@ -534,10 +514,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       // Send cleaned text first (if non-empty)
       let result: { messageId: string; chatId: string };
       if (processed.text.trim()) {
-        result = await sendText(to, processed.text, {
-          verbose: false,
-          accountId: accountId ?? undefined,
-        });
+        result = await sendText(to, processed.text, sendOpts);
       } else {
         // If text is empty after processing, still need a result
         result = { messageId: "processed", chatId: to };
@@ -547,20 +524,18 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       for (const flexMsg of processed.flexMessages) {
         // LINE SDK expects FlexContainer but we receive contents as unknown
         const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
-        await sendFlex(to, flexMsg.altText, flexContents, {
-          verbose: false,
-          accountId: accountId ?? undefined,
-        });
+        await sendFlex(to, flexMsg.altText, flexContents, sendOpts);
       }
 
       return { channel: "line", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
       const send = getLineRuntime().channel.line.sendMessageLine;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
         accountId: accountId ?? undefined,
+        cfg,
       });
       return { channel: "line", ...result };
     },

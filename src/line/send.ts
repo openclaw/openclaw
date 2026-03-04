@@ -1,4 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -27,13 +28,14 @@ const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 interface LineSendOpts {
   channelAccessToken?: string;
   accountId?: string;
+  cfg?: OpenClawConfig;
   verbose?: boolean;
   mediaUrl?: string;
   replyToken?: string;
 }
 
-type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
-type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "verbose">;
+type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "cfg">;
+type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "cfg" | "verbose">;
 
 interface LinePushBehavior {
   errorContext?: string;
@@ -68,7 +70,7 @@ function createLineMessagingClient(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
 } {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
@@ -405,7 +407,12 @@ export function createTextMessageWithQuickReplies(
  */
 export async function showLoadingAnimation(
   chatId: string,
-  opts: { channelAccessToken?: string; accountId?: string; loadingSeconds?: number } = {},
+  opts: {
+    channelAccessToken?: string;
+    accountId?: string;
+    cfg?: OpenClawConfig;
+    loadingSeconds?: number;
+  } = {},
 ): Promise<void> {
   const { client } = createLineMessagingClient(opts);
 
@@ -426,7 +433,12 @@ export async function showLoadingAnimation(
  */
 export async function getUserProfile(
   userId: string,
-  opts: { channelAccessToken?: string; accountId?: string; useCache?: boolean } = {},
+  opts: {
+    channelAccessToken?: string;
+    accountId?: string;
+    cfg?: OpenClawConfig;
+    useCache?: boolean;
+  } = {},
 ): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const useCache = opts.useCache ?? true;
 
@@ -465,7 +477,7 @@ export async function getUserProfile(
  */
 export async function getUserDisplayName(
   userId: string,
-  opts: { channelAccessToken?: string; accountId?: string } = {},
+  opts: { channelAccessToken?: string; accountId?: string; cfg?: OpenClawConfig } = {},
 ): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;

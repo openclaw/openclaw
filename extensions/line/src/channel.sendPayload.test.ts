@@ -114,10 +114,11 @@ describe("linePlugin outbound.sendPayload", () => {
     });
 
     expect(mocks.pushFlexMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
-      verbose: false,
-      accountId: "default",
-    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      "Now playing:",
+      expect.objectContaining({ verbose: false, accountId: "default", cfg }),
+    );
   });
 
   it("sends template message without dropping text", async () => {
@@ -151,10 +152,11 @@ describe("linePlugin outbound.sendPayload", () => {
 
     expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledTimes(1);
     expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
-      verbose: false,
-      accountId: "default",
-    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:1",
+      "Choose one:",
+      expect.objectContaining({ verbose: false, accountId: "default", cfg }),
+    );
   });
 
   it("attaches quick replies when no text chunks are present", async () => {
@@ -193,7 +195,7 @@ describe("linePlugin outbound.sendPayload", () => {
           quickReply: { items: ["One", "Two"] },
         },
       ],
-      { verbose: false, accountId: "default" },
+      expect.objectContaining({ verbose: false, accountId: "default", cfg }),
     );
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
@@ -221,20 +223,50 @@ describe("linePlugin outbound.sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      accountId: "default",
-    });
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
+      "line:user:3",
+      "",
+      expect.objectContaining({
+        verbose: false,
+        mediaUrl: "https://example.com/img.jpg",
+        accountId: "default",
+        cfg,
+      }),
+    );
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
       ["One", "Two"],
-      { verbose: false, accountId: "default" },
+      expect.objectContaining({ verbose: false, accountId: "default", cfg }),
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
     expect(mediaOrder).toBeLessThan(quickReplyOrder);
+  });
+
+  it("forwards caller cfg to all LINE send helpers", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const callerCfg = { channels: { line: { accountId: "caller-account" } } } as OpenClawConfig;
+
+    const payload = {
+      text: "Hello",
+      channelData: { line: {} },
+    };
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:U1",
+      text: payload.text,
+      payload,
+      accountId: "acc1",
+      cfg: callerCfg,
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:U1",
+      "Hello",
+      expect.objectContaining({ cfg: callerCfg }),
+    );
   });
 
   it("uses configured text chunk limit for payloads", async () => {

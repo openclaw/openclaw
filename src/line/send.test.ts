@@ -225,4 +225,30 @@ describe("LINE send helpers", () => {
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
   });
+
+  it("uses caller cfg when provided, does not call loadConfig", async () => {
+    const callerCfg = { channels: { line: { channelAccessToken: "caller-token" } } } as never;
+    resolveLineAccountMock.mockImplementation(({ cfg }) => {
+      expect(cfg).toBe(callerCfg);
+      return { accountId: "default" };
+    });
+
+    await sendModule.pushMessageLine("U123", "hello", { cfg: callerCfg });
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(resolveLineAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: callerCfg }),
+    );
+  });
+
+  it("falls back to loadConfig when cfg is not provided", async () => {
+    loadConfigMock.mockReturnValue({ channels: { line: {} } } as never);
+
+    await sendModule.pushMessageLine("U123", "hello", {});
+
+    expect(loadConfigMock).toHaveBeenCalled();
+    expect(resolveLineAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: { channels: { line: {} } } }),
+    );
+  });
 });
