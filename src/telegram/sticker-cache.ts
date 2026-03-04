@@ -147,9 +147,16 @@ let imageRuntimePromise: Promise<
   typeof import("../media-understanding/providers/image-runtime.js")
 > | null = null;
 
-function loadImageRuntime() {
-  imageRuntimePromise ??= import("../media-understanding/providers/image-runtime.js");
-  return imageRuntimePromise;
+async function loadImageRuntime() {
+  if (!imageRuntimePromise) {
+    imageRuntimePromise = import("../media-understanding/providers/image-runtime.js");
+  }
+  try {
+    return await imageRuntimePromise;
+  } catch {
+    imageRuntimePromise = null; // allow retry on next call
+    throw new Error("failed to load image runtime");
+  }
 }
 
 export interface DescribeStickerParams {
