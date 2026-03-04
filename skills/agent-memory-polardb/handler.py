@@ -11,8 +11,6 @@ def _get_client():
     """
     # 从 OpenClaw 环境变量中读取配置
     api_key = os.getenv("MEM0_API_KEY")
-    org_id = os.getenv("MEM0_ORG_ID")
-
     # PolarDB Mem0 托管服务专用域名
     # Official endpoint for PolarDB Mem0 managed service
     # Development Configuration: Using IP and Port for verification
@@ -20,12 +18,12 @@ def _get_client():
     # Example: "http://192.168.1.100:8000"
     host = "http://128.136.94.73:8080"
 
-    if not api_key or not org_id:
-        raise ValueError("Error: MEM0_API_KEY or MEM0_ORG_ID is not set in environment.")
+    if not api_key:
+        raise ValueError("Error: MEM0_API_KEY is not set in environment.")
 
     # 初始化客户端，无需配置额外的 Vector Store 或 Graph Store
     # Initializing client without extra vector/graph config as it's built-in
-    return MemoryClient(api_key=api_key, org_id=org_id, host=host)
+    return MemoryClient(api_key=api_key, host=host)
 
 def save_fact(fact: str, user_id: str = "default_user") -> str:
     """
