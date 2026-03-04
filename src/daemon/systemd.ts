@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -178,19 +179,74 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
-function resolveSystemctlUserScopeArgs(env: GatewayServiceEnv): string[] {
+function resolveSystemctlDirectUserScopeArgs(): string[] {
+  return ["--user"];
+}
+
+function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
   const sudoUser = env.SUDO_USER?.trim();
   if (sudoUser && sudoUser !== "root") {
-    return ["--machine", `${sudoUser}@`, "--user"];
+    return sudoUser;
   }
-  return ["--user"];
+  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  try {
+    return os.userInfo().username;
+  } catch {
+    return null;
+  }
+}
+
+function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
+  const trimmedUser = user.trim();
+  if (!trimmedUser) {
+    return [];
+  }
+  return ["--machine", `${trimmedUser}@`, "--user"];
+}
+
+function shouldFallbackToMachineUserScope(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("failed to connect to user scope bus") ||
+    normalized.includes("dbus_session_bus_address") ||
+    normalized.includes("xdg_runtime_dir")
+  );
 }
 
 async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execSystemctl([...resolveSystemctlUserScopeArgs(env), ...args]);
+  const machineUser = resolveSystemctlMachineScopeUser(env);
+  const sudoUser = env.SUDO_USER?.trim();
+
+  // Under sudo, prefer the invoking non-root user's scope directly.
+  if (sudoUser && sudoUser !== "root" && machineUser) {
+    const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
+    if (machineScopeArgs.length > 0) {
+      return await execSystemctl([...machineScopeArgs, ...args]);
+    }
+  }
+
+  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  if (directResult.code === 0) {
+    return directResult;
+  }
+
+  const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
+  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
+    return directResult;
+  }
+
+  const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
+  if (machineScopeArgs.length === 0) {
+    return directResult;
+  }
+  return await execSystemctl([...machineScopeArgs, ...args]);
 }
 
 export async function isSystemdUserServiceAvailable(
