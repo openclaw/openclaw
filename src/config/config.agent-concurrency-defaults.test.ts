@@ -44,6 +44,30 @@ describe("agent concurrency defaults", () => {
     expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(7);
   });
 
+  it("accepts subagent notification localization/templates", () => {
+    const parsed = OpenClawSchema.parse({
+      agents: {
+        defaults: {
+          subagents: {
+            notifications: {
+              locale: "zh-CN",
+              templates: {
+                finished: "✅ 子任务 {{label}} 已完成",
+                timedOut: "⏱️ 子任务 {{label}} 超时",
+                error: "❌ 子任务 {{label}} 出错：{{error}}",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.agents?.defaults?.subagents?.notifications?.locale).toBe("zh-CN");
+    expect(parsed.agents?.defaults?.subagents?.notifications?.templates?.timedOut).toContain(
+      "{{label}}",
+    );
+  });
+
   it("injects defaults on load", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {});

@@ -75,7 +75,77 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+type SubagentNotificationTemplateKey =
+  | "finished"
+  | "timedOut"
+  | "error"
+  | "finishedSession"
+  | "timedOutSession"
+  | "errorSession";
+
+const BUILTIN_SUBAGENT_NOTIFICATION_TEMPLATES: Record<
+  string,
+  Record<SubagentNotificationTemplateKey, string>
+> = {
+  en: {
+    finished: "✅ Subagent {{label}} finished",
+    timedOut: "⏱️ Subagent {{label}} timed out",
+    error: "❌ Subagent {{label}} failed",
+    finishedSession: "✅ Subagent {{label}} completed this task (session remains active)",
+    timedOutSession: "⏱️ Subagent {{label}} timed out on this task (session remains active)",
+    errorSession: "❌ Subagent {{label}} failed this task (session remains active)",
+  },
+  "zh-CN": {
+    finished: "✅ 子任务 {{label}} 已完成",
+    timedOut: "⏱️ 子任务 {{label}} 超时",
+    error: "❌ 子任务 {{label}} 失败",
+    finishedSession: "✅ 子任务 {{label}} 已完成本任务（会话保持活跃）",
+    timedOutSession: "⏱️ 子任务 {{label}} 本任务超时（会话保持活跃）",
+    errorSession: "❌ 子任务 {{label}} 本任务失败（会话保持活跃）",
+  },
+};
+
+function renderSubagentNotificationTemplate(
+  template: string,
+  vars: { label: string; error?: string },
+): string {
+  return template
+    .replaceAll(/{{\s*label\s*}}/g, vars.label)
+    .replaceAll(/{{\s*error\s*}}/g, vars.error ?? "unknown error");
+}
+
+function resolveSubagentNotificationTemplate(
+  cfg: ReturnType<typeof loadConfig>,
+  params: { outcome?: SubagentRunOutcome; spawnMode?: SpawnSubagentMode },
+): string | undefined {
+  const statusKey =
+    params.outcome?.status === "error"
+      ? "error"
+      : params.outcome?.status === "timeout"
+        ? "timedOut"
+        : "finished";
+  const key = (
+    params.spawnMode === "session" ? `${statusKey}Session` : statusKey
+  ) as SubagentNotificationTemplateKey;
+  const notifications = cfg.agents?.defaults?.subagents?.notifications;
+  const customTemplates = notifications?.templates;
+  const customCandidate = customTemplates?.[key] ?? customTemplates?.[statusKey];
+  if (typeof customCandidate === "string" && customCandidate.trim()) {
+    return customCandidate.trim();
+  }
+  const locale = notifications?.locale?.trim();
+  if (!locale) {
+    return undefined;
+  }
+  const localized = BUILTIN_SUBAGENT_NOTIFICATION_TEMPLATES[locale]?.[key];
+  if (typeof localized === "string" && localized.trim()) {
+    return localized;
+  }
+  return BUILTIN_SUBAGENT_NOTIFICATION_TEMPLATES.en[key];
+}
+
 function buildCompletionDeliveryMessage(params: {
+  cfg: ReturnType<typeof loadConfig>;
   findings: string;
   subagentName: string;
   spawnMode?: SpawnSubagentMode;
@@ -91,21 +161,30 @@ function buildCompletionDeliveryMessage(params: {
   if (params.announceType === "cron job") {
     return hasFindings ? findingsText : "";
   }
-  const header = (() => {
-    if (params.outcome?.status === "error") {
-      return params.spawnMode === "session"
-        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
-        : `❌ Subagent ${params.subagentName} failed`;
-    }
-    if (params.outcome?.status === "timeout") {
-      return params.spawnMode === "session"
-        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
-        : `⏱️ Subagent ${params.subagentName} timed out`;
-    }
-    return params.spawnMode === "session"
-      ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
-      : `✅ Subagent ${params.subagentName} finished`;
-  })();
+  const configuredTemplate = resolveSubagentNotificationTemplate(params.cfg, {
+    outcome: params.outcome,
+    spawnMode: params.spawnMode,
+  });
+  const header = configuredTemplate
+    ? renderSubagentNotificationTemplate(configuredTemplate, {
+        label: params.subagentName,
+        error: params.outcome?.error,
+      })
+    : (() => {
+        if (params.outcome?.status === "error") {
+          return params.spawnMode === "session"
+            ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
+            : `❌ Subagent ${params.subagentName} failed`;
+        }
+        if (params.outcome?.status === "timeout") {
+          return params.spawnMode === "session"
+            ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
+            : `⏱️ Subagent ${params.subagentName} timed out`;
+        }
+        return params.spawnMode === "session"
+          ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
+          : `✅ Subagent ${params.subagentName} finished`;
+      })();
   if (!hasFindings) {
     return header;
   }
@@ -1128,6 +1207,7 @@ export async function runSubagentAnnounceFlow(params: {
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
+  const cfg = loadConfig();
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
@@ -1332,6 +1412,7 @@ export async function runSubagentAnnounceFlow(params: {
       endedAt: params.endedAt,
     });
     completionMessage = buildCompletionDeliveryMessage({
+      cfg,
       findings,
       subagentName,
       spawnMode: params.spawnMode,

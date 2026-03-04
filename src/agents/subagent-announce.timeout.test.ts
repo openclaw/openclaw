@@ -148,4 +148,79 @@ describe("subagent announce timeout config", () => {
     const sendCall = findGatewayCall((call) => call.method === "send");
     expect(sendCall?.timeoutMs).toBe(90_000);
   });
+
+  it("localizes completion direct-send header with built-in subagent notifications locale", async () => {
+    configOverride = {
+      session: defaultSessionConfig,
+      agents: {
+        defaults: {
+          subagents: {
+            notifications: {
+              locale: "zh-CN",
+            },
+          },
+        },
+      },
+    };
+
+    await runAnnounceFlowForTest("run-locale-header-send", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+      roundOneReply: "done",
+      outcome: { status: "ok" },
+    });
+
+    const sendCall = findGatewayCall((call) => call.method === "send");
+    const message = typeof sendCall?.params?.message === "string" ? sendCall.params.message : "";
+    expect(message).toContain("✅ 子任务 main 已完成");
+  });
+
+  it("applies custom subagent notification templates to timeout and error completion headers", async () => {
+    configOverride = {
+      session: defaultSessionConfig,
+      agents: {
+        defaults: {
+          subagents: {
+            notifications: {
+              templates: {
+                timedOut: "⏱️ [custom] {{label}} timeout",
+                error: "❌ [custom] {{label}} failed: {{error}}",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await runAnnounceFlowForTest("run-custom-timeout-header-send", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+      roundOneReply: "partial",
+      outcome: { status: "timeout" },
+    });
+    const timeoutSendCall = gatewayCalls[gatewayCalls.length - 1];
+    const timeoutMessage =
+      typeof timeoutSendCall?.params?.message === "string" ? timeoutSendCall.params.message : "";
+    expect(timeoutMessage).toContain("⏱️ [custom] main timeout");
+
+    await runAnnounceFlowForTest("run-custom-error-header-send", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+      roundOneReply: "failed",
+      outcome: { status: "error", error: "boom" },
+    });
+    const errorSendCall = gatewayCalls[gatewayCalls.length - 1];
+    const errorMessage =
+      typeof errorSendCall?.params?.message === "string" ? errorSendCall.params.message : "";
+    expect(errorMessage).toContain("❌ [custom] main failed: boom");
+  });
 });

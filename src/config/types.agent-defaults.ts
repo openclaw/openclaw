@@ -281,6 +281,26 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /** Optional notification localization/customization for sub-agent completion announces. */
+    notifications?: {
+      /** Built-in locale for announce headers (currently: "en", "zh-CN"). */
+      locale?: string;
+      /** Optional custom templates; supports {{label}} and {{error}} placeholders. */
+      templates?: {
+        /** Success template for non-session spawn mode. */
+        finished?: string;
+        /** Timeout template for non-session spawn mode. */
+        timedOut?: string;
+        /** Error template for non-session spawn mode. */
+        error?: string;
+        /** Success template for session spawn mode. */
+        finishedSession?: string;
+        /** Timeout template for session spawn mode. */
+        timedOutSession?: string;
+        /** Error template for session spawn mode. */
+        errorSession?: string;
+      };
+    };
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

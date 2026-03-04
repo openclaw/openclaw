@@ -176,6 +176,23 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        notifications: z
+          .object({
+            locale: z.string().optional(),
+            templates: z
+              .object({
+                finished: z.string().optional(),
+                timedOut: z.string().optional(),
+                error: z.string().optional(),
+                finishedSession: z.string().optional(),
+                timedOutSession: z.string().optional(),
+                errorSession: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
