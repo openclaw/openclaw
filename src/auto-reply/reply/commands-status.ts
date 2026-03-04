@@ -9,6 +9,10 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -27,6 +31,59 @@ import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
+
+type ChannelHealthSnapshot = Pick<
+  ChannelAccountSnapshot,
+  "configured" | "enabled" | "connected" | "running" | "lastError"
+>;
+
+type ChannelHealthEntry = {
+  id: string;
+  snapshot: ChannelHealthSnapshot;
+};
+
+const CHANNEL_HEALTH_ERROR_MAX = 30;
+
+function truncateChannelHealthError(message: string): string {
+  if (message.length <= CHANNEL_HEALTH_ERROR_MAX) {
+    return message;
+  }
+  return message.slice(0, CHANNEL_HEALTH_ERROR_MAX);
+}
+
+function formatChannelHealthEntry(entry: ChannelHealthEntry): string | null {
+  const channelId = entry.id.trim();
+  if (!channelId) {
+    return null;
+  }
+
+  const snapshot = entry.snapshot;
+  if (snapshot.configured === false) {
+    return null;
+  }
+
+  if (snapshot.enabled === false) {
+    return `⚫ ${channelId}`;
+  }
+
+  const errorMessage = typeof snapshot.lastError === "string" ? snapshot.lastError.trim() : "";
+  const hasError = errorMessage.length > 0;
+  const disconnected = snapshot.connected === false || snapshot.running === false;
+  if (hasError || disconnected) {
+    const detail = hasError ? ` (${truncateChannelHealthError(errorMessage)})` : "";
+    return `❌ ${channelId}${detail}`;
+  }
+
+  return `✅ ${channelId}`;
+}
+
+export function buildChannelHealthSummaryLine(entries: ReadonlyArray<ChannelHealthEntry>): string | undefined {
+  const parts = entries.map(formatChannelHealthEntry).filter((entry): entry is string => Boolean(entry));
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return `📡 Channels: ${parts.join(", ")}`;
+}
 
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
@@ -105,6 +162,31 @@ export async function buildStatusReply(params: {
       usageLine = null;
     }
   }
+
+  const channelHealthEntries: ChannelHealthEntry[] = [];
+  for (const plugin of listChannelPlugins()) {
+    try {
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const accountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const snapshot = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
+        accountId,
+      });
+      channelHealthEntries.push({
+        id: plugin.id,
+        snapshot,
+      });
+    } catch {
+      // Ignore channel snapshot failures in /status.
+    }
+  }
+  const channelsLine = buildChannelHealthSummaryLine(channelHealthEntries);
+
   const queueSettings = resolveQueueSettings({
     cfg,
     channel: command.channel,
@@ -196,6 +278,7 @@ export async function buildStatusReply(params: {
       showDetails: queueOverrides,
     },
     subagentsLine,
+    channelsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
   });

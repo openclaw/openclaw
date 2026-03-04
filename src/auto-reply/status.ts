@@ -87,6 +87,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  channelsLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -677,6 +678,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.channelsLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
     activationLine,
