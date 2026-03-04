@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  buildChromeLaunchArgs,
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
@@ -375,5 +376,81 @@ describe("browser chrome helpers", () => {
     await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+});
+
+describe("buildChromeLaunchArgs", () => {
+  const baseProfile = { cdpPort: 18800 };
+  const userDataDir = "/tmp/test-profile";
+
+  it("omits --disable-background-networking in headless mode (#34468)", () => {
+    const args = buildChromeLaunchArgs(
+      { headless: true, noSandbox: false, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "linux",
+    );
+    expect(args).not.toContain("--disable-background-networking");
+    expect(args).toContain("--headless=new");
+    expect(args).toContain("--disable-gpu");
+  });
+
+  it("includes --disable-background-networking in non-headless mode", () => {
+    const args = buildChromeLaunchArgs(
+      { headless: false, noSandbox: false, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "linux",
+    );
+    expect(args).toContain("--disable-background-networking");
+    expect(args).not.toContain("--headless=new");
+  });
+
+  it("includes sandbox flags when noSandbox is true", () => {
+    const args = buildChromeLaunchArgs(
+      { headless: true, noSandbox: true, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "linux",
+    );
+    expect(args).toContain("--no-sandbox");
+    expect(args).toContain("--disable-setuid-sandbox");
+  });
+
+  it("includes --disable-dev-shm-usage on linux regardless of headless", () => {
+    const headlessArgs = buildChromeLaunchArgs(
+      { headless: true, noSandbox: false, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "linux",
+    );
+    const nonHeadlessArgs = buildChromeLaunchArgs(
+      { headless: false, noSandbox: false, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "linux",
+    );
+    expect(headlessArgs).toContain("--disable-dev-shm-usage");
+    expect(nonHeadlessArgs).toContain("--disable-dev-shm-usage");
+  });
+
+  it("omits --disable-dev-shm-usage on non-linux platforms", () => {
+    const args = buildChromeLaunchArgs(
+      { headless: true, noSandbox: false, extraArgs: [] },
+      baseProfile,
+      userDataDir,
+      "darwin",
+    );
+    expect(args).not.toContain("--disable-dev-shm-usage");
+  });
+
+  it("appends extraArgs", () => {
+    const args = buildChromeLaunchArgs(
+      { headless: false, noSandbox: false, extraArgs: ["--window-size=1280,720"] },
+      baseProfile,
+      userDataDir,
+      "darwin",
+    );
+    expect(args).toContain("--window-size=1280,720");
   });
 });
