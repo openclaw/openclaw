@@ -23,22 +23,27 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return true;
   } catch {
     // Fallback for non-secure contexts (HTTP on Windows/localhost)
-    try {
-      // Use textarea element fallback for insecure contexts
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      textarea.style.top = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const success = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      return success;
-    } catch {
-      return false;
-    }
+    return copyViaExecCommand(text);
+  }
+}
+
+function copyViaExecCommand(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "-9999px";
+  document.body.appendChild(textarea);
+
+  try {
+    textarea.focus();
+    textarea.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    // Always clean up the textarea element to prevent DOM leak
+    document.body.removeChild(textarea);
   }
 }
 
