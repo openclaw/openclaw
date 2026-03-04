@@ -165,10 +165,16 @@ export function resolveModel(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+  const providers = cfg?.models?.providers ?? {};
+  const normalizedProvider = normalizeProviderId(provider);
+  const providerEntry = Object.entries(providers).find(
+    ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
+  )?.[1];
+  const providerModelEntry = providerEntry?.models?.find((entry) => entry.id === modelId);
+  const explicitApi = providerModelEntry?.api ?? providerEntry?.api;
+  const explicitBaseUrl = providerEntry?.baseUrl;
   if (!model) {
-    const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
       (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
     );
@@ -221,5 +227,13 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  const resolvedModel =
+    explicitApi || explicitBaseUrl
+      ? ({
+          ...model,
+          api: explicitApi ?? model.api,
+          baseUrl: explicitBaseUrl ?? model.baseUrl,
+        } as Model<Api>)
+      : model;
+  return { model: normalizeModelCompat(resolvedModel), authStorage, modelRegistry };
 }
