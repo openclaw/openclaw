@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Context as LlmContext, UserMessage } from "@mariozechner/pi-ai";
-import { complete } from "@mariozechner/pi-ai";
+import type { Context as LlmContext, UserMessage, Model } from "@mariozechner/pi-ai";
+import { complete, getModel } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { serializeConversation, convertToLlm } from "@mariozechner/pi-coding-agent";
 import {
@@ -250,14 +250,69 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
+// ---------------------------------------------------------------------------
+// Model override for handover generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the model + API key for handover generation.
+ * If handoverCfg.model is set (e.g. "google/gemini-2.5-pro"), use that model
+ * with the corresponding API key from env. Otherwise fall back to session model.
+ */
+async function resolveHandoverModel(
+  sessionModel: Model<any>,
+  modelOverride: string | undefined,
+  ctx: { modelRegistry: { getApiKey: (model: any) => Promise<string | null> } },
+): Promise<{ model: Model<any>; apiKey: string | null }> {
+  if (modelOverride) {
+    const parts = modelOverride.split("/");
+    if (parts.length === 2) {
+      const [provider, modelId] = parts;
+      try {
+        const overrideModel = getModel(provider as any, modelId as any);
+        // Resolve API key for the override provider
+        const envKeyMap: Record<string, string | undefined> = {
+          google: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
+          anthropic: process.env.ANTHROPIC_API_KEY,
+          openai: process.env.OPENAI_API_KEY,
+        };
+        const apiKey = envKeyMap[provider] ?? null;
+        if (apiKey) {
+          console.log(
+            `[iris-handover] Using override model: ${provider}/${modelId} (from handover config)`,
+          );
+          return { model: overrideModel, apiKey };
+        }
+        console.warn(
+          `[iris-handover] Override model ${modelOverride} configured but no API key found for provider "${provider}"`,
+        );
+      } catch (err) {
+        console.warn(
+          `[iris-handover] Failed to resolve override model "${modelOverride}": ${
+            err instanceof Error ? err.message : String(err)
+          }. Falling back to session model.`,
+        );
+      }
+    } else {
+      console.warn(
+        `[iris-handover] Invalid model override format "${modelOverride}" (expected "provider/model"). Falling back to session model.`,
+      );
+    }
+  }
+
+  // Fallback: use session model with registry API key
+  const apiKey = await ctx.modelRegistry.getApiKey(sessionModel);
+  return { model: sessionModel, apiKey };
+}
+
 export default function irisHandoverExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
 
-    const model = ctx.model;
-    if (!model) {
+    const sessionModel = ctx.model;
+    if (!sessionModel) {
       return {
         compaction: {
           summary: FALLBACK_SUMMARY + fileOpsSummary,
@@ -268,7 +323,10 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
       };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
+    // Check for handover model override (e.g. "google/gemini-2.5-pro")
+    const runtime = getHandoverRuntime(ctx.sessionManager);
+    const handoverCfg = runtime?.handoverConfig;
+    const { model, apiKey } = await resolveHandoverModel(sessionModel, handoverCfg?.model, ctx);
     if (!apiKey) {
       return {
         compaction: {
@@ -284,9 +342,7 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
     const restoreOAuthEnv = shimOAuthEnvIfNeeded();
 
     try {
-      const runtime = getHandoverRuntime(ctx.sessionManager);
       const safeguardRuntime = getCompactionSafeguardRuntime(ctx.sessionManager);
-      const handoverCfg = runtime?.handoverConfig;
       const workspace = runtime?.workspace ?? process.cwd();
 
       // Resolve config with defaults

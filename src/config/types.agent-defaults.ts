@@ -312,6 +312,12 @@ export type AgentHandoverConfig = {
   maxLines?: number;
   /** Keep vanilla summary as internal fallback alongside handover. */
   preserveVanillaSummary?: boolean;
+  /**
+   * Override the model used for handover generation.
+   * Format: "provider/model" (e.g. "google/gemini-2.5-pro").
+   * If not set, uses the session's default model.
+   */
+  model?: string;
 };
 
 export type AgentCompactionConfig = {
