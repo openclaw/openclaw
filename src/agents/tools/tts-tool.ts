@@ -2,7 +2,8 @@ import { Type } from "@sinclair/typebox";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import { textToSpeech } from "../../tts/tts.js";
+import { textToSpeech, resolveTtsConfig } from "../../tts/tts.js";
+import { parseTtsDirectives } from "../../tts/tts-core.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -25,13 +26,17 @@ export function createTtsTool(opts?: {
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const text = readStringParam(params, "text", { required: true });
+      const rawText = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
       const cfg = opts?.config ?? loadConfig();
+      const config = resolveTtsConfig(cfg);
+      const directives = parseTtsDirectives(rawText, config.modelOverrides);
+      const text = directives.ttsText?.trim() || directives.cleanedText.trim();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        overrides: directives.overrides,
       });
 
       if (result.success && result.audioPath) {
