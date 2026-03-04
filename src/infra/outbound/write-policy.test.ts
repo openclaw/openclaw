@@ -142,6 +142,73 @@ describe("write policy", () => {
     expect(decision).toEqual({ kind: "suppress" });
   });
 
+  it.each([
+    "react",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "unsend",
+    "kick",
+    "ban",
+    "timeout",
+    "role-add",
+    "role-remove",
+    "set-presence",
+    "poll-vote",
+    "renameGroup",
+    "setGroupIcon",
+    "addParticipant",
+    "removeParticipant",
+    "leaveGroup",
+    "thread-create",
+    "topic-create",
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "event-create",
+    "emoji-upload",
+    "sticker-upload",
+  ] as const)("suppresses %s for protected destinations", (action) => {
+    const cfg: OpenClawConfig = {
+      session: {
+        relayRouting: {
+          targets: {
+            ops: {
+              channel: "telegram",
+              to: "123456789",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "ops",
+              match: {
+                channel: "whatsapp",
+                chatId: "+15551230000",
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const decision = decideWrite(
+      action,
+      {
+        channel: "whatsapp",
+        to: "+15551230000",
+      },
+      buildProtectedDestinationMap(cfg),
+    );
+
+    expect(decision).toEqual({ kind: "suppress" });
+  });
+
   it("denies protected destinations when no relay target exists", () => {
     const cfg: OpenClawConfig = {
       session: {

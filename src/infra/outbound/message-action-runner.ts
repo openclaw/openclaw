@@ -48,7 +48,7 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
-import { decideWrite, getProtectedDestinationMap } from "./write-policy.js";
+import { decideWrite, getProtectedDestinationMap, SUPPRESSED_ACTIONS } from "./write-policy.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -802,7 +802,14 @@ export async function runMessageAction(
     accountId,
   });
 
-  const policyTo = typeof params.to === "string" ? params.to.trim() : "";
+  const policyToCandidates = [
+    typeof params.to === "string" ? params.to.trim() : "",
+    typeof params.channelId === "string" ? params.channelId.trim() : "",
+    typeof input.toolContext?.currentChannelId === "string"
+      ? input.toolContext.currentChannelId.trim()
+      : "",
+  ];
+  const policyTo = policyToCandidates.find((candidate) => candidate.length > 0) ?? "";
   if (policyTo) {
     const writeDecision = decideWrite(
       action,
@@ -842,6 +849,14 @@ export async function runMessageAction(
         dryRun,
       });
     }
+  } else if (SUPPRESSED_ACTIONS.has(action.trim().toLowerCase())) {
+    return buildPolicyResult({
+      status: "denied",
+      action,
+      channel,
+      reason: "Denied write with unresolved destination for mutating action.",
+      dryRun,
+    });
   }
 
   enforceCrossContextPolicy({

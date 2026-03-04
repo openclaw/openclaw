@@ -338,6 +338,67 @@ describe("runMessageAction context isolation", () => {
     expect(result.payload.status).toBe("suppressed");
   });
 
+  it("suppresses mutating actions when destination resolves from channelId", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyRelayConfig,
+      action: "channel-edit",
+      params: {
+        channel: "slack",
+        target: "channel:C12345678",
+        name: "renamed",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("policy");
+    if (result.kind !== "policy") {
+      throw new Error("expected policy result");
+    }
+    expect(result.payload.status).toBe("suppressed");
+  });
+
+  it("suppresses mutating actions when destination resolves from tool context", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyRelayConfig,
+      action: "edit",
+      params: {
+        channel: "slack",
+        messageId: "msg-1",
+        text: "updated",
+      },
+      toolContext: {
+        currentChannelId: "channel:C12345678",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("policy");
+    if (result.kind !== "policy") {
+      throw new Error("expected policy result");
+    }
+    expect(result.payload.status).toBe("suppressed");
+  });
+
+  it("denies mutating actions when no destination can be resolved", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyRelayConfig,
+      action: "edit",
+      params: {
+        channel: "slack",
+        messageId: "msg-1",
+        text: "updated",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("policy");
+    if (result.kind !== "policy") {
+      throw new Error("expected policy result");
+    }
+    expect(result.payload.status).toBe("denied");
+    expect(result.payload.reason).toContain("unresolved destination");
+  });
+
   it("returns denied policy results when no relay target is available", async () => {
     const result = await runMessageAction({
       cfg: readOnlyWithoutRelayConfig,
