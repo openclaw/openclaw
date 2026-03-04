@@ -10,6 +10,7 @@ import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.j
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import { applyPrimaryModel } from "../../model-picker.js";
+import { configureOllamaNonInteractive } from "../../ollama-setup.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -172,6 +173,10 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
     runtime.exit(1);
     return null;
+  }
+
+  if (authChoice === "ollama") {
+    return configureOllamaNonInteractive({ nextConfig, opts, runtime });
   }
 
   if (authChoice === "apiKey") {
