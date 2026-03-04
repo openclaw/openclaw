@@ -22,8 +22,16 @@ describe("resolveReceiveIdType", () => {
     expect(resolveReceiveIdType("channel:oc_123")).toBe("chat_id");
   });
 
+  it("treats explicit chat_id prefix as chat_id", () => {
+    expect(resolveReceiveIdType("chat_id:oc_123")).toBe("chat_id");
+  });
+
   it("treats dm-prefixed open IDs as open_id", () => {
     expect(resolveReceiveIdType("dm:ou_123")).toBe("open_id");
+  });
+
+  it("treats explicit user_id prefix as user_id", () => {
+    expect(resolveReceiveIdType("user_id:on_123")).toBe("user_id");
   });
 });
 
@@ -35,6 +43,13 @@ describe("normalizeFeishuTarget", () => {
 
   it("strips provider and chat prefixes", () => {
     expect(normalizeFeishuTarget("feishu:chat:oc_123")).toBe("oc_123");
+  });
+
+  it("strips official receive-id type prefixes", () => {
+    expect(normalizeFeishuTarget("chat_id:oc_123")).toBe("oc_123");
+    expect(normalizeFeishuTarget("feishu:chat_id:oc_123")).toBe("oc_123");
+    expect(normalizeFeishuTarget("user_id:on_123")).toBe("on_123");
+    expect(normalizeFeishuTarget("lark:user_id:on_123")).toBe("on_123");
   });
 
   it("normalizes group/channel prefixes to chat ids", () => {
@@ -66,5 +81,10 @@ describe("looksLikeFeishuId", () => {
     expect(looksLikeFeishuId("feishu:group:oc_123")).toBe(true);
     expect(looksLikeFeishuId("group:oc_123")).toBe(true);
     expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
+  });
+
+  it("accepts official receive-id type prefixes", () => {
+    expect(looksLikeFeishuId("chat_id:oc_123")).toBe(true);
+    expect(looksLikeFeishuId("user_id:on_123")).toBe(true);
   });
 });
