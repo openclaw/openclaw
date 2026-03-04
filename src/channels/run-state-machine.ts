@@ -79,6 +79,9 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   }
 
   return {
+    isActive() {
+      return lifecycleActive;
+    },
     onRunStart() {
       activeRuns += 1;
       publish();

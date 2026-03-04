@@ -67,8 +67,14 @@ export function createDiscordMessageHandler(
     const queueKey = resolveDiscordRunQueueKey(ctx);
     void runQueue
       .enqueue(queueKey, async () => {
+        if (!runState.isActive()) {
+          return;
+        }
         runState.onRunStart();
         try {
+          if (!runState.isActive()) {
+            return;
+          }
           await processDiscordMessage(ctx);
         } finally {
           runState.onRunEnd();

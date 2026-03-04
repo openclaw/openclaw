@@ -60,7 +60,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
     }
 
     // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = assistantMsg.content || [];
+    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;

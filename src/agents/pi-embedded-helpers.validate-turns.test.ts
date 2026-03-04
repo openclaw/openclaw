@@ -513,4 +513,19 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
 
     expect(secondPass).toEqual(firstPass);
   });
+
+  it("does not crash when assistant content is non-array", () => {
+    const msgs = [
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: "legacy-content",
+      },
+      { role: "user", content: [{ type: "text", text: "Thanks" }] },
+    ] as unknown as AgentMessage[];
+
+    expect(() => validateAnthropicTurns(msgs)).not.toThrow();
+    const result = validateAnthropicTurns(msgs);
+    expect(result).toHaveLength(3);
+  });
 });
