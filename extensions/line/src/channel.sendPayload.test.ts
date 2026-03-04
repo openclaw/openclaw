@@ -117,6 +117,7 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
       verbose: false,
       accountId: "default",
+      cfg,
     });
   });
 
@@ -154,6 +155,7 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
       verbose: false,
       accountId: "default",
+      cfg,
     });
   });
 
@@ -193,7 +195,7 @@ describe("linePlugin outbound.sendPayload", () => {
           quickReply: { items: ["One", "Two"] },
         },
       ],
-      { verbose: false, accountId: "default" },
+      { verbose: false, accountId: "default", cfg },
     );
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
@@ -225,12 +227,13 @@ describe("linePlugin outbound.sendPayload", () => {
       verbose: false,
       mediaUrl: "https://example.com/img.jpg",
       accountId: "default",
+      cfg,
     });
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
       ["One", "Two"],
-      { verbose: false, accountId: "default" },
+      { verbose: false, accountId: "default", cfg },
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
@@ -266,6 +269,46 @@ describe("linePlugin outbound.sendPayload", () => {
       fallbackLimit: 5000,
     });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
+  });
+
+  it("forwards cfg in outbound.sendText", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendText!({
+      to: "line:user:7",
+      text: "hello",
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:7", "hello", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
+  it("forwards cfg in outbound.sendMedia", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendMedia!({
+      to: "line:user:8",
+      text: "caption",
+      mediaUrl: "https://example.com/m.jpg",
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:8", "caption", {
+      verbose: false,
+      mediaUrl: "https://example.com/m.jpg",
+      accountId: "default",
+      cfg,
+    });
   });
 });
 

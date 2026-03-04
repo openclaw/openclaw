@@ -25,6 +25,7 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 interface LineSendOpts {
+  cfg?: ReturnType<typeof loadConfig>;
   channelAccessToken?: string;
   accountId?: string;
   verbose?: boolean;
@@ -32,7 +33,7 @@ interface LineSendOpts {
   replyToken?: string;
 }
 
-type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
+type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
 type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "verbose">;
 
 interface LinePushBehavior {
@@ -68,7 +69,7 @@ function createLineMessagingClient(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
 } {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
