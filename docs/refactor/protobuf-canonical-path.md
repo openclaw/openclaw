@@ -57,6 +57,10 @@ This proto file is a compatibility mirror of the current protocol contract.
 - No breaking change to existing method names/events during migration
 - Existing JSON clients remain fully functional
 - Proto generation failures must fail CI in protocol checks once adopted
+- Transport migration must be negotiated and backwards-compatible:
+  - client may advertise `transports` in `connect` params
+  - server returns selected `transport` in `hello-ok`
+  - current default remains `json-ws`
 
 ## Next steps
 

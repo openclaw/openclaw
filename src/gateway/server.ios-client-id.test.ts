@@ -30,6 +30,21 @@ describe("connect params client id validation", () => {
     },
   );
 
+  test("accepts transport negotiation hints", () => {
+    const params = makeConnectParams(GATEWAY_CLIENT_IDS.IOS_APP) as Record<string, unknown>;
+    params.transports = ["json-ws", "protobuf-ws"];
+    const ok = validateConnectParams(params);
+    expect(ok).toBe(true);
+    expect(validateConnectParams.errors ?? []).toHaveLength(0);
+  });
+
+  test("rejects unknown transport values", () => {
+    const params = makeConnectParams(GATEWAY_CLIENT_IDS.IOS_APP) as Record<string, unknown>;
+    params.transports = ["json-ws", "invalid-transport"];
+    const ok = validateConnectParams(params);
+    expect(ok).toBe(false);
+  });
+
   test("rejects unknown client ids", () => {
     const ok = validateConnectParams(makeConnectParams("openclaw-mobile"));
     expect(ok).toBe(false);

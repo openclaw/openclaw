@@ -17,6 +17,8 @@ export const ShutdownEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const GatewayTransportSchema = Type.Union([Type.Literal("json-ws"), Type.Literal("protobuf-ws")]);
+
 export const ConnectParamsSchema = Type.Object(
   {
     minProtocol: Type.Integer({ minimum: 1 }),
@@ -64,6 +66,7 @@ export const ConnectParamsSchema = Type.Object(
     ),
     locale: Type.Optional(Type.String()),
     userAgent: Type.Optional(Type.String()),
+    transports: Type.Optional(Type.Array(GatewayTransportSchema, { minItems: 1 })),
   },
   { additionalProperties: false },
 );
@@ -107,6 +110,7 @@ export const HelloOkSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    transport: Type.Optional(GatewayTransportSchema),
   },
   { additionalProperties: false },
 );
