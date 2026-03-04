@@ -67,6 +67,15 @@ export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): Explicit
   return { token, password };
 }
 
+function resolveGatewayCredential(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
 export function ensureExplicitGatewayAuth(params: {
   urlOverride?: string;
   auth: ExplicitGatewayAuth;
@@ -208,28 +217,22 @@ export async function callGateway<T = Record<string, unknown>>(
   const token =
     explicitAuth.token ||
     (!urlOverride
-      ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
+      ? resolveGatewayCredential(
+          isRemoteMode ? remote?.token : undefined,
+          process.env.OPENCLAW_GATEWAY_TOKEN,
+          process.env.CLAWDBOT_GATEWAY_TOKEN,
+          authToken,
+        )
       : undefined);
   const password =
     explicitAuth.password ||
     (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-        (isRemoteMode
-          ? typeof remote?.password === "string" && remote.password.trim().length > 0
-            ? remote.password.trim()
-            : undefined
-          : typeof authPassword === "string" && authPassword.trim().length > 0
-            ? authPassword.trim()
-            : undefined)
+      ? resolveGatewayCredential(
+          isRemoteMode ? remote?.password : undefined,
+          process.env.OPENCLAW_GATEWAY_PASSWORD,
+          process.env.CLAWDBOT_GATEWAY_PASSWORD,
+          authPassword,
+        )
       : undefined);
 
   const formatCloseError = (code: number, reason: string) => {
