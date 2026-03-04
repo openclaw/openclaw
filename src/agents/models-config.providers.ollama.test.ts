@@ -278,4 +278,28 @@ describe("Ollama provider", () => {
 
     expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
+  it("registers ollama when explicitly configured even if discovery throws", async () => {
+    const agentDir = createAgentDir();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network error"))),
+    );
+
+    const providers = await resolveImplicitProviders({
+      agentDir,
+      explicitProviders: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434",
+          api: "ollama",
+          models: [],
+          apiKey: "local",
+        },
+      },
+    });
+
+    expect(providers?.ollama).toBeDefined();
+    expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
+    expect(providers?.ollama?.apiKey).toBe("local");
+    expect(providers?.ollama?.models).toEqual([]);
+  });
 });
