@@ -489,6 +489,7 @@ export async function sendMessageTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
     shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -1095,6 +1096,7 @@ export async function sendPollTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
     shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const requestWithChatNotFound = createRequestWithChatNotFound({
     requestWithDiag,
@@ -1214,6 +1216,7 @@ export async function createForumTopicTelegram(
     configRetry: account.config.retry,
     verbose: opts.verbose,
     shouldRetry: (err) => isSafeToRetrySendError(err),
+    strictShouldRetry: true,
   });
   const logHttpError = createTelegramHttpLogger(cfg);
   const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
