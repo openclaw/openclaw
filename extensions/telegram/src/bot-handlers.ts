@@ -62,6 +62,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  hasBotMention,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -1642,20 +1643,32 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (
-        shouldSkipGroupMessage({
-          isGroup: event.isGroup,
-          chatId: event.chatId,
-          chatTitle: event.msg.chat.title,
-          resolvedThreadId,
-          senderId: event.senderId,
-          senderUsername: event.senderUsername,
-          effectiveGroupAllow,
-          hasGroupAllowOverride,
-          groupConfig,
-          topicConfig,
-        })
-      ) {
+      const shouldSkip = shouldSkipGroupMessage({
+        isGroup: event.isGroup,
+        chatId: event.chatId,
+        chatTitle: event.msg.chat.title,
+        resolvedThreadId,
+        senderId: event.senderId,
+        senderUsername: event.senderUsername,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+        groupConfig,
+        topicConfig,
+      });
+      
+      if (shouldSkip) {
+        // Check if bot was @mentioned - if so, send authorization hint
+        const botUsername = event.ctx.me?.username;
+        if (botUsername && hasBotMention(event.msg, botUsername)) {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () => bot.api.sendMessage(
+              event.chatId,
+              "⚠️ I received your message, but I'm not authorized to respond in this group. Please check the group configuration.",
+            ),
+          }).catch(() => {}); // Silently ignore errors
+        }
         return;
       }
 
