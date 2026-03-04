@@ -344,7 +344,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+            "System-installed Node not found; install Node 22+ before migrating away from version-manager-managed runtimes.",
           level: "recommended",
         });
       }

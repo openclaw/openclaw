@@ -6,12 +6,15 @@ const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   install: vi.fn(),
   auditGatewayServiceConfig: vi.fn(),
+  needsNodeRuntimeMigration: vi.fn(() => false),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
+  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
+  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
   note: vi.fn(),
 }));
 
@@ -26,13 +29,13 @@ vi.mock("../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
-  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
-  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  renderSystemNodeWarning: mocks.renderSystemNodeWarning,
+  resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: vi.fn(() => false),
+  needsNodeRuntimeMigration: mocks.needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   },
@@ -120,6 +123,9 @@ function setupGatewayTokenRepairScenario(expectedToken: string) {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.needsNodeRuntimeMigration.mockReturnValue(false);
+    mocks.resolveSystemNodeInfo.mockResolvedValue(null);
+    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
@@ -171,6 +177,41 @@ describe("maybeRepairGatewayServiceConfig", () => {
       );
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("warns about version-manager installation method when system node is missing", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "current-token",
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-runtime-node-version-manager",
+          message: "Gateway service uses Node from a version manager",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.needsNodeRuntimeMigration.mockReturnValue(true);
+    mocks.resolveSystemNodeInfo.mockResolvedValue(null);
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "current-token",
+      },
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("installation method, not your current Node version"),
+      "Gateway runtime",
+    );
   });
 });
 
