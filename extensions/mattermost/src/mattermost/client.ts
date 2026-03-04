@@ -210,12 +210,6 @@ export async function createMattermostPost(
   });
 }
 
-export type MattermostTeam = {
-  id: string;
-  name?: string | null;
-  display_name?: string | null;
-};
-
 export async function fetchMattermostUserTeams(
   client: MattermostClient,
   userId: string,
