@@ -30,6 +30,7 @@ function fakeMsg(role: string, content: string): AgentMessage {
 describe("context_assembled hook", () => {
   const baseEvent: PluginHookContextAssembledEvent = {
     systemPrompt: "You are helpful.",
+    prompt: "Tell me a joke",
     messages: [fakeMsg("user", "hi")],
     messageCount: 1,
     iteration: 0,
