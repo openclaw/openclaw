@@ -40,6 +40,14 @@
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
     },
+    "./plugin-sdk/core": {
+      "types": "./dist/plugin-sdk/core.d.ts",
+      "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/telegram": {
+      "types": "./dist/plugin-sdk/telegram.d.ts",
+      "default": "./dist/plugin-sdk/telegram.js"
+    },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
