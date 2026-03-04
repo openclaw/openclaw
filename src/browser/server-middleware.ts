@@ -4,6 +4,7 @@ import { browserMutationGuardMiddleware } from "./csrf.js";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
 
 export function installBrowserCommonMiddleware(app: Express) {
+  app.disable("x-powered-by");
   app.use((req, res, next) => {
     const ctrl = new AbortController();
     const abort = () => ctrl.abort(new Error("request aborted"));
