@@ -3,6 +3,8 @@ import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
+const SUBAGENT_INDEX_RE = /^#?\d+$/;
+
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) {
     return undefined;
@@ -143,6 +145,22 @@ export function extractQueueDirective(body?: string): {
       hasOptions: false,
     };
   }
+  const steerAliasMatch = /^\s*\/steer(?:(?:\s+)(.+))?$/i.exec(body);
+  if (steerAliasMatch) {
+    const rest = (steerAliasMatch[1] ?? "").trim();
+    const firstToken = rest.split(/\s+/, 1)[0]?.trim() ?? "";
+    if (rest && !SUBAGENT_INDEX_RE.test(firstToken)) {
+      return {
+        cleaned: rest,
+        queueMode: "steer",
+        queueReset: false,
+        rawMode: "steer",
+        hasDirective: true,
+        hasOptions: false,
+      };
+    }
+  }
+
   const re = /(?:^|\s)\/queue(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {

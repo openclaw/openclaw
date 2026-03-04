@@ -150,6 +150,19 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("treats /steer <message> as queue steer shorthand", () => {
+    const res = extractQueueDirective("/steer check on the download progress");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("steer");
+    expect(res.cleaned).toBe("check on the download progress");
+  });
+
+  it("keeps /steer <id> <message> for subagent steering", () => {
+    const res = extractQueueDirective("/steer #2 check timer.ts instead");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("/steer #2 check timer.ts instead");
+  });
+
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);

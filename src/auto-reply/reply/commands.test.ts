@@ -1419,6 +1419,29 @@ describe("handleCommands subagents", () => {
     expect(trackedRuns[0].endedAt).toBeUndefined();
   });
 
+  it("lets /steer <message> pass through in main session for queue shorthand", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer check on the download progress", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(true);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("keeps /steer <message> as subagent steering outside main session", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer check on the download progress", cfg);
+    params.sessionKey = "agent:main:whatsapp:direct:user-123";
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Unknown subagent id: check");
+  });
+
   it("restores announce behavior when /steer replacement dispatch fails", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

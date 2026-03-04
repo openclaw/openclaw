@@ -13,9 +13,12 @@ import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocu
 import {
   type SubagentsCommandContext,
   extractMessageText,
+  isMainRequesterSession,
+  isSubagentIndexToken,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
+  COMMAND_STEER,
   stopWithText,
 } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -52,6 +55,15 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
   });
   if (!requesterKey) {
     return stopWithText("⚠️ Missing session key.");
+  }
+  if (
+    action === "steer" &&
+    handledPrefix === COMMAND_STEER &&
+    isMainRequesterSession({ requesterKey, cfg: params.cfg }) &&
+    restTokens.length > 0 &&
+    !isSubagentIndexToken(restTokens[0])
+  ) {
+    return null;
   }
 
   const ctx: SubagentsCommandContext = {

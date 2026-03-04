@@ -59,6 +59,7 @@ const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SUBAGENT_INDEX_RE = /^#?\d+$/;
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -214,6 +215,27 @@ export function resolveRequesterSessionKey(
   }
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
+}
+
+export function isMainRequesterSession(params: {
+  requesterKey: string;
+  cfg: SubagentsCommandParams["cfg"];
+}): boolean {
+  const parsed = parseAgentSessionKey(params.requesterKey);
+  const scopeKey = (parsed?.rest ?? params.requesterKey).trim().toLowerCase();
+  if (!scopeKey) {
+    return false;
+  }
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  return scopeKey === "main" || scopeKey === mainKey || scopeKey === alias;
+}
+
+export function isSubagentIndexToken(token: string | undefined): boolean {
+  const cleaned = token?.trim() ?? "";
+  if (!cleaned) {
+    return false;
+  }
+  return SUBAGENT_INDEX_RE.test(cleaned);
 }
 
 export function resolveHandledPrefix(normalized: string): string | null {
