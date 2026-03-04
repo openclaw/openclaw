@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { lookupContextTokens } from "./context.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
@@ -43,7 +44,6 @@ export function resolveContextWindowInfo(params: {
     }
 
     // Try a scoped lookup in the model cache (composite key: provider::modelId)
-    const { lookupContextTokens } = require("./context.js");
     const cachedTokens = lookupContextTokens(params.modelId, params.provider);
     if (cachedTokens) {
       return { tokens: cachedTokens, source: "model" as const };
