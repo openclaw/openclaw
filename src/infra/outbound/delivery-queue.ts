@@ -124,7 +124,7 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   }
 }
 
-/** Update a queue entry after a failed delivery attempt. */
+/** Update a queue entry after a failed delivery attempt. Moves to failed/ on permanent errors. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
@@ -138,6 +138,9 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
     mode: 0o600,
   });
   await fs.promises.rename(tmp, filePath);
+  if (isPermanentDeliveryError(error)) {
+    await moveToFailed(id, stateDir);
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */
@@ -349,20 +352,21 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      let failErr: unknown = null;
+      try {
+        await failDelivery(entry.id, errMsg, opts.stateDir);
+      } catch (e) {
+        failErr = e;
+      }
       if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
-        try {
-          await moveToFailed(entry.id, opts.stateDir);
-        } catch (moveErr) {
-          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
+        if (failErr) {
+          const failErrMsg = failErr instanceof Error ? failErr.message : JSON.stringify(failErr);
+          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${failErrMsg}`);
+        } else {
+          opts.log.warn(`Delivery ${entry.id} hit permanent error — moved to failed/: ${errMsg}`);
         }
         failed += 1;
         continue;
-      }
-      try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
-      } catch {
-        // Best-effort update.
       }
       failed += 1;
       opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
@@ -387,6 +391,12 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // HTTP 4xx client errors (excluding 429 rate limit and 408 timeout)
+  /^4(?!29|08)\d{2}[\s:]/,
+  /message (?:is )?too long/i,
+  /caption (?:is )?too long/i,
+  /payload too large/i,
+  /request entity too large/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
