@@ -381,124 +381,138 @@ export async function getHealthSnapshot(params?: {
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
-  for (const plugin of listChannelPlugins()) {
+  const plugins = listChannelPlugins();
+  for (const plugin of plugins) {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
-    const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
-      defaultAccountId,
-      boundAccounts,
-    });
-    const boundAccountIdsAll = Array.from(
-      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap((ids) => ids)),
-    );
-    const accountIdsToProbe = Array.from(
-      new Set(
-        [preferredAccountId, defaultAccountId, ...accountIds, ...boundAccountIdsAll].filter(
-          (value) => value && value.trim(),
+  }
+
+  const pluginResults = await Promise.all(
+    plugins.map(async (plugin) => {
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const preferredAccountId = resolvePreferredAccountId({
+        accountIds,
+        defaultAccountId,
+        boundAccounts,
+      });
+      const boundAccountIdsAll = Array.from(
+        new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap((ids) => ids)),
+      );
+      const accountIdsToProbe = Array.from(
+        new Set(
+          [preferredAccountId, defaultAccountId, ...accountIds, ...boundAccountIdsAll].filter(
+            (value) => value && value.trim(),
+          ),
         ),
-      ),
-    );
-    debugHealth("channel", {
-      id: plugin.id,
-      accountIds,
-      defaultAccountId,
-      boundAccounts,
-      preferredAccountId,
-      accountIdsToProbe,
-    });
-    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
+      );
+      debugHealth("channel", {
+        id: plugin.id,
+        accountIds,
+        defaultAccountId,
+        boundAccounts,
+        preferredAccountId,
+        accountIdsToProbe,
+      });
+      const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
 
-    for (const accountId of accountIdsToProbe) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = plugin.config.isEnabled
-        ? plugin.config.isEnabled(account, cfg)
-        : isAccountEnabled(account);
-      const configured = plugin.config.isConfigured
-        ? await plugin.config.isConfigured(account, cfg)
-        : true;
+      for (const accountId of accountIdsToProbe) {
+        const account = plugin.config.resolveAccount(cfg, accountId);
+        const enabled = plugin.config.isEnabled
+          ? plugin.config.isEnabled(account, cfg)
+          : isAccountEnabled(account);
+        const configured = plugin.config.isConfigured
+          ? await plugin.config.isConfigured(account, cfg)
+          : true;
 
-      let probe: unknown;
-      let lastProbeAt: number | null = null;
-      if (enabled && configured && doProbe && plugin.status?.probeAccount) {
-        try {
-          probe = await plugin.status.probeAccount({
-            account,
-            timeoutMs: cappedTimeout,
-            cfg,
-          });
-          lastProbeAt = Date.now();
-        } catch (err) {
-          probe = { ok: false, error: formatErrorMessage(err) };
-          lastProbeAt = Date.now();
+        let probe: unknown;
+        let lastProbeAt: number | null = null;
+        if (enabled && configured && doProbe && plugin.status?.probeAccount) {
+          try {
+            probe = await plugin.status.probeAccount({
+              account,
+              timeoutMs: cappedTimeout,
+              cfg,
+            });
+            lastProbeAt = Date.now();
+          } catch (err) {
+            probe = { ok: false, error: formatErrorMessage(err) };
+            lastProbeAt = Date.now();
+          }
         }
+
+        const probeRecord =
+          probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+        const bot =
+          probeRecord && typeof probeRecord.bot === "object"
+            ? (probeRecord.bot as { username?: string | null })
+            : null;
+        if (bot?.username) {
+          debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+        }
+
+        const snapshot: ChannelAccountSnapshot = {
+          accountId,
+          enabled,
+          configured,
+        };
+        if (probe !== undefined) {
+          snapshot.probe = probe;
+        }
+        if (lastProbeAt) {
+          snapshot.lastProbeAt = lastProbeAt;
+        }
+
+        const summary = plugin.status?.buildChannelSummary
+          ? await plugin.status.buildChannelSummary({
+              account,
+              cfg,
+              defaultAccountId: accountId,
+              snapshot,
+            })
+          : undefined;
+        const record =
+          summary && typeof summary === "object"
+            ? (summary as ChannelAccountHealthSummary)
+            : ({
+                accountId,
+                configured,
+                probe,
+                lastProbeAt,
+              } satisfies ChannelAccountHealthSummary);
+        if (record.configured === undefined) {
+          record.configured = configured;
+        }
+        if (record.lastProbeAt === undefined && lastProbeAt) {
+          record.lastProbeAt = lastProbeAt;
+        }
+        record.accountId = accountId;
+        accountSummaries[accountId] = record;
       }
 
-      const probeRecord =
-        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-      const bot =
-        probeRecord && typeof probeRecord.bot === "object"
-          ? (probeRecord.bot as { username?: string | null })
-          : null;
-      if (bot?.username) {
-        debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+      const defaultSummary =
+        accountSummaries[preferredAccountId] ??
+        accountSummaries[defaultAccountId] ??
+        accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
+      const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+      let channelSummary: ChannelHealthSummary | undefined;
+      if (fallbackSummary) {
+        channelSummary = {
+          ...fallbackSummary,
+          accounts: accountSummaries,
+        } satisfies ChannelHealthSummary;
       }
+      return { pluginId: plugin.id, channelSummary };
+    }),
+  );
 
-      const snapshot: ChannelAccountSnapshot = {
-        accountId,
-        enabled,
-        configured,
-      };
-      if (probe !== undefined) {
-        snapshot.probe = probe;
-      }
-      if (lastProbeAt) {
-        snapshot.lastProbeAt = lastProbeAt;
-      }
-
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account,
-            cfg,
-            defaultAccountId: accountId,
-            snapshot,
-          })
-        : undefined;
-      const record =
-        summary && typeof summary === "object"
-          ? (summary as ChannelAccountHealthSummary)
-          : ({
-              accountId,
-              configured,
-              probe,
-              lastProbeAt,
-            } satisfies ChannelAccountHealthSummary);
-      if (record.configured === undefined) {
-        record.configured = configured;
-      }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
-        record.lastProbeAt = lastProbeAt;
-      }
-      record.accountId = accountId;
-      accountSummaries[accountId] = record;
-    }
-
-    const defaultSummary =
-      accountSummaries[preferredAccountId] ??
-      accountSummaries[defaultAccountId] ??
-      accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
-    if (fallbackSummary) {
-      channels[plugin.id] = {
-        ...fallbackSummary,
-        accounts: accountSummaries,
-      } satisfies ChannelHealthSummary;
+  for (const result of pluginResults) {
+    if (result.channelSummary) {
+      channels[result.pluginId] = result.channelSummary;
     }
   }
 
