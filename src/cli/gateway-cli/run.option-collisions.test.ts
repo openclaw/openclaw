@@ -12,6 +12,7 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
@@ -80,6 +81,7 @@ vi.mock("../command-format.js", () => ({
 
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
+  waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
 }));
 
 vi.mock("./dev.js", () => ({
@@ -108,6 +110,7 @@ describe("gateway run option collisions", () => {
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
     forceFreePortAndWait.mockClear();
+    waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
   });
@@ -140,6 +143,10 @@ describe("gateway run option collisions", () => {
     ]);
 
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
+    expect(waitForPortBindable).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({ host: "127.0.0.1" }),
+    );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
