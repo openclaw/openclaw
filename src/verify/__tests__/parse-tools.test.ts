@@ -97,7 +97,7 @@ describe("parseToolCatalog", () => {
       browser: [],
       canvas: [],
       message: ["messaging"],
-      cron: [],
+      cron: ["coding"],
       gateway: [],
       nodes: [],
       agents_list: [],
