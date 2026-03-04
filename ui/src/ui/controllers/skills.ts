@@ -10,6 +10,9 @@ export type SkillsState = {
   skillsBusyKey: string | null;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
+  addFromUrlUrl: string;
+  addFromUrlBusy: boolean;
+  addFromUrlMessage: string | null;
 };
 
 export type SkillMessage = {
@@ -153,5 +156,37 @@ export async function installSkill(
     });
   } finally {
     state.skillsBusyKey = null;
+  }
+}
+
+export function updateAddFromUrlUrl(state: SkillsState, url: string) {
+  state.addFromUrlUrl = url;
+  if (state.addFromUrlMessage) {
+    state.addFromUrlMessage = null;
+  }
+}
+
+export async function addSkillFromUrl(state: SkillsState, url: string) {
+  const trimmed = url.trim();
+  if (!trimmed || !state.client || !state.connected) {
+    return;
+  }
+  state.addFromUrlBusy = true;
+  state.addFromUrlMessage = null;
+  state.skillsError = null;
+  try {
+    const result = await state.client.request<{ ok: boolean; name?: string; message: string }>(
+      "skills.addFromUrl",
+      { url: trimmed },
+    );
+    await loadSkills(state);
+    state.addFromUrlMessage = result?.message ?? (result?.ok ? "Added" : "Failed");
+    if (result?.ok) {
+      state.addFromUrlUrl = "";
+    }
+  } catch (err) {
+    state.addFromUrlMessage = getErrorMessage(err);
+  } finally {
+    state.addFromUrlBusy = false;
   }
 }

@@ -51,7 +51,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
   </Tab>
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
-    The Control UI renders a form from the config schema, with a **Raw JSON** editor as an escape hatch.
+    The Control UI edits the same file as the CLI (`~/.openclaw/openclaw.json`, or the path set by `OPENCLAW_CONFIG_PATH`); the path is shown in the Config sidebar. You get a form built from the config schema and a **Raw JSON** editor as an escape hatch.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).

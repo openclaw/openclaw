@@ -1,0 +1,14 @@
+{
+  "id": "wechat-mp",
+  "channels": ["wechat-mp"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "appId": { "type": "string" },
+      "appSecret": { "type": "string" },
+      "token": { "type": "string" }
+    }
+  }
+}

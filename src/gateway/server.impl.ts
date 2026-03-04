@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
-import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
+import { ensureSkillsWatcher, registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
@@ -638,6 +638,18 @@ export async function startGatewayServer(
           void refreshRemoteBinsForConnectedNodes(latest);
         }, skillsRefreshDelayMs);
       });
+
+  // Start skills watcher at boot so new skills in ~/.openclaw/skills or workspace/skills
+  // are picked up before the first message (no restart needed).
+  if (!minimalTestGateway) {
+    const defaultWorkspaceDir = resolveAgentWorkspaceDir(
+      cfgAtStart,
+      resolveDefaultAgentId(cfgAtStart),
+    );
+    if (defaultWorkspaceDir?.trim()) {
+      ensureSkillsWatcher({ workspaceDir: defaultWorkspaceDir, config: cfgAtStart });
+    }
+  }
 
   const noopInterval = () => setInterval(() => {}, 1 << 30);
   let tickInterval = noopInterval();

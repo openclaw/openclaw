@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import module from "node:module";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 12;
@@ -47,6 +49,8 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
+const openclawDir = path.dirname(fileURLToPath(import.meta.url));
+
 const installProcessWarningFilter = async () => {
   // Keep bootstrap warnings consistent with the TypeScript runtime.
   for (const specifier of ["./dist/warning-filter.js", "./dist/warning-filter.mjs"]) {
@@ -80,10 +84,18 @@ const tryImport = async (specifier) => {
   }
 };
 
-if (await tryImport("./dist/entry.js")) {
+// Resolve entry relative to this script so it works regardless of cwd
+const entryJs = pathToFileURL(path.join(openclawDir, "dist", "entry.js")).href;
+const entryMjs = pathToFileURL(path.join(openclawDir, "dist", "entry.mjs")).href;
+
+if (await tryImport(entryJs)) {
   // OK
-} else if (await tryImport("./dist/entry.mjs")) {
+} else if (await tryImport(entryMjs)) {
   // OK
 } else {
-  throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  const tried = path.join(openclawDir, "dist", "entry.js");
+  throw new Error(
+    `openclaw: missing dist/entry.(m)js (build output). Tried: ${tried}\n` +
+      "Run from repo root: pnpm exec tsdown --no-clean",
+  );
 }

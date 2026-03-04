@@ -341,9 +341,9 @@ export function renderNode(params: {
   const criteria = params.searchCriteria;
 
   if (unsupported.has(key)) {
-    return html`<div class="cfg-field cfg-field--error">
+    return html`<div class="cfg-field cfg-field--muted">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
+      <div class="cfg-field__help">Advanced or free-form options. Use the <strong>Raw</strong> tab above to edit without losing data.</div>
     </div>`;
   }
   if (
@@ -522,9 +522,9 @@ export function renderNode(params: {
 
   // Fallback
   return html`
-    <div class="cfg-field cfg-field--error">
+    <div class="cfg-field cfg-field--muted">
       <div class="cfg-field__label">${label}</div>
-      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
+      <div class="cfg-field__help">Type "${type}" not editable in form. Use the <strong>Raw</strong> tab above.</div>
     </div>
   `;
 }
@@ -832,9 +832,9 @@ function renderArray(params: {
   const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
   if (!itemsSchema) {
     return html`
-      <div class="cfg-field cfg-field--error">
+      <div class="cfg-field cfg-field--muted">
         <div class="cfg-field__label">${label}</div>
-        <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
+        <div class="cfg-field__help">Array shape not editable in form. Use the <strong>Raw</strong> tab above.</div>
       </div>
     `;
   }

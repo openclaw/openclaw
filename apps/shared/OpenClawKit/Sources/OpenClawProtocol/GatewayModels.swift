@@ -2440,6 +2440,40 @@ public struct SkillsUpdateParams: Codable, Sendable {
     }
 }
 
+public struct SkillsAddFromUrlParams: Codable, Sendable {
+    public let url: String
+
+    public init(
+        url: String
+    ) {
+        self.url = url
+    }
+    private enum CodingKeys: String, CodingKey {
+        case url
+    }
+}
+
+public struct SkillsAddFromUrlResult: Codable, Sendable {
+    public let ok: Bool
+    public let name: String?
+    public let message: String
+
+    public init(
+        ok: Bool,
+        name: String?,
+        message: String
+    ) {
+        self.ok = ok
+        self.name = name
+        self.message = message
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case name
+        case message
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?

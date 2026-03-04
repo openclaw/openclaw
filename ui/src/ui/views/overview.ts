@@ -267,8 +267,8 @@ export function renderOverview(props: OverviewProps) {
           </label>
         </div>
         <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+          <button type="button" class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+          <button type="button" class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
           <span class="muted">${
             isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
           }</span>

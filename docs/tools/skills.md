@@ -294,6 +294,10 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 
 See [Skills config](/tools/skills-config) for the full configuration schema.
 
+## Community use cases
+
+For real-world workflows (RAG knowledge base, market research, daily Reddit/YouTube digests, Twitter/X AI monitoring), see [Community use cases](/community/usecases). That page links to [awesome-openclaw-usecases](https://github.com/hesamsheikh/awesome-openclaw-usecases) and lists the skills and install steps (Git or ClawHub) for each.
+
 ## Looking for more skills?
 
 Browse [https://clawhub.com](https://clawhub.com).

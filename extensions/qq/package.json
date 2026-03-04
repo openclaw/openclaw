@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/qq",
+  "version": "2026.3.2",
+  "description": "OpenClaw QQ channel plugin — stub for future implementation",
+  "type": "module",
+  "dependencies": {
+    "@noble/ed25519": "3.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "qq",
+      "label": "QQ",
+      "selectionLabel": "QQ",
+      "docsPath": "/channels/qq",
+      "docsLabel": "qq",
+      "blurb": "QQ 机器人 / QQ 频道（占位扩展，完整实现规划中）。",
+      "order": 83
+    },
+    "install": {
+      "npmSpec": "@openclaw/qq",
+      "localPath": "extensions/qq",
+      "defaultChoice": "npm"
+    }
+  }
+}

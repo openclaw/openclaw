@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "skills": {
+    "agentmail-wrapper": {
+      "version": "1.0.0",
+      "installedAt": 1772507599469
+    },
+    "calendar": {
+      "version": "1.0.0",
+      "installedAt": 1772507608578
+    },
+    "memory-search": {
+      "version": "1.0.0",
+      "installedAt": 1772507643334
+    },
+    "qwen-image-skill": {
+      "version": "1.0.0",
+      "installedAt": 1772507649776
+    },
+    "searching-assistant": {
+      "version": "0.1.0",
+      "installedAt": 1772507658231
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-skill-xai",
+  "version": "1.0.0",
+  "description": "xAI/Grok integration for OpenClaw",
+  "private": true,
+  "scripts": {
+    "chat": "node scripts/chat.js",
+    "models": "node scripts/models.js"
+  }
+}

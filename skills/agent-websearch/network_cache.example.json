@@ -1,0 +1,8 @@
+{
+  "availability": {
+    "duckduckgo": true,
+    "bing": true,
+    "tavily": false
+  },
+  "last_check": "2026-01-01T00:00:00.000000"
+}

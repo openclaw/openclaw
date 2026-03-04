@@ -1,0 +1,13 @@
+{
+  "id": "dingtalk",
+  "channels": ["dingtalk"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "appKey": { "type": "string" },
+      "appSecret": { "type": "string" }
+    }
+  }
+}

@@ -45,10 +45,24 @@ function which(cmd) {
   return null;
 }
 
-function resolveRunner() {
+function resolveRunner(action) {
+  // For "build" only: prefer npm so we install/run only in ui/ and avoid
+  // triggering root pnpm workspace (which can fail on git deps like libsignal-node).
+  if (action === "build") {
+    const npm = which("npm");
+    if (npm) {
+      return { cmd: npm, kind: "npm" };
+    }
+  }
   const pnpm = which("pnpm");
   if (pnpm) {
     return { cmd: pnpm, kind: "pnpm" };
+  }
+  if (action !== "build") {
+    const npm = which("npm");
+    if (npm) {
+      return { cmd: npm, kind: "npm" };
+    }
   }
   return null;
 }
@@ -166,9 +180,9 @@ export function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
 
-  const runner = resolveRunner();
+  const runner = resolveRunner(action);
   if (!runner) {
-    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
+    process.stderr.write("Missing UI runner: install pnpm or npm, then retry.\n");
     process.exit(1);
   }
 
@@ -186,7 +200,12 @@ export function main(argv = process.argv.slice(2)) {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
+    const installArgs =
+      action === "build" && runner.kind === "npm"
+        ? ["install", "--omit=dev"]
+        : action === "build"
+          ? ["install", "--prod"]
+          : ["install"];
     runSync(runner.cmd, installArgs, installEnv);
   }
 

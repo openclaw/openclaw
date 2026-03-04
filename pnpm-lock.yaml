@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  libsignal: file:.tmp-libsignal/whiskeysockets-libsignal-node-2.0.1.tgz
   hono: 4.11.10
   fast-xml-parser: 5.3.8
   request: npm:@cypress/request@3.0.10
@@ -316,6 +317,16 @@ importers:
         specifier: 1.58.2
         version: 1.58.2
 
+  extensions/dingtalk:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/discord: {}
 
   extensions/feishu:
@@ -445,6 +456,19 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/qq:
+    dependencies:
+      '@noble/ed25519':
+        specifier: 3.0.0
+        version: 3.0.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/signal: {}
 
   extensions/slack: {}
@@ -504,6 +528,26 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/wechat:
+    dependencies:
+      '@canghe/openclaw-wechat':
+        specifier: 0.1.0
+        version: 0.1.0(openclaw@)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/wechat-mp:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/whatsapp: {}
 
@@ -868,6 +912,11 @@ packages:
 
   '@cacheable/utils@2.3.4':
     resolution: {integrity: sha512-knwKUJEYgIfwShABS1BX6JyJJTglAFcEU7EXqzTdiGCXur4voqkiJkdgZIQtWNFhynzDWERcTYv/sETMu3uJWA==}
+
+  '@canghe/openclaw-wechat@0.1.0':
+    resolution: {integrity: sha512-zrxaO3LMbm9a5j9LeSCyenP3wwF7vr60rWusRFcgnSHHp/QpdMGDvyqDEkJ3x1f90Y4abYt06woTtSSTtHNFUA==}
+    peerDependencies:
+      openclaw: '>=2026.2.9'
 
   '@clack/core@1.0.1':
     resolution: {integrity: sha512-WKeyK3NOBwDOzagPR5H08rFk9D/WuN705yEbuZvKqlkmoLM2woKtXb10OO2k1NoSU4SFG947i2/SCYh+2u5e4g==}
@@ -3270,8 +3319,8 @@ packages:
       link-preview-js:
         optional: true
 
-  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
+  '@whiskeysockets/libsignal-node@file:.tmp-libsignal/whiskeysockets-libsignal-node-2.0.1.tgz':
+    resolution: {integrity: sha512-OoptN1yDyDSFNvpDHFpiNt5KOu9ePBaRbBQwt9py4yyUs85ey+jTgbdHjR/mAqFF5EOXhBdEM1CBeCzK77nEBg==, tarball: file:.tmp-libsignal/whiskeysockets-libsignal-node-2.0.1.tgz}
     version: 2.0.1
 
   abbrev@1.1.1:
@@ -6858,6 +6907,10 @@ snapshots:
       hashery: 1.5.0
       keyv: 5.6.0
 
+  '@canghe/openclaw-wechat@0.1.0(openclaw@)':
+    dependencies:
+      openclaw: 'link:'
+
   '@clack/core@1.0.1':
     dependencies:
       picocolors: 1.1.1
@@ -9358,7 +9411,7 @@ snapshots:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
-      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
+      libsignal: '@whiskeysockets/libsignal-node@file:.tmp-libsignal/whiskeysockets-libsignal-node-2.0.1.tgz'
       lru-cache: 11.2.6
       music-metadata: 11.12.1
       p-queue: 9.1.0
@@ -9373,7 +9426,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
+  '@whiskeysockets/libsignal-node@file:.tmp-libsignal/whiskeysockets-libsignal-node-2.0.1.tgz':
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8

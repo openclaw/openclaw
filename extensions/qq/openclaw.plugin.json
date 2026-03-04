@@ -1,0 +1,13 @@
+{
+  "id": "qq",
+  "channels": ["qq"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "appId": { "type": "string" },
+      "token": { "type": "string" }
+    }
+  }
+}

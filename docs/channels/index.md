@@ -15,6 +15,7 @@ Text is supported everywhere; media and reactions vary by channel.
 
 - [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
+- [DingTalk](/channels/dingtalk) — DingTalk (钉钉) enterprise bot; stub, full implementation planned (plugin, install separately).
 - [Feishu](/channels/feishu) — Feishu/Lark bot via WebSocket (plugin, installed separately).
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
 - [iMessage (legacy)](/channels/imessage) — Legacy macOS integration via imsg CLI (deprecated, use BlueBubbles for new setups).
@@ -25,6 +26,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).
+- [QQ](/channels/qq) — QQ bot / QQ 频道; stub, full implementation planned (plugin, install separately).
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
 - [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (plugin, installed separately).
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
@@ -32,6 +34,8 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
+- [WeChat](/channels/wechat) — Personal WeChat (微信) via proxy API (plugin, install separately).
+- [WeChat Official Account](/channels/wechat-mp) — 微信公众号; stub, full implementation planned (plugin, install separately).
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).

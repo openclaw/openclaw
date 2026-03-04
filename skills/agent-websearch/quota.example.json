@@ -1,0 +1,11 @@
+{
+  "tavily": {
+    "used": 0,
+    "month": 1
+  },
+  "bing_api": {
+    "used": 0,
+    "month": 1
+  },
+  "last_reset": "2026-01-01T00:00:00.000000"
+}

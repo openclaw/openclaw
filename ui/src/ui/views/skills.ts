@@ -17,12 +17,17 @@ export type SkillsProps = {
   edits: Record<string, string>;
   busyKey: string | null;
   messages: SkillMessageMap;
+  addFromUrlUrl: string;
+  addFromUrlBusy: boolean;
+  addFromUrlMessage: string | null;
   onFilterChange: (next: string) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
   onInstall: (skillKey: string, name: string, installId: string) => void;
+  onAddFromUrlUrlChange: (url: string) => void;
+  onAddFromUrl: () => void;
 };
 
 export function renderSkills(props: SkillsProps) {
@@ -41,11 +46,37 @@ export function renderSkills(props: SkillsProps) {
         <div>
           <div class="card-title">Skills</div>
           <div class="card-sub">Bundled, managed, and workspace skills.</div>
+          <div class="muted" style="margin-top: 4px;">New or updated skill directories take effect on the next conversation (no restart needed).</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
+
+      <div class="row" style="margin-top: 14px; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+        <label class="field" style="flex: 1; min-width: 200px;">
+          <span>Add from URL</span>
+          <input
+            type="url"
+            .value=${props.addFromUrlUrl}
+            @input=${(e: Event) => props.onAddFromUrlUrlChange((e.target as HTMLInputElement).value)}
+            placeholder="https://github.com/user/repo"
+            ?disabled=${props.addFromUrlBusy}
+          />
+        </label>
+        <button
+          class="btn primary"
+          ?disabled=${props.addFromUrlBusy || !props.addFromUrlUrl.trim()}
+          @click=${props.onAddFromUrl}
+        >
+          ${props.addFromUrlBusy ? "Adding…" : "Add skill"}
+        </button>
+      </div>
+      ${
+        props.addFromUrlMessage
+          ? html`<div class="muted" style="margin-top: 6px;">${props.addFromUrlMessage}</div>`
+          : nothing
+      }
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">

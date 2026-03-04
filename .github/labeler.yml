@@ -9,6 +9,11 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: dingtalk":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dingtalk/**"
+          - "docs/channels/dingtalk.md"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:
@@ -61,6 +66,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: qq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qq/**"
+          - "docs/channels/qq.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -93,6 +103,16 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/voice-call/**"
+"channel: wechat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wechat/**"
+          - "docs/channels/wechat.md"
+"channel: wechat-mp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wechat-mp/**"
+          - "docs/channels/wechat-mp.md"
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:

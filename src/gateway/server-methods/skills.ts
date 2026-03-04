@@ -1,8 +1,10 @@
+import path from "node:path";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { addSkillFromUrl } from "../../agents/skills-add-from-url.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
@@ -11,11 +13,13 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateSkillsAddFromUrlParams,
   validateSkillsBinsParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
@@ -135,6 +139,31 @@ export const skillsHandlers: GatewayRequestHandlers = {
       skillName: p.name,
       installId: p.installId,
       timeoutMs: p.timeoutMs,
+      config: cfg,
+    });
+    respond(
+      result.ok,
+      result,
+      result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
+    );
+  },
+  "skills.addFromUrl": async ({ params, respond }) => {
+    if (!validateSkillsAddFromUrlParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.addFromUrl params: ${formatValidationErrors(validateSkillsAddFromUrlParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    const managedSkillsDir = path.join(CONFIG_DIR, "skills");
+    const result = await addSkillFromUrl({
+      url: (params as { url: string }).url,
+      managedSkillsDir,
       config: cfg,
     });
     respond(

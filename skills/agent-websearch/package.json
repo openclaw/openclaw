@@ -1,0 +1,6 @@
+{
+  "name": "openclaw-skill-agent-websearch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Intelligent multi-engine web search for OpenClaw (DuckDuckGo, Tavily, Bing API, Bing Scraper), works with or without VPN"
+}

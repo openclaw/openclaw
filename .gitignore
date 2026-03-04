@@ -12,6 +12,10 @@ __pycache__/
 .tsbuildinfo
 .pnpm-store
 .worktrees/
+tmp/
+.tmp-lanshu-waytovideo/
+.tmp-libsignal/
+.tmp-awesome-usecases/
 .DS_Store
 **/.DS_Store
 ui/src/ui/__screenshots__/
@@ -91,6 +95,8 @@ USER.md
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
+.openclaw/
+.openclaw/openclaw.json
 .agent/*.json
 !.agent/workflows/
 /local/
@@ -103,6 +109,8 @@ skills-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+# Agus: ignore large files (>50MB)
+node_modules/.pnpm/@lancedb+lancedb-darwin-arm64@0.26.2/node_modules/@lancedb/lancedb-darwin-arm64/lancedb.darwin-arm64.node
 
 # Xcode build directories (xcodebuild output)
 apps/ios/build/

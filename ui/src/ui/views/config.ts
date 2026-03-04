@@ -5,6 +5,8 @@ import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-fo
 import { getTagFilters, replaceTagFilters } from "./config-search.ts";
 
 export type ConfigProps = {
+  /** Path to the config file being edited (e.g. ~/.openclaw/openclaw.json). Same file as CLI and Control UI. */
+  configFilePath?: string | null;
   raw: string;
   originalRaw: string;
   valid: boolean | null;
@@ -477,6 +479,15 @@ export function renderConfig(props: ConfigProps) {
             >${validity}</span
           >
         </div>
+        ${
+          props.configFilePath
+            ? html`
+                <div class="config-sidebar__path" title="Same file as openclaw config get/set and .openclaw/openclaw.json">
+                  ${props.configFilePath}
+                </div>
+              `
+            : nothing
+        }
 
         <!-- Search -->
         <div class="config-search">
@@ -785,8 +796,9 @@ export function renderConfig(props: ConfigProps) {
                 ${
                   formUnsafe
                     ? html`
-                        <div class="callout danger" style="margin-top: 12px">
-                          Form view can't safely edit some fields. Use Raw to avoid losing config entries.
+                        <div class="callout info" style="margin-top: 12px">
+                          Some sections (e.g. Messaging Channels) use advanced schema. Switch to the
+                          <strong>Raw</strong> tab above to edit them without losing data.
                         </div>
                       `
                     : nothing

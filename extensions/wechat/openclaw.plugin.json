@@ -1,0 +1,31 @@
+{
+  "id": "wechat",
+  "channels": ["wechat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "apiKey": { "type": "string" },
+            "deviceType": { "type": "string", "enum": ["ipad", "mac"] },
+            "proxy": { "type": "string" },
+            "webhookPort": { "type": "integer" },
+            "webhookUrl": { "type": "string" },
+            "natappEnabled": { "type": "boolean" },
+            "natapiWebPort": { "type": "integer" },
+            "wcId": { "type": "string" },
+            "nickName": { "type": "string" }
+          },
+          "required": ["apiKey"]
+        }
+      }
+    }
+  }
+}

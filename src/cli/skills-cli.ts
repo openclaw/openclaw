@@ -1,9 +1,12 @@
+import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { addSkillFromUrl } from "../agents/skills-add-from-url.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { CONFIG_DIR } from "../utils.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -64,6 +67,31 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) => {
       await runSkillsAction((report) => formatSkillInfo(report, name, opts));
+    });
+
+  skills
+    .command("add")
+    .description("Add a skill from a Git URL (e.g. https://github.com/user/repo)")
+    .argument("<url>", "HTTPS URL of the skill repository")
+    .action(async (url: string) => {
+      try {
+        const config = loadConfig();
+        const managedSkillsDir = path.join(CONFIG_DIR, "skills");
+        const result = await addSkillFromUrl({
+          url,
+          managedSkillsDir,
+          config,
+        });
+        if (result.ok) {
+          defaultRuntime.log(result.message);
+        } else {
+          defaultRuntime.error(result.message);
+          defaultRuntime.exit(1);
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   skills

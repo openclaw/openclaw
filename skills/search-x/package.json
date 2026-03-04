@@ -1,0 +1,12 @@
+{
+  "name": "openclaw-skill-search-x",
+  "version": "1.0.0",
+  "description": "Real-time X/Twitter search for OpenClaw (Grok or X API)",
+  "private": true,
+  "bin": {
+    "search-x": "./scripts/search.js"
+  },
+  "scripts": {
+    "search": "node scripts/search.js"
+  }
+}

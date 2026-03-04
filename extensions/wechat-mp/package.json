@@ -1,0 +1,31 @@
+{
+  "name": "@openclaw/wechat-mp",
+  "version": "2026.3.2",
+  "description": "OpenClaw WeChat Official Account (微信公众号) channel plugin — stub for future implementation",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "wechat-mp",
+      "label": "WeChat MP",
+      "selectionLabel": "微信公众号 (WeChat Official Account)",
+      "docsPath": "/channels/wechat-mp",
+      "docsLabel": "wechat-mp",
+      "blurb": "微信公众号消息与客服接口（占位扩展，完整实现规划中）。",
+      "order": 81
+    },
+    "install": {
+      "npmSpec": "@openclaw/wechat-mp",
+      "localPath": "extensions/wechat-mp",
+      "defaultChoice": "npm"
+    }
+  }
+}

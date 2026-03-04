@@ -1,0 +1,31 @@
+{
+  "name": "@openclaw/wechat",
+  "version": "2026.2.20",
+  "private": true,
+  "description": "OpenClaw WeChat (微信) channel plugin via Proxy API",
+  "type": "module",
+  "dependencies": {
+    "@canghe/openclaw-wechat": "0.1.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "wechat",
+      "label": "WeChat",
+      "selectionLabel": "WeChat (微信)",
+      "docsPath": "/channels/wechat",
+      "docsLabel": "wechat",
+      "blurb": "WeChat channel via Proxy API. 让 OpenClaw 稳定连上个人微信。",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@canghe/openclaw-wechat",
+      "localPath": "extensions/wechat",
+      "defaultChoice": "npm"
+    }
+  }
+}

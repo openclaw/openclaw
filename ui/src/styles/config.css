@@ -61,6 +61,15 @@
   letter-spacing: -0.01em;
 }
 
+.config-sidebar__path {
+  padding: 0 18px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .config-sidebar__footer {
   margin-top: auto;
   padding: 14px;
@@ -779,6 +788,13 @@
   border-radius: var(--radius-md);
   background: var(--danger-subtle);
   border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.cfg-field--muted {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--muted-subtle, rgba(128, 128, 128, 0.08));
+  border: 1px solid rgba(128, 128, 128, 0.15);
 }
 
 .cfg-field__label {

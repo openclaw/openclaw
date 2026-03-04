@@ -69,6 +69,8 @@ export async function setupSkills(
       `Missing requirements: ${missing.length}`,
       `Unsupported on this OS: ${unsupportedOs.length}`,
       `Blocked by allowlist: ${blocked.length}`,
+      "",
+      "Skills are loaded from ~/.openclaw/skills and workspace/skills. New directories are picked up automatically (no restart needed).",
     ].join("\n"),
     "Skills status",
   );
