@@ -53,7 +53,6 @@ Key fields per asset:
 ### Get Single Asset
 
 ```bash
-# URL-encode the colon in the asset code
 curl -fsSL "https://api.qxmp.ai/api/v1/rwa/assets/QXMP:RHENO-JORC-ZA"
 ```
 

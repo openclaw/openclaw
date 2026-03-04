@@ -137,7 +137,19 @@ console.log('Liquidity:', position.liquidity.toString());
 ```typescript
 // sqrtPriceX96 → price
 // price = (sqrtPriceX96 / 2^96)^2
+// Keep all arithmetic in bigint until final display to preserve precision.
+// sqrtPriceX96 can be up to ~2^160, so squaring it overflows Number — use bigint throughout.
 const sqrtPrice = BigInt(slot0.sqrtPriceX96);
 const Q96 = 2n ** 96n;
-const price = Number(sqrtPrice * sqrtPrice) / Number(Q96 * Q96);
+
+// Fixed-point integer price scaled by 1e18 for display (adjust decimals as needed)
+const PRECISION = 10n ** 18n;
+const priceScaled = (sqrtPrice * sqrtPrice * PRECISION) / (Q96 * Q96);
+// Convert to human-readable: divide by PRECISION accounting for token decimal difference
+// e.g. for two 18-decimal tokens: price = Number(priceScaled) / 1e18
+const priceFloat = Number(priceScaled) / 1e18;
+
+// Alternative: use a decimal library (e.g. decimal.js) for full precision
+// import Decimal from 'decimal.js';
+// const price = new Decimal(sqrtPrice.toString()).pow(2).div(new Decimal(Q96.toString()).pow(2));
 ```

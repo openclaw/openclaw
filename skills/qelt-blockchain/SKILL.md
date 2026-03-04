@@ -106,13 +106,23 @@ curl -fsSL -X POST https://mainnet.qelt.ai \
 
 ### Get Event Logs
 
+Always bound the block range — querying from genesis (`"0x0"`) scans the entire chain and is commonly rate-limited or timed out. Use a recent window (e.g., last 1,000 blocks) and page forward if you need more history.
+
 ```bash
+# First get the current block number
+LATEST=$(curl -fsSL -X POST https://mainnet.qelt.ai \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
+
+# Then query a bounded recent range (last ~1000 blocks ≈ 83 minutes on QELT)
+FROM_HEX=$(python3 -c "print(hex(int('$LATEST',16) - 1000))")
+
 curl -fsSL -X POST https://mainnet.qelt.ai \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_getLogs","params":[{"fromBlock":"0x0","toBlock":"latest","address":"0xCONTRACT","topics":["0xTOPIC"]}],"id":1}'
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getLogs\",\"params\":[{\"fromBlock\":\"$FROM_HEX\",\"toBlock\":\"latest\",\"address\":\"0xCONTRACT\",\"topics\":[\"0xTOPIC\"]}],\"id\":1}"
 ```
 
-For historical logs, use `https://archivem.qelt.ai`.
+For full historical log scans, use `https://archivem.qelt.ai` and page in chunks of ≤10,000 blocks to avoid timeouts.
 
 ### Get Contract Code
 

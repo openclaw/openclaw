@@ -42,7 +42,9 @@ Return the table above from memory — no RPC call needed.
 
 ```bash
 WQELT="0xfebc6f9f0149036006c4f5ac124685e0ef48e8a2"
-ADDR="0xUSER_ADDRESS_WITHOUT_0x"
+# ADDR must be the 40 hex chars WITHOUT the 0x prefix, left-padded to 32 bytes by the zeros above
+# Example: address 0xAbCd...1234 → ADDR="abcd...1234" (40 chars, no 0x)
+ADDR="USER_ADDRESS_40_HEX_CHARS_NO_0x_PREFIX"
 
 # balanceOf(address) selector: 0x70a08231
 curl -fsSL -X POST https://mainnet.qelt.ai \
