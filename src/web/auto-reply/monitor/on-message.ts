@@ -8,6 +8,7 @@ import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
+import { buildWhatsAppAccountConfig } from "./config.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
@@ -34,7 +35,12 @@ export function createWebOnMessageHandler(params: {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config per-message so runtime changes are picked up without restart.
-    const cfg = loadConfig();
+    // Merge account-specific overrides (groupPolicy, groupAllowFrom, etc.) so
+    // multi-account setups keep their per-account gating rules.
+    const cfg = buildWhatsAppAccountConfig({
+      cfg: loadConfig(),
+      accountId: params.account.accountId,
+    });
 
     const processForRoute = async (
       inMsg: WebInboundMsg,

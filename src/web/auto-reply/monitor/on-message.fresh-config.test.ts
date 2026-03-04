@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   loadConfigMock,
+  buildWhatsAppAccountConfigMock,
   resolveAgentRouteMock,
   processMessageMock,
   updateLastRouteInBackgroundMock,
@@ -14,6 +15,8 @@ const {
   maybeBroadcastMessageMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(),
+  // Pass-through: return the cfg from params so the tagged config propagates.
+  buildWhatsAppAccountConfigMock: vi.fn((p: { cfg: unknown }) => p.cfg),
   resolveAgentRouteMock: vi.fn(),
   processMessageMock: vi.fn(async () => true),
   updateLastRouteInBackgroundMock: vi.fn(),
@@ -26,6 +29,10 @@ const {
 // ---------------------------------------------------------------------------
 
 vi.mock("../../../config/config.js", () => ({ loadConfig: loadConfigMock }));
+
+vi.mock("./config.js", () => ({
+  buildWhatsAppAccountConfig: buildWhatsAppAccountConfigMock,
+}));
 
 vi.mock("../../../routing/resolve-route.js", () => ({
   resolveAgentRoute: resolveAgentRouteMock,
@@ -160,7 +167,7 @@ describe("createWebOnMessageHandler – fresh config per message", () => {
 
     // processMessage must receive the per-message config, NOT the creation-time config
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const pmArgs = processMessageMock.mock.calls[0][0];
+    const pmArgs = (processMessageMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
     expect((pmArgs.cfg as Record<string, unknown>)._tag).toBe("per-message");
   });
 
@@ -182,7 +189,10 @@ describe("createWebOnMessageHandler – fresh config per message", () => {
     await handler(makeGroupMsg());
 
     expect(applyGroupGatingMock).toHaveBeenCalledTimes(1);
-    const gatingArgs = applyGroupGatingMock.mock.calls[0][0];
+    const gatingArgs = (applyGroupGatingMock.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      unknown
+    >;
     expect((gatingArgs.cfg as Record<string, unknown>)._tag).toBe("fresh-group");
   });
 
@@ -194,7 +204,10 @@ describe("createWebOnMessageHandler – fresh config per message", () => {
     await handler(makeGroupMsg());
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
-    const routeArgs = updateLastRouteInBackgroundMock.mock.calls[0][0];
+    const routeArgs = (updateLastRouteInBackgroundMock.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      unknown
+    >;
     expect((routeArgs.cfg as Record<string, unknown>)._tag).toBe("fresh-route");
   });
 
@@ -206,7 +219,10 @@ describe("createWebOnMessageHandler – fresh config per message", () => {
     await handler(makeDmMsg());
 
     expect(maybeBroadcastMessageMock).toHaveBeenCalledTimes(1);
-    const broadcastArgs = maybeBroadcastMessageMock.mock.calls[0][0];
+    const broadcastArgs = (maybeBroadcastMessageMock.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      unknown
+    >;
     expect((broadcastArgs.cfg as Record<string, unknown>)._tag).toBe("fresh-broadcast");
   });
 
@@ -224,11 +240,11 @@ describe("createWebOnMessageHandler – fresh config per message", () => {
     expect(loadConfigMock).toHaveBeenCalledTimes(2);
 
     // First message gets cfg1
-    const pm1 = processMessageMock.mock.calls[0][0];
+    const pm1 = (processMessageMock.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
     expect((pm1.cfg as Record<string, unknown>)._tag).toBe("msg-1");
 
     // Second message gets cfg2
-    const pm2 = processMessageMock.mock.calls[1][0];
+    const pm2 = (processMessageMock.mock.calls as unknown[][])[1][0] as Record<string, unknown>;
     expect((pm2.cfg as Record<string, unknown>)._tag).toBe("msg-2");
   });
 });
