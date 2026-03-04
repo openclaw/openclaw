@@ -221,6 +221,62 @@ export const icons = {
   circle: html`
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /></svg>
   `,
+  microphone: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 2c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2s2-.9 2-2V4c0-1.1-.9-2-2-2z" />
+      <path
+        d="M19 11c0 2.8-2.2 5.1-5 5.1h-1V19c0 .6.4 1 1 1s1-.4 1-1v-1c0-.6.4-1 1-1h2c.6 0 1 .4 1 1v1c0 .6.4 1 1 1s1-.4 1-1v-2.9c0-2.8-2.2-5.1-5-5.1s-5 2.3-5 5.1"
+      />
+      <path d="M5 11c0 2.2 1.6 4.1 3.7 4.5" />
+    </svg>
+  `,
+  microphoneOff: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 2c-1.1 0-2 .9-2 2v7c0 1.1.9 2 2 2s2-.9 2-2V4c0-1.1-.9-2-2-2z" />
+      <path
+        d="M19 11c0 2.8-2.2 5.1-5 5.1h-1V19c0 .6.4 1 1 1s1-.4 1-1v-1c0-.6.4-1 1-1h2c.6 0 1 .4 1 1v1c0 .6.4 1 1 1s1-.4 1-1v-2.9c0-2.8-2.2-5.1-5-5.1s-5 2.3-5 5.1"
+      />
+      <path d="M5 11c0 2.2 1.6 4.1 3.7 4.5" />
+      <line
+        x1="3"
+        x2="21"
+        y1="3"
+        y2="21"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      />
+    </svg>
+  `,
+  volume2: html`
+    <svg viewBox="0 0 24 24">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15.54 5.54a9 9 0 0 1 0 12.92M19.07 4a15 15 0 0 1 0 16" />
+    </svg>
+  `,
+  volumeX: html`
+    <svg viewBox="0 0 24 24">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <line
+        x1="23"
+        x2="17"
+        y1="9"
+        y2="15"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      />
+      <line
+        x1="17"
+        x2="23"
+        y1="9"
+        y2="15"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      />
+    </svg>
+  `,
   puzzle: html`
     <svg viewBox="0 0 24 24">
       <path

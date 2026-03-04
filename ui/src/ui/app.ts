@@ -118,6 +118,40 @@ export class OpenClawApp extends LitElement {
       void i18n.setLocale(this.settings.locale);
     }
   }
+
+  // toggle handlers used by chat UI
+  toggleVoiceInput() {
+    // flip state and notify voice service
+    if (!this.voiceInputEnabled) {
+      // start recording
+      this.voiceInputEnabled = true;
+      void import("./services/voice.ts").then((m) => {
+        m.startRecording().catch((err) => {
+          console.error("voice start failed", err);
+          this.voiceInputEnabled = false;
+        });
+      });
+    } else {
+      // stop recording
+      void import("./services/voice.ts").then(async (m) => {
+        try {
+          const transcript = await m.stopRecording();
+          if (transcript) {
+            // append to draft
+            this.chatMessage = this.chatMessage ? this.chatMessage + " " + transcript : transcript;
+          }
+        } catch (err) {
+          console.error("voice stop failed", err);
+        } finally {
+          this.voiceInputEnabled = false;
+        }
+      });
+    }
+  }
+
+  toggleAudioOutput() {
+    this.audioOutputEnabled = !this.audioOutputEnabled;
+  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -175,6 +209,10 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
+
+  // voice/audio toggles (ephemeral, not persisted)
+  @state() voiceInputEnabled = false;
+  @state() audioOutputEnabled = false;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";

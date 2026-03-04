@@ -1063,6 +1063,11 @@ export function renderApp(state: AppViewState) {
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
+                // Voice/audio toggles
+                voiceInputEnabled: state.voiceInputEnabled,
+                audioOutputEnabled: state.audioOutputEnabled,
+                onToggleVoiceInput: () => state.toggleVoiceInput!(),
+                onToggleAudioOutput: () => state.toggleAudioOutput!(),
                 // Sidebar props for tool output viewing
                 sidebarOpen: state.sidebarOpen,
                 sidebarContent: state.sidebarContent,

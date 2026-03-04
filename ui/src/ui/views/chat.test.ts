@@ -45,6 +45,10 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    voiceInputEnabled: false,
+    audioOutputEnabled: false,
+    onToggleVoiceInput: () => undefined,
+    onToggleAudioOutput: () => undefined,
     ...overrides,
   };
 }
@@ -223,5 +227,38 @@ describe("chat view", () => {
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
+  });
+
+  it("renders mic and audio toggle buttons and calls handlers", () => {
+    const container = document.createElement("div");
+    const onVoice = vi.fn();
+    const onAudio = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          voiceInputEnabled: true,
+          audioOutputEnabled: false,
+          onToggleVoiceInput: onVoice,
+          onToggleAudioOutput: onAudio,
+        }),
+      ),
+      container,
+    );
+
+    const micBtn = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.title?.includes("Voice input"),
+    );
+    const audioBtn = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.title?.includes("Audio output"),
+    );
+    expect(micBtn).not.toBeUndefined();
+    expect(audioBtn).not.toBeUndefined();
+    // mic active class
+    expect(micBtn?.classList.contains("active")).toBe(true);
+    expect(audioBtn?.classList.contains("active")).toBe(false);
+    micBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    audioBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onVoice).toHaveBeenCalledTimes(1);
+    expect(onAudio).toHaveBeenCalledTimes(1);
   });
 });

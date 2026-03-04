@@ -66,6 +66,11 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  // voice/audio toggles are tracked on the view state so props can be passed down
+  voiceInputEnabled: boolean;
+  audioOutputEnabled: boolean;
+  toggleVoiceInput?: () => void;
+  toggleAudioOutput?: () => void;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
