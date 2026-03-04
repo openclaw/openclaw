@@ -326,12 +326,38 @@ function resolveToolPolicies(params: {
   return policies;
 }
 
-function isWebSearchEnabled(cfg: OpenClawConfig): boolean {
+function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
   if (enabled === false) {
     return false;
   }
-  // You.com free tier works without any API key, so web_search is always available
+  // When a keyed provider is explicitly pinned, web_search is only capable
+  // if the corresponding credentials are present (otherwise it returns a
+  // missing-key error at runtime). When no provider is set, auto-detection
+  // falls through to You.com free tier which always works.
+  const provider = cfg.tools?.web?.search?.provider;
+  if (provider && provider !== "you") {
+    const search = cfg.tools?.web?.search;
+    // Check provider sub-config key and all known env vars
+    const sub =
+      search && typeof search === "object"
+        ? (search as Record<string, unknown>)[provider]
+        : undefined;
+    const subApiKey =
+      sub && typeof sub === "object" ? (sub as Record<string, unknown>).apiKey : undefined;
+    const hasKey = Boolean(
+      search?.apiKey ||
+      subApiKey ||
+      env.BRAVE_API_KEY ||
+      env.PERPLEXITY_API_KEY ||
+      env.XAI_API_KEY ||
+      env.GEMINI_API_KEY ||
+      env.KIMI_API_KEY ||
+      env.MOONSHOT_API_KEY,
+    );
+    return hasKey;
+  }
+  // No provider pinned or provider="you" → always available (You.com free tier)
   return true;
 }
 
@@ -1226,7 +1252,7 @@ export function collectSmallModelRiskFindings(params: {
       agentId,
     });
     const exposed: string[] = [];
-    if (isWebSearchEnabled(params.cfg)) {
+    if (isWebSearchEnabled(params.cfg, params.env)) {
       if (isToolAllowedByPolicies("web_search", policies)) {
         exposed.push("web_search");
       }
