@@ -143,9 +143,16 @@ describe("discordOutbound", () => {
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
     mockBoundThreadManager();
+    const cfg = {
+      channels: {
+        discord: {
+          token: "resolved-token",
+        },
+      },
+    };
 
     const result = await discordOutbound.sendText?.({
-      cfg: {},
+      cfg,
       to: "channel:parent-1",
       text: "hello from persona",
       accountId: "default",
@@ -169,6 +176,10 @@ describe("discordOutbound", () => {
         avatarUrl: "https://example.com/avatar.png",
       }),
     );
+    expect(
+      (hoisted.sendWebhookMessageDiscordMock.mock.calls[0]?.[1] as { cfg?: unknown } | undefined)
+        ?.cfg,
+    ).toBe(cfg);
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       channel: "discord",

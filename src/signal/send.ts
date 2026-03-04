@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
@@ -8,6 +8,7 @@ import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
+  cfg?: OpenClawConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -100,7 +101,7 @@ export async function sendMessageSignal(
   text: string,
   opts: SignalSendOpts = {},
 ): Promise<SignalSendResult> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
