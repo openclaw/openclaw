@@ -377,3 +377,34 @@ export function resolveCommandAuthorization(params: {
     to: to || undefined,
   };
 }
+
+/**
+ * Checks whether a sender is authorized by `commands.allowFrom` for native command dispatch.
+ *
+ * Returns `null` when `commands.allowFrom` is not configured (caller should fall through
+ * to channel-level authorization). Returns `true` / `false` when configured.
+ */
+export function resolveCommandsAllowFromCheck(params: {
+  cfg: OpenClawConfig;
+  providerId?: ChannelId;
+  accountId?: string | null;
+  senderId?: string | null;
+}): boolean | null {
+  const { cfg, providerId, accountId, senderId } = params;
+  const dock = providerId ? getChannelDock(providerId) : undefined;
+  const list = resolveCommandsAllowFromList({ dock, cfg, accountId, providerId });
+  if (list === null) {
+    return null;
+  }
+  if (list.some((entry) => entry.trim() === "*")) {
+    return true;
+  }
+  const candidates = resolveSenderCandidates({
+    dock,
+    providerId,
+    cfg,
+    accountId,
+    senderId,
+  });
+  return candidates.some((candidate) => list.includes(candidate));
+}
