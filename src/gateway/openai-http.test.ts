@@ -681,4 +681,113 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
     await res.text();
   });
+
+  it("extracts multiple images from a single message", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "Two images" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+            { type: "image_url", image_url: { url: "data:image/jpeg;base64,BBB" } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+    const typedOpts = opts as { images?: Array<{ data: string; mimeType: string }> };
+    expect(typedOpts.images).toHaveLength(2);
+    expect(typedOpts.images![0].mimeType).toBe("image/png");
+    expect(typedOpts.images![1].mimeType).toBe("image/jpeg");
+
+    await res.text();
+  });
+
+  it("ignores malformed image_url entries without url", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "check" },
+            { type: "image_url" } as never,
+            { type: "image_url", image_url: {} } as never,
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+    const typedOpts = opts as { images?: unknown };
+    expect(typedOpts.images).toBeUndefined();
+
+    await res.text();
+  });
+
+  it("handles content with mixed valid and invalid parts gracefully", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            null as never,
+            42 as never,
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+    const typedOpts = opts as { images?: Array<{ data: string }> };
+    expect(typedOpts.images).toHaveLength(1);
+
+    await res.text();
+  });
+
+  it("extracts text from input_text type parts alongside images", async () => {
+    const port = enabledPort;
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "describe this" } as never,
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+    const typedOpts = opts as { message?: string; images?: Array<{ data: string }> };
+    expect(typedOpts.message).toContain("describe this");
+    expect(typedOpts.images).toHaveLength(1);
+
+    await res.text();
+  });
 });
