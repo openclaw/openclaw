@@ -13,6 +13,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Default scope: `dev-morpho` + `monitoring` namespace.
 - Print command target before execution: AWS identity, kube context, namespace.
 - Always include explicit Kubernetes context in commands: `kubectl --context "$K8S_CONTEXT" ...`
+- Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 
 ## Paths
 
@@ -80,7 +81,6 @@ kubectl --context "$K8S_CONTEXT" get ns | sed -n '1,20p'
 - Mandatory: verify reachable schema first (`information_schema`/`\dt`) before table-specific query.
 - Mandatory response evidence line:
   - `db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed> rows=<n>`
-- Retry policy: if the same/near-identical DB request is asked again in the same thread, retry live connectivity + query (do not reuse a prior failure answer; state may have changed).
 - If live query cannot run:
   - include exact failing command + exact error text
   - include next unblock step
