@@ -68,6 +68,60 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
+/**
+ * Fix malformed content blocks in tool result messages.
+ * Handles cases where plugins return undefined/void, producing blocks like {type: "text"} without text property.
+ * This prevents crashes in context truncation (see issue #34979).
+ */
+function fixMalformedToolResultContent(msg: AgentMessage): AgentMessage {
+  if ((msg as { role?: unknown }).role !== "toolResult") {
+    return msg;
+  }
+
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return msg; // String content is already valid
+  }
+
+  if (!Array.isArray(content)) {
+    return msg; // No array content to fix
+  }
+
+  // Check if any block needs fixing
+  let needsFix = false;
+  for (const block of content) {
+    if (block && typeof block === "object") {
+      const typed = block as { type?: unknown; text?: unknown };
+      if (typed.type === "text" && typeof typed.text !== "string") {
+        needsFix = true;
+        break;
+      }
+    }
+  }
+
+  if (!needsFix) {
+    return msg;
+  }
+
+  // Fix malformed blocks
+  const fixedContent = content.map((block) => {
+    if (block && typeof block === "object") {
+      const typed = block as { type?: unknown; text?: unknown };
+      if (typed.type === "text" && typeof typed.text !== "string") {
+        // Replace missing text with empty string
+        return { type: "text", text: "" };
+      }
+    }
+    return block;
+  });
+
+  // Only set content if the original message had content property
+  if ("content" in msg) {
+    return { ...msg, content: fixedContent };
+  }
+  return msg;
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -188,9 +242,11 @@ export function installSessionToolResultGuard(
         pendingState.delete(id);
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
+      // Fix malformed content blocks (e.g., {type: "text"} without text property from plugins returning undefined)
+      const fixed = fixMalformedToolResultContent(normalizedToolResult);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult));
+      const capped = capToolResultSize(persistMessage(fixed));
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
