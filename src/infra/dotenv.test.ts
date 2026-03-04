@@ -38,6 +38,7 @@ type DotEnvFixture = {
 };
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
+  const prevCwd = process.cwd();
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
@@ -48,8 +49,8 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
     await run({ base, cwdDir, stateDir });
   } finally {
     const cwd = process.cwd();
-    if (cwd === cwdDir || cwd.startsWith(`${cwdDir}${path.sep}`)) {
-      process.chdir(base);
+    if (cwd === base || cwd.startsWith(`${base}${path.sep}`)) {
+      process.chdir(prevCwd);
     }
     await fs.rm(base, { recursive: true, force: true });
   }
