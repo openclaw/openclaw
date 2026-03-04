@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.js
+*.d.ts
+*.map
+!vitest.config.ts
+.env
+wallet.json
+trades.json
+marketplace.json
+
+# Hardhat
+cache/
+artifacts/

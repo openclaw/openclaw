@@ -1,0 +1,50 @@
+{
+  "name": "@openclaw/plugin-agent-commerce",
+  "version": "0.1.0",
+  "description": "Agent-to-agent commerce via blockchain utility token (ClawToken)",
+  "keywords": [
+    "agent-economy",
+    "base",
+    "blockchain",
+    "commerce",
+    "erc20",
+    "escrow",
+    "openclaw",
+    "plugin",
+    "web3"
+  ],
+  "homepage": "https://github.com/lluviaoscuradeldoce-design/agent-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/lluviaoscuradeldoce-design/agent-commerce/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lluviaoscuradeldoce-design/agent-commerce.git"
+  },
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "hardhat": "^2.28.6",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2024.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "agent-commerce",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "rpcUrl": {
+        "type": "string",
+        "description": "EVM JSON-RPC endpoint (e.g. Base Sepolia)"
+      },
+      "contractAddress": {
+        "type": "string",
+        "description": "Deployed ClawToken contract address"
+      },
+      "chainId": {
+        "type": "number",
+        "description": "EVM chain ID (84532 = Base Sepolia)"
+      }
+    }
+  }
+}

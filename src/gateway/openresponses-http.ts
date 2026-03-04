@@ -1,7 +1,7 @@
 /**
  * OpenResponses HTTP Handler
  *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
+ * Implements the OpenResponses `/v1/responses` endpoint for Moltbot Gateway.
  *
  * @see https://www.open-responses.com/
  */
@@ -59,7 +59,9 @@ const DEFAULT_MAX_URL_PARTS = 8;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  // Security: Escape < and > to prevent XSS if the content-type is misinterpreted as HTML.
+  const json = JSON.stringify(event).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  res.write(`data: ${json}\n\n`);
 }
 
 type ResolvedResponsesLimits = {
@@ -415,8 +417,12 @@ export async function handleOpenResponsesHttpRequest(
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
+    const isInvalidRequest = err instanceof Error && err.message.includes("tool_choice");
     sendJson(res, 400, {
-      error: { message: "invalid tool configuration", type: "invalid_request_error" },
+      error: {
+        message: isInvalidRequest ? err.message : "invalid tool configuration",
+        type: "invalid_request_error",
+      },
     });
     return true;
   }
@@ -511,7 +517,7 @@ export async function handleOpenResponsesHttpRequest(
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
-          : "No response from OpenClaw.";
+          : "No response from Moltbot.";
 
       const response = createResponseResource({
         id: responseId,
@@ -533,6 +539,7 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+      defaultRuntime.error(`OpenResponses gateway error: ${String(err)}`);
       sendJson(res, 500, response);
     }
     return true;
@@ -678,7 +685,7 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from OpenClaw.";
+        const finalText = accumulatedText || "No response from Moltbot.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -789,7 +796,7 @@ export async function handleOpenResponsesHttpRequest(
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from OpenClaw.";
+            : "No response from Moltbot.";
 
         accumulatedText = content;
         sawAssistantDelta = true;

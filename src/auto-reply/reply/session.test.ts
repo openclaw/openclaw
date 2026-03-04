@@ -14,7 +14,7 @@ import { initSessionState } from "./session.js";
 
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", () => ({
-  acquireSessionWriteLock: async () => ({ release: async () => {} }),
+  acquireSessionWriteLock: async () => ({ release: async () => { } }),
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
@@ -60,7 +60,7 @@ async function writeSessionStoreFast(
 
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => { });
     const root = await makeCaseDir("openclaw-thread-session-");
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);
@@ -145,7 +145,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => { });
     const root = await makeCaseDir("openclaw-thread-session-existing-");
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);

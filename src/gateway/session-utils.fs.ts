@@ -71,6 +71,9 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+/**
+ * Synchronously reads session messages. Use `readSessionMessagesAsync` for non-blocking I/O.
+ */
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -79,16 +82,51 @@ export function readSessionMessages(
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
   const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return [];
-  }
+  if (!filePath) return [];
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
   const messages: unknown[] = [];
   for (const line of lines) {
-    if (!line.trim()) {
-      continue;
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.message) {
+        messages.push(parsed.message);
+      }
+    } catch {
+      // ignore bad lines
     }
+  }
+  return messages;
+}
+
+/**
+ * Asynchronously reads session messages. Preferred for hot paths to avoid blocking.
+ */
+export async function readSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): Promise<unknown[]> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+  let filePath: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      await fs.promises.access(candidate, fs.constants.F_OK);
+      filePath = candidate;
+      break;
+    } catch {
+      // continue to next candidate
+    }
+  }
+  if (!filePath) return [];
+
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const lines = raw.split(/\r?\n/);
+  const messages: unknown[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
@@ -155,7 +193,6 @@ export function resolveSessionTranscriptCandidates(
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
   }
-
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
@@ -270,9 +307,7 @@ export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
 ): { items: T[]; bytes: number } {
-  if (items.length === 0) {
-    return { items, bytes: 2 };
-  }
+  if (items.length === 0) return { items, bytes: 2 };
   const parts = items.map((item) => jsonUtf8Bytes(item));
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
@@ -373,9 +408,7 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
     return null;
   }
   for (const part of content) {
-    if (!part || typeof part.text !== "string") {
-      continue;
-    }
+    if (!part || typeof part.text !== "string") continue;
     if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
       const normalized = stripInlineDirectiveTagsForDisplay(part.text).text.trim();
       if (normalized) {
@@ -442,9 +475,7 @@ function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | nul
   } catch {
     // file read error
   } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
+    if (fd !== null) fs.closeSync(fd);
   }
   return null;
 }
@@ -544,9 +575,7 @@ type TranscriptPreviewMessage = {
 };
 
 function normalizeRole(role: string | undefined, isTool: boolean): SessionPreviewItem["role"] {
-  if (isTool) {
-    return "tool";
-  }
+  if (isTool) return "tool";
   switch ((role ?? "").toLowerCase()) {
     case "user":
       return "user";
@@ -562,12 +591,8 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
 }
 
 function truncatePreviewText(text: string, maxChars: number): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
-    return text;
-  }
-  if (maxChars <= 3) {
-    return text.slice(0, maxChars);
-  }
+  if (maxChars <= 0 || text.length <= maxChars) return text;
+  if (maxChars <= 3) return text.slice(0, maxChars);
   return `${text.slice(0, maxChars - 3)}...`;
 }
 
@@ -594,22 +619,36 @@ function extractPreviewText(message: TranscriptPreviewMessage): string | null {
 }
 
 function isToolCall(message: TranscriptPreviewMessage): boolean {
-  return hasToolCall(message as Record<string, unknown>);
+  if (message.toolName || message.tool_name) return true;
+  if (!Array.isArray(message.content)) return false;
+  return message.content.some((entry) => {
+    if (entry?.name) return true;
+    const raw = typeof entry?.type === "string" ? entry.type.toLowerCase() : "";
+    return raw === "toolcall" || raw === "tool_call";
+  });
 }
 
 function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  return extractToolCallNames(message as Record<string, unknown>);
+  const names: string[] = [];
+  if (Array.isArray(message.content)) {
+    for (const entry of message.content) {
+      if (typeof entry?.name === "string" && entry.name.trim()) {
+        names.push(entry.name.trim());
+      }
+    }
+  }
+  const toolName = typeof message.toolName === "string" ? message.toolName : message.tool_name;
+  if (typeof toolName === "string" && toolName.trim()) {
+    names.push(toolName.trim());
+  }
+  return names;
 }
 
 function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
-  if (!Array.isArray(message.content)) {
-    return null;
-  }
+  if (!Array.isArray(message.content)) return null;
   for (const entry of message.content) {
     const raw = typeof entry?.type === "string" ? entry.type.trim().toLowerCase() : "";
-    if (!raw || raw === "text" || raw === "toolcall" || raw === "tool_call") {
-      continue;
-    }
+    if (!raw || raw === "text" || raw === "toolcall" || raw === "tool_call") continue;
     return `[${raw}]`;
   }
   return null;
@@ -631,21 +670,15 @@ function buildPreviewItems(
         const shown = toolNames.slice(0, 2);
         const overflow = toolNames.length - shown.length;
         text = `call ${shown.join(", ")}`;
-        if (overflow > 0) {
-          text += ` +${overflow}`;
-        }
+        if (overflow > 0) text += ` +${overflow}`;
       }
     }
     if (!text) {
       text = extractMediaSummary(message);
     }
-    if (!text) {
-      continue;
-    }
+    if (!text) continue;
     let trimmed = text.trim();
-    if (!trimmed) {
-      continue;
-    }
+    if (!trimmed) continue;
     if (role === "user") {
       trimmed = stripEnvelope(trimmed);
     }
@@ -653,9 +686,7 @@ function buildPreviewItems(
     items.push({ role, text: trimmed });
   }
 
-  if (items.length <= maxItems) {
-    return items;
-  }
+  if (items.length <= maxItems) return items;
   return items.slice(-maxItems);
 }
 
@@ -669,9 +700,7 @@ function readRecentMessagesFromTranscript(
     fd = fs.openSync(filePath, "r");
     const stat = fs.fstatSync(fd);
     const size = stat.size;
-    if (size === 0) {
-      return [];
-    }
+    if (size === 0) return [];
 
     const readStart = Math.max(0, size - readBytes);
     const readLen = Math.min(size, readBytes);
@@ -690,21 +719,17 @@ function readRecentMessagesFromTranscript(
         const msg = parsed?.message as TranscriptPreviewMessage | undefined;
         if (msg && typeof msg === "object") {
           collected.push(msg);
-          if (collected.length >= maxMessages) {
-            break;
-          }
+          if (collected.length >= maxMessages) break;
         }
       } catch {
         // skip malformed lines
       }
     }
-    return collected.toReversed();
+    return collected.reverse();
   } catch {
     return [];
   } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
+    if (fd !== null) fs.closeSync(fd);
   }
 }
 
@@ -718,9 +743,7 @@ export function readSessionPreviewItemsFromTranscript(
 ): SessionPreviewItem[] {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
   const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return [];
-  }
+  if (!filePath) return [];
 
   const boundedItems = Math.max(1, Math.min(maxItems, 50));
   const boundedChars = Math.max(20, Math.min(maxChars, 2000));
