@@ -32,9 +32,9 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 ## Sponsors
 
-| OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
+| OpenAI                                                                                                                     | Vercel                                                                                                                     | Blacksmith                                                                                                                            | Convex                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [![OpenAI](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
 
 **Subscriptions (OAuth):**
 
