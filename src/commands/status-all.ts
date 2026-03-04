@@ -268,7 +268,7 @@ export async function statusAllCommand(
     const overviewRows = [
       { Item: "Version", Value: VERSION },
       { Item: "OS", Value: osSummary.label },
-      { Item: "Node", Value: process.versions.node },
+      { Item: "Node", Value: gatewaySelf?.nodeVersion ?? process.versions.node },
       {
         Item: "Config",
         Value: snap?.path?.trim() ? snap.path.trim() : "(unknown config path)",

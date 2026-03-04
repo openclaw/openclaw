@@ -3,6 +3,7 @@ export type GatewaySelfPresence = {
   ip?: string;
   version?: string;
   platform?: string;
+  nodeVersion?: string;
 };
 
 export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence | null {
@@ -23,5 +24,6 @@ export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence 
     ip: typeof self.ip === "string" ? self.ip : undefined,
     version: typeof self.version === "string" ? self.version : undefined,
     platform: typeof self.platform === "string" ? self.platform : undefined,
+    nodeVersion: typeof self.nodeVersion === "string" ? self.nodeVersion : undefined,
   };
 }

@@ -394,7 +394,10 @@ export async function statusCommand(
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
-    { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
+    {
+      Item: "OS",
+      Value: `${osSummary.label} · node ${gatewaySelf?.nodeVersion ?? process.versions.node}`,
+    },
     {
       Item: "Tailscale",
       Value:

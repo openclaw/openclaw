@@ -10,6 +10,7 @@ export type SystemPresence = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  nodeVersion?: string;
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
@@ -102,6 +103,7 @@ function initSelfPresence() {
     platform,
     deviceFamily,
     modelIdentifier,
+    nodeVersion: process.versions.node,
     mode: "gateway",
     reason: "self",
     text,
