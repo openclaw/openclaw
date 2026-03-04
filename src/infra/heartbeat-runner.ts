@@ -1042,17 +1042,14 @@ export function startHeartbeatRunner(opts: {
     if (typeof prevState?.lastRunMs === "number") {
       return { nextDueMs: prevState.lastRunMs + intervalMs, scheduledAt: prevState.scheduledAt };
     }
-    // Config unchanged and schedule still pending — keep it
-    if (
-      prevState &&
-      prevState.intervalMs === intervalMs &&
-      prevState.jitterMs === jitterMs &&
-      prevState.nextDueMs > now
-    ) {
-      return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
-    }
-    // Config changed on pending schedule — recompute from original base, don't reset countdown
-    if (prevState && !prevState.lastRunMs) {
+    // Pending schedule (no run yet) — keep or recompute based on config changes
+    if (prevState) {
+      const configChanged = prevState.intervalMs !== intervalMs || prevState.jitterMs !== jitterMs;
+      if (!configChanged) {
+        // Config unchanged — keep existing schedule (even if overdue, let it fire)
+        return { nextDueMs: prevState.nextDueMs, scheduledAt: prevState.scheduledAt };
+      }
+      // Config changed — recompute from original base, preserving elapsed countdown
       const recomputed = prevState.scheduledAt + intervalMs + Math.floor(Math.random() * jitterMs);
       return { nextDueMs: Math.max(now, recomputed), scheduledAt: prevState.scheduledAt };
     }
