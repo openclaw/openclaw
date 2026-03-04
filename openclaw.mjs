@@ -1,5 +1,33 @@
 #!/usr/bin/env node
 
+// Validate and sanitize proxy environment variables before any modules are loaded.
+// This prevents "Invalid URL" errors from EnvHttpProxyAgent in pi-ai when
+// environment variables contain empty or malformed proxy URLs (common on Windows).
+// See: https://github.com/openclaw/openclaw/issues/33730
+const validateProxyEnv = () => {
+  const proxyEnvs = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+  ];
+  for (const env of proxyEnvs) {
+    const value = process.env[env];
+    if (value !== undefined && value !== "") {
+      try {
+        // Validate that it's a valid URL
+        new URL(value);
+      } catch {
+        // Clear invalid proxy env vars to prevent EnvHttpProxyAgent crashes
+        delete process.env[env];
+      }
+    }
+  }
+};
+validateProxyEnv();
+
 import module from "node:module";
 
 const MIN_NODE_MAJOR = 22;
