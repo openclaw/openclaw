@@ -35,6 +35,16 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+// Lazy imports to avoid circular dependency with config/paths (TDZ issue in bundler).
+// Modules are loaded on first use and cached for subsequent sync access.
+let _sessionPaths: typeof import("../config/sessions/paths.js") | undefined;
+let _sessionStore: typeof import("../config/sessions/store.js") | undefined;
+let _sessionTypes: typeof import("../config/sessions/types.js") | undefined;
+async function ensureSessionModules() {
+  _sessionPaths ??= await import("../config/sessions/paths.js");
+  _sessionStore ??= await import("../config/sessions/store.js");
+  _sessionTypes ??= await import("../config/sessions/types.js");
+}
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -526,6 +536,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
+      sessions: {
+        getEntry(key: string) {
+          if (!_sessionPaths || !_sessionStore) {
+            throw new Error(
+              "sessions.getEntry: session modules not loaded yet — call updateEntry first or await sessions.init()",
+            );
+          }
+          const storePath = _sessionPaths.resolveDefaultSessionStorePath();
+          const store = _sessionStore.loadSessionStore(storePath);
+          const normalizedKey = key.trim().toLowerCase();
+          return store[normalizedKey];
+        },
+        async updateEntry(key: string, patch) {
+          await ensureSessionModules();
+          const storePath = _sessionPaths!.resolveDefaultSessionStorePath();
+          const normalizedKey = key.trim().toLowerCase();
+          await _sessionStore!.updateSessionStore(storePath, (s) => {
+            const existing = s[normalizedKey];
+            s[normalizedKey] = _sessionTypes!.mergeSessionEntry(existing, patch);
+          });
+        },
+        async init() {
+          await ensureSessionModules();
+        },
+      },
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };
   };

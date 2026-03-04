@@ -33,6 +33,13 @@ describe("diffs plugin registration", () => {
       resolvePath(input: string) {
         return input;
       },
+      sessions: {
+        getEntry() {
+          return undefined;
+        },
+        updateEntry: async () => {},
+        init: async () => {},
+      },
       on,
     });
 
@@ -100,6 +107,13 @@ describe("diffs plugin registration", () => {
       registerCommand() {},
       resolvePath(input: string) {
         return input;
+      },
+      sessions: {
+        getEntry() {
+          return undefined;
+        },
+        updateEntry: async () => {},
+        init: async () => {},
       },
       on() {},
     });
