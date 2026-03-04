@@ -267,4 +267,29 @@ describe("systemd service control", () => {
       }),
     ).rejects.toThrow("systemctl stop failed: permission denied");
   });
+
+  it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          "debian@",
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { SUDO_USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
 });
