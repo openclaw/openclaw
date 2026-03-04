@@ -51,6 +51,14 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
 
+// SQLite error codes that indicate transient failures (shouldn't crash the gateway)
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+]);
+
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
   "socket hang up",
@@ -180,6 +188,35 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient SQLite error that shouldn't crash the gateway.
+ * These are typically temporary I/O or locking issues that resolve on retry.
+ */
+export function isTransientSqliteError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -233,6 +270,11 @@ export function installUnhandledRejectionHandler(): void {
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
+      return;
+    }
+
+    if (isTransientSqliteError(reason)) {
+      console.warn("[openclaw] Non-fatal SQLite error (continuing):", formatUncaughtError(reason));
       return;
     }
 
