@@ -78,8 +78,9 @@ export type SessionRelayRoutingTarget = {
 
 export type SessionRelayRoutingMatch = {
   channel?: string;
-  chatIdPattern?: string;
-  senderPattern?: string;
+  accountId?: string;
+  chatId?: string;
+  sender?: string;
 };
 
 export type SessionRelayRoutingRule = {

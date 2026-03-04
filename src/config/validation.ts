@@ -222,6 +222,152 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+type RelayRoutingRuleRecord = {
+  mode?: string;
+  relayTo?: string;
+  match?: {
+    channel?: string;
+    accountId?: string;
+    chatId?: string;
+  };
+};
+
+type RelayRoutingTargetRecord = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+};
+
+function normalizeRelayChannelId(raw: string | undefined): string {
+  const normalizedCore = normalizeChatChannelId(raw);
+  if (normalizedCore) {
+    return normalizedCore;
+  }
+  return raw?.trim().toLowerCase() ?? "";
+}
+
+function normalizeRelayAccountId(raw: string | undefined): string {
+  return raw?.trim().toLowerCase() || "default";
+}
+
+function relayRuleProtectsTarget(params: {
+  rule: RelayRoutingRuleRecord;
+  target: { channel: string; to: string; accountId: string };
+}): boolean {
+  const match = params.rule.match;
+  if (!match) {
+    return true;
+  }
+  const matchChannel = normalizeRelayChannelId(match.channel);
+  if (matchChannel && matchChannel !== params.target.channel) {
+    return false;
+  }
+  const matchAccountId = normalizeRelayAccountId(match.accountId);
+  if (match.accountId && matchAccountId !== params.target.accountId) {
+    return false;
+  }
+  const matchChatId = match.chatId?.trim() ?? "";
+  if (matchChatId && matchChatId !== params.target.to) {
+    return false;
+  }
+  return true;
+}
+
+function validateRelayRoutingProtectionLoops(config: OpenClawConfig): ConfigValidationIssue[] {
+  const relayRouting = config.session?.relayRouting;
+  if (!relayRouting) {
+    return [];
+  }
+  const targets = relayRouting.targets ?? {};
+  const rules = relayRouting.rules ?? [];
+  if (!Array.isArray(rules) || rules.length === 0) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  for (const [index, candidateRule] of rules.entries()) {
+    const rule = candidateRule as RelayRoutingRuleRecord;
+    if (rule.mode !== "read-only") {
+      continue;
+    }
+    const relayTo = rule.relayTo?.trim();
+    if (!relayTo) {
+      continue;
+    }
+    const target = targets[relayTo] as RelayRoutingTargetRecord | undefined;
+    if (!target) {
+      continue;
+    }
+    const normalizedTarget = {
+      channel: normalizeRelayChannelId(target.channel),
+      to: target.to?.trim() ?? "",
+      accountId: normalizeRelayAccountId(target.accountId),
+    };
+    if (!normalizedTarget.channel || !normalizedTarget.to) {
+      continue;
+    }
+
+    const sourceChannel = normalizeRelayChannelId(rule.match?.channel);
+    const sourceChatId = rule.match?.chatId?.trim() ?? "";
+    const sourceAccountId = normalizeRelayAccountId(rule.match?.accountId);
+    if (
+      sourceChannel &&
+      sourceChatId &&
+      sourceChannel === normalizedTarget.channel &&
+      sourceChatId === normalizedTarget.to &&
+      sourceAccountId === normalizedTarget.accountId
+    ) {
+      issues.push({
+        path: `session.relayRouting.rules.${index}.relayTo`,
+        message:
+          `relay target "${relayTo}" cannot be the same as protected source ` +
+          `${sourceChannel}:${sourceChatId} (account: ${sourceAccountId})`,
+      });
+      continue;
+    }
+
+    const blockingRuleIndex = rules.findIndex((candidate, candidateIndex) => {
+      const blockingRule = candidate as RelayRoutingRuleRecord;
+      if (blockingRule.mode !== "read-only") {
+        return false;
+      }
+      if (candidateIndex === index && sourceChannel && sourceChatId) {
+        return false;
+      }
+      return relayRuleProtectsTarget({ rule: blockingRule, target: normalizedTarget });
+    });
+
+    if (blockingRuleIndex >= 0) {
+      issues.push({
+        path: `session.relayRouting.rules.${index}.relayTo`,
+        message:
+          `relay target "${relayTo}" (${normalizedTarget.channel}:${normalizedTarget.to}) is itself ` +
+          "a protected read-only channel, which would create a redirect loop",
+      });
+    }
+  }
+  return issues;
+}
+
+function validateRelayTargetDestinationFormat(params: {
+  channel: string;
+  destination: string;
+}): string | null {
+  if (params.channel === "whatsapp" || params.channel === "signal") {
+    if (!/^\+\d{3,20}$/.test(params.destination)) {
+      return `relay target destination "${params.destination}" must be E.164 (for example +15551234567) for ${params.channel}`;
+    }
+    return null;
+  }
+  if (params.channel === "telegram") {
+    const isNumericChatId = /^-?\d+(?::topic:\d+)?$/.test(params.destination);
+    const isUsername = /^@[a-zA-Z0-9_]{5,}$/.test(params.destination);
+    if (!isNumericChatId && !isUsername) {
+      return `relay target destination "${params.destination}" must be a numeric chat id or @username for telegram`;
+    }
+  }
+  return null;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -265,6 +411,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const relayRoutingIssues = validateRelayRoutingProtectionLoops(validated.data as OpenClawConfig);
+  if (relayRoutingIssues.length > 0) {
+    return { ok: false, issues: relayRoutingIssues };
   }
   return {
     ok: true,
@@ -469,6 +619,68 @@ function validateConfigObjectWithPluginsBase(
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+    }
+  }
+
+  const relayKnownChannels = new Set<string>(
+    CHANNEL_IDS.map((channelId) => channelId.toLowerCase()),
+  );
+  let relayPluginChannelsLoaded = false;
+  const ensureRelayPluginChannels = () => {
+    if (relayPluginChannelsLoaded) {
+      return;
+    }
+    relayPluginChannelsLoaded = true;
+    const { registry } = ensureRegistry();
+    for (const record of registry.plugins) {
+      for (const channelId of record.channels) {
+        const normalized = channelId.trim().toLowerCase();
+        if (normalized) {
+          relayKnownChannels.add(normalized);
+        }
+      }
+    }
+  };
+
+  const relayTargets = config.session?.relayRouting?.targets;
+  if (relayTargets && isRecord(relayTargets)) {
+    for (const [targetKey, candidateTarget] of Object.entries(relayTargets)) {
+      if (!candidateTarget || typeof candidateTarget !== "object") {
+        continue;
+      }
+      const target = candidateTarget as RelayRoutingTargetRecord;
+      const channel = target.channel?.trim() ?? "";
+      if (!channel) {
+        continue;
+      }
+      const normalizedChannel = normalizeRelayChannelId(channel);
+      const basePath = `session.relayRouting.targets.${targetKey}`;
+      let knownChannel = Boolean(normalizedChannel) && relayKnownChannels.has(normalizedChannel);
+      if (!knownChannel && normalizedChannel) {
+        ensureRelayPluginChannels();
+        knownChannel = relayKnownChannels.has(normalizedChannel);
+      }
+      if (!knownChannel) {
+        issues.push({
+          path: `${basePath}.channel`,
+          message: `unknown relay target channel: ${channel}`,
+        });
+        continue;
+      }
+      const destination = target.to?.trim() ?? "";
+      if (!destination) {
+        continue;
+      }
+      const destinationIssue = validateRelayTargetDestinationFormat({
+        channel: normalizedChannel,
+        destination,
+      });
+      if (destinationIssue) {
+        issues.push({
+          path: `${basePath}.to`,
+          message: destinationIssue,
+        });
+      }
     }
   }
 

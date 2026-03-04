@@ -1065,13 +1065,15 @@ export const FIELD_HELP: Record<string, string> = {
   "session.relayRouting.rules[].relayTo":
     "Target key reference into session.relayRouting.targets used when mode is read-only. Keep relayTo values aligned with existing target keys so validation can prevent silent policy gaps.",
   "session.relayRouting.rules[].match":
-    "Optional inbound match constraints for scoping when a relay rule applies, including channel and sender/chat pattern selectors. Use narrow match filters to avoid accidental over-application across unrelated chats.",
+    "Optional inbound match constraints for scoping when a relay rule applies, including channel, account, sender, and chat selectors. Use narrow match filters to avoid accidental over-application across unrelated chats.",
   "session.relayRouting.rules[].match.channel":
     "Restricts relay rule matching to a specific inbound channel/provider id. Use this when the same relay target key exists but policy intent differs across channels.",
-  "session.relayRouting.rules[].match.chatIdPattern":
-    "Pattern string matched against inbound chat identifiers to scope relay behavior within a channel. Use exact ids for strict targeting or regex-style patterns when controlled wildcard matching is required.",
-  "session.relayRouting.rules[].match.senderPattern":
-    "Pattern string matched against inbound sender identifiers for sender-scoped relay protections. Keep patterns explicit and tested so policy does not over-match broad user populations.",
+  "session.relayRouting.rules[].match.accountId":
+    "Optional account selector for multi-account channel setups when relay protection should only apply to a specific account. Omit this to match the channel default account behavior.",
+  "session.relayRouting.rules[].match.chatId":
+    "Inbound chat identifier match used to scope relay behavior within a channel (for example room/thread IDs). Use stable provider ids for precise targeting and easier policy debugging.",
+  "session.relayRouting.rules[].match.sender":
+    "Inbound sender identifier match used for sender-scoped relay protections. Keep sender ids explicit and verified so policy does not over-match unrelated users.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":

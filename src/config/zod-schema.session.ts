@@ -36,8 +36,9 @@ const SessionRelayRoutingTargetSchema = z
 export const SessionRelayRoutingMatchSchema = z
   .object({
     channel: z.string().min(1).optional(),
-    chatIdPattern: z.string().min(1).optional(),
-    senderPattern: z.string().min(1).optional(),
+    accountId: z.string().optional(),
+    chatId: z.string().min(1).optional(),
+    sender: z.string().min(1).optional(),
   })
   .strict();
 
@@ -58,6 +59,29 @@ export const SessionRelayRoutingSchema = z
   .strict()
   .superRefine((val, ctx) => {
     const targets = val.targets ?? {};
+
+    const normalizeChannel = (value: string | undefined): string =>
+      value?.trim().toLowerCase() ?? "";
+    const normalizeAccountId = (value: string | undefined): string =>
+      value?.trim().toLowerCase() || "default";
+
+    for (const [targetKey, target] of Object.entries(targets)) {
+      if (!target.channel.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targets", targetKey, "channel"],
+          message: "relay target channel must not be empty",
+        });
+      }
+      if (!target.to.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["targets", targetKey, "to"],
+          message: "relay target destination must not be empty",
+        });
+      }
+    }
+
     for (const [index, rule] of (val.rules ?? []).entries()) {
       if (rule.mode !== "read-only") {
         continue;
@@ -76,6 +100,34 @@ export const SessionRelayRoutingSchema = z
           code: z.ZodIssueCode.custom,
           path: ["rules", index, "relayTo"],
           message: `relayTo "${relayTo}" must reference an existing targets key`,
+        });
+        continue;
+      }
+
+      const target = targets[relayTo];
+      const sourceChannel = normalizeChannel(rule.match?.channel);
+      const sourceChatId = rule.match?.chatId?.trim() ?? "";
+      if (!sourceChannel || !sourceChatId) {
+        continue;
+      }
+      const targetChannel = normalizeChannel(target.channel);
+      const targetTo = target.to.trim();
+      if (!targetChannel || !targetTo) {
+        continue;
+      }
+      const sourceAccountId = normalizeAccountId(rule.match?.accountId);
+      const targetAccountId = normalizeAccountId(target.accountId);
+      if (
+        sourceChannel === targetChannel &&
+        sourceChatId === targetTo &&
+        sourceAccountId === targetAccountId
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message:
+            `relay target "${relayTo}" cannot be the same as protected source ` +
+            `${sourceChannel}:${sourceChatId} (account: ${sourceAccountId})`,
         });
       }
     }

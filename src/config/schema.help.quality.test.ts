@@ -160,8 +160,9 @@ const TARGET_KEYS = [
   "session.relayRouting.rules[].relayTo",
   "session.relayRouting.rules[].match",
   "session.relayRouting.rules[].match.channel",
-  "session.relayRouting.rules[].match.chatIdPattern",
-  "session.relayRouting.rules[].match.senderPattern",
+  "session.relayRouting.rules[].match.accountId",
+  "session.relayRouting.rules[].match.chatId",
+  "session.relayRouting.rules[].match.sender",
   "session.agentToAgent",
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
@@ -684,8 +685,11 @@ describe("config help copy quality", () => {
     const relayTo = FIELD_HELP["session.relayRouting.rules[].relayTo"];
     expect(/targets/i.test(relayTo)).toBe(true);
 
-    const chatPattern = FIELD_HELP["session.relayRouting.rules[].match.chatIdPattern"];
-    expect(/pattern|regex/i.test(chatPattern)).toBe(true);
+    const chatId = FIELD_HELP["session.relayRouting.rules[].match.chatId"];
+    expect(/chat|id/i.test(chatId)).toBe(true);
+
+    const accountId = FIELD_HELP["session.relayRouting.rules[].match.accountId"];
+    expect(/account/i.test(accountId)).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
