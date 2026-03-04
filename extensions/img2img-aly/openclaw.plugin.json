@@ -1,0 +1,19 @@
+{
+  "id": "img2img-aly",
+  "name": "Img2Img Aly",
+  "description": "img2img extension for aly.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "DashScope API key. If omitted, OPENCLAW_ALY_API_KEY is used."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Override API endpoint. If omitted, OPENCLAW_ALY_BASE_URL or default DashScope endpoint is used."
+      }
+    }
+  }
+}
