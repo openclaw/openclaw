@@ -395,7 +395,7 @@ type FindPageByTargetIdResult = {
 
 function isCdpAttachBlockedError(err: unknown): boolean {
   const message = formatErrorMessage(err).toLowerCase();
-  return message.includes("target.attachtobrowsertarget") || message.includes("not allowed");
+  return message.includes("target.attachtobrowsertarget") && message.includes("not allowed");
 }
 
 async function findPageByTargetId(
