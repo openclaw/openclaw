@@ -297,6 +297,8 @@ export function registerLogTransport(transport: LogTransport): () => void {
 
 export const __test__ = {
   shouldSkipLoadConfigFallback,
+  defaultRollingPathForToday,
+  isRollingPath,
 };
 
 function formatLocalDate(date: Date): string {
@@ -306,18 +308,24 @@ function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function defaultRollingPathForToday(): string {
-  const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+function resolveLogProfileTag(): string {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile === "default") {
+    return "";
+  }
+  return `-${profile}`;
 }
 
+function defaultRollingPathForToday(): string {
+  const today = formatLocalDate(new Date());
+  const tag = resolveLogProfileTag();
+  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}${tag}-${today}${LOG_SUFFIX}`);
+}
+
+const ROLLING_PATH_RE = /^openclaw(?:-[a-zA-Z0-9_-]+)?-\d{4}-\d{2}-\d{2}\.log$/;
+
 function isRollingPath(file: string): boolean {
-  const base = path.basename(file);
-  return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
-  );
+  return ROLLING_PATH_RE.test(path.basename(file));
 }
 
 function pruneOldRollingLogs(dir: string): void {
