@@ -57,6 +57,7 @@ struct AppStateRemoteConfigTests {
             remoteToken: "")
         let localGateway = localRoot["gateway"] as? [String: Any]
         let localRemoteConfig = localGateway?["remote"] as? [String: Any]
+        // Local mode should not discard remote token state; users can return to remote mode later.
         #expect(localGateway?["mode"] as? String == "local")
         #expect(localRemoteConfig?["token"] as? String == "persisted-token")
 
