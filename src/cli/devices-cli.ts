@@ -327,7 +327,9 @@ export function registerDevicesCli(program: Command) {
         }
         let resolvedDeviceId = trimmed;
         try {
-          const result = await callGatewayCli("device.pair.remove", opts, { deviceId: resolvedDeviceId });
+          const result = await callGatewayCli("device.pair.remove", opts, {
+            deviceId: resolvedDeviceId,
+          });
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
@@ -350,7 +352,9 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         resolvedDeviceId = resolved.deviceId;
-        const result = await callGatewayCli("device.pair.remove", opts, { deviceId: resolvedDeviceId });
+        const result = await callGatewayCli("device.pair.remove", opts, {
+          deviceId: resolvedDeviceId,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;

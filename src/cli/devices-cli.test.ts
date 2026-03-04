@@ -177,15 +177,13 @@ describe("devices cli remove", () => {
   });
 
   it("aborts removal when alias matches multiple devices", async () => {
-    callGateway
-      .mockRejectedValueOnce(new Error("unknown deviceId"))
-      .mockResolvedValueOnce({
-        paired: [
-          { deviceId: "device-1", displayName: "Office iPad" },
-          { deviceId: "device-2", displayName: "Office iPad" },
-        ],
-        pending: [],
-      });
+    callGateway.mockRejectedValueOnce(new Error("unknown deviceId")).mockResolvedValueOnce({
+      paired: [
+        { deviceId: "device-1", displayName: "Office iPad" },
+        { deviceId: "device-2", displayName: "Office iPad" },
+      ],
+      pending: [],
+    });
 
     await runDevicesCommand(["remove", "Office iPad"]);
 
@@ -197,12 +195,10 @@ describe("devices cli remove", () => {
   });
 
   it("aborts removal when alias matches no devices", async () => {
-    callGateway
-      .mockRejectedValueOnce(new Error("unknown deviceId"))
-      .mockResolvedValueOnce({
-        paired: [{ deviceId: "device-1", displayName: "Office iPad" }],
-        pending: [],
-      });
+    callGateway.mockRejectedValueOnce(new Error("unknown deviceId")).mockResolvedValueOnce({
+      paired: [{ deviceId: "device-1", displayName: "Office iPad" }],
+      pending: [],
+    });
 
     await runDevicesCommand(["remove", "Unknown Device"]);
 
