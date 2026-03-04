@@ -17,11 +17,24 @@ function resolveInstallOptions(
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   const parentPort = inheritOptionFromParent<string>(command, "port");
   const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentSystem = inheritOptionFromParent<boolean>(command, "system");
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    system: Boolean(cmdOpts.system || parentSystem),
+  };
+}
+
+function resolveLifecycleOptions(
+  cmdOpts: DaemonInstallOptions | GatewayRpcOpts,
+  command?: Command,
+): { json?: boolean; system?: boolean } {
+  const parentSystem = inheritOptionFromParent<boolean>(command, "system");
+  return {
+    json: Boolean(cmdOpts.json),
+    system: Boolean(("system" in cmdOpts ? cmdOpts.system : false) || parentSystem),
   };
 }
 
@@ -45,6 +58,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--no-probe", "Skip RPC probe")
     .option("--deep", "Scan system-level services", false)
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runDaemonStatus({
@@ -52,6 +66,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         probe: Boolean(cmdOpts.probe),
         deep: Boolean(cmdOpts.deep),
         json: Boolean(cmdOpts.json),
+        system: Boolean(cmdOpts.system),
       });
     });
 
@@ -61,6 +76,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
@@ -70,32 +86,36 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("uninstall")
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
-      await runDaemonUninstall(cmdOpts);
+    .action(async (cmdOpts, command) => {
+      await runDaemonUninstall(resolveLifecycleOptions(cmdOpts, command));
     });
 
   parent
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
-      await runDaemonStart(cmdOpts);
+    .action(async (cmdOpts, command) => {
+      await runDaemonStart(resolveLifecycleOptions(cmdOpts, command));
     });
 
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
-      await runDaemonStop(cmdOpts);
+    .action(async (cmdOpts, command) => {
+      await runDaemonStop(resolveLifecycleOptions(cmdOpts, command));
     });
 
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--system", "Use Linux system-level systemd scope", false)
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
-      await runDaemonRestart(cmdOpts);
+    .action(async (cmdOpts, command) => {
+      await runDaemonRestart(resolveLifecycleOptions(cmdOpts, command));
     });
 }
