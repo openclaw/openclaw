@@ -71,7 +71,7 @@ function normalizePublicKeyMap(raw: Record<string, string> | undefined): Record<
   const normalized = Object.entries(raw)
     .map(([keyId, key]) => [keyId.trim(), key.trim()] as const)
     .filter(([keyId, key]) => Boolean(keyId) && Boolean(key))
-    .sort(([a], [b]) => a.localeCompare(b));
+    .toSorted(([a], [b]) => a.localeCompare(b));
   return Object.fromEntries(normalized);
 }
 
