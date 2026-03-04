@@ -82,7 +82,7 @@ describe("createAccountListHelpers", () => {
       expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
     });
 
-    it("includes default when base has tokens AND a named account has its own tokens", () => {
+    it("includes default when ALL named accounts have their own tokens", () => {
       const config = {
         channels: {
           testchannel: {
@@ -93,6 +93,19 @@ describe("createAccountListHelpers", () => {
         },
       } as unknown as OpenClawConfig;
       expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("does NOT inject default in mixed configs (some accounts inherit base tokens)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { teamA: { botToken: "xoxb-own" }, teamB: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // teamB inherits base tokens — injecting default would duplicate teamB
+      expect(listAccountIds(config)).toEqual(["teamA", "teamB"]);
     });
 
     it("does NOT inject default when named accounts inherit base tokens (avoids duplicates)", () => {

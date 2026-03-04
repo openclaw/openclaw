@@ -58,14 +58,17 @@ export function createAccountListHelpers(
     const hasBaseTokens = Boolean(base?.botToken || base?.appToken || base?.token);
     if (hasBaseTokens) {
       const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
-      const someAccountHasOwnTokens = ids.some((id) => {
+      const everyAccountHasOwnTokens = ids.every((id) => {
         const acct = accounts[id];
         return acct && Boolean(acct.botToken || acct.appToken || acct.token);
       });
-      if (someAccountHasOwnTokens) {
+      if (everyAccountHasOwnTokens) {
+        // Every named account has distinct credentials, so default won't
+        // collide with any of them — safe to inject.
         return [DEFAULT_ACCOUNT_ID, ...ids].toSorted((a, b) => a.localeCompare(b));
       }
-      // All named accounts inherit base tokens — don't inject default.
+      // At least one named account inherits base tokens — injecting default
+      // would duplicate that account's credentials.
     }
     return ids.toSorted((a, b) => a.localeCompare(b));
   }
