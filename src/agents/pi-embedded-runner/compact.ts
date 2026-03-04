@@ -689,13 +689,7 @@ export async function compactEmbeddedPiSessionDirect(
           // Sanity check: tokensAfter should be less than the full session token count before compaction
           // We use tokensBeforeFull instead of result.tokensBefore to ensure we're comparing
           // values from the same scope (full session vs full session)
-          if (
-            tokensBeforeFull !== undefined &&
-            tokensAfter > tokensBeforeFull
-          ) {
-            tokensAfter = undefined; // Don't trust the estimate
-          }
-          if (tokensAfter > result.tokensBefore) {
+          if (tokensBeforeFull !== undefined && tokensAfter > tokensBeforeFull) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
