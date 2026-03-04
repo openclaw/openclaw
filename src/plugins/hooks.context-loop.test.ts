@@ -33,6 +33,7 @@ describe("context_assembled hook", () => {
     prompt: "Tell me a joke",
     messages: [fakeMsg("user", "hi")],
     messageCount: 1,
+    imageCount: 0,
     iteration: 0,
   };
 
