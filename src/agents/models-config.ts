@@ -159,10 +159,14 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    // Only carry forward the existing secret when the incoming config entry does
+    // not explicitly supply one.  If the user changed their API key via the
+    // Control UI the updated value arrives in `newEntry`; spreading `preserved`
+    // last would silently clobber that change and make the config appear locked.
+    if (typeof existing.apiKey === "string" && existing.apiKey && !newEntry.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (typeof existing.baseUrl === "string" && existing.baseUrl && !newEntry.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };

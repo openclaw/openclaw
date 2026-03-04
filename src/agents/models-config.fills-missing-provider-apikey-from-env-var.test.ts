@@ -207,7 +207,11 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("uses config apiKey/baseUrl when config explicitly provides them, even if models.json has existing values", async () => {
+    // When the config explicitly provides apiKey/baseUrl (e.g. user changed them
+    // via Control UI), those values must win over any stale values in models.json.
+    // Pre-fix the merge spread preserved the old models.json value last, silently
+    // clobbering the config update and making the config appear locked.
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
@@ -215,8 +219,8 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+      expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
 
