@@ -26,6 +26,7 @@ function createDeferred<T = void>() {
 function createHandlerParams(overrides?: {
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
+  listenerTimeoutMs?: number;
 }) {
   const cfg: OpenClawConfig = {
     channels: {
@@ -64,6 +65,7 @@ function createHandlerParams(overrides?: {
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,
     abortSignal: overrides?.abortSignal,
+    listenerTimeoutMs: overrides?.listenerTimeoutMs,
   };
 }
 
@@ -165,6 +167,55 @@ describe("createDiscordMessageHandler queue behavior", () => {
         }),
       );
     });
+  });
+
+  it("applies listener timeout to queued runs so stalled runs do not block the queue", async () => {
+    vi.useFakeTimers();
+    try {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+
+      processDiscordMessageMock
+        .mockImplementationOnce(async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })
+        .mockImplementationOnce(async () => undefined);
+      preflightDiscordMessageMock.mockImplementation(
+        async (params: { data: { channel_id: string } }) =>
+          createPreflightContext(params.data.channel_id),
+      );
+
+      const params = createHandlerParams({ listenerTimeoutMs: 50 });
+      const handler = createDiscordMessageHandler(params);
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await expect(
+        handler(createMessageData("m-2") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(60);
+      await vi.waitFor(() => {
+        expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+      });
+
+      const firstCtx = processDiscordMessageMock.mock.calls[0]?.[0] as
+        | { abortSignal?: AbortSignal }
+        | undefined;
+      expect(firstCtx?.abortSignal?.aborted).toBe(true);
+      expect(params.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("discord queued run timed out after"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes run activity while active runs are in progress", async () => {
