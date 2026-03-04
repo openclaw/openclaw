@@ -21,22 +21,27 @@ async function fetchMatrixMediaBuffer(params: {
   mxcUrl: string;
   maxBytes: number;
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
-  // @vector-im/matrix-bot-sdk provides mxcToHttp helper
   const url = params.client.mxcToHttp(params.mxcUrl);
   if (!url) {
     return null;
   }
 
-  // Use the client's download method which handles auth
   try {
-    const result = await params.client.downloadContent(params.mxcUrl);
-    const raw = result.data ?? result;
-    const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-
+    const headers: Record<string, string> = {};
+    const token = (params.client as { accessToken?: string }).accessToken;
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
     if (buffer.byteLength > params.maxBytes) {
       throw new Error("Matrix media exceeds configured size limit");
     }
-    return { buffer, headerType: result.contentType };
+    return { buffer, headerType: res.headers.get("content-type") ?? undefined };
   } catch (err) {
     throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }

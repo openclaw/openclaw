@@ -66,6 +66,39 @@ describe("downloadMatrixMedia", () => {
     expect(result?.path).toBe("/tmp/media");
   });
 
+  it("downloads unencrypted media via fetch and buffers fully", async () => {
+    const payload = Buffer.from("A".repeat(50_000));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(payload, {
+        status: 200,
+        headers: { "content-type": "audio/ogg" },
+      }),
+    );
+
+    const client = {
+      mxcToHttp: vi.fn().mockReturnValue("https://matrix.example/_media/download/example/abc"),
+      accessToken: "syt_test",
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const result = await downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/abc",
+      contentType: "audio/ogg",
+      maxBytes: 100_000,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const fetchUrl = fetchSpy.mock.calls[0][0] as string;
+    expect(fetchUrl).toContain("matrix.example");
+    const fetchOpts = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(fetchOpts.headers).toEqual(
+      expect.objectContaining({ Authorization: "Bearer syt_test" }),
+    );
+    expect(saveMediaBuffer).toHaveBeenCalledWith(payload, "audio/ogg", "inbound", 100_000);
+    expect(result?.path).toBe("/tmp/media");
+    fetchSpy.mockRestore();
+  });
+
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
     const { decryptMedia, client, file } = makeEncryptedMediaFixture();
 
