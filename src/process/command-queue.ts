@@ -13,6 +13,17 @@ export class CommandLaneClearedError extends Error {
 }
 
 /**
+ * Dedicated error type thrown when a task exceeds its lane-level timeout.
+ * The task is forcefully completed so the lane can proceed with queued work.
+ */
+export class CommandLaneTaskTimeoutError extends Error {
+  constructor(lane: string, timeoutMs: number) {
+    super(`Task in lane "${lane}" timed out after ${timeoutMs}ms`);
+    this.name = "CommandLaneTaskTimeoutError";
+  }
+}
+
+/**
  * Dedicated error type thrown when a new command is rejected because the
  * gateway is currently draining for restart.
  */
@@ -47,6 +58,7 @@ type LaneState = {
   maxConcurrent: number;
   draining: boolean;
   generation: number;
+  taskTimeoutMs?: number;
 };
 
 const lanes = new Map<string, LaneState>();
@@ -108,10 +120,26 @@ function drainLane(lane: string) {
         const taskId = nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
+        // Task-level timeout guard: if configured, forcefully complete the task
+        // after the deadline so the lane is not blocked indefinitely.
+        const taskTimer = state.taskTimeoutMs
+          ? setTimeout(() => {
+              if (completeTask(state, taskId, taskGeneration)) {
+                diag.error(
+                  `lane task timeout: lane=${lane} taskId=${taskId} timeoutMs=${state.taskTimeoutMs}`,
+                );
+                pump();
+                entry.reject(new CommandLaneTaskTimeoutError(lane, state.taskTimeoutMs!));
+              }
+            }, state.taskTimeoutMs)
+          : null;
         void (async () => {
           const startTime = Date.now();
           try {
             const result = await entry.task();
+            if (taskTimer) {
+              clearTimeout(taskTimer);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
@@ -121,6 +149,9 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (taskTimer) {
+              clearTimeout(taskTimer);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (!isProbeLane) {
@@ -156,6 +187,18 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const state = getLaneState(cleaned);
   state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
   drainLane(cleaned);
+}
+
+/**
+ * Set a per-task timeout for a lane.  Any task that runs longer than
+ * `timeoutMs` will be forcefully completed (rejected with
+ * `CommandLaneTaskTimeoutError`) so the lane is not blocked indefinitely.
+ * Pass `undefined` to remove the timeout.
+ */
+export function setCommandLaneTaskTimeout(lane: string, timeoutMs: number | undefined) {
+  const cleaned = lane.trim() || CommandLane.Main;
+  const state = getLaneState(cleaned);
+  state.taskTimeoutMs = timeoutMs;
 }
 
 export function enqueueCommandInLane<T>(

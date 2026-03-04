@@ -1,5 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resetAllLanes } from "../process/command-queue.js";
 import type { ChannelManager } from "./server-channels.js";
 
 const log = createSubsystemLogger("gateway/health-monitor");
@@ -118,6 +119,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
       const snapshot = channelManager.getRuntimeSnapshot();
 
+      let managedCount = 0;
+      let restartedCount = 0;
+
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
           continue;
@@ -132,6 +136,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+
+          managedCount++;
+
           if (isChannelHealthy(status, { now, staleEventThresholdMs })) {
             continue;
           }
@@ -179,12 +186,23 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
             restartRecords.set(key, record);
+            restartedCount++;
           } catch (err) {
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
             );
           }
         }
+      }
+
+      // If a majority of managed channels were stuck, the root cause is likely
+      // a blocked command lane rather than individual channel issues.  Reset all
+      // lanes so stuck tasks are abandoned and queued work can resume.
+      if (restartedCount > 0 && restartedCount >= Math.ceil(managedCount / 2)) {
+        log.warn?.(
+          `health-monitor: ${restartedCount}/${managedCount} channels stuck, resetting all lanes`,
+        );
+        resetAllLanes();
       }
     } finally {
       checkInFlight = false;

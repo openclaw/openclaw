@@ -291,6 +291,8 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Safety timeout in milliseconds for a single compaction run (default: 600_000). */
+  timeoutMs?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
 };

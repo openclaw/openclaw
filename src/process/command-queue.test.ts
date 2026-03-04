@@ -19,6 +19,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 import {
   clearCommandLane,
   CommandLaneClearedError,
+  CommandLaneTaskTimeoutError,
   enqueueCommand,
   enqueueCommandInLane,
   GatewayDrainingError,
@@ -27,6 +28,7 @@ import {
   markGatewayDraining,
   resetAllLanes,
   setCommandLaneConcurrency,
+  setCommandLaneTaskTimeout,
   waitForActiveTasks,
 } from "./command-queue.js";
 
@@ -333,5 +335,43 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("rejects a task with CommandLaneTaskTimeoutError when it exceeds the lane timeout", async () => {
+    const lane = `timeout-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+    setCommandLaneTaskTimeout(lane, 50);
+
+    vi.useFakeTimers();
+    try {
+      const task = enqueueCommandInLane(lane, () => new Promise<never>(() => {}));
+
+      // Attach rejection handler before advancing timers to avoid unhandled rejection.
+      const rejection = expect(task).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      await vi.advanceTimersByTimeAsync(50);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears task timeout timer on normal completion", async () => {
+    const lane = `timeout-clear-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+    setCommandLaneTaskTimeout(lane, 5000);
+
+    vi.useFakeTimers();
+    try {
+      const task = enqueueCommandInLane(
+        lane,
+        () => new Promise<string>((resolve) => setTimeout(() => resolve("done"), 10)),
+      );
+
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(task).resolves.toBe("done");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

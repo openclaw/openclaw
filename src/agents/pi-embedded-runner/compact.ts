@@ -513,10 +513,12 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
+    const effectiveTimeoutMs =
+      params.config?.agents?.defaults?.compaction?.timeoutMs ?? EMBEDDED_COMPACTION_TIMEOUT_MS;
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
+        timeoutMs: effectiveTimeoutMs,
       }),
     });
     try {
@@ -661,8 +663,9 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          effectiveTimeoutMs,
         );
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
