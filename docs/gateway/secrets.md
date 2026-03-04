@@ -221,6 +221,38 @@ Optional per-id errors:
 }
 ```
 
+### Generic batch resolver pattern
+
+For secrets managers that support bulk reads, prefer a small external wrapper that:
+
+- accepts OpenClaw protocol input (`ids[]`) on stdin
+- performs one upstream fetch per request
+- maps requested ids into `values`, with per-id misses in `errors`
+- writes protocol v1 JSON to stdout
+
+Example provider config for a user-managed external wrapper:
+
+```json5
+{
+  secrets: {
+    providers: {
+      batch_exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-secret-batch-resolver",
+        args: [],
+        passEnv: ["PATH"],
+        jsonOnly: true,
+      },
+    },
+  },
+}
+```
+
+External vendor patterns that fit this contract:
+
+- 1Password Environments: wrapper can call `op environment read $OP_ENVIRONMENT_ID` once per batch and map keys to ids. Note: this command requires 1Password CLI `2.33-beta.02` or newer.
+- Bitwarden Secrets: wrapper can call `bws secret list` once per batch and map secret keys to ids.
+
 ### HashiCorp Vault CLI
 
 ```json5
