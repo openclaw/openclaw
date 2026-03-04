@@ -713,6 +713,7 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
+    params: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
