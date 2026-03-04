@@ -163,13 +163,14 @@ export function execDockerRaw(
 
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveBundledSkillsDir } from "../skills/bundled-dir.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import { appendBundledSkillsMountArgs, appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
 
@@ -460,6 +461,10 @@ async function createSandboxContainer(params: {
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
   });
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (bundledSkillsDir) {
+    appendBundledSkillsMountArgs({ args, bundledSkillsDir });
+  }
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 

@@ -49,6 +49,9 @@ export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
+/** Read-only mount point for bundled (npm-installed) skills inside the sandbox container. */
+export const SANDBOX_BUNDLED_SKILLS_MOUNT = "/openclaw-bundled-skills";
+
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");

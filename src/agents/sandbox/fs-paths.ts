@@ -1,7 +1,8 @@
 import path from "node:path";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
+import { resolveBundledSkillsDir } from "../skills/bundled-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_BUNDLED_SKILLS_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext } from "./types.js";
@@ -88,6 +89,19 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
       hostRoot: parsed.hostRoot,
       containerRoot: parsed.containerRoot,
       writable: parsed.writable,
+      source: "bind",
+    });
+  }
+
+  // Automatically expose the bundled skills directory so agents running inside
+  // the sandbox can read SKILL.md files referenced in the system prompt.
+  // The docker container is created with a matching read-only bind mount.
+  const bundledSkillsDir = resolveBundledSkillsDir();
+  if (bundledSkillsDir) {
+    mounts.push({
+      hostRoot: path.resolve(bundledSkillsDir),
+      containerRoot: SANDBOX_BUNDLED_SKILLS_MOUNT,
+      writable: false,
       source: "bind",
     });
   }

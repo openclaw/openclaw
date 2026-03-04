@@ -1,4 +1,4 @@
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_BUNDLED_SKILLS_MOUNT } from "./constants.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 function mainWorkspaceMountSuffix(access: SandboxWorkspaceAccess): "" | ":ro" {
@@ -25,4 +25,14 @@ export function appendWorkspaceMountArgs(params: {
       `${agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentWorkspaceMountSuffix(workspaceAccess)}`,
     );
   }
+}
+
+/**
+ * Mount the bundled skills directory into the container as a read-only bind so that
+ * sandboxed agents can read `SKILL.md` files that are referenced in the system prompt.
+ * Without this, every skill invocation fails with "Path escapes sandbox root" because
+ * the skills live in the npm-installed package directory, not in the workspace.
+ */
+export function appendBundledSkillsMountArgs(params: { args: string[]; bundledSkillsDir: string }) {
+  params.args.push("-v", `${params.bundledSkillsDir}:${SANDBOX_BUNDLED_SKILLS_MOUNT}:ro`);
 }
