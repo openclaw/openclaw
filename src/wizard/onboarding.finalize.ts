@@ -492,7 +492,7 @@ export async function finalizeOnboardingWizard(
     }
   })();
   const envVars = webSearchEnvVars[webSearchProvider] ?? [];
-  const webSearchEnv = envVars.some((v) => (process.env[v] ?? "").trim());
+  const webSearchEnv = envVars.some((v) => Boolean((process.env[v] ?? "").trim()));
   const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
   const providerLabel = webSearchProviderLabels[webSearchProvider] ?? webSearchProvider;
   const configKeyPath = webSearchConfigKeys[webSearchProvider] ?? "apiKey";
