@@ -334,12 +334,13 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, silent }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,
+        cfg,
         messageThreadId,
         replyToMessageId,
         accountId: accountId ?? undefined,
@@ -348,6 +349,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       return { channel: "telegram", ...result };
     },
     sendMedia: async ({
+      cfg,
       to,
       text,
       mediaUrl,
@@ -363,6 +365,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,
+        cfg,
         mediaUrl,
         mediaLocalRoots,
         messageThreadId,
@@ -372,8 +375,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       });
       return { channel: "telegram", ...result };
     },
-    sendPoll: async ({ to, poll, accountId, threadId, silent, isAnonymous }) =>
+    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, isAnonymous }) =>
       await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {
+        cfg,
         accountId: accountId ?? undefined,
         messageThreadId: parseTelegramThreadId(threadId),
         silent: silent ?? undefined,
