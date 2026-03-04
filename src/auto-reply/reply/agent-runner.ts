@@ -501,7 +501,12 @@ export async function runReplyAgent(params: {
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
+    const shouldSkipEmptyHeartbeatFollowupDrain =
+      isHeartbeat && (runResult.messagingToolSentTargets?.length ?? 0) > 0;
     if (payloadArray.length === 0) {
+      if (shouldSkipEmptyHeartbeatFollowupDrain) {
+        return undefined;
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -530,6 +535,9 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      if (shouldSkipEmptyHeartbeatFollowupDrain) {
+        return undefined;
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 

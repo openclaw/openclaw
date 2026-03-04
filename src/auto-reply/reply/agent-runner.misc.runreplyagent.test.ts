@@ -15,6 +15,7 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const scheduleFollowupDrainMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -63,7 +64,7 @@ vi.mock("./queue.js", async () => {
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
-    scheduleFollowupDrain: vi.fn(),
+    scheduleFollowupDrain: (...args: unknown[]) => scheduleFollowupDrainMock(...args),
   };
 });
 
@@ -80,6 +81,7 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  scheduleFollowupDrainMock.mockClear();
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
@@ -872,7 +874,7 @@ describe("runReplyAgent claude-cli routing", () => {
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
-    opts: { storePath?: string; sessionKey?: string } = {},
+    opts: { storePath?: string; sessionKey?: string; isHeartbeat?: boolean } = {},
   ) {
     const typing = createMockTypingController();
     const sessionKey = opts.sessionKey ?? "main";
@@ -919,6 +921,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       shouldFollowup: false,
       isActive: false,
       isStreaming: false,
+      opts: opts.isHeartbeat ? { isHeartbeat: true } : undefined,
       typing,
       sessionCtx,
       sessionKey,
@@ -944,6 +947,34 @@ describe("runReplyAgent messaging tool suppression", () => {
     const result = await createRun("slack");
 
     expect(result).toBeUndefined();
+  });
+
+  it("does not schedule followup drain for heartbeat runs that only send via messaging tools", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["status sent"],
+      messagingToolSentTargets: [{ tool: "message", provider: "imessage", to: "+18005551212" }],
+      meta: {},
+    });
+
+    const result = await createRun("imessage", { isHeartbeat: true });
+
+    expect(result).toBeUndefined();
+    expect(scheduleFollowupDrainMock).not.toHaveBeenCalled();
+  });
+
+  it("does not schedule followup drain when heartbeat payloads are fully deduped by messaging tool sends", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {},
+    });
+
+    const result = await createRun("slack", { isHeartbeat: true });
+
+    expect(result).toBeUndefined();
+    expect(scheduleFollowupDrainMock).not.toHaveBeenCalled();
   });
 
   it("delivers replies when tool provider does not match", async () => {
