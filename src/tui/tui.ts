@@ -203,9 +203,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed;
+    return trimmed.toLowerCase();
   }
-  return `agent:${params.currentAgentId}:${trimmed}`;
+  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {

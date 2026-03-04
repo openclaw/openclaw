@@ -46,7 +46,8 @@ export type PluginManifestRegistry = {
 
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
-const DEFAULT_MANIFEST_CACHE_MS = 200;
+// Keep a short cache window to collapse bursty reloads during startup flows.
+const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
