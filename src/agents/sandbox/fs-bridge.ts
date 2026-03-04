@@ -275,13 +275,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       containerPath: target.containerPath,
       allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
-    const canonicalMount = this.resolveMountByContainerPath(canonicalContainerPath);
-    if (!canonicalMount) {
+    // Reuse the lexicalMount instead of re-looking up with canonical path
+    // The canonical path must still be within the same mount we already validated
+    if (!isPathInsideContainerRoot(lexicalMount.containerRoot, canonicalContainerPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${options.action}: ${target.containerPath}`,
       );
     }
-    if (options.requireWritable && !canonicalMount.writable) {
+    if (options.requireWritable && !lexicalMount.writable) {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
