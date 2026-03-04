@@ -1,6 +1,10 @@
 ---
 x-i18n:
-  source_path: "docs/cli/dns.md"
+  generated_at: "2026-03-04T06:16:36Z"
+  model: claude-opus-4-6
+  provider: anthropic
+  source_hash: d2011e41982ffb4b71ab98211574529bc1c8b7769ab1838abddd593f42b12380
+  source_path: cli/dns.md
   workflow: 15
 summary: "`openclaw dns`（広域ディスカバリーヘルパー）のCLIリファレンス"
 read_when:
