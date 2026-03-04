@@ -120,7 +120,8 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "--job-mode",
   "--when",
 ]);
-const SHELL_CONTROL_TOKENS = new Set(["&&", "||", ";", "|", ">", ">>", "<", "<<"]);
+const SHELL_CONTROL_TOKENS = new Set(["&&", "||", "&", ";", "|", ">", ">>", "<", "<<"]);
+const WINDOWS_FALLBACK_CONTROL_CHARS = new Set(["&", "|", ";", "<", ">"]);
 
 export type GatewayManagementExecSource = "openclaw-cli" | "systemctl" | "launchctl" | "schtasks";
 
@@ -161,6 +162,25 @@ function basenameLower(token: string): string {
   const cleaned = stripSurroundingQuotes(token).replace(/\\/g, "/");
   const pieces = cleaned.split("/");
   return (pieces[pieces.length - 1] ?? "").trim().toLowerCase();
+}
+
+function hasUnquotedWindowsFallbackControlChar(command: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  for (const ch of command) {
+    if (!inDouble && ch === "'") {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && ch === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && WINDOWS_FALLBACK_CONTROL_CHARS.has(ch)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeSystemdUnitToken(token: string): string {
@@ -810,7 +830,14 @@ function detectGatewayManagementExecCommandFromWindowsFallback(params: {
     return null;
   }
 
-  const argv = splitShellArgs(params.command).map((token) => token.trim());
+  if (hasUnquotedWindowsFallbackControlChar(params.command)) {
+    return null;
+  }
+  const rawArgv = splitShellArgs(params.command);
+  if (!rawArgv) {
+    return null;
+  }
+  const argv = rawArgv.map((token) => token.trim());
   if (argv.length === 0 || argv.some((token) => !token || SHELL_CONTROL_TOKENS.has(token))) {
     return null;
   }

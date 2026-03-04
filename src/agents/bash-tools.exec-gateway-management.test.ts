@@ -4,6 +4,7 @@ import {
   listRunningSessions,
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
+import type { ProcessGatewayAllowlistResult } from "./bash-tools.exec-host-gateway.js";
 
 const isRestartEnabledMock = vi.fn(() => true);
 const loadConfigMock = vi.fn(() => ({ commands: { restart: true } }));
@@ -21,10 +22,12 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
   cooldownMsApplied: 0,
 }));
-const processGatewayAllowlistMock = vi.fn(async () => ({
-  pendingResult: null,
-  execCommandOverride: undefined,
-}));
+const processGatewayAllowlistMock = vi.fn(
+  async (): Promise<ProcessGatewayAllowlistResult> => ({
+    pendingResult: undefined,
+    execCommandOverride: undefined,
+  }),
+);
 
 vi.mock("../config/commands.js", () => ({
   isRestartEnabled: (...args: Parameters<typeof isRestartEnabledMock>) =>
@@ -87,7 +90,7 @@ beforeEach(() => {
     cooldownMsApplied: 0,
   });
   processGatewayAllowlistMock.mockResolvedValue({
-    pendingResult: null,
+    pendingResult: undefined,
     execCommandOverride: undefined,
   });
   resetProcessRegistryForTests();
@@ -596,6 +599,39 @@ describe("detectGatewayManagementExecCommand", () => {
     });
 
     expect(detected).toBeNull();
+  });
+
+  it("does not detect chained schtasks commands with single ampersand in windows fallback parsing", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)" & echo done',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "win32",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect unspaced chained schtasks commands in windows fallback parsing", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)"& echo done',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "win32",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not throw for invalid quoting in windows fallback parsing", () => {
+    expect(() =>
+      detectGatewayManagementExecCommand({
+        command: 'schtasks /Run /TN "OpenClaw Gateway (dev)',
+        cwd: process.cwd(),
+        env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+        platform: "win32",
+      }),
+    ).not.toThrow();
   });
 
   it("does not detect non-gateway systemctl commands", () => {
