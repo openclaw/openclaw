@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { stripFeishuReactionSuffix } from "./external-keys.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -241,7 +242,7 @@ export async function sendMessageFeishu(
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: stripFeishuReactionSuffix(replyToMessageId) },
       data: {
         content,
         msg_type: msgType,
@@ -293,7 +294,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
+      path: { message_id: stripFeishuReactionSuffix(replyToMessageId) },
       data: {
         content,
         msg_type: "interactive",
