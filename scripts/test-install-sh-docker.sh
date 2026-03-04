@@ -7,8 +7,13 @@ NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-${CLAWDBOT_INSTALL_NONROOT_IMAG
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
 CLI_INSTALL_URL="${OPENCLAW_INSTALL_CLI_URL:-${CLAWDBOT_INSTALL_CLI_URL:-https://openclaw.bot/install-cli.sh}}"
 SKIP_NONROOT="${OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT:-${CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT:-0}}"
+USE_GUM="${OPENCLAW_USE_GUM:-${CLAWDBOT_USE_GUM:-}}"
 LATEST_DIR="$(mktemp -d)"
 LATEST_FILE="${LATEST_DIR}/latest"
+DOCKER_GUM_ENV=()
+if [[ -n "$USE_GUM" ]]; then
+  DOCKER_GUM_ENV=(-e OPENCLAW_USE_GUM="$USE_GUM")
+fi
 
 echo "==> Build smoke image (upgrade, root): $SMOKE_IMAGE"
 docker build \
@@ -26,6 +31,7 @@ docker run --rm -t \
   -e OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS="${OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS:-${CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS:-0}}" \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e DEBIAN_FRONTEND=noninteractive \
+  "${DOCKER_GUM_ENV[@]}" \
   "$SMOKE_IMAGE"
 
 LATEST_VERSION=""
@@ -49,6 +55,7 @@ else
     -e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION" \
     -e OPENCLAW_NO_ONBOARD=1 \
     -e DEBIAN_FRONTEND=noninteractive \
+    "${DOCKER_GUM_ENV[@]}" \
     "$NONROOT_IMAGE"
 fi
 
@@ -69,4 +76,5 @@ docker run --rm -t \
   -e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL" \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e DEBIAN_FRONTEND=noninteractive \
+  "${DOCKER_GUM_ENV[@]}" \
   "$NONROOT_IMAGE" -lc "curl -fsSL \"$CLI_INSTALL_URL\" | bash -s -- --set-npm-prefix --no-onboard"
