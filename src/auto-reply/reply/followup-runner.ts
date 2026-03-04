@@ -237,7 +237,7 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
+        lookupContextTokens(modelUsed, fallbackProvider) ??
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 

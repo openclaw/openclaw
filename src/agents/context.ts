@@ -8,7 +8,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -32,7 +32,7 @@ export function applyDiscoveredContextWindows(params: {
   models: ModelEntry[];
 }) {
   for (const model of params.models) {
-    if (!model?.id) {
+    if (!model?.id || !model?.provider) {
       continue;
     }
     const contextWindow =
@@ -40,11 +40,21 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
-    // When multiple providers expose the same model id with different limits,
-    // prefer the smaller window so token budgeting is fail-safe (no overestimation).
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+
+    // 1. Scoped lookup (highest precedence)
+    const scopedKey = `${model.provider.toLowerCase().trim()}::${model.id.toLowerCase().trim()}`;
+    const existingScoped = params.cache.get(scopedKey);
+    if (existingScoped === undefined || contextWindow < existingScoped) {
+      params.cache.set(scopedKey, contextWindow);
+    }
+
+    // 2. Bare modelId lookup (legacy/fallback precedence)
+    const bareKey = model.id.toLowerCase().trim();
+    const existingBare = params.cache.get(bareKey);
+    // For the global bare-id cache, we continue to prefer the smaller window
+    // so that budgeting remains fail-safe when the provider is unknown.
+    if (existingBare === undefined || contextWindow < existingBare) {
+      params.cache.set(bareKey, contextWindow);
     }
   }
 }
@@ -57,7 +67,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -68,7 +78,15 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextWindow);
+
+      const normalizedProvider = providerId.toLowerCase().trim();
+      const normalizedModelId = modelId.toLowerCase().trim();
+
+      // Set scoped key
+      params.cache.set(`${normalizedProvider}::${normalizedModelId}`, contextWindow);
+
+      // Set bare key (last one wins or smallest wins? Config should probably override discovery)
+      params.cache.set(normalizedModelId, contextWindow);
     }
   }
 }
@@ -178,12 +196,26 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+export function lookupContextTokens(
+  modelId?: string,
+  provider?: string,
+): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
+
+  if (provider) {
+    const scopedKey = `${provider.toLowerCase().trim()}::${modelId.toLowerCase().trim()}`;
+    const scopedLimit = MODEL_CACHE.get(scopedKey);
+    if (scopedLimit !== undefined) {
+      return scopedLimit;
+    }
+  }
+
+  // Fallback to legacy behavior where we check for a bare modelId match.
+  // This supports cases where the provider is not yet known or for generic aliases.
   return MODEL_CACHE.get(modelId);
 }
 
@@ -269,5 +301,5 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
+  return lookupContextTokens(params.model, params.provider) ?? params.fallbackContextTokens;
 }

@@ -32,6 +32,7 @@ export type SessionDisplayRow = {
 };
 
 export type SessionDisplayDefaults = {
+  provider: string;
   model: string;
 };
 
@@ -77,7 +78,23 @@ export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDispl
     defaultModel: DEFAULT_MODEL,
   });
   return {
+    provider: resolved.provider ?? DEFAULT_PROVIDER,
     model: resolved.model ?? DEFAULT_MODEL,
+  };
+}
+
+export function resolveSessionDisplayModelRef(
+  cfg: OpenClawConfig,
+  row: Pick<
+    SessionDisplayRow,
+    "key" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
+  >,
+  defaults: SessionDisplayDefaults,
+): { provider: string; model: string } {
+  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
+  return {
+    provider: resolved.provider ?? defaults.provider,
+    model: resolved.model ?? defaults.model,
   };
 }
 
@@ -89,8 +106,7 @@ export function resolveSessionDisplayModel(
   >,
   defaults: SessionDisplayDefaults,
 ): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
-  return resolved.model ?? defaults.model;
+  return resolveSessionDisplayModelRef(cfg, row, defaults).model;
 }
 
 function truncateSessionKey(key: string): string {
