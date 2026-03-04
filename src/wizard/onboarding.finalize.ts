@@ -472,39 +472,22 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchProvider = nextConfig.tools?.web?.search?.provider ?? "brave";
-  const webSearchKey =
-    webSearchProvider === "perplexity"
-      ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv =
-    webSearchProvider === "perplexity"
-      ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
-      : (process.env.BRAVE_API_KEY ?? "").trim();
-  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
-  await prompter.note(
-    hasWebSearchKey
-      ? [
-          "Web search is enabled, so your agent can look things up online when needed.",
-          "",
-          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
-          webSearchKey
-            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
-            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n")
-      : [
-          "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
-          "",
-          "Set it up interactively:",
-          `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Choose a provider and paste your API key",
-          "",
-          "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n"),
-    "Web search (optional)",
-  );
+  const webSearchProvider = nextConfig.tools?.web?.search?.provider;
+  const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
+  if (webSearchProvider && webSearchEnabled !== false) {
+    const { SEARCH_PROVIDER_OPTIONS } = await import("../commands/onboard-search.js");
+    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
+    const label = entry?.label ?? webSearchProvider;
+    await prompter.note(
+      [
+        "Web search is enabled, so your agent can look things up online when needed.",
+        "",
+        `Provider: ${label}`,
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
+  }
 
   await prompter.note(
     'What now: https://openclaw.ai/showcase ("What People Are Building").',
