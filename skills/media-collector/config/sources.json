@@ -1,0 +1,99 @@
+{
+  "rss": [
+    {
+      "name": "Hacker News",
+      "url": "https://news.ycombinator.com/rss",
+      "enabled": true,
+      "category": "tech"
+    },
+    {
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "enabled": true,
+      "category": "tech"
+    },
+    {
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "enabled": true,
+      "category": "tech"
+    },
+    {
+      "name": "Wired",
+      "url": "https://www.wired.com/feed/rss",
+      "enabled": true,
+      "category": "tech"
+    }
+  ],
+  "twitter": {
+    "keywords": [
+      "AI",
+      "MachineLearning",
+      "OpenAI",
+      "Anthropic",
+      "LLM",
+      "AGI"
+    ],
+    "accounts": [
+      "elonmusk",
+      "sama",
+      "AnthropicAI",
+      "OpenAIDev",
+      "GoogleAI"
+    ],
+    "hashtags": [
+      "#AI",
+      "#MachineLearning",
+      "#TechNews"
+    ]
+  },
+  "reddit": {
+    "subreddits": [
+      {"name": "artificial", "min_score": 50},
+      {"name": "MachineLearning", "min_score": 100},
+      {"name": "technology", "min_score": 200},
+      {"name": "singularity", "min_score": 100}
+    ]
+  },
+  "hackernews": {
+    "min_score": 50,
+    "limit": 30,
+    "categories": ["front", "new", "ask", "show"]
+  },
+  "youtube": {
+    "channels": [
+      "TwoMinutePapers",
+      "Computerphile",
+      "3Blue1Brown"
+    ],
+    "keywords": [
+      "AI tutorial",
+      "machine learning",
+      "neural networks"
+    ]
+  },
+  "filters": {
+    "min_score": 50,
+    "min_length": 100,
+    "max_age_hours": 48,
+    "keywords_include": [
+      "AI",
+      "machine learning",
+      "neural",
+      "LLM",
+      "AGI",
+      "tech"
+    ],
+    "keywords_exclude": [
+      "spam",
+      "ad",
+      "promotion",
+      "crypto"
+    ]
+  },
+  "output": {
+    "format": ["markdown", "json"],
+    "archive_days": 30,
+    "digest_time": "09:00"
+  }
+}
