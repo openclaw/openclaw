@@ -72,12 +72,13 @@ function isoToPerplexityDate(iso: string): string | undefined {
 function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
   if (ISO_DATE_PATTERN.test(trimmed)) {
-    return trimmed;
+    return isValidIsoDate(trimmed) ? trimmed : undefined;
   }
   const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
   if (match) {
     const [, month, day, year] = match;
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    return isValidIsoDate(iso) ? iso : undefined;
   }
   return undefined;
 }
@@ -1481,6 +1482,14 @@ export function createWebSearchTool(options?: {
         });
       }
       const rawDateAfter = readStringParam(params, "date_after");
+      const rawDateBefore = readStringParam(params, "date_before");
+      if ((rawDateAfter || rawDateBefore) && provider !== "brave" && provider !== "perplexity") {
+        return jsonResult({
+          error: "unsupported_date_filter",
+          message: `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
       if (rawDateAfter && !dateAfter) {
         return jsonResult({
@@ -1489,7 +1498,6 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      const rawDateBefore = readStringParam(params, "date_before");
       const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
       if (rawDateBefore && !dateBefore) {
         return jsonResult({
