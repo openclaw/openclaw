@@ -485,7 +485,7 @@ export const registerTelegramHandlers = ({
         senderUsername,
       }));
 
-  const shouldSkipGroupMessage = (params: {
+  const shouldSkipGroupMessage = async (params: {
     isGroup: boolean;
     chatId: string | number;
     chatTitle?: string;
@@ -497,6 +497,7 @@ export const registerTelegramHandlers = ({
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
     msg?: Message;
+    ctx: TelegramContext;
     botUsername?: string;
   }) => {
     const {
@@ -512,10 +513,11 @@ export const registerTelegramHandlers = ({
       topicConfig,
       msg,
       botUsername,
+      ctx,
     } = params;
     
     // Helper to send auth hint if bot is mentioned
-    const sendAuthHint = async (reason: string) => {
+    const sendAuthHint = async () => {
       if (msg && botUsername && hasBotMention(msg, botUsername)) {
         try {
           await ctx.reply("You are not authorized to use this bot in this group.", {
@@ -672,16 +674,17 @@ export const registerTelegramHandlers = ({
     return { dmPolicy: effectiveDmPolicy, ...groupAllowContext };
   };
 
-  const authorizeTelegramEventSender = (params: {
+  const authorizeTelegramEventSender = async (params: {
     chatId: number;
     chatTitle?: string;
     isGroup: boolean;
     senderId: string;
     senderUsername: string;
     mode: TelegramEventAuthorizationMode;
+    ctx: TelegramContext;
     context: TelegramEventAuthorizationContext;
-  }): TelegramEventAuthorizationResult => {
-    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context } = params;
+  }): Promise<TelegramEventAuthorizationResult> => {
+    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context, ctx } = params;
     const {
       dmPolicy,
       resolvedThreadId,
@@ -700,7 +703,7 @@ export const registerTelegramHandlers = ({
       deniedGroupReason,
     } = authRules;
     if (
-      shouldSkipGroupMessage({
+      await shouldSkipGroupMessage({
         isGroup,
         chatId,
         chatTitle,
@@ -711,6 +714,7 @@ export const registerTelegramHandlers = ({
         hasGroupAllowOverride,
         groupConfig,
         topicConfig,
+        ctx,
       })
     ) {
       return { allowed: false, reason: "group-policy" };
@@ -781,7 +785,7 @@ export const registerTelegramHandlers = ({
         isGroup,
         isForum,
       });
-      const senderAuthorization = authorizeTelegramEventSender({
+      const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
         chatTitle: reaction.chat.title,
         isGroup,
@@ -789,6 +793,7 @@ export const registerTelegramHandlers = ({
         senderUsername,
         mode: "reaction",
         context: eventAuthContext,
+        ctx,
       });
       if (!senderAuthorization.allowed) {
         return;
@@ -1150,7 +1155,7 @@ export const registerTelegramHandlers = ({
       const senderUsername = callback.from?.username ?? "";
       const authorizationMode: TelegramEventAuthorizationMode =
         inlineButtonsScope === "allowlist" ? "callback-allowlist" : "callback-scope";
-      const senderAuthorization = authorizeTelegramEventSender({
+      const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
         chatTitle: callbackMessage.chat.title,
         isGroup,
@@ -1158,6 +1163,7 @@ export const registerTelegramHandlers = ({
         senderUsername,
         mode: authorizationMode,
         context: eventAuthContext,
+        ctx,
       });
       if (!senderAuthorization.allowed) {
         return;
@@ -1445,7 +1451,7 @@ export const registerTelegramHandlers = ({
       }
 
       if (
-        shouldSkipGroupMessage({
+        await shouldSkipGroupMessage({
           isGroup: event.isGroup,
           chatId: event.chatId,
           chatTitle: event.msg.chat.title,
@@ -1458,6 +1464,7 @@ export const registerTelegramHandlers = ({
           topicConfig,
           msg: event.msg,
           botUsername: ctx.me?.username,
+          ctx,
         })
       ) {
         return;
