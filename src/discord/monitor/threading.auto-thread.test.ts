@@ -1,6 +1,6 @@
 import { ChannelType } from "@buape/carbon";
 import { describe, it, expect, vi } from "vitest";
-import { maybeCreateDiscordAutoThread } from "./threading.js";
+import { maybeCreateDiscordAutoThread, extractFirstSentence } from "./threading.js";
 
 describe("maybeCreateDiscordAutoThread", () => {
   const postMock = vi.fn();
@@ -87,5 +87,39 @@ describe("maybeCreateDiscordAutoThread", () => {
     });
     expect(result).toBe("thread1");
     expect(postMock).toHaveBeenCalled();
+  });
+});
+
+describe("extractFirstSentence", () => {
+  it("extracts first sentence ending with period", () => {
+    expect(extractFirstSentence("Hello world. This is more text.")).toBe("Hello world.");
+  });
+
+  it("extracts first sentence ending with question mark", () => {
+    expect(extractFirstSentence("Is this working? I hope so.")).toBe("Is this working?");
+  });
+
+  it("extracts first sentence ending with exclamation mark", () => {
+    expect(extractFirstSentence("Hello! How are you?")).toBe("Hello!");
+  });
+
+  it("returns full text if no sentence ending found and under 50 chars", () => {
+    expect(extractFirstSentence("Short text without ending")).toBe("Short text without ending");
+  });
+
+  it("truncates at word boundary if no sentence ending and over 50 chars", () => {
+    const longText =
+      "This is a very long piece of text that does not have any sentence ending punctuation";
+    const result = extractFirstSentence(longText);
+    expect(result.length).toBeLessThanOrEqual(50);
+    expect(longText.startsWith(result)).toBe(true);
+  });
+
+  it("handles empty string", () => {
+    expect(extractFirstSentence("")).toBe("");
+  });
+
+  it("handles whitespace-only string", () => {
+    expect(extractFirstSentence("   ")).toBe("");
   });
 });

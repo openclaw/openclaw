@@ -233,6 +233,25 @@ export function resolveDiscordReplyTarget(opts: {
   return opts.hasReplied ? undefined : replyToId;
 }
 
+/**
+ * Extract the first sentence from text for thread naming.
+ * Looks for sentence-ending punctuation followed by space or end of string.
+ */
+export function extractFirstSentence(text: string): string {
+  const trimmed = text.trim();
+  // Match first sentence: text up to and including .!? followed by space or end
+  const match = trimmed.match(/^[^.!?]*[.!?](?:\s|$)/);
+  if (match) {
+    return match[0].trim();
+  }
+  // If no sentence ending found, take first ~50 chars at word boundary
+  if (trimmed.length > 50) {
+    const truncated = trimmed.slice(0, 50).replace(/\s+\S*$/, "");
+    return truncated || trimmed.slice(0, 50);
+  }
+  return trimmed;
+}
+
 export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): string {
   const cleanedName = rawName
     .replace(/<@!?\d+>/g, "") // user mentions
@@ -393,16 +412,25 @@ export async function maybeCreateDiscordAutoThread(params: {
     return undefined;
   }
   try {
-    const threadName = sanitizeDiscordThreadName(
-      params.baseText || params.combinedBody || "Thread",
-      params.message.id,
-    );
+    // Apply naming strategy: "first-sentence" extracts first sentence, "message" (default) uses full text
+    const rawText = params.baseText || params.combinedBody || "Thread";
+    const nameSource =
+      params.channelConfig?.autoThreadName === "first-sentence"
+        ? extractFirstSentence(rawText)
+        : rawText;
+    const threadName = sanitizeDiscordThreadName(nameSource, params.message.id);
+
+    // Parse archive duration from config, default to 60 minutes
+    const archiveDuration = params.channelConfig?.autoThreadArchiveMin
+      ? parseInt(params.channelConfig.autoThreadArchiveMin, 10)
+      : 60;
+
     const created = (await params.client.rest.post(
       `${Routes.channelMessage(messageChannelId, params.message.id)}/threads`,
       {
         body: {
           name: threadName,
-          auto_archive_duration: 60,
+          auto_archive_duration: archiveDuration,
         },
       },
     )) as { id?: string };
