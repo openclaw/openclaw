@@ -342,7 +342,7 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
+  /** Use "audio" for audio, "media" for video, and "file" for documents */
   msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
