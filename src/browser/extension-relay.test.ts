@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { captureEnv } from "../test-utils/env.js";
@@ -12,6 +13,24 @@ import { getFreePort } from "./test-port.js";
 const RELAY_MESSAGE_TIMEOUT_MS = 1_200;
 const RELAY_LIST_MATCH_TIMEOUT_MS = 1_000;
 const RELAY_TEST_TIMEOUT_MS = 10_000;
+const require = createRequire(import.meta.url);
+const BACKGROUND_UTILS_MODULE = "../../assets/chrome-extension/background-utils.js";
+
+type BackgroundUtilsModule = {
+  buildRelayWsProtocols: (port: number, gatewayToken: string) => Promise<string[]>;
+};
+
+async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
+  try {
+    return require(BACKGROUND_UTILS_MODULE) as BackgroundUtilsModule;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("Unexpected token 'export'")) {
+      throw error;
+    }
+    return (await import(BACKGROUND_UTILS_MODULE)) as BackgroundUtilsModule;
+  }
+}
 
 function waitForOpen(ws: WebSocket) {
   return new Promise<void>((resolve, reject) => {
@@ -618,17 +637,9 @@ describe("chrome extension relay server", () => {
   it("accepts extension websocket access with relay token subprotocol", async () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = Number(new URL(sharedUrl).port);
-    const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)[
-      "x-openclaw-relay-token"
-    ];
-    expect(token).toBeTruthy();
-    const encodedToken = Buffer.from(String(token), "utf8")
-      .toString("base64url")
-      .replace(/=+$/g, "");
-    const ext = new WebSocket(`ws://127.0.0.1:${sharedPort}/extension`, [
-      "openclaw-relay-v1",
-      `openclaw-relay-token.${encodedToken}`,
-    ]);
+    const { buildRelayWsProtocols } = await loadBackgroundUtils();
+    const protocols = await buildRelayWsProtocols(sharedPort, TEST_GATEWAY_TOKEN);
+    const ext = new WebSocket(`ws://127.0.0.1:${sharedPort}/extension`, protocols);
     await waitForOpen(ext);
     ext.close();
   });
