@@ -8,6 +8,7 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import type { TelegramInlineButtons } from "../telegram/button-types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -195,6 +196,14 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   return lines.join("\n");
 }
 
+function buildTelegramApprovalButtons(requestId: string): TelegramInlineButtons {
+  return [
+    [{ text: "✅ Allow once", callback_data: `/approve ${requestId} allow-once` }],
+    [{ text: "✅ Allow always", callback_data: `/approve ${requestId} allow-always` }],
+    [{ text: "❌ Deny", callback_data: `/approve ${requestId} deny` }],
+  ];
+}
+
 function decisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -263,6 +272,7 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;
+  requestId?: string;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -274,13 +284,24 @@ async function deliverToTargets(params: {
       return;
     }
     try {
+      const payload =
+        channel === "telegram" && params.requestId
+          ? {
+              text: params.text,
+              channelData: {
+                telegram: {
+                  buttons: buildTelegramApprovalButtons(params.requestId),
+                },
+              },
+            }
+          : { text: params.text };
       await params.deliver({
         cfg: params.cfg,
         channel,
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [payload],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -384,6 +405,7 @@ export function createExecApprovalForwarder(
       targets: filteredTargets,
       text,
       deliver,
+      requestId: request.id,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {
       log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
