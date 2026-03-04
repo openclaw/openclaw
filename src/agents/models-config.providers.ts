@@ -552,12 +552,12 @@ function buildMinimaxPortalProvider(): ProviderConfig {
     authHeader: true,
     models: [
       buildMinimaxTextModel({
-        id: MINIMAX_DEFAULT_MODEL_ID,
+        id: "MiniMax-M2.1",
         name: "MiniMax M2.1",
         reasoning: false,
       }),
       buildMinimaxTextModel({
-        id: "MiniMax-M2.5",
+        id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.5",
         reasoning: true,
       }),
