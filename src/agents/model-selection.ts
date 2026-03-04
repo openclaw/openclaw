@@ -16,6 +16,15 @@ export type ModelRef = {
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
+export const isThinkingLevel = (value: unknown): value is ThinkLevel =>
+  value === "off" ||
+  value === "minimal" ||
+  value === "low" ||
+  value === "medium" ||
+  value === "high" ||
+  value === "xhigh" ||
+  value === "adaptive";
+
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
@@ -539,15 +548,6 @@ export function resolveThinkingDefault(params: {
   catalog?: ModelCatalogEntry[];
   agentId?: string;
 }): ThinkLevel {
-  const isThinkingLevel = (value: unknown): value is ThinkLevel =>
-    value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "adaptive";
-
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelLower = params.model.toLowerCase();
   const perModelThinking =

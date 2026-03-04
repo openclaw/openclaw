@@ -381,26 +381,19 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  let defaultThinkingLevel: ThinkLevel | undefined;
   const resolveDefaultThinkingLevel = async () => {
-    if (defaultThinkingLevel) {
-      return defaultThinkingLevel;
-    }
     let catalogForThinking = modelCatalog ?? allowedModelCatalog;
     if (!catalogForThinking || catalogForThinking.length === 0) {
       modelCatalog = await loadModelCatalog({ config: cfg });
       catalogForThinking = modelCatalog;
     }
-    const resolved = resolveThinkingDefault({
+    return resolveThinkingDefault({
       cfg,
       provider,
       model,
       catalog: catalogForThinking,
       agentId,
     });
-    defaultThinkingLevel =
-      resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";
-    return defaultThinkingLevel;
   };
 
   const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
