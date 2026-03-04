@@ -13,6 +13,9 @@ export type DiscordMonitorStatusPatch = {
     | null;
   lastInboundAt?: number | null;
   lastError?: string | null;
+  busy?: boolean;
+  activeRuns?: number;
+  lastRunActivityAt?: number | null;
 };
 
 export type DiscordMonitorStatusSink = (patch: DiscordMonitorStatusPatch) => void;

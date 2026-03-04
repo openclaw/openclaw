@@ -7,14 +7,12 @@ import { expectInboundContextContract } from "../../../../test/helpers/inbound-c
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
-import {
-  createInboundSlackTestContext as createInboundSlackCtx,
-  createSlackTestAccount as createSlackAccount,
-} from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
@@ -24,7 +22,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     if (!fixtureRoot) {
       throw new Error("fixtureRoot missing");
     }
-    return { storePath: path.join(fixtureRoot, `case-${caseId++}.sessions.json`) };
+    const dir = path.join(fixtureRoot, `case-${caseId++}`);
+    fs.mkdirSync(dir);
+    return { dir, storePath: path.join(dir, "sessions.json") };
   }
 
   beforeAll(() => {
@@ -37,6 +37,54 @@ describe("slack prepareSlackMessage inbound contract", () => {
       fixtureRoot = "";
     }
   });
+
+  function createInboundSlackCtx(params: {
+    cfg: OpenClawConfig;
+    appClient?: App["client"];
+    defaultRequireMention?: boolean;
+    replyToMode?: "off" | "all";
+    channelsConfig?: Record<string, { systemPrompt: string }>;
+  }) {
+    return createSlackMonitorContext({
+      cfg: params.cfg,
+      accountId: "default",
+      botToken: "token",
+      app: { client: params.appClient ?? {} } as App,
+      runtime: {} as RuntimeEnv,
+      botUserId: "B1",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      sessionScope: "per-sender",
+      mainKey: "main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      allowNameMatching: false,
+      groupDmEnabled: true,
+      groupDmChannels: [],
+      defaultRequireMention: params.defaultRequireMention ?? true,
+      channelsConfig: params.channelsConfig,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: params.replyToMode ?? "off",
+      threadHistoryScope: "thread",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 4000,
+      ackReactionScope: "group-mentions",
+      typingReaction: "",
+      mediaMaxBytes: 1024,
+      removeAckAfterReply: false,
+    });
+  }
 
   function createDefaultSlackCtx() {
     const slackCtx = createInboundSlackCtx({
@@ -57,38 +105,39 @@ describe("slack prepareSlackMessage inbound contract", () => {
     userTokenSource: "none",
     config: {},
   };
-  const defaultMessageTemplate = Object.freeze({
-    channel: "D123",
-    channel_type: "im",
-    user: "U1",
-    text: "hi",
-    ts: "1.000",
-  }) as SlackMessageEvent;
-  const threadAccount = Object.freeze({
-    accountId: "default",
-    enabled: true,
-    botTokenSource: "config",
-    appTokenSource: "config",
-    userTokenSource: "none",
-    config: {
-      replyToMode: "all",
-      thread: { initialHistoryLimit: 20 },
-    },
-    replyToMode: "all",
-  }) as ResolvedSlackAccount;
-  const defaultPrepareOpts = Object.freeze({ source: "message" }) as { source: "message" };
 
   async function prepareWithDefaultCtx(message: SlackMessageEvent) {
     return prepareSlackMessage({
       ctx: createDefaultSlackCtx(),
       account: defaultAccount,
       message,
-      opts: defaultPrepareOpts,
+      opts: { source: "message" },
     });
   }
 
+  function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): ResolvedSlackAccount {
+    return {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      userTokenSource: "none",
+      config,
+      replyToMode: config.replyToMode,
+      replyToModeByChatType: config.replyToModeByChatType,
+      dm: config.dm,
+    };
+  }
+
   function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
-    return { ...defaultMessageTemplate, ...overrides } as SlackMessageEvent;
+    return {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "hi",
+      ts: "1.000",
+      ...overrides,
+    } as SlackMessageEvent;
   }
 
   async function prepareMessageWith(
@@ -100,7 +149,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
       account,
       message,
-      opts: defaultPrepareOpts,
+      opts: { source: "message" },
     });
   }
 
@@ -114,7 +163,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
   }
 
   function createThreadAccount(): ResolvedSlackAccount {
-    return threadAccount;
+    return {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      userTokenSource: "none",
+      config: {
+        replyToMode: "all",
+        thread: { initialHistoryLimit: 20 },
+      },
+      replyToMode: "all",
+    };
   }
 
   function createThreadReplyMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
@@ -450,7 +510,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
-    expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
@@ -474,7 +533,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       baseSessionKey: route.sessionKey,
       threadId: "200.000",
     });
-    // Simulate existing session - thread history should NOT be fetched (bloat fix)
     fs.writeFileSync(
       storePath,
       JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),

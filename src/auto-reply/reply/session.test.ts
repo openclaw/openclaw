@@ -1609,4 +1609,69 @@ describe("initSessionState internal channel routing preservation", () => {
 
     expect(result.sessionEntry.lastChannel).toBe("webchat");
   });
+
+  it("does not reuse stale external lastTo for webchat/main turns without destination", async () => {
+    const storePath = await createStorePath("webchat-main-no-stale-lastto-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-webchat-main-1",
+        updatedAt: Date.now(),
+        lastChannel: "whatsapp",
+        lastTo: "+15555550123",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15555550123",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "webchat follow-up",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+  });
+
+  it("prefers webchat route over persisted external route for main session turns", async () => {
+    const storePath = await createStorePath("prefer-webchat-main-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-webchat-main-2",
+        updatedAt: Date.now(),
+        lastChannel: "whatsapp",
+        lastTo: "+15555550123",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15555550123",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "reply only here",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:webchat-main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBe("session:webchat-main");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
+  });
 });
