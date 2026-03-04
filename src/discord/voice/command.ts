@@ -161,7 +161,7 @@ async function authorizeVoiceCommand(
   });
 
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
+    allowFrom: params.discordConfig.allowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -181,6 +181,7 @@ async function authorizeVoiceCommand(
     useAccessGroups: params.useAccessGroups,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
+    modeWhenAccessGroupsOn: "configured",
   });
 
   if (!commandAuthorized) {

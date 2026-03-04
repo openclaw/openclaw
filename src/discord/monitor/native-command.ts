@@ -1289,7 +1289,7 @@ async function dispatchDiscordCommandInteraction(params: {
     : [];
   const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    allowFrom: discordConfig?.allowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -1426,6 +1426,7 @@ async function dispatchDiscordCommandInteraction(params: {
       useAccessGroups,
       authorizers,
       modeWhenAccessGroupsOff: "configured",
+      modeWhenAccessGroupsOn: "configured",
     });
     if (!commandAuthorized) {
       await respond("You are not authorized to use this command.", { ephemeral: true });

@@ -73,6 +73,42 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
   });
 });
 
+describe("resolveCommandAuthorizedFromAuthorizers — open-access when nothing configured", () => {
+  it("allows guild slash commands when useAccessGroups is enabled, modeWhenAccessGroupsOn is 'configured', and no authorizer is configured", () => {
+    // Scenario: guild slash command, discordConfig.allowFrom is not set (ownerAllowList=null →
+    // configured:false) and no dm.allowFrom leak, no channel/role restrictions.
+    // With modeWhenAccessGroupsOn:"configured", open access should apply when nothing is configured.
+    // Bug: without this parameter, the useAccessGroups=true path always uses some(configured&&allowed)
+    // which returns false when no authorizer is configured, blocking guild users unexpectedly.
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        modeWhenAccessGroupsOn: "configured",
+        authorizers: [
+          { configured: false, allowed: false }, // ownerAllowList is null (no allowFrom set)
+          { configured: false, allowed: true }, // no member/role restrictions (open)
+        ],
+        modeWhenAccessGroupsOff: "configured",
+      }),
+    ).toBe(true);
+  });
+
+  it("still denies when useAccessGroups is enabled without modeWhenAccessGroupsOn and no authorizer configured (fail-closed)", () => {
+    // Default behavior (no modeWhenAccessGroupsOn) remains fail-closed for channels
+    // like Slack where unknown-channel access should be denied.
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        authorizers: [
+          { configured: false, allowed: false },
+          { configured: false, allowed: true },
+        ],
+        modeWhenAccessGroupsOff: "configured",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("resolveControlCommandGate", () => {
   it("blocks control commands when unauthorized", () => {
     const result = resolveControlCommandGate({

@@ -9,6 +9,7 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
   useAccessGroups: boolean;
   authorizers: CommandAuthorizer[];
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
+  modeWhenAccessGroupsOn?: "configured" | "deny";
 }): boolean {
   const { useAccessGroups, authorizers } = params;
   const mode = params.modeWhenAccessGroupsOff ?? "allow";
@@ -24,6 +25,12 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
       return true;
     }
     return authorizers.some((entry) => entry.configured && entry.allowed);
+  }
+  if ((params.modeWhenAccessGroupsOn ?? "deny") === "configured") {
+    const anyConfigured = authorizers.some((entry) => entry.configured);
+    if (!anyConfigured) {
+      return true;
+    }
   }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
