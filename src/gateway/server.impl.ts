@@ -156,6 +156,26 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const preserveBindingsOnWrite = (
+    snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+    nextConfig: import("../config/config.js").OpenClawConfig,
+  ): import("../config/config.js").OpenClawConfig => {
+    if (nextConfig.bindings !== undefined) {
+      return nextConfig;
+    }
+    const parsed =
+      snapshot.parsed && typeof snapshot.parsed === "object"
+        ? (snapshot.parsed as Record<string, unknown>)
+        : null;
+    if (!parsed || !Array.isArray(parsed.bindings)) {
+      return nextConfig;
+    }
+    return {
+      ...nextConfig,
+      bindings: parsed.bindings as import("../config/config.js").OpenClawConfig["bindings"],
+    };
+  };
+
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
@@ -180,7 +200,7 @@ export async function startGatewayServer(
         `Legacy config entries detected but auto-migration failed. Run "${formatCliCommand("openclaw doctor")}" to migrate.`,
       );
     }
-    await writeConfigFile(migrated);
+    await writeConfigFile(preserveBindingsOnWrite(configSnapshot, migrated));
     if (changes.length > 0) {
       log.info(
         `gateway: migrated legacy config entries:\n${changes
@@ -206,7 +226,7 @@ export async function startGatewayServer(
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
     try {
-      await writeConfigFile(autoEnable.config);
+      await writeConfigFile(preserveBindingsOnWrite(configSnapshot, autoEnable.config));
       log.info(
         `gateway: auto-enabled plugins:\n${autoEnable.changes
           .map((entry) => `- ${entry}`)
