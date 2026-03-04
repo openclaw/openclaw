@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -21,7 +22,7 @@ import { whatsappPlugin } from "./channel.js";
 
 describe("whatsappPlugin outbound sendPoll", () => {
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
-    const cfg = { marker: "resolved-cfg" } as const;
+    const cfg = { marker: "resolved-cfg" } as OpenClawConfig;
     const poll = {
       question: "Lunch?",
       options: ["Pizza", "Sushi"],

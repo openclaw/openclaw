@@ -48,7 +48,7 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: Parameters<typeof sendMessageSlack>[2]["cfg"];
+  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
   to: string;
   text: string;
   mediaUrl?: string;

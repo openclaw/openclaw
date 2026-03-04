@@ -45,7 +45,7 @@ describe("nostr outbound cfg threading", () => {
     };
     mocks.startNostrBus.mockResolvedValueOnce(bus as any);
 
-    const cleanup = await nostrPlugin.gateway!.startAccount!(
+    const cleanup = (await nostrPlugin.gateway!.startAccount!(
       createStartAccountContext({
         account: {
           accountId: "default",
@@ -58,7 +58,7 @@ describe("nostr outbound cfg threading", () => {
         },
         abortSignal: new AbortController().signal,
       }),
-    );
+    )) as { stop: () => void };
 
     const cfg = {
       channels: {

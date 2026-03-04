@@ -9,7 +9,7 @@ import { sendMessageTelegram } from "../../../telegram/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
 function resolveTelegramSendContext(params: {
-  cfg: Parameters<typeof sendMessageTelegram>[2]["cfg"];
+  cfg: NonNullable<Parameters<typeof sendMessageTelegram>[2]>["cfg"];
   deps?: OutboundSendDeps;
   accountId?: string | null;
   replyToId?: string | null;
@@ -17,7 +17,7 @@ function resolveTelegramSendContext(params: {
 }): {
   send: typeof sendMessageTelegram;
   baseOpts: {
-    cfg: Parameters<typeof sendMessageTelegram>[2]["cfg"];
+    cfg: NonNullable<Parameters<typeof sendMessageTelegram>[2]>["cfg"];
     verbose: false;
     textMode: "html";
     messageThreadId?: number;

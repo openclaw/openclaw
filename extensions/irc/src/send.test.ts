@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { IrcClient } from "./client.js";
+import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
   const loadConfig = vi.fn();
@@ -73,11 +75,11 @@ describe("sendMessageIrc cfg threading", () => {
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
-    const providedCfg = { source: "provided" } as const;
+    const providedCfg = { source: "provided" } as unknown as CoreConfig;
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
-    };
+    } as IrcClient;
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
@@ -95,12 +97,12 @@ describe("sendMessageIrc cfg threading", () => {
   });
 
   it("falls back to runtime config when cfg is omitted", async () => {
-    const runtimeCfg = { source: "runtime" } as const;
+    const runtimeCfg = { source: "runtime" } as unknown as CoreConfig;
     hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
-    };
+    } as IrcClient;
 
     await sendMessageIrc("#ops", "ping", { client });
 

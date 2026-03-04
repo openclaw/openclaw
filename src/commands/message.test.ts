@@ -241,12 +241,12 @@ describe("messageCommand", () => {
       resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
       diagnostics: ["resolved channels.telegram.token"],
     });
-    const sendText = vi.fn(async () => ({
+    const sendText = vi.fn(async (_ctx: { cfg?: unknown; to: string; text: string }) => ({
       channel: "telegram" as const,
       messageId: "msg-1",
       chatId: "123456",
     }));
-    const sendMedia = vi.fn(async () => ({
+    const sendMedia = vi.fn(async (_ctx: { cfg?: unknown }) => ({
       channel: "telegram" as const,
       messageId: "msg-2",
       chatId: "123456",
@@ -311,12 +311,12 @@ describe("messageCommand", () => {
       resolvedConfig: locallyResolvedConfig as unknown as Record<string, unknown>,
       diagnostics: ["gateway secrets.resolve unavailable; used local resolver fallback."],
     });
-    const sendText = vi.fn(async () => ({
+    const sendText = vi.fn(async (_ctx: { cfg?: unknown }) => ({
       channel: "telegram" as const,
       messageId: "msg-3",
       chatId: "123456",
     }));
-    const sendMedia = vi.fn(async () => ({
+    const sendMedia = vi.fn(async (_ctx: { cfg?: unknown }) => ({
       channel: "telegram" as const,
       messageId: "msg-4",
       chatId: "123456",
