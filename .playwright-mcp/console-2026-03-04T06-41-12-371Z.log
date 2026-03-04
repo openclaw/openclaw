@@ -1,0 +1,14 @@
+[     123ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[     123ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    2149ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    2149ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6152ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    6153ms] [WARNING] SSE trade failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    6153ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6153ms] [WARNING] SSE fund failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    6156ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[    6156ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   16156ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   16156ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   26157ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   26157ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0

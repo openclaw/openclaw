@@ -114,7 +114,7 @@ export class BacktestEngine {
         },
         history,
         indicators: buildIndicatorLib(history),
-        regime: "sideways",
+        regime: config.regimeDetector?.detect(history) ?? "sideways",
         memory,
         log: () => {},
       };

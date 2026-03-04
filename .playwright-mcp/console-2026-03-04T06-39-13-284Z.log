@@ -1,0 +1,15 @@
+[    1110ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    1110ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    1280ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/favicon.ico:0
+[    3113ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    3113ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    7116ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    7116ms] [WARNING] SSE trade failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    7116ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    7116ms] [WARNING] SSE fund failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    7117ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[    7117ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   17178ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   17179ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   27118ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   27119ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0

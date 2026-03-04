@@ -325,14 +325,24 @@ export function registerStrategyTools(
 
           return json({
             strategyId,
-            totalReturn: `${result.totalReturn.toFixed(2)}%`,
-            sharpe: result.sharpe.toFixed(3),
-            sortino: result.sortino.toFixed(3),
-            maxDrawdown: `${result.maxDrawdown.toFixed(2)}%`,
-            winRate: `${result.winRate.toFixed(1)}%`,
-            profitFactor: result.profitFactor.toFixed(2),
+            totalReturn: result.totalReturn,
+            sharpe: result.sharpe,
+            sortino: result.sortino,
+            maxDrawdown: result.maxDrawdown,
+            winRate: result.winRate,
+            profitFactor: result.profitFactor,
             totalTrades: result.totalTrades,
-            finalEquity: result.finalEquity.toFixed(2),
+            initialCapital: config.capital,
+            finalEquity: result.finalEquity,
+            formatted: {
+              totalReturn: `${result.totalReturn.toFixed(2)}%`,
+              sharpe: result.sharpe.toFixed(3),
+              sortino: result.sortino.toFixed(3),
+              maxDrawdown: `${result.maxDrawdown.toFixed(2)}%`,
+              winRate: `${result.winRate.toFixed(1)}%`,
+              profitFactor: result.profitFactor.toFixed(2),
+              finalEquity: result.finalEquity.toFixed(2),
+            },
           });
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });
@@ -464,6 +474,8 @@ export function registerStrategyTools(
             tickMemory.set(strategyId, new Map());
           }
 
+          let regimeSource: "detector" | "default" = "default";
+
           const ctx: StrategyContext = {
             portfolio: {
               equity: (portfolio as { equity: number }).equity,
@@ -484,6 +496,7 @@ export function registerStrategyTools(
             | undefined;
           if (regimeDetector?.detect) {
             ctx.regime = regimeDetector.detect(ohlcv) as typeof ctx.regime;
+            regimeSource = "detector";
           }
 
           // Execute strategy onBar
@@ -497,6 +510,8 @@ export function registerStrategyTools(
               bar: { timestamp: latestBar.timestamp, close: latestBar.close },
               signal: null,
               action: "hold",
+              regime: ctx.regime,
+              regimeSource,
             });
           }
 
@@ -545,6 +560,8 @@ export function registerStrategyTools(
               reason: signal.reason,
               confidence: signal.confidence,
             },
+            regime: ctx.regime,
+            regimeSource,
             level: record.level,
             orderResult,
           });

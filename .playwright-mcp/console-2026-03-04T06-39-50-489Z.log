@@ -1,0 +1,2 @@
+[      72ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    2074ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0

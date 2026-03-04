@@ -85,14 +85,14 @@ describe("gatherFinanceConfigData", () => {
     expect(data.exchanges[0]!.exchange).toBe("binance");
     expect(data.trading.enabled).toBe(true);
     expect(data.trading.maxAutoTradeUsd).toBe(100);
-    expect(data.plugins.total).toBe(8); // FINANCIAL_PLUGIN_IDS has 8 entries
+    expect(data.plugins.total).toBe(4); // FINANCIAL_PLUGIN_IDS has 4 entries
     expect(data.plugins.enabled).toBe(2);
   });
 
   it("should report zero enabled plugins when none configured", () => {
     const data = gatherFinanceConfigData(makeDeps());
     expect(data.plugins.enabled).toBe(0);
-    expect(data.plugins.total).toBe(8);
+    expect(data.plugins.total).toBe(4);
   });
 
   it("should include risk config fields in trading section", () => {

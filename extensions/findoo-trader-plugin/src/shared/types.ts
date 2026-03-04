@@ -96,6 +96,8 @@ export interface BacktestConfig {
   commissionRate: number; // e.g., 0.001
   slippageBps: number; // e.g., 5
   market: MarketType;
+  /** Optional regime detector. Defaults to "sideways" if absent. */
+  regimeDetector?: { detect: (bars: OHLCV[]) => MarketRegime };
 }
 
 export interface TradeRecord {

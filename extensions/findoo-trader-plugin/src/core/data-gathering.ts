@@ -25,12 +25,8 @@ import type { ExchangeRegistry } from "./exchange-registry.js";
 const FINANCIAL_PLUGIN_IDS = [
   "findoo-trader-plugin",
   "findoo-datahub-plugin",
-  "fin-market-data",
-  "fin-portfolio",
-  "fin-monitoring",
-  "fin-strategy-memory",
-  "fin-expert-sdk",
-  "fin-info-feed",
+  "findoo-backtest-plugin",
+  "fin-evolution-engine",
 ] as const;
 
 export type DataGatheringDeps = {

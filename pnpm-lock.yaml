@@ -359,83 +359,13 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/fin-core:
-    dependencies:
-      ccxt:
-        specifier: ^4.4.0
-        version: 4.5.40
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/fin-evolution-engine:
     devDependencies:
       openfinclaw:
         specifier: workspace:*
         version: link:../..
 
-  extensions/fin-expert-sdk:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-fund-manager:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-info-feed:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-market-data:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-monitoring:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-paper-trading:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-portfolio:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/fin-shared-types:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-strategy-engine:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-strategy-memory:
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/fin-trading:
     devDependencies:
       openfinclaw:
         specifier: workspace:*

@@ -1,0 +1,66 @@
+[      49ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at renderAll (http://localhost:18900/dashboard/strategy-lab:4730:11)
+    at http://localhost:18900/dashboard/strategy-lab:5198:9
+    at http://localhost:18900/dashboard/strategy-lab:5201:9 @ http://localhost:18900/dashboard/strategy-lab:4497
+[      61ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution/stream:0
+[      61ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[      64ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    2064ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution/stream:0
+[    2064ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    2065ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6066ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution/stream:0
+[    6066ms] [WARNING] SSE evolution failed 3 times, falling back to polling @ http://localhost:18900/dashboard/strategy-lab:4774
+[    6066ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    6066ms] [WARNING] SSE trade failed 3 times, falling back to polling @ http://localhost:18900/dashboard/strategy-lab:4774
+[    6067ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[    6067ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4794:17 @ http://localhost:18900/dashboard/strategy-lab:4497
+[    6067ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[    6067ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6067ms] [WARNING] SSE fund failed 3 times, falling back to polling @ http://localhost:18900/dashboard/strategy-lab:4774
+[    6069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   16069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   16069ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   16069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   16069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   26069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   26070ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   26070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   26070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   36068ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   36069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   36069ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   36069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   46070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   46070ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   46070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   46071ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   56069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   56069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   56069ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   56070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
+[   66069ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/evolution:0
+[   66070ms] [WARNING] Fitness chart error: ReferenceError: Chart is not defined
+    at renderFitnessChart (http://localhost:18900/dashboard/strategy-lab:4433:15)
+    at onEvolutionData (http://localhost:18900/dashboard/strategy-lab:4843:11)
+    at http://localhost:18900/dashboard/strategy-lab:4806:19 @ http://localhost:18900/dashboard/strategy-lab:4497
+[   66070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[   66070ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0

@@ -1,0 +1,10 @@
+[      75ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[      75ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    2077ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    2078ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6079ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading/stream:0
+[    6079ms] [WARNING] SSE trade failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    6080ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund/stream:0
+[    6080ms] [WARNING] SSE fund failed 3 times, falling back to polling @ http://localhost:18900/dashboard/overview:5058
+[    6081ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/finance/trading:0
+[    6081ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:18900/api/v1/fund:0
