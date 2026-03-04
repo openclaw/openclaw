@@ -35,12 +35,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
-  it("infers timeout from abort stop-reason messages", () => {
+  it("infers timeout from abort/error stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "timeout",
+    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
+  });
+
+  it("infers timeout from connection/network error messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
+      "timeout",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
+      "timeout",
+    );
   });
 
   it("treats AbortError reason=abort as timeout", () => {

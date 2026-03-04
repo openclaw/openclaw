@@ -974,6 +974,60 @@ describe("loadOpenClawPlugins", () => {
     );
   });
 
+  it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-introspection",
+      filename: "runtime-introspection.cjs",
+      body: `module.exports = { id: "runtime-introspection", register(api) {
+  const runtime = api.runtime ?? {};
+  const keys = Object.keys(runtime);
+  if (!keys.includes("channel")) {
+    throw new Error("runtime channel key missing");
+  }
+  if (!("channel" in runtime)) {
+    throw new Error("runtime channel missing from has check");
+  }
+  if (!Object.getOwnPropertyDescriptor(runtime, "channel")) {
+    throw new Error("runtime channel descriptor missing");
+  }
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["runtime-introspection"],
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "runtime-introspection");
+    expect(record?.status).toBe("loaded");
+  });
+
+  it("supports legacy plugins importing monolithic plugin-sdk root", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-root-import",
+      filename: "legacy-root-import.cjs",
+      body: `module.exports = {
+  id: "legacy-root-import",
+  configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
+  register() {},
+};`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-root-import"],
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
+    expect(record?.status).toBe("loaded");
+  });
+
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
     const { root, distFile } = createPluginSdkAliasFixture();
 

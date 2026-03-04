@@ -4,9 +4,17 @@ import { setupLlmProxy } from "../../agents/llm-proxy.js";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
+
+let piModelDiscoveryRuntimePromise: Promise<
+  typeof import("../../agents/pi-model-discovery-runtime.js")
+> | null = null;
+
+function loadPiModelDiscoveryRuntime() {
+  piModelDiscoveryRuntimePromise ??= import("../../agents/pi-model-discovery-runtime.js");
+  return piModelDiscoveryRuntimePromise;
+}
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
@@ -15,6 +23,7 @@ export async function describeImageWithModel(
   setupLlmProxy(params.cfg);
 
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;

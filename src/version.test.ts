@@ -4,10 +4,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  VERSION,
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
   resolveBinaryVersion,
   resolveRuntimeServiceVersion,
+  resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
 
@@ -141,14 +143,25 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
-  it("uses service and package fallbacks and ignores blank env values", () => {
+  it("normalizes runtime version candidate for fallback handling", () => {
+    expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
+    expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
+  });
+
+  it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
+    const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
         OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
-    ).toBe("2.0.0");
+    ).toBe(runtimeVersion ?? "2.0.0");
 
     expect(
       resolveRuntimeServiceVersion({
@@ -156,7 +169,7 @@ describe("version resolution", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
-    ).toBe("1.0.0-package");
+    ).toBe(runtimeVersion ?? "1.0.0-package");
 
     expect(
       resolveRuntimeServiceVersion(
@@ -167,6 +180,6 @@ describe("version resolution", () => {
         },
         "fallback",
       ),
-    ).toBe("fallback");
+    ).toBe(runtimeVersion ?? "fallback");
   });
 });

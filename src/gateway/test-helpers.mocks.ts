@@ -574,6 +574,7 @@ vi.mock("../channels/web/index.js", async () => {
 });
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig,

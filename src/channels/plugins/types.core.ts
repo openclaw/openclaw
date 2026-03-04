@@ -120,6 +120,9 @@ export type ChannelAccountSnapshot = {
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean;
+  activeRuns?: number;
+  lastRunActivityAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];

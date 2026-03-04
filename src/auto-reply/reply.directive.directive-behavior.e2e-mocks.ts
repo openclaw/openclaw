@@ -1,5 +1,4 @@
-import type { Mock } from "vitest";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 export const runEmbeddedPiAgentMock: Mock = vi.fn();
 
