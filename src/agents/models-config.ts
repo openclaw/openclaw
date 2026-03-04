@@ -165,6 +165,25 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.baseUrl === "string" && existing.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
+    // Preserve endpoint protocol and auth settings alongside baseUrl so that a
+    // user who pointed a provider at a different endpoint (e.g. a domestic
+    // MiniMax endpoint) keeps the matching api/authHeader/headers values.
+    // Without this, regenerating models.json after a gateway restart could
+    // replace the user's "anthropic-messages" + authHeader:true with whatever
+    // the built-in catalog emits, causing HTTP 401 on every request.
+    if (typeof existing.api === "string" && existing.api) {
+      preserved.api = existing.api;
+    }
+    if (typeof existing.authHeader === "boolean") {
+      preserved.authHeader = existing.authHeader;
+    }
+    if (
+      existing.headers &&
+      typeof existing.headers === "object" &&
+      !Array.isArray(existing.headers)
+    ) {
+      preserved.headers = existing.headers;
+    }
     mergedProviders[key] = { ...newEntry, ...preserved };
   }
   return mergedProviders;

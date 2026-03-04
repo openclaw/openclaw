@@ -220,6 +220,83 @@ describe("models-config", () => {
     });
   });
 
+  it("preserves api/authHeader/headers from existing models.json in merge mode", async () => {
+    // Regression: after a user changes baseUrl to a domestic endpoint and sets
+    // authHeader/api in models.json, a gateway restart would regenerate
+    // models.json from openclaw.json (which may have different api/authHeader),
+    // losing the user's endpoint-specific settings and causing HTTP 401.
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            apiKey: "user-minimax-new-key",
+            api: "anthropic-messages",
+            authHeader: true,
+            headers: { "x-custom-header": "custom-value" },
+            models: [
+              {
+                id: "MiniMax-M2.5",
+                name: "MiniMax M2.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      });
+
+      // Simulate openclaw.json that was generated with a different api format
+      // (e.g. old Coding Plan config with openai-completions and no authHeader)
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              apiKey: "old-minimax-key",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "MiniMax-M2.5",
+                  name: "MiniMax M2.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
+                  contextWindow: 200000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<
+          string,
+          {
+            apiKey?: string;
+            baseUrl?: string;
+            api?: string;
+            authHeader?: boolean;
+            headers?: Record<string, string>;
+          }
+        >;
+      }>();
+
+      // User's credentials and endpoint-specific config must be preserved
+      expect(parsed.providers.minimax?.apiKey).toBe("user-minimax-new-key");
+      expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+      expect(parsed.providers.minimax?.api).toBe("anthropic-messages");
+      expect(parsed.providers.minimax?.authHeader).toBe(true);
+      expect(parsed.providers.minimax?.headers).toEqual({ "x-custom-header": "custom-value" });
+    });
+  });
+
   it("uses config apiKey/baseUrl when existing agent values are empty", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
