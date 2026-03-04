@@ -209,9 +209,9 @@ describe("after_llm_call hook", () => {
     });
   });
 
-  it("runs multiple handlers in parallel (void hook)", async () => {
-    const h1 = vi.fn().mockResolvedValue(undefined);
-    const h2 = vi.fn().mockResolvedValue(undefined);
+  it("runs multiple handlers sequentially and merges results", async () => {
+    const h1 = vi.fn().mockResolvedValue({ block: false, toolCalls: [baseEvent.toolCalls[0]] });
+    const h2 = vi.fn().mockResolvedValue({ block: true, blockReason: "tainted context" });
     const runner = createHookRunner(
       makeRegistry([
         { pluginId: "p1", hookName: "after_llm_call", handler: h1, source: "test" },
@@ -219,15 +219,38 @@ describe("after_llm_call hook", () => {
       ]),
     );
 
-    await runner.runAfterLlmCall(baseEvent, agentCtx);
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
     expect(h1).toHaveBeenCalledOnce();
     expect(h2).toHaveBeenCalledOnce();
+    // h2 overrides h1's block decision
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("tainted context");
   });
 
-  it("skips when no handlers registered", async () => {
+  it("returns tool call filter from handler", async () => {
+    const filtered = [{ id: "tc-1", name: "read", arguments: { path: "/tmp/x" } }];
+    const handler = vi.fn().mockResolvedValue({ toolCalls: filtered });
+    const runner = createHookRunner(
+      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result?.toolCalls).toEqual(filtered);
+  });
+
+  it("returns undefined when no handlers registered", async () => {
     const runner = createHookRunner(makeRegistry([]));
-    // void hook — should not throw
-    await runner.runAfterLlmCall(baseEvent, agentCtx);
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when handlers return void", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const runner = createHookRunner(
+      makeRegistry([{ pluginId: "p1", hookName: "after_llm_call", handler, source: "test" }]),
+    );
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    expect(result).toBeUndefined();
   });
 });
 
