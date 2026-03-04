@@ -320,6 +320,22 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           error: err,
         });
+        // Let tool_result_before_model intercept error results too.
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorResult: AgentToolResult<unknown> = {
+          content: [{ type: "text", text: `Error: ${errorMessage}` }],
+          details: { error: true },
+        };
+        const hookProcessed = await runToolResultBeforeModelHook({
+          toolName,
+          toolCallId,
+          params: outcome.params,
+          result: errorResult,
+          ctx,
+        });
+        if (hookProcessed !== errorResult) {
+          return hookProcessed;
+        }
         throw err;
       }
     },
