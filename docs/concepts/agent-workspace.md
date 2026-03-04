@@ -41,6 +41,11 @@ workspace and seed the bootstrap files if they are missing.
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink
 aliases that resolve outside the source workspace are ignored.
 
+Profile note:
+
+- Security/media local-root checks include the active agent workspace path at runtime.
+- So `~/.openclaw/workspace-<profile>` (or any explicit `agent.workspace`) is treated as an allowed workspace root for that agent.
+
 If you already manage the workspace files yourself, you can disable bootstrap
 file creation:
 
