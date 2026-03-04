@@ -33,6 +33,10 @@ export function resolveWhatsAppOutboundTarget(params: {
         error: missingTargetError("WhatsApp", "<E.164|group JID>"),
       };
     }
+    // Group JIDs bypass allowFrom/allowSendTo intentionally: group sends are
+    // governed by the separate groupPolicy/groupAllowFrom axis, not by the
+    // per-DM allowlist.  This matches legacy allowFrom behavior and keeps
+    // allowSendTo semantically consistent as a DM-only outbound gate.
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
