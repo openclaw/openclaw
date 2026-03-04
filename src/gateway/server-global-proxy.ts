@@ -88,13 +88,21 @@ function resolveFirstChannelProxy(cfg: ReturnType<typeof loadConfig>): string | 
 }
 
 /** Telegram account is credentialed when it has a botToken or tokenFile. */
-function hasTelegramToken(account: { botToken?: string; tokenFile?: string }): boolean {
-  return !!(account.botToken?.trim() || account.tokenFile?.trim());
+function hasTelegramToken(account: { botToken?: unknown; tokenFile?: unknown }): boolean {
+  const bt = account.botToken;
+  const tf = account.tokenFile;
+  return !!(
+    (typeof bt === "string" && bt.trim()) ||
+    (typeof tf === "string" && tf.trim()) ||
+    (bt != null && typeof bt !== "string") ||
+    (tf != null && typeof tf !== "string")
+  );
 }
 
-/** Discord account is credentialed when it has a token. */
-function hasDiscordToken(account: { token?: string }): boolean {
-  return !!account.token?.trim();
+/** Discord account is credentialed when it has a token (string or SecretRef). */
+function hasDiscordToken(account: { token?: unknown }): boolean {
+  const t = account.token;
+  return !!((typeof t === "string" && t.trim()) || (t != null && typeof t !== "string"));
 }
 
 /**
