@@ -74,24 +74,26 @@ function getJiti() {
   return jitiLoader;
 }
 
+function loadWithJiti(modulePath) {
+  return getJiti()(modulePath);
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
-  const jiti = getJiti();
-
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = loadWithJiti(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = loadWithJiti(path.join(__dirname, "index.ts"));
   return monolithicSdk;
 }
 
@@ -106,28 +108,92 @@ function tryLoadMonolithicSdk() {
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
+  __unsafeIsMonolithicLoadedForTest: () => monolithicSdk !== null,
+  __unsafeResetMonolithicForTest: () => {
+    monolithicSdk = null;
+    jitiLoader = null;
+  },
+  __unsafeSetJitiOverrideForTest: (loader) => {
+    jitiLoader = loader;
+  },
 };
 
-const monolithic = tryLoadMonolithicSdk();
-const rootExports =
-  monolithic && typeof monolithic === "object"
-    ? {
-        ...monolithic,
-        ...fastExports,
+const rootProxy = new Proxy(fastExports, {
+  get(target, prop, receiver) {
+    if (prop === "__esModule") {
+      return true;
+    }
+    if (prop === "default") {
+      return rootProxy;
+    }
+    if (Reflect.has(target, prop)) {
+      return Reflect.get(target, prop, receiver);
+    }
+    const monolithic = loadMonolithicSdk();
+    return monolithic[prop];
+  },
+  has(target, prop) {
+    if (prop === "__esModule" || prop === "default") {
+      return true;
+    }
+    if (Reflect.has(target, prop)) {
+      return true;
+    }
+    const monolithic = tryLoadMonolithicSdk();
+    return monolithic ? prop in monolithic : false;
+  },
+  ownKeys(target) {
+    const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
+    if (monolithicSdk) {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
+        keys.add(key);
       }
-    : { ...fastExports };
-
-Object.defineProperty(rootExports, "__esModule", {
-  configurable: true,
-  enumerable: false,
-  writable: false,
-  value: true,
+    }
+    return [...keys];
+  },
+  getOwnPropertyDescriptor(target, prop) {
+    if (prop === "__esModule") {
+      return {
+        configurable: true,
+        enumerable: false,
+        value: true,
+        writable: false,
+      };
+    }
+    if (prop === "default") {
+      return {
+        configurable: true,
+        enumerable: false,
+        value: rootProxy,
+        writable: false,
+      };
+    }
+    if (Reflect.has(target, prop)) {
+      return {
+        configurable: true,
+        enumerable: true,
+        value: Reflect.get(target, prop, rootProxy),
+        writable: true,
+      };
+    }
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return undefined;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
+    if (descriptor) {
+      return { ...descriptor, configurable: true };
+    }
+    if (prop in monolithic) {
+      return {
+        configurable: true,
+        enumerable: true,
+        value: monolithic[prop],
+        writable: true,
+      };
+    }
+    return undefined;
+  },
 });
-Object.defineProperty(rootExports, "default", {
-  configurable: true,
-  enumerable: false,
-  writable: false,
-  value: rootExports,
-});
 
-module.exports = rootExports;
+module.exports = rootProxy;
