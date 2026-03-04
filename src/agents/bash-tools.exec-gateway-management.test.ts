@@ -960,8 +960,23 @@ describe("exec gateway management interception", () => {
     expect(listFinishedSessions()).toHaveLength(0);
   });
 
-  it("intercepts gateway restart before approval handoff", async () => {
-    const gatewayAllowlistCallsBefore = processGatewayAllowlistMock.mock.calls.length;
+  it("does not bypass gateway approval policy for restart interception", async () => {
+    processGatewayAllowlistMock.mockResolvedValueOnce({
+      pendingResult: {
+        content: [{ type: "text", text: "Approval required" }],
+        details: {
+          status: "approval-pending",
+          approvalId: "approval-1",
+          approvalSlug: "approval-1",
+          expiresAtMs: Date.now() + 60_000,
+          host: "gateway",
+          command: "openclaw gateway restart",
+          cwd: process.cwd(),
+        },
+      },
+      execCommandOverride: undefined,
+    });
+
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -974,13 +989,11 @@ describe("exec gateway management interception", () => {
     });
 
     expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode: 0,
+      status: "approval-pending",
+      host: "gateway",
     });
-    expect(processGatewayAllowlistMock.mock.calls.length).toBe(gatewayAllowlistCallsBefore);
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "exec:gateway-restart" }),
-    );
+    expect(processGatewayAllowlistMock).toHaveBeenCalledOnce();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
   it("does not intercept when request env retargets gateway profile identity", async () => {

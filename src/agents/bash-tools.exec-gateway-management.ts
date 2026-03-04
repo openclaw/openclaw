@@ -13,7 +13,14 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import type { ExecHost } from "../infra/exec-approvals.js";
+import {
+  evaluateShellAllowlist,
+  requiresExecApproval,
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
+import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { normalizeExecutableToken } from "../infra/exec-wrapper-resolution.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -23,6 +30,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../infra/restart.js";
 import { logInfo } from "../logger.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveExecHostApprovalContext } from "./bash-tools.exec-host-shared.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 const RUNNER_BINS = new Set(["pnpm", "npx", "bunx"]);
@@ -1325,10 +1333,16 @@ export async function maybeInterceptGatewayManagementExec(params: {
   host: ExecHost;
   command: string;
   cwd: string;
-  env: NodeJS.ProcessEnv;
+  env: Record<string, string>;
   runtimeEnv?: NodeJS.ProcessEnv;
-  requestedEnv?: NodeJS.ProcessEnv;
+  requestedEnv?: Record<string, string>;
   sessionKey?: string;
+  agentId?: string;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  safeBins: Set<string>;
+  safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
+  trustedSafeBinDirs?: ReadonlySet<string>;
 }): Promise<AgentToolResult<ExecToolDetails> | null> {
   if (params.host !== "gateway") {
     return null;
@@ -1351,6 +1365,42 @@ export async function maybeInterceptGatewayManagementExec(params: {
 
   if (commandMatch.action !== "restart" || commandMatch.hard || commandMatch.complex) {
     throw new Error(buildBlockedMessage(commandMatch));
+  }
+
+  // Enforce gateway exec approval policy (deny/allowlist/ask) before we schedule a
+  // restart and return a completed tool result. If approval is required, we fall
+  // through so the normal allowlist/approval flow can handle it.
+  const { approvals, hostSecurity, hostAsk } = resolveExecHostApprovalContext({
+    agentId: params.agentId,
+    security: params.security,
+    ask: params.ask,
+    host: "gateway",
+  });
+  const allowlistEval = evaluateShellAllowlist({
+    command: params.command,
+    allowlist: approvals.allowlist,
+    safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
+    cwd: params.cwd,
+    env: params.env,
+    platform: process.platform,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
+  });
+  const analysisOk = allowlistEval.analysisOk;
+  const allowlistSatisfied =
+    hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  if (
+    requiresExecApproval({
+      ask: hostAsk,
+      security: hostSecurity,
+      analysisOk,
+      allowlistSatisfied,
+    })
+  ) {
+    return null;
+  }
+  if (hostSecurity === "allowlist" && (!analysisOk || !allowlistEval.allowlistSatisfied)) {
+    throw new Error("exec denied: allowlist miss");
   }
 
   const cfg = loadConfig();

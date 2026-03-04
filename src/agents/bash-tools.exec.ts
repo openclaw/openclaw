@@ -433,6 +433,12 @@ export function createExecTool(
         runtimeEnv: baseEnv,
         requestedEnv: params.env,
         sessionKey: defaults?.sessionKey,
+        agentId,
+        security,
+        ask,
+        safeBins,
+        safeBinProfiles,
+        trustedSafeBinDirs,
       });
       if (gatewayInterceptResult) {
         const text = gatewayInterceptResult.content.find((part) => part.type === "text")?.text;
