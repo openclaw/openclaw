@@ -409,6 +409,46 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 
+  it("sets supportsDeveloperRole false when baseUrl override points to non-OpenAI proxy", () => {
+    const originalModel = {
+      id: "gpt-4o",
+      name: "GPT-4o",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text", "image"] as const,
+      cost: { input: 2.5, output: 10, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 16384,
+    };
+
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-4o",
+      templateModel: originalModel,
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://my-proxy.example.com/v1",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-4o", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("https://my-proxy.example.com/v1");
+    // Proxy is not native OpenAI — developer role must be disabled
+    expect((result.model as unknown as Record<string, unknown>)?.compat).toEqual({
+      supportsDeveloperRole: false,
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 
