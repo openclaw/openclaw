@@ -19,7 +19,8 @@ Use `coscli` for Tencent Cloud COS operations from terminal.
   - `chmod 755 ./coscli`
   - `sudo mv ./coscli /usr/local/bin/coscli`
 - Windows:
-  - Download `coscli-windows.exe` from the official install page and add it to `PATH`.
+  - Download `coscli-windows.exe` from the official install page.
+  - Rename it to `coscli.exe` and add its directory to `PATH`.
 
 Verify:
 
