@@ -401,7 +401,7 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
-        await deliverWebReply({
+        const { sentChunks } = await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
           mediaLocalRoots,
@@ -414,12 +414,23 @@ export async function processMessage(params: {
           tableMode,
         });
         didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
+        // Register each sent chunk (post-markdown-conversion) for echo detection.
+        // Previously only the raw pre-conversion text was stored, causing mismatches
+        // when WhatsApp echoed back the converted text in self-chat mode.
+        for (const chunk of sentChunks) {
+          params.rememberSentText(chunk, {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: true,
+          });
+        }
+        // Also store the raw text as a fallback for channels that don't convert markdown.
+        if (payload.text && !sentChunks.includes(payload.text)) {
+          params.rememberSentText(payload.text, {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+          });
+        }
         const fromDisplay =
           params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
