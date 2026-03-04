@@ -4,6 +4,7 @@
  */
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_CHATS = 1000;
 
 type CacheEntry = {
   timestamps: Map<number, number>;
@@ -31,6 +32,13 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   const key = getChatKey(chatId);
   let entry = sentMessages.get(key);
   if (!entry) {
+    // Evict oldest chat if at capacity
+    if (sentMessages.size >= MAX_CHATS) {
+      const oldest = sentMessages.keys().next().value;
+      if (oldest !== undefined) {
+        sentMessages.delete(oldest);
+      }
+    }
     entry = { timestamps: new Map() };
     sentMessages.set(key, entry);
   }
