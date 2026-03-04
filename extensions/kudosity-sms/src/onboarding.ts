@@ -6,13 +6,7 @@
  * Telegram, Slack, and other channel onboarding adapters.
  */
 
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingConfigureContext,
-  ChannelOnboardingResult,
-  ChannelOnboardingStatus,
-  ChannelOnboardingStatusContext,
-} from "openclaw/plugin-sdk";
+import type { ChannelOnboardingAdapter } from "openclaw/plugin-sdk";
 import { validateApiKey, type KudosityConfig } from "./kudosity-api.js";
 
 const CHANNEL_ID = "kudosity-sms";
@@ -62,7 +56,7 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
    * - statusLines: human-readable status for the CLI display
    * - selectionHint: short hint shown in channel selector
    */
-  async getStatus(ctx: ChannelOnboardingStatusContext): Promise<ChannelOnboardingStatus> {
+  async getStatus(ctx) {
     const apiKey = getApiKey(ctx.cfg);
     const sender = getSender(ctx.cfg);
 
@@ -104,7 +98,7 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
    * Must always return ChannelOnboardingResult { cfg, accountId? }.
    * If the user cancels, returns the unchanged cfg.
    */
-  async configure(ctx: ChannelOnboardingConfigureContext): Promise<ChannelOnboardingResult> {
+  async configure(ctx) {
     const { prompter, cfg } = ctx;
 
     // Show setup instructions

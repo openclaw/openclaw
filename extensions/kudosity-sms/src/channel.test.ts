@@ -57,11 +57,8 @@ describe("kudositySmsPlugin", () => {
       expect(kudositySmsPlugin.meta.docsLabel).toBe("kudosity-sms");
     });
 
-    it("should support text but not media", () => {
-      expect(kudositySmsPlugin.capabilities.text).toBe(true);
-      expect(kudositySmsPlugin.capabilities.media).toBe(false);
-      expect(kudositySmsPlugin.capabilities.threads).toBe(false);
-      expect(kudositySmsPlugin.capabilities.groups).toBe(false);
+    it("should have correct capabilities", () => {
+      expect(kudositySmsPlugin.capabilities.chatTypes).toEqual(["direct"]);
     });
   });
 
