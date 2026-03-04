@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "minimax";
 
 export type TtsMode = "final" | "all";
 
@@ -68,7 +68,7 @@ export type TtsConfig = {
   };
   /** MiniMax T2A configuration. */
   minimax?: {
-    apiKey?: string;
+    apiKey?: SecretInput;
     /** Base URL for MiniMax T2A API. */
     baseUrl?: string;
     /** Speech model to use (e.g. speech-2.8-hd, speech-2.8-turbo). */
