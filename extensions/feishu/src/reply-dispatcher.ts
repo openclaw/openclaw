@@ -76,38 +76,76 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
+  let typingStopped = false;
+  // Serialize start() calls so concurrent keepalive ticks (fire-and-forget
+  // onReplyStart) don't interleave and orphan reactions.
+  let startChain: Promise<void> = Promise.resolve();
   const typingCallbacks = createTypingCallbacks({
-    start: async () => {
-      // Check if typing indicator is enabled (default: true)
+    start: (): Promise<void> | void => {
+      // Quick synchronous bail-outs — avoid chaining no-op promises.
       if (!(account.config.typingIndicator ?? true)) {
         return;
       }
-      if (!replyToMessageId) {
+      if (!replyToMessageId || typingStopped) {
         return;
       }
-      // Skip typing indicator for old messages — likely replays after context
-      // compaction that would flood users with stale notifications (#30418).
-      const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
-      if (
-        messageCreateTimeMs !== undefined &&
-        Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
-      ) {
-        return;
-      }
-      // Feishu reactions persist until explicitly removed, so skip keepalive
-      // re-adds when a reaction already exists. Re-adding the same emoji
-      // triggers a new push notification for every call (#28660).
-      if (typingState?.reactionId) {
-        return;
-      }
-      typingState = await addTypingIndicator({
-        cfg,
-        messageId: replyToMessageId,
-        accountId,
-        runtime: params.runtime,
+      startChain = startChain.then(async () => {
+        if (typingStopped) {
+          return;
+        }
+        // Skip typing indicator for old messages — likely replays after context
+        // compaction that would flood users with stale notifications (#30418).
+        const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
+        if (
+          messageCreateTimeMs !== undefined &&
+          Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
+        ) {
+          return;
+        }
+        // Feishu reactions persist until explicitly removed, so the initial add
+        // is sufficient. However, the Feishu client stops displaying the typing
+        // animation after a short period even though the reaction remains. To
+        // keep the indicator visible during long inference runs we must remove
+        // and re-add the reaction instead of calling addReaction again (which
+        // would trigger a duplicate push notification per #28660).
+        if (typingState?.reactionId) {
+          await removeTypingIndicator({
+            cfg,
+            state: typingState,
+            accountId,
+            runtime: params.runtime,
+          });
+          typingState = null;
+        }
+        // Recheck after the async gap — stop() may have run while we awaited.
+        if (typingStopped) {
+          return;
+        }
+        typingState = await addTypingIndicator({
+          cfg,
+          messageId: replyToMessageId,
+          accountId,
+          runtime: params.runtime,
+        });
+        // Final recheck — if stop() ran during addTypingIndicator, clean up the
+        // freshly-added reaction so it doesn't stick on the message.
+        if (typingStopped && typingState) {
+          await removeTypingIndicator({
+            cfg,
+            state: typingState,
+            accountId,
+            runtime: params.runtime,
+          });
+          typingState = null;
+        }
       });
+      return startChain;
     },
     stop: async () => {
+      typingStopped = true;
+      // Wait for any in-flight start() to finish before cleaning up, so we
+      // don't race with its state mutations.
+      await startChain;
       if (!typingState) {
         return;
       }

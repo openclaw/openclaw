@@ -8,7 +8,9 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
-const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
+const addTypingIndicatorMock = vi.hoisted(() =>
+  vi.fn(async () => ({ messageId: "om_msg", reactionId: "rc_typing_1" })),
+);
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted(() => [] as any[]);
 
@@ -167,6 +169,93 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         messageId: "om_parent",
       }),
     );
+  });
+
+  it("refreshes typing indicator on keepalive by removing then re-adding", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    // First call: initial add
+    await options.onReplyStart?.();
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expect(removeTypingIndicatorMock).not.toHaveBeenCalled();
+
+    // Second call (keepalive): should remove then re-add
+    await options.onReplyStart?.();
+    expect(removeTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not orphan a reaction when stop() races with keepalive start()", async () => {
+    // Simulate stop() running during the addTypingIndicator await by having
+    // the mock trigger the onIdle (stop) callback mid-flight.
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // First call: initial add — sets typingState
+    await options.onReplyStart?.();
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+
+    // On the next add call, simulate stop() firing during the async gap
+    addTypingIndicatorMock.mockImplementationOnce(async () => {
+      // onIdle fires while addTypingIndicator is in-flight
+      await options.onIdle?.();
+      return { messageId: "om_msg", reactionId: "rc_orphan" };
+    });
+
+    // Second call (keepalive): remove + add, but onIdle runs mid-add.
+    // The typingStopped flag prevents the orphaned reaction from sticking:
+    // start() detects the flag after add returns and removes rc_orphan.
+    await options.onReplyStart?.();
+
+    // rc_orphan should have been cleaned up. removeTypingIndicator is called:
+    // 1. keepalive remove (old reaction)
+    // 2. stop() — no-op since typingState was null
+    // 3. post-add cleanup (rc_orphan)
+    expect(removeTypingIndicatorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({ reactionId: "rc_orphan" }),
+      }),
+    );
+  });
+
+  it("skips start after stop has been called", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Initial add
+    await options.onReplyStart?.();
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+
+    // Stop
+    await options.onIdle?.();
+
+    // Try to start again after stop — should be no-op
+    await options.onReplyStart?.();
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1); // still 1, not 2
   });
 
   it("keeps auto mode plain text on non-streaming send path", async () => {
