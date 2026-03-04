@@ -296,7 +296,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       });
       return { channel: "whatsapp", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      gifPlayback,
+    }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
         verbose: false,
