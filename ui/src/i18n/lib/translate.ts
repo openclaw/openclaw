@@ -35,6 +35,8 @@ class I18nManager {
       this.locale = DEFAULT_LOCALE;
       return;
     }
+    // Reflect the persisted startup locale immediately; translation map may still lazy-load.
+    this.locale = initialLocale;
     // Use the normal locale setter so startup locale loading follows the same
     // translation-loading + notify path as manual locale changes.
     void this.setLocale(initialLocale);
