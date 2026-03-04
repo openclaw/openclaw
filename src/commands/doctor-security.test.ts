@@ -105,6 +105,55 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
 
+  it("warns for all accounts, not just the default", async () => {
+    pluginRegistry.list = [
+      {
+        id: "discord",
+        meta: { label: "Discord" },
+        config: {
+          listAccountIds: () => ["default", "work-bot"],
+          resolveAccount: (_cfg: unknown, accountId: string) => {
+            if (accountId === "work-bot") {
+              return {
+                accountId: "work-bot",
+                config: { dm: { policy: "open", allowFrom: ["*"] } },
+              };
+            }
+            return {
+              accountId: "default",
+              config: { dm: { policy: "pairing", allowFrom: [] } },
+            };
+          },
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: ({
+            accountId,
+            account,
+          }: {
+            cfg: unknown;
+            accountId: string;
+            account: { config: { dm: { policy: string; allowFrom: string[] } } };
+          }) => ({
+            policy: account.config.dm.policy,
+            allowFrom: account.config.dm.allowFrom,
+            allowFromPath: `channels.discord.accounts.${accountId}.dm.`,
+            approveHint: "approve via pairing",
+          }),
+        },
+      },
+    ];
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    // The "work-bot" account has dmPolicy="open", which should be warned about
+    expect(message).toContain("Discord (work-bot)");
+    expect(message).toContain("OPEN");
+    // The "default" account should also appear with its pairing policy info
+    expect(message).toContain("Discord (default)");
+  });
+
   it("clarifies approvals.exec forwarding-only behavior", async () => {
     const cfg = {
       approvals: {
