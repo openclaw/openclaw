@@ -5,7 +5,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 /** Resolve path for host edit: expand ~ and resolve relative paths against root. */
-function resolveHostEditPath(root: string, pathParam: string): string {
+function resolveHostEditPath(_root: string, pathParam: string): string {
   const expanded =
     pathParam.startsWith("~/") || pathParam === "~"
       ? pathParam.replace(/^~/, os.homedir())
@@ -21,7 +21,7 @@ function resolveHostEditPath(root: string, pathParam: string): string {
  */
 export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
-  root: string,
+  _root: string,
 ): AnyAgentTool {
   return {
     ...base,
@@ -87,7 +87,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
  */
 export function wrapHostEditToolWithMismatchContent(
   base: AnyAgentTool,
-  root: string,
+  _root: string,
 ): AnyAgentTool {
   return {
     ...base,
@@ -97,51 +97,8 @@ export function wrapHostEditToolWithMismatchContent(
       signal: AbortSignal | undefined,
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
-      const result = await base.execute(toolCallId, params, signal, onUpdate);
-
-      // Check if edit failed due to oldText mismatch
-      if (
-        result.isError &&
-        result.content.some((b: unknown) => {
-          if (typeof b === "object" && b !== null && "type" in b && "text" in b) {
-            const block = b as { type: string; text: string };
-            return (
-              block.type === "text" &&
-              block.text.toLowerCase().includes("oldtext") &&
-              block.text.toLowerCase().includes("not found")
-            );
-          }
-          return false;
-        })
-      ) {
-        const record =
-          params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-        // Use canonical path key that the edit operation validated against
-        // Do NOT use file_path as it could be used to exfiltrate non-workspace files
-        const pathParam = record?.path;
-
-        if (typeof pathParam === "string") {
-          try {
-            const absolutePath = resolveHostEditPath(root, pathParam);
-            const content = await fs.readFile(absolutePath, "utf-8");
-
-            return {
-              ...result,
-              content: [
-                ...result.content,
-                {
-                  type: "text" as const,
-                  text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
-                },
-              ],
-            };
-          } catch {
-            // File read failed; return original error
-          }
-        }
-      }
-
-      return result;
+      // Just pass through - the base implementation handles everything
+      return base.execute(toolCallId, params, signal, onUpdate);
     },
   };
 }
