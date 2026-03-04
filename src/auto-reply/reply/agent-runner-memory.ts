@@ -453,7 +453,7 @@ export async function runMemoryFlushIfNeeded(params: {
   // Read the tail of the session transcript and compute a lightweight hash.
   // If the hash matches the last flush, the context hasn't materially changed
   // and flushing again would produce duplicate memory entries (#30115).
-  const sessionFilePath = resolveSessionFilePathForFlush(
+  const sessionFilePath = await resolveSessionFilePathForFlush(
     params.followupRun.run.sessionId,
     entry ?? params.sessionEntry,
     params.storePath,
@@ -461,7 +461,7 @@ export async function runMemoryFlushIfNeeded(params: {
   let contextHashBeforeFlush: string | undefined;
   if (sessionFilePath) {
     try {
-      const tailMessages = readTranscriptTailMessages(sessionFilePath, 10);
+      const tailMessages = await readTranscriptTailMessages(sessionFilePath, 10);
       contextHashBeforeFlush = computeContextHash(tailMessages);
       const previousHash = entry?.memoryFlushContextHash;
       if (previousHash && contextHashBeforeFlush === previousHash) {
@@ -602,17 +602,26 @@ export async function runMemoryFlushIfNeeded(params: {
 /**
  * Resolve the session transcript file path for flush hash computation.
  */
-function resolveSessionFilePathForFlush(
+async function resolveSessionFilePathForFlush(
   sessionId: string | undefined,
   entry: SessionEntry | undefined,
   storePath: string | undefined,
-): string | undefined {
+): Promise<string | undefined> {
   if (!sessionId) {
     return undefined;
   }
-  const sessionFile = entry?.sessionFile?.trim();
-  if (sessionFile && fs.existsSync(sessionFile)) {
-    return sessionFile;
+  // Mirror resolveSessionLogPath: check both sessionFile and transcriptPath.
+  const transcriptPath = (
+    entry as (SessionEntry & { transcriptPath?: string }) | undefined
+  )?.transcriptPath?.trim();
+  const sessionFile = entry?.sessionFile?.trim() || transcriptPath;
+  if (sessionFile) {
+    try {
+      await fs.promises.access(sessionFile);
+      return sessionFile;
+    } catch {
+      // fall through
+    }
   }
   if (!storePath) {
     return undefined;
@@ -623,7 +632,12 @@ function resolveSessionFilePathForFlush(
       entry,
       resolveSessionFilePathOptions({ storePath }),
     );
-    return fs.existsSync(resolved) ? resolved : undefined;
+    try {
+      await fs.promises.access(resolved);
+      return resolved;
+    } catch {
+      return undefined;
+    }
   } catch {
     return undefined;
   }
@@ -633,39 +647,43 @@ function resolveSessionFilePathForFlush(
  * Read the last N messages (with role + content) from a session transcript JSONL file.
  * Only returns entries that have a `message` field with a `role`.
  */
-function readTranscriptTailMessages(
+async function readTranscriptTailMessages(
   filePath: string,
   maxMessages: number,
-): Array<{ role?: string; content?: unknown }> {
+): Promise<Array<{ role?: string; content?: unknown }>> {
   // Only read the tail of the file to avoid loading multi-MB transcripts (#15145).
   const TAIL_BYTES = 64 * 1024; // 64KB — same budget as readSessionLogSnapshot
-  const stat = fs.statSync(filePath);
-  const start = Math.max(0, stat.size - TAIL_BYTES);
-  const buf = Buffer.alloc(Math.min(stat.size, TAIL_BYTES));
-  const fd = fs.openSync(filePath, "r");
+  const handle = await fs.promises.open(filePath, "r");
   try {
-    fs.readSync(fd, buf, 0, buf.length, start);
-  } finally {
-    fs.closeSync(fd);
-  }
-  const tail = buf.toString("utf-8");
-  // If we started mid-file, drop the first (likely partial) line.
-  const lines = (start > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\r?\n/);
-  const messages: Array<{ role?: string; content?: unknown }> = [];
-  // Read from the end for efficiency — we only need the tail.
-  for (let i = lines.length - 1; i >= 0 && messages.length < maxMessages; i--) {
-    const line = lines[i].trim();
-    if (!line) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message?.role) {
-        messages.unshift({ role: parsed.message.role, content: parsed.message.content });
+    const stat = await handle.stat();
+    const start = Math.max(0, stat.size - TAIL_BYTES);
+    const readLen = Math.min(stat.size, TAIL_BYTES);
+    const buf = Buffer.alloc(readLen);
+    await handle.read(buf, 0, readLen, start);
+    const tail = buf.toString("utf-8");
+    // If we started mid-file, drop the first (likely partial) line.
+    // Guard against indexOf returning -1 (no newline found = entire chunk is one partial line).
+    const nlIdx = tail.indexOf("\n");
+    const trimmed = start > 0 ? (nlIdx >= 0 ? tail.slice(nlIdx + 1) : "") : tail;
+    const lines = trimmed.split(/\r?\n/);
+    const messages: Array<{ role?: string; content?: unknown }> = [];
+    // Read from the end for efficiency — we only need the tail.
+    for (let i = lines.length - 1; i >= 0 && messages.length < maxMessages; i--) {
+      const line = lines[i].trim();
+      if (!line) {
+        continue;
       }
-    } catch {
-      // skip malformed lines
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message?.role) {
+          messages.unshift({ role: parsed.message.role, content: parsed.message.content });
+        }
+      } catch {
+        // skip malformed lines
+      }
     }
+    return messages;
+  } finally {
+    await handle.close();
   }
-  return messages;
 }

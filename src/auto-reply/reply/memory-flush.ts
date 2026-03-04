@@ -240,7 +240,7 @@ export function hasAlreadyFlushedForCurrentCompaction(
 export function computeContextHash(messages: Array<{ role?: string; content?: unknown }>): string {
   const userAssistant = messages.filter((m) => m.role === "user" || m.role === "assistant");
   const tail = userAssistant.slice(-3);
-  const payload = `${messages.length}:${tail.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""))).join("\n")}`;
+  const payload = `${messages.length}:${tail.map((m, i) => `[${i}]${typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")}`).join("\x00")}`;
   const hash = crypto.createHash("sha256").update(payload).digest("hex");
   return hash.slice(0, 16);
 }

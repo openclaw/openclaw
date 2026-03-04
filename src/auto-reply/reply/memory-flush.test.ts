@@ -90,7 +90,7 @@ describe("computeContextHash", () => {
     expect(hash).toMatch(/^[0-9a-f]{16}$/);
   });
 
-  it("ignores system and tool messages", () => {
+  it("excludes system messages from content tail but length still differentiates", () => {
     const withSystem = [
       { role: "system", content: "you are helpful" },
       { role: "user", content: "hello" },
