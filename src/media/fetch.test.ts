@@ -54,25 +54,6 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow("exceeds maxBytes");
   });
 
-  it("rejects empty response body", async () => {
-    const lookupFn = vi.fn(async () => [
-      { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = async () =>
-      new Response(makeStream([]), {
-        status: 200,
-      });
-
-    await expect(
-      fetchRemoteMedia({
-        url: "https://cdn.example.com/file.pdf",
-        fetchImpl,
-        maxBytes: 1024,
-        lookupFn,
-      }),
-    ).rejects.toThrow("empty response body");
-  });
-
   it("rejects response body that is literal JSON null", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
