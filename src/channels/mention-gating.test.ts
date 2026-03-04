@@ -34,6 +34,20 @@ describe("resolveMentionGating", () => {
     });
     expect(res.shouldSkip).toBe(false);
   });
+
+  it("skips when requireMention is true and only implicit mention exists (no explicit mention)", () => {
+    // When requireMention is true, implicit mentions should be suppressed
+    // to prevent auto-reply in threads without explicit @mention
+    const res = resolveMentionGating({
+      requireMention: true,
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMention: false, // Caller should suppress implicit when requireMention is true
+      shouldBypassMention: false,
+    });
+    expect(res.effectiveWasMentioned).toBe(false);
+    expect(res.shouldSkip).toBe(true);
+  });
 });
 
 describe("resolveMentionGatingWithBypass", () => {

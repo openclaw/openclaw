@@ -479,7 +479,8 @@ export async function prepareSlackMessage(params: {
     requireMention: Boolean(shouldRequireMention),
     canDetectMention,
     wasMentioned,
-    implicitMention,
+    // Suppress implicit mention when requireMention is true to prevent auto-reply in threads
+    implicitMention: shouldRequireMention ? false : implicitMention,
     hasAnyMention,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
