@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   maintainConfigBackups,
   rotateConfigBackups,
   hardenBackupPermissions,
   cleanOrphanBackups,
+  getBackupCount,
+  getBackupPath,
+  buildBackupPath,
+  type BackupConfig,
 } from "./backup-rotation.js";
 import {
   expectPosixMode,
@@ -129,6 +134,108 @@ describe("config backup rotation", () => {
       }
       // Out-of-ring orphan gets pruned.
       await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
+    });
+  });
+
+  describe("configurable backup options", () => {
+    it("getBackupCount returns default when not configured", () => {
+      expect(getBackupCount(undefined)).toBe(5);
+      expect(getBackupCount({})).toBe(5);
+      expect(getBackupCount({ maxFiles: undefined })).toBe(5);
+    });
+
+    it("getBackupCount returns configured value", () => {
+      expect(getBackupCount({ maxFiles: 10 })).toBe(10);
+      expect(getBackupCount({ maxFiles: 1 })).toBe(1);
+      expect(getBackupCount({ maxFiles: 50 })).toBe(50);
+    });
+
+    it("getBackupPath returns config directory when not configured", () => {
+      const configPath = "/home/user/.openclaw/openclaw.json";
+      expect(getBackupPath(configPath, undefined)).toBe("/home/user/.openclaw");
+      expect(getBackupPath(configPath, {})).toBe("/home/user/.openclaw");
+      expect(getBackupPath(configPath, { path: undefined })).toBe("/home/user/.openclaw");
+    });
+
+    it("getBackupPath returns custom path with tilde expansion", () => {
+      const configPath = "/home/user/.openclaw/openclaw.json";
+      expect(getBackupPath(configPath, { path: "~/backups" })).toBe(
+        path.join(process.env.HOME || "", "backups"),
+      );
+      expect(getBackupPath(configPath, { path: "/custom/backup/path" })).toBe(
+        "/custom/backup/path",
+      );
+    });
+
+    it("buildBackupPath creates correct paths", () => {
+      const configPath = "/home/user/.openclaw/openclaw.json";
+      expect(buildBackupPath("/home/user/.openclaw", configPath)).toBe(
+        "/home/user/.openclaw/openclaw.json.bak",
+      );
+      expect(buildBackupPath("/home/user/.openclaw", configPath, ".1")).toBe(
+        "/home/user/.openclaw/openclaw.json.bak.1",
+      );
+      expect(buildBackupPath("/custom/backup", configPath)).toBe(
+        "/custom/backup/openclaw.json.bak",
+      );
+    });
+
+    it("rotateConfigBackups respects maxFiles config", async () => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+        const customConfig: BackupConfig = { maxFiles: 3 };
+
+        // Write initial config
+        await fs.writeFile(configPath, JSON.stringify({ v: 1 }), "utf-8");
+        await fs.copyFile(configPath, `${configPath}.bak`).catch(() => {});
+
+        // Rotate with custom maxFiles
+        await rotateConfigBackups(configPath, fs, customConfig);
+        await fs.copyFile(configPath, `${configPath}.bak`).catch(() => {});
+        await fs.writeFile(configPath, JSON.stringify({ v: 2 }), "utf-8");
+
+        await rotateConfigBackups(configPath, fs, customConfig);
+        await fs.copyFile(configPath, `${configPath}.bak`).catch(() => {});
+        await fs.writeFile(configPath, JSON.stringify({ v: 3 }), "utf-8");
+
+        await rotateConfigBackups(configPath, fs, customConfig);
+        await fs.copyFile(configPath, `${configPath}.bak`).catch(() => {});
+        await fs.writeFile(configPath, JSON.stringify({ v: 4 }), "utf-8");
+
+        // With maxFiles=3, we should have .bak, .bak.1, .bak.2 but NOT .bak.3
+        await expect(fs.stat(`${configPath}.bak`)).resolves.toBeDefined();
+        await expect(fs.stat(`${configPath}.bak.1`)).resolves.toBeDefined();
+        await expect(fs.stat(`${configPath}.bak.2`)).resolves.toBeDefined();
+        await expect(fs.stat(`${configPath}.bak.3`)).rejects.toThrow();
+      });
+    });
+
+    it("maintainConfigBackups uses custom path", async () => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+        const backupDir = path.join(path.dirname(configPath), "custom-backups");
+
+        // Create custom backup directory
+        await fs.mkdir(backupDir, { recursive: true }).catch(() => {});
+
+        const customConfig: BackupConfig = { path: backupDir, maxFiles: 3 };
+
+        await fs.writeFile(configPath, JSON.stringify({ token: "secret" }), { mode: 0o600 });
+
+        await maintainConfigBackups(configPath, fs, customConfig);
+
+        // Backup should be in custom directory
+        const customBackupPath = path.join(backupDir, path.basename(configPath) + ".bak");
+        await expect(fs.readFile(customBackupPath, "utf-8")).resolves.toBe(
+          JSON.stringify({ token: "secret" }),
+        );
+
+        // Original directory should not have backups
+        await expect(fs.stat(`${configPath}.bak`)).rejects.toThrow();
+
+        // Clean up custom backup dir
+        await fs.rm(backupDir, { recursive: true, force: true }).catch(() => {});
+      });
     });
   });
 });

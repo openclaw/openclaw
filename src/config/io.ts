@@ -1241,7 +1241,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
 
       if (deps.fs.existsSync(configPath)) {
-        await maintainConfigBackups(configPath, deps.fs.promises);
+        // Get backup config from the validated config
+        const backupConfig = (persistCandidate as { backup?: unknown })?.backup as
+          | { path?: string; maxFiles?: number; trigger?: "write" | "interact" }
+          | undefined;
+        await maintainConfigBackups(configPath, deps.fs.promises, backupConfig);
       }
 
       try {

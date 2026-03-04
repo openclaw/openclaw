@@ -28,6 +28,15 @@ const BrowserSnapshotDefaultsSchema = z
   .strict()
   .optional();
 
+const BackupConfigSchema = z
+  .object({
+    path: z.string().optional(),
+    maxFiles: z.number().int().min(1).max(50).optional(),
+    trigger: z.union([z.literal("write"), z.literal("interact")]).optional(),
+  })
+  .strict()
+  .optional();
+
 const NodeHostSchema = z
   .object({
     browserProxy: z
@@ -831,6 +840,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    backup: BackupConfigSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {

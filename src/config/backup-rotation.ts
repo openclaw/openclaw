@@ -1,6 +1,13 @@
+import os from "node:os";
 import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
+
+export interface BackupConfig {
+  path?: string;
+  maxFiles?: number;
+  trigger?: "write" | "interact";
+}
 
 export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
@@ -13,15 +20,47 @@ export interface BackupMaintenanceFs extends BackupRotationFs {
   copyFile: (from: string, to: string) => Promise<void>;
 }
 
+/**
+ * Get the effective backup count from config (with default).
+ */
+export function getBackupCount(config?: BackupConfig): number {
+  return config?.maxFiles ?? CONFIG_BACKUP_COUNT;
+}
+
+/**
+ * Get the effective backup path from config.
+ * If not configured, returns the directory of the config file.
+ */
+export function getBackupPath(configPath: string, config?: BackupConfig): string {
+  if (config?.path) {
+    return path.resolve(config.path.replace("~", os.homedir()));
+  }
+  // Default: same directory as config file
+  return path.dirname(configPath);
+}
+
+/**
+ * Build the backup filename with optional custom path.
+ */
+export function buildBackupPath(baseDir: string, configPath: string, suffix: string = ""): string {
+  const baseName = path.basename(configPath);
+  return path.join(baseDir, `${baseName}.bak${suffix}`);
+}
+
 export async function rotateConfigBackups(
   configPath: string,
   ioFs: BackupRotationFs,
+  config?: BackupConfig,
 ): Promise<void> {
-  if (CONFIG_BACKUP_COUNT <= 1) {
+  const backupCount = getBackupCount(config);
+  if (backupCount <= 1) {
     return;
   }
-  const backupBase = `${configPath}.bak`;
-  const maxIndex = CONFIG_BACKUP_COUNT - 1;
+
+  const backupDir = getBackupPath(configPath, config);
+  const backupBase = buildBackupPath(backupDir, configPath);
+
+  const maxIndex = backupCount - 1;
   await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
     // best-effort
   });
@@ -44,17 +83,22 @@ export async function rotateConfigBackups(
 export async function hardenBackupPermissions(
   configPath: string,
   ioFs: BackupRotationFs,
+  config?: BackupConfig,
 ): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
-  const backupBase = `${configPath}.bak`;
+
+  const backupCount = getBackupCount(config);
+  const backupDir = getBackupPath(configPath, config);
+  const backupBase = buildBackupPath(backupDir, configPath);
+
   // Harden the primary .bak
   await ioFs.chmod(backupBase, 0o600).catch(() => {
     // best-effort
   });
   // Harden numbered backups
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+  for (let i = 1; i < backupCount; i++) {
     await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
       // best-effort
     });
@@ -72,23 +116,26 @@ export async function hardenBackupPermissions(
 export async function cleanOrphanBackups(
   configPath: string,
   ioFs: BackupRotationFs,
+  config?: BackupConfig,
 ): Promise<void> {
   if (!ioFs.readdir) {
     return;
   }
-  const dir = path.dirname(configPath);
-  const base = path.basename(configPath);
-  const bakPrefix = `${base}.bak.`;
+
+  const backupCount = getBackupCount(config);
+  const backupDir = getBackupPath(configPath, config);
+  const baseName = path.basename(configPath);
+  const bakPrefix = `${baseName}.bak.`;
 
   // Build the set of valid numbered suffixes: "1", "2", ..., "{N-1}"
   const validSuffixes = new Set<string>();
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+  for (let i = 1; i < backupCount; i++) {
     validSuffixes.add(String(i));
   }
 
   let entries: string[];
   try {
-    entries = await ioFs.readdir(dir);
+    entries = await ioFs.readdir(backupDir);
   } catch {
     return; // best-effort
   }
@@ -102,7 +149,7 @@ export async function cleanOrphanBackups(
       continue;
     }
     // This is an orphan — remove it
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
+    await ioFs.unlink(path.join(backupDir, entry)).catch(() => {
       // best-effort
     });
   }
@@ -115,11 +162,25 @@ export async function cleanOrphanBackups(
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
+  config?: BackupConfig,
 ): Promise<void> {
-  await rotateConfigBackups(configPath, ioFs);
-  await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
+  const backupDir = getBackupPath(configPath, config);
+
+  // Ensure backup directory exists (best-effort)
+  try {
+    await ioFs.rename(backupDir, backupDir).catch(() => {
+      // Directory doesn't exist, try to create it
+    });
+  } catch {
+    // Ignore errors - best-effort
+  }
+
+  await rotateConfigBackups(configPath, ioFs, config);
+
+  const backupBase = buildBackupPath(backupDir, configPath);
+  await ioFs.copyFile(configPath, backupBase).catch(() => {
     // best-effort
   });
-  await hardenBackupPermissions(configPath, ioFs);
-  await cleanOrphanBackups(configPath, ioFs);
+  await hardenBackupPermissions(configPath, ioFs, config);
+  await cleanOrphanBackups(configPath, ioFs, config);
 }
