@@ -113,7 +113,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
-  it("uses msg_type=file for mp4", async () => {
+  it("uses msg_type=media for mp4 (playable video)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -129,7 +129,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
   });
@@ -176,7 +176,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=file when replying with mp4", async () => {
+  it("uses msg_type=media when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -188,7 +188,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
 
@@ -208,7 +208,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
+        data: expect.objectContaining({ msg_type: "media", reply_in_thread: true }),
       }),
     );
   });
@@ -340,7 +340,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });
 
-  it("encodes Chinese filenames for file uploads", async () => {
+  it("preserves Chinese filenames for file uploads (#33912)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -349,8 +349,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).not.toBe("测试文档.pdf");
-    expect(createCall.data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
+    expect(createCall.data.file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -365,7 +364,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(createCall.data.file_name).toBe("report-2026.pdf");
   });
 
-  it("encodes special characters (em-dash, full-width brackets) in filenames", async () => {
+  it("preserves em-dash and full-width brackets in filenames (#33912)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -374,9 +373,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toMatch(/\.md$/);
-    expect(createCall.data.file_name).not.toContain("—");
-    expect(createCall.data.file_name).not.toContain("（");
+    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
   });
 });
 
@@ -386,56 +383,32 @@ describe("sanitizeFileNameForUpload", () => {
     expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
   });
 
-  it("encodes Chinese characters in basename, preserves extension", () => {
-    const result = sanitizeFileNameForUpload("测试文件.md");
-    expect(result).toBe(encodeURIComponent("测试文件") + ".md");
-    expect(result).toMatch(/\.md$/);
+  it("preserves Chinese characters (Feishu API handles UTF-8 natively, #33912)", () => {
+    expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
+    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
+      "武汉15座山登山信息汇总.csv",
+    );
   });
 
-  it("encodes em-dash and full-width brackets", () => {
-    const result = sanitizeFileNameForUpload("文件—说明（v2）.pdf");
-    expect(result).toMatch(/\.pdf$/);
-    expect(result).not.toContain("—");
-    expect(result).not.toContain("（");
-    expect(result).not.toContain("）");
+  it("preserves em-dash and full-width brackets", () => {
+    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
   });
 
-  it("encodes single quotes and parentheses per RFC 5987", () => {
-    const result = sanitizeFileNameForUpload("文件'(test).txt");
-    expect(result).toContain("%27");
-    expect(result).toContain("%28");
-    expect(result).toContain("%29");
-    expect(result).toMatch(/\.txt$/);
+  it("preserves single quotes and parentheses", () => {
+    expect(sanitizeFileNameForUpload("file\'s (copy).txt")).toBe("file\'s (copy).txt");
   });
 
-  it("handles filenames without extension", () => {
-    const result = sanitizeFileNameForUpload("测试文件");
-    expect(result).toBe(encodeURIComponent("测试文件"));
+  it("preserves emoji filenames", () => {
+    expect(sanitizeFileNameForUpload("report_😀.txt")).toBe("report_😀.txt");
   });
 
-  it("handles mixed ASCII and non-ASCII", () => {
-    const result = sanitizeFileNameForUpload("Report_报告_2026.xlsx");
-    expect(result).toMatch(/\.xlsx$/);
-    expect(result).not.toContain("报告");
+  it("strips control characters", () => {
+    expect(sanitizeFileNameForUpload("file\x00name.txt")).toBe("file_name.txt");
+    expect(sanitizeFileNameForUpload("file\x1Fname.txt")).toBe("file_name.txt");
   });
 
-  it("encodes non-ASCII extensions", () => {
-    const result = sanitizeFileNameForUpload("报告.文档");
-    expect(result).toContain("%E6%96%87%E6%A1%A3");
-    expect(result).not.toContain("文档");
-  });
-
-  it("encodes emoji filenames", () => {
-    const result = sanitizeFileNameForUpload("report_😀.txt");
-    expect(result).toContain("%F0%9F%98%80");
-    expect(result).toMatch(/\.txt$/);
-  });
-
-  it("encodes mixed ASCII and non-ASCII extensions", () => {
-    const result = sanitizeFileNameForUpload("notes_总结.v测试");
-    expect(result).toContain("notes_");
-    expect(result).toContain("%E6%B5%8B%E8%AF%95");
-    expect(result).not.toContain("测试");
+  it("strips double quotes from filenames", () => {
+    expect(sanitizeFileNameForUpload('bad"file.txt')).toBe("bad_file.txt");
   });
 });
 

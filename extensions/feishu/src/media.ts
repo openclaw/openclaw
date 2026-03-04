@@ -215,14 +215,11 @@ export async function uploadImageFeishu(params: {
  * Feishu's server decodes and preserves the original display name.
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  const ASCII_ONLY = /^[\x20-\x7E]+$/;
-  if (ASCII_ONLY.test(fileName)) {
-    return fileName;
-  }
-  return encodeURIComponent(fileName)
-    .replace(/'/g, "%27")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+  // Feishu API accepts UTF-8 filenames natively via the Node SDK.
+  // Previous encodeURIComponent caused Chinese/non-ASCII names to display
+  // as garbled percent-encoded text in the Feishu client (see #33912).
+  // Only strip characters that are genuinely unsafe in multipart headers.
+  return fileName.replace(/[\x00-\x1F\x7F"\\]/g, "_");
 }
 
 /**
@@ -328,8 +325,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio files, "file" for documents and video */
-  msgType?: "file" | "audio";
+  /** Use "audio" for audio files, "media" for video, "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -467,8 +464,8 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
+    // Feishu API: opus -> "audio", mp4 -> "media" (playable video), everything else -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
