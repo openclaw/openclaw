@@ -2419,6 +2419,8 @@ See [Plugins](/tools/plugin).
       // Remove tools from the default HTTP deny list
       allow: ["gateway"],
     },
+    // Interval in minutes for channel health probing. Set to 0 to disable. Default: 5.
+    channelHealthCheckMinutes: 5,
   },
 }
 ```
@@ -2449,6 +2451,7 @@ See [Plugins](/tools/plugin).
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list.
+- `channelHealthCheckMinutes`: interval in minutes for automatic channel health probing and status updates. Lower values detect channel failures faster; higher values reduce periodic probe noise. Set to `0` to disable. Default: `5`.
 
 </Accordion>
 
