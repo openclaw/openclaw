@@ -179,7 +179,7 @@ export class AcpxRuntime implements AcpRuntime {
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
 
-    const events = await this.runControlCommand({
+    let events = await this.runControlCommand({
       args: this.buildControlArgs({
         cwd,
         command: [agent, "sessions", "ensure", "--name", sessionName],
@@ -187,12 +187,36 @@ export class AcpxRuntime implements AcpRuntime {
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
     });
-    const ensuredEvent = events.find(
+    let ensuredEvent = events.find(
       (event) =>
         asOptionalString(event.agentSessionId) ||
         asOptionalString(event.acpxSessionId) ||
         asOptionalString(event.acpxRecordId),
     );
+
+    if (!ensuredEvent) {
+      events = await this.runControlCommand({
+        args: this.buildControlArgs({
+          cwd,
+          command: [agent, "sessions", "new", "--name", sessionName],
+        }),
+        cwd,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+      });
+      ensuredEvent = events.find(
+        (event) =>
+          asOptionalString(event.agentSessionId) ||
+          asOptionalString(event.acpxSessionId) ||
+          asOptionalString(event.acpxRecordId),
+      );
+      if (!ensuredEvent) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+        );
+      }
+    }
+
     const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
     const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
     const backendSessionId = ensuredEvent
