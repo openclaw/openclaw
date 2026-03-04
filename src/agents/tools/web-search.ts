@@ -1455,6 +1455,13 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      if (language && provider === "perplexity" && !/^[a-z]{2}$/i.test(language)) {
+        return jsonResult({
+          error: "invalid_language",
+          message: "language must be a 2-letter ISO 639-1 code like 'en', 'de', or 'fr'.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       // For Brave, accept both `language` (unified) and `search_lang`
