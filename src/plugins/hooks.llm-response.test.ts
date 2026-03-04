@@ -195,7 +195,7 @@ describe("after_llm_call hook", () => {
     });
   });
 
-  it("runs multiple handlers in parallel (void)", async () => {
+  it("runs multiple handlers sequentially (modifying)", async () => {
     const h1 = vi.fn().mockResolvedValue(undefined);
     const h2 = vi.fn().mockResolvedValue(undefined);
     const runner = createHookRunner(

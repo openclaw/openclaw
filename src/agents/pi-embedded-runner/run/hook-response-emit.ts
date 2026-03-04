@@ -111,8 +111,14 @@ export async function applyBeforeResponseEmitHook(
  * and clears all subsequent text parts to prevent stale/unredacted fragments.
  */
 function rewriteAssistantContent(messages: AgentMessage[], newContent: string): void {
-  const sessionMsg = messages[messages.length - 1];
-  if (!sessionMsg || sessionMsg.role !== "assistant" || !("content" in sessionMsg)) {
+  // Scan backwards for the last assistant message — same strategy as
+  // applyBeforeResponseEmitHook. Don't assume messages[-1] is assistant;
+  // tool results or other entries may have been appended since the snapshot.
+  const sessionMsg = [...messages]
+    .toReversed()
+    .find((m) => m.role === "assistant" && "content" in m);
+  if (!sessionMsg) {
+    log.warn("rewriteAssistantContent: no assistant message found in session history");
     return;
   }
   const msgContent = (sessionMsg as { content: unknown }).content;
