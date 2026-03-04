@@ -123,4 +123,29 @@ describe("runServiceRestart token drift", () => {
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
   });
+
+  it("does not emit legacy migration notice field in JSON restart output", async () => {
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("notice");
+  });
+
+  it("does not print the legacy graceful-restart migration notice in text mode", async () => {
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+    });
+
+    expect(
+      runtimeLogs.some((line) => line.includes("now defaults to graceful restart (SIGUSR1)")),
+    ).toBe(false);
+  });
 });
