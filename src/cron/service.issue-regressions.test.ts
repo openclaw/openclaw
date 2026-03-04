@@ -1499,4 +1499,42 @@ describe("Cron issue regressions", () => {
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
   });
+
+  it("force run on 'every' schedule preserves the original schedule anchor (#33940)", async () => {
+    // Simulates: daily job at 7am, user manually force-runs at 1pm.
+    // Without the fix, lastRunAtMs gets set to 1pm before nextRunAtMs is
+    // computed, causing nextFromLastRun = 1pm + 24h = 1pm tomorrow instead
+    // of 7am tomorrow.
+    const nowMs = Date.now();
+    const everyMs = 24 * 60 * 60 * 1_000; // 24 hours
+    const lastScheduledRunMs = nowMs - 6 * 60 * 60 * 1_000; // 7am (6h ago)
+    const expectedNextMs = lastScheduledRunMs + everyMs; // 7am tomorrow
+
+    const state = createRunningCronServiceState({ nowMs: () => nowMs });
+    const job: CronJob = {
+      id: "daily-job",
+      name: "Daily job",
+      enabled: true,
+      createdAtMs: lastScheduledRunMs - everyMs,
+      updatedAtMs: lastScheduledRunMs,
+      schedule: { kind: "every", everyMs, anchorMs: lastScheduledRunMs - everyMs },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "daily check-in" },
+      state: {
+        lastRunAtMs: lastScheduledRunMs,
+        nextRunAtMs: expectedNextMs,
+      },
+    };
+
+    const startedAt = nowMs; // manual run at 1pm (nowMs = 6h after last scheduled run)
+    const endedAt = nowMs + 2_000;
+
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { preserveSchedule: true });
+
+    // lastRunAtMs should be recorded as the manual run time (for UI display)
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    // nextRunAtMs must still align with the original 7am schedule, not 1pm + 24h
+    expect(job.state.nextRunAtMs).toBe(expectedNextMs);
+  });
 });
