@@ -124,4 +124,34 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
   });
+
+  it("retries command sync on transient network errors", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const networkErr = new Error("Network request for 'setMyCommands' failed!");
+    (networkErr as { name?: string }).name = "HttpError";
+    const setMyCommands = vi.fn().mockRejectedValueOnce(networkErr).mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands,
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "status", description: "Show status" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
+    });
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram command sync hit a transient network error; retrying setMyCommands in 400ms.",
+    );
+  });
 });

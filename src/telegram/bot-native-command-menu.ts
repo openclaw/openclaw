@@ -5,9 +5,11 @@ import {
 } from "../config/telegram-custom-commands.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
+const TELEGRAM_NETWORK_RETRY_DELAYS_MS = [400, 1200];
 
 export type TelegramMenuCommand = {
   command: string;
@@ -119,7 +121,21 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
+    const isFastTestEnv =
+      process.env.OPENCLAW_TEST_FAST === "1" ||
+      process.env.VITEST === "true" ||
+      process.env.VITEST === "1" ||
+      process.env.NODE_ENV === "test";
+    const waitBeforeRetry = async (attempt: number) => {
+      const delayMs = isFastTestEnv ? 0 : (TELEGRAM_NETWORK_RETRY_DELAYS_MS[attempt] ?? 2000);
+      if (delayMs <= 0) {
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    };
+
     let retryCommands = commandsToRegister;
+    let networkRetryAttempt = 0;
     while (retryCommands.length > 0) {
       try {
         await withTelegramApiErrorLogging({
@@ -130,6 +146,21 @@ export function syncTelegramMenuCommands(params: {
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {
+          if (
+            networkRetryAttempt < TELEGRAM_NETWORK_RETRY_DELAYS_MS.length &&
+            isRecoverableTelegramNetworkError(err, {
+              context: "send",
+              allowMessageMatch: true,
+            })
+          ) {
+            const retryAfterMs = TELEGRAM_NETWORK_RETRY_DELAYS_MS[networkRetryAttempt] ?? 0;
+            runtime.log?.(
+              `Telegram command sync hit a transient network error; retrying setMyCommands in ${retryAfterMs}ms.`,
+            );
+            await waitBeforeRetry(networkRetryAttempt);
+            networkRetryAttempt += 1;
+            continue;
+          }
           throw err;
         }
         const nextCount = Math.floor(retryCommands.length * TELEGRAM_COMMAND_RETRY_RATIO);
