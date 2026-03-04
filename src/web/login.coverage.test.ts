@@ -4,7 +4,7 @@ import path from "node:path";
 import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
-import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
+import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
 
@@ -35,16 +35,7 @@ vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(async () => (call++ === 0 ? sockA : sockB));
   const waitForWaConnection = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
-  const getStatusCode = vi.fn((err: unknown) => {
-    if (!err || typeof err !== "object") {
-      return undefined;
-    }
-    return (
-      (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
-      (err as { status?: number })?.status
-    );
-  });
+  const getStatusCode = vi.fn();
   return {
     createWaSocket,
     waitForWaConnection,
@@ -64,6 +55,7 @@ vi.mock("./session.js", () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const formatErrorMock = vi.mocked(formatError);
+const getStatusCodeMock = vi.mocked(getStatusCode);
 
 describe("loginWeb coverage", () => {
   beforeEach(() => {
@@ -76,6 +68,7 @@ describe("loginWeb coverage", () => {
   });
 
   it("restarts once when WhatsApp requests code 515", async () => {
+    getStatusCodeMock.mockReturnValueOnce(515);
     waitForWaConnectionMock
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
@@ -92,6 +85,7 @@ describe("loginWeb coverage", () => {
   });
 
   it("clears creds and throws when logged out", async () => {
+    getStatusCodeMock.mockReturnValueOnce(DisconnectReason.loggedOut);
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: DisconnectReason.loggedOut },
     });

@@ -214,9 +214,6 @@ export function getStatusCode(err: unknown) {
     }
 
     queue.push(record.error, record.lastDisconnect, record.cause, record.output?.payload);
-    if (record.lastDisconnect && typeof record.lastDisconnect === "object") {
-      queue.push((record.lastDisconnect as { error?: unknown }).error);
-    }
   }
   return undefined;
 }
