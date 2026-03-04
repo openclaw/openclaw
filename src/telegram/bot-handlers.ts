@@ -407,13 +407,30 @@ export const registerTelegramHandlers = ({
 
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
+      const chatId = primaryEntry.msg.chat.id;
 
       const allMedia: TelegramMediaRef[] = [];
-      for (const { ctx } of entry.messages) {
+      for (const { ctx, msg } of entry.messages) {
         let media;
         try {
           media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
         } catch (mediaErr) {
+          // Send the same oversize warning the non-batched path sends
+          if (isMediaSizeLimitError(mediaErr)) {
+            if (entry.sendOversizeWarning) {
+              const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                    reply_to_message_id: msg.message_id,
+                  }),
+              }).catch(() => {});
+            }
+            logger.warn({ chatId, error: String(mediaErr) }, entry.oversizeLogMessage);
+            continue;
+          }
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
           }
@@ -1040,9 +1057,11 @@ export const registerTelegramHandlers = ({
 
     // Document batch handling – documents sent in quick succession lack media_group_id,
     // so we buffer them per-chat+sender and flush as a single processMessage call.
-    if (!mediaGroupId && msg.document && documentBatchWindowMs > 0) {
-      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
-      const docBatchKey = `doc:${chatId}:${senderId}`;
+    // Skip batching when sender is unknown (channel posts, anonymous admins) to avoid
+    // merging unrelated documents under a shared "unknown" key.
+    const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
+    if (!mediaGroupId && msg.document && documentBatchWindowMs > 0 && docSenderId) {
+      const docBatchKey = `doc:${chatId}:${docSenderId}`;
       const existing = documentBatchBuffer.get(docBatchKey);
       if (existing) {
         existing.messages.push({ msg, ctx });
