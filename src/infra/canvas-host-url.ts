@@ -6,6 +6,7 @@ type CanvasHostUrlParams = {
   canvasPort?: number;
   hostOverride?: HostSource;
   requestHost?: HostSource;
+  forwardedHost?: HostSource | HostSource[];
   forwardedProto?: HostSource | HostSource[];
   localAddress?: HostSource;
   scheme?: "http" | "https";
@@ -47,11 +48,13 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   }
 };
 
-const parseForwardedProto = (value: HostSource | HostSource[]) => {
-  if (Array.isArray(value)) {
-    return value[0];
+const parseForwardedHeaderValue = (value: HostSource | HostSource[]) => {
+  const first = Array.isArray(value) ? value[0] : value;
+  if (!first) {
+    return undefined;
   }
-  return value;
+  const token = first.split(",")[0]?.trim();
+  return token || undefined;
 };
 
 export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
@@ -62,14 +65,19 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
 
   const scheme =
     params.scheme ??
-    (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
+    (parseForwardedHeaderValue(params.forwardedProto) === "https" ? "https" : "http");
 
   const override = normalizeHost(params.hostOverride, true);
+  const parsedForwardedHost = parseHostHeader(parseForwardedHeaderValue(params.forwardedHost));
+  const forwardedHost = normalizeHost(parsedForwardedHost.host, !!override);
   const parsedRequestHost = parseHostHeader(params.requestHost);
-  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
-  const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
+  const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override || forwardedHost));
+  const localAddress = normalizeHost(
+    params.localAddress,
+    Boolean(override || forwardedHost || requestHost),
+  );
 
-  const host = override || requestHost || localAddress;
+  const host = override || forwardedHost || requestHost || localAddress;
   if (!host) {
     return undefined;
   }
@@ -78,8 +86,10 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   // internal listener still runs on 18789. In that case, expose the public port instead of
   // advertising the internal one back to clients.
   let exposedPort = port;
-  if (!override && requestHost && port === 18789) {
-    if (parsedRequestHost.port && parsedRequestHost.port > 0) {
+  if (!override && (forwardedHost || requestHost) && port === 18789) {
+    if (parsedForwardedHost.port && parsedForwardedHost.port > 0) {
+      exposedPort = parsedForwardedHost.port;
+    } else if (!forwardedHost && parsedRequestHost.port && parsedRequestHost.port > 0) {
       exposedPort = parsedRequestHost.port;
     } else if (scheme === "https") {
       exposedPort = 443;

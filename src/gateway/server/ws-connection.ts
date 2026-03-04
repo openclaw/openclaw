@@ -134,6 +134,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       canvasPort: canvasHostPortForWs,
       hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
       requestHost: upgradeReq.headers.host,
+      forwardedHost: upgradeReq.headers["x-forwarded-host"],
       forwardedProto: upgradeReq.headers["x-forwarded-proto"],
       localAddress: upgradeReq.socket?.localAddress,
     });
