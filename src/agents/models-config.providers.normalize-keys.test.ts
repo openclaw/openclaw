@@ -73,4 +73,71 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("does not copy plaintext api keys from non-env SecretRefs into providers", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              id: "openai:default",
+              provider: "openai",
+              type: "api_key",
+              key: "sk-live-from-exec",
+              keyRef: { source: "exec", provider: "default", id: "keychain:openai" },
+            },
+          },
+          providerOrder: { openai: ["openai:default"] },
+        }),
+      );
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          models: [{ id: "gpt-4.1-mini", name: "GPT", input: ["text"], reasoning: false }],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.openai?.apiKey).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses env var name when auth profile uses env SecretRef", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              id: "openai:default",
+              provider: "openai",
+              type: "api_key",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+          providerOrder: { openai: ["openai:default"] },
+        }),
+      );
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          models: [{ id: "gpt-4.1-mini", name: "GPT", input: ["text"], reasoning: false }],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 });

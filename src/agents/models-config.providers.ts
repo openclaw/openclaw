@@ -414,22 +414,30 @@ function resolveApiKeyFromProfiles(params: {
       continue;
     }
     if (cred.type === "api_key") {
+      const keyRef = coerceSecretRef(cred.keyRef);
+      if (keyRef) {
+        if (keyRef.source === "env" && keyRef.id.trim()) {
+          return keyRef.id.trim();
+        }
+        // Non-env SecretRefs (exec/file) must not be serialized into models.json.
+        continue;
+      }
       if (cred.key?.trim()) {
         return cred.key;
-      }
-      const keyRef = coerceSecretRef(cred.keyRef);
-      if (keyRef?.source === "env" && keyRef.id.trim()) {
-        return keyRef.id.trim();
       }
       continue;
     }
     if (cred.type === "token") {
+      const tokenRef = coerceSecretRef(cred.tokenRef);
+      if (tokenRef) {
+        if (tokenRef.source === "env" && tokenRef.id.trim()) {
+          return tokenRef.id.trim();
+        }
+        // Non-env SecretRefs (exec/file) must not be serialized into models.json.
+        continue;
+      }
       if (cred.token?.trim()) {
         return cred.token;
-      }
-      const tokenRef = coerceSecretRef(cred.tokenRef);
-      if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-        return tokenRef.id.trim();
       }
       continue;
     }
