@@ -8,13 +8,15 @@ describe("maskApiKey", () => {
   });
 
   it("masks short and medium values without returning raw secrets", () => {
-    expect(maskApiKey(" abcdefghijklmnop ")).toBe("ab...op");
-    expect(maskApiKey(" short ")).toBe("s...t");
-    expect(maskApiKey(" a ")).toBe("a...a");
-    expect(maskApiKey(" ab ")).toBe("a...b");
+    expect(maskApiKey(" abcdefghijklmnop ")).toBe("****");
+    expect(maskApiKey(" short ")).toBe("****");
+    expect(maskApiKey(" a ")).toBe("****");
+    expect(maskApiKey(" ab ")).toBe("****");
+    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("****");
   });
 
-  it("masks long values with first and last 8 chars", () => {
-    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop");
+  it("masks all configured values with a fixed mask", () => {
+    expect(maskApiKey("a")).toBe("****");
+    expect(maskApiKey("ab")).toBe("****");
   });
 });
