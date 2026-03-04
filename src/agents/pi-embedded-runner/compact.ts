@@ -648,6 +648,28 @@ export async function compactEmbeddedPiSessionDirect(
             });
         }
 
+        // Pre-flight: skip the compaction LLM call entirely when the session
+        // contains no real conversation messages (user/assistant/toolResult).
+        // When compaction.mode is "safeguard", the extension's session_before_compact
+        // handler would detect this and return { cancel: true }, but only after
+        // session.compact() has already initiated an LLM API round-trip (~33k tokens
+        // on a typical system-prompt-only session). Checking here avoids the
+        // unnecessary token spend — particularly costly on idle cron sessions that
+        // cycle every ~30 minutes with no user content.
+        const messagesToCompact = limited.length > 0 ? limited : session.messages;
+        const hasRealConversationMessages = messagesToCompact.some(
+          (msg) =>
+            msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult",
+        );
+        if (!hasRealConversationMessages) {
+          log.warn(
+            `[compaction-diag] skip runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `diagId=${diagId} trigger=${trigger} reason=no_real_conversation_messages ` +
+              `durationMs=${Date.now() - startedAt}`,
+          );
+          return { ok: true, compacted: false, reason: "no real conversation messages" };
+        }
+
         const diagEnabled = log.isEnabled("debug");
         const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics) {
