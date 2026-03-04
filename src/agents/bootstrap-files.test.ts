@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearInternalHooks,
   isMemoryRetrievedEvent,
@@ -142,13 +142,13 @@ describe("resolveBootstrapContextForRun", () => {
     await resolveBootstrapContextForRun({ workspaceDir, sessionKey: "test-session" });
 
     expect(captured).toHaveLength(1);
-    const event = captured[0]!;
+    const event = captured[0];
     expect(isMemoryRetrievedEvent(event)).toBe(true);
 
     const context = event.context as MemoryRetrievedHookContext;
     expect(context.workspaceDir).toBe(workspaceDir);
-    expect(context.tokenBudget.bootstrapFiles).toBeGreaterThan(0);
-    expect(context.tokenBudget.memoryRetrieved).toBeGreaterThanOrEqual(0);
+    expect(context.tokenBudget.limit).toBeGreaterThan(0);
+    expect(context.tokenBudget.used).toBeGreaterThanOrEqual(0);
 
     const soulResult = context.results.find((r) => r.path.endsWith("SOUL.md"));
     expect(soulResult).toBeDefined();
@@ -166,8 +166,8 @@ describe("resolveBootstrapContextForRun", () => {
     await resolveBootstrapContextForRun({ workspaceDir });
 
     expect(captured).toHaveLength(1);
-    const context = captured[0]!.context as MemoryRetrievedHookContext;
+    const context = captured[0].context as MemoryRetrievedHookContext;
     expect(context.results).toEqual([]);
-    expect(typeof context.tokenBudget.memoryRetrieved).toBe("number");
+    expect(typeof context.tokenBudget.used).toBe("number");
   });
 });

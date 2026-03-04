@@ -124,18 +124,16 @@ export async function resolveBootstrapContextForRun(params: {
   });
 
   const sessionKey = params.sessionKey ?? params.sessionId ?? "unknown";
-  const results: MemoryRetrievalResult[] = bootstrapFiles
-    .filter((file) => !file.missing)
-    .map((file) => ({
-      path: file.path,
-      source: "bootstrap",
-    }));
-  const memoryRetrieved = contextFiles.reduce((sum, file) => sum + file.content.length, 0);
+  const results: MemoryRetrievalResult[] = contextFiles.map((file) => ({
+    path: file.path,
+    source: "bootstrap",
+  }));
+  const used = contextFiles.reduce((sum, file) => sum + file.content.length, 0);
   const hookContext: MemoryRetrievedHookContext = {
     results,
     tokenBudget: {
-      bootstrapFiles: totalMaxChars,
-      memoryRetrieved,
+      limit: totalMaxChars,
+      used,
     },
     workspaceDir: params.workspaceDir,
   };

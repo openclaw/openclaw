@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "memory"
+  | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -203,10 +209,10 @@ export type MemoryRetrievedHookContext = {
   results: MemoryRetrievalResult[];
   /** Token budget breakdown for memory retrieval */
   tokenBudget: {
-    /** Characters allocated to bootstrap files */
-    bootstrapFiles: number;
-    /** Characters used by memory-retrieved content */
-    memoryRetrieved: number;
+    /** Character budget cap for bootstrap files */
+    limit: number;
+    /** Characters actually injected into the agent context */
+    used: number;
   };
   /** Workspace directory that scoped this retrieval */
   workspaceDir: string;

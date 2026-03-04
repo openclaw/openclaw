@@ -7,7 +7,6 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMemoryRetrievedEvent,
-  isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
   triggerInternalHook,
@@ -482,7 +481,7 @@ describe("hooks", () => {
     it("returns true for memory:retrieved events with expected context", () => {
       const event = createInternalHookEvent("memory", "retrieved", "test-session", {
         results: [{ path: "/tmp/SOUL.md", source: "bootstrap" }],
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 1200 },
+        tokenBudget: { limit: 50000, used: 1200 },
         workspaceDir: "/tmp",
       } satisfies MemoryRetrievedHookContext);
       expect(isMemoryRetrievedEvent(event)).toBe(true);
@@ -491,7 +490,7 @@ describe("hooks", () => {
     it("returns true when results array is empty", () => {
       const event = createInternalHookEvent("memory", "retrieved", "test-session", {
         results: [],
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 0 },
+        tokenBudget: { limit: 50000, used: 0 },
         workspaceDir: "/tmp",
       } satisfies MemoryRetrievedHookContext);
       expect(isMemoryRetrievedEvent(event)).toBe(true);
@@ -512,7 +511,7 @@ describe("hooks", () => {
     it("returns false when results is not an array", () => {
       const event = createInternalHookEvent("memory", "retrieved", "test-session", {
         results: "not-an-array",
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 0 },
+        tokenBudget: { limit: 50000, used: 0 },
         workspaceDir: "/tmp",
       });
       expect(isMemoryRetrievedEvent(event)).toBe(false);
@@ -521,7 +520,7 @@ describe("hooks", () => {
     it("returns false when workspaceDir is missing", () => {
       const event = createInternalHookEvent("memory", "retrieved", "test-session", {
         results: [],
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 0 },
+        tokenBudget: { limit: 50000, used: 0 },
       });
       expect(isMemoryRetrievedEvent(event)).toBe(false);
     });
@@ -534,7 +533,7 @@ describe("hooks", () => {
 
       const context: MemoryRetrievedHookContext = {
         results: [{ path: "/workspace/SOUL.md", source: "bootstrap" }],
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 1200 },
+        tokenBudget: { limit: 50000, used: 1200 },
         workspaceDir: "/workspace",
       };
       const event = createInternalHookEvent("memory", "retrieved", "test-session", context);
@@ -550,7 +549,7 @@ describe("hooks", () => {
 
       const context: MemoryRetrievedHookContext = {
         results: [],
-        tokenBudget: { bootstrapFiles: 50000, memoryRetrieved: 0 },
+        tokenBudget: { limit: 50000, used: 0 },
         workspaceDir: "/workspace",
       };
       const event = createInternalHookEvent("memory", "retrieved", "test-session", context);
