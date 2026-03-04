@@ -9,7 +9,9 @@ import type { GatewayRequestHandlers } from "./types.js";
 const execFileAsync = promisify(execFile);
 
 // Task registry types matching ~/.openclaw/agent-tasks.json schema
-export type SwarmTaskStatus = "running" | "done" | "failed";
+export type SwarmTaskStatus = "running" | "done" | "failed" | "cleaned";
+
+type SwarmListStatusFilter = "active" | "inactive" | "running" | "done" | "all";
 
 export type SwarmTask = {
   id: string;
@@ -37,6 +39,8 @@ const TASK_REGISTRY_PATH = path.join(os.homedir(), ".openclaw", "agent-tasks.jso
 
 // Swarm cleanup script location (installed by coder-swarm skill)
 const SWARM_SCRIPTS_DIR = path.join(os.homedir(), "gilfoyle", "skills", "coder-swarm", "scripts");
+const INACTIVE_TASK_STATUSES = new Set<SwarmTaskStatus>(["done", "failed", "cleaned"]);
+const ACTIVE_TASK_STATUSES = new Set<SwarmTaskStatus>(["running"]);
 
 function loadTaskRegistry(): AgentTaskRegistry | null {
   try {
@@ -47,35 +51,102 @@ function loadTaskRegistry(): AgentTaskRegistry | null {
   }
 }
 
+function sortTasksNewestFirst(tasks: SwarmTask[]): SwarmTask[] {
+  // Use startedAt (task creation time) consistently for both active and inactive sections.
+  return tasks.toSorted((a, b) => b.startedAt - a.startedAt);
+}
+
+function getTaskSections(tasks: SwarmTask[]): {
+  all: SwarmTask[];
+  active: SwarmTask[];
+  inactive: SwarmTask[];
+} {
+  const all = sortTasksNewestFirst(tasks);
+  const active = all.filter((task) => ACTIVE_TASK_STATUSES.has(task.status));
+  const inactive = all.filter((task) => INACTIVE_TASK_STATUSES.has(task.status));
+  return { all, active, inactive };
+}
+
+function normalizeStatusFilter(rawStatus: unknown): SwarmListStatusFilter {
+  if (typeof rawStatus !== "string") {
+    return "active";
+  }
+  const cleaned = rawStatus.trim().toLowerCase();
+  if (
+    cleaned === "active" ||
+    cleaned === "inactive" ||
+    cleaned === "running" ||
+    cleaned === "done" ||
+    cleaned === "all"
+  ) {
+    return cleaned;
+  }
+  return "all";
+}
+
 export const swarmHandlers: GatewayRequestHandlers = {
   /**
    * List coder-swarm tasks from ~/.openclaw/agent-tasks.json.
-   * Params: { status?: "running" | "done" | "all" }
-   * Returns: { tasks: SwarmTask[], total: number }
+   * Params: { status?: "active" | "inactive" | "running" | "done" | "all" }
+   * Returns: {
+   *   tasks: SwarmTask[],
+   *   total: number,
+   *   activeTasks: SwarmTask[],
+   *   inactiveTasks: SwarmTask[],
+   *   defaultStatusFilter: "active",
+   *   inactiveCollapsedByDefault: true,
+   *   sort: { field: "startedAt", order: "desc" }
+   * }
    *
    * curl -s -X POST http://localhost:18789 \
    *   -H 'Content-Type: application/json' \
    *   -d '{"type":"req","id":"1","method":"swarm.list","params":{"status":"running"}}'
    */
   "swarm.list": ({ params, respond }) => {
-    const statusFilter = typeof params?.status === "string" ? params.status.trim() : "all";
+    const statusFilter = normalizeStatusFilter(params?.status);
 
     const registry = loadTaskRegistry();
     if (!registry) {
       // Registry not yet created — return empty list rather than an error
-      respond(true, { tasks: [], total: 0 }, undefined);
+      respond(
+        true,
+        {
+          tasks: [],
+          total: 0,
+          activeTasks: [],
+          inactiveTasks: [],
+          defaultStatusFilter: "active",
+          inactiveCollapsedByDefault: true,
+          sort: { field: "startedAt", order: "desc" },
+        },
+        undefined,
+      );
       return;
     }
 
-    let tasks = registry.tasks ?? [];
-    if (statusFilter === "running") {
-      tasks = tasks.filter((t) => t.status === "running");
-    } else if (statusFilter === "done") {
-      tasks = tasks.filter((t) => t.status === "done" || t.status === "failed");
-    }
-    // "all" returns unfiltered list
+    const sections = getTaskSections(registry.tasks ?? []);
+    let tasks = sections.all;
 
-    respond(true, { tasks, total: registry.tasks?.length ?? 0 }, undefined);
+    if (statusFilter === "active" || statusFilter === "running") {
+      tasks = sections.active;
+    } else if (statusFilter === "inactive" || statusFilter === "done") {
+      tasks = sections.inactive;
+    }
+    // "all" returns the full list.
+
+    respond(
+      true,
+      {
+        tasks,
+        total: sections.all.length,
+        activeTasks: sections.active,
+        inactiveTasks: sections.inactive,
+        defaultStatusFilter: "active",
+        inactiveCollapsedByDefault: true,
+        sort: { field: "startedAt", order: "desc" },
+      },
+      undefined,
+    );
   },
 
   /**

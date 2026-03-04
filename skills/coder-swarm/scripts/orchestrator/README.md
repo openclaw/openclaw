@@ -72,6 +72,19 @@ check-agents.sh --verbose
 check-agents.sh --notify
 ```
 
+### Dashboard Task Filters
+
+Coder-swarm dashboards should present tasks in two sections on the same page:
+
+- **Active tasks** (default visible): `running`
+- **Inactive tasks** (collapsed by default, expandable): `done`, `failed`, `cleaned`
+
+Status dropdowns can remain, but should be treated as secondary controls and default to
+**Active** when no explicit filter is chosen.
+
+Sort both sections by `startedAt` descending (newest task first). `startedAt` is the task
+creation timestamp recorded when the agent task is spawned.
+
 ### Mid-Task Steering
 
 Agent going the wrong direction? Don't kill it — steer it:
