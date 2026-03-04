@@ -155,6 +155,9 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
+// Channels like Zalo treat `send.media` as a remote URL and cannot consume local file paths.
+const URL_ONLY_SEND_MEDIA_CHANNELS = new Set<ChannelId>(["zalo"]);
+
 export type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
@@ -298,6 +301,10 @@ export async function hydrateBufferedSendParams(params: {
 
   const bufferedPayload = readStringParam(params.args, "buffer", { trim: false });
   if (!bufferedPayload) {
+    return;
+  }
+
+  if (URL_ONLY_SEND_MEDIA_CHANNELS.has(params.channel)) {
     return;
   }
 

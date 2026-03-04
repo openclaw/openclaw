@@ -114,6 +114,26 @@ describe("send buffer hydration", () => {
     expect(args.media).toBe("/tmp/existing.txt");
   });
 
+  it("skips local media materialization for URL-only send channels", async () => {
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
+    const args: Record<string, unknown> = {
+      buffer: Buffer.from("hello").toString("base64"),
+      filename: "test.txt",
+      contentType: "text/plain",
+    };
+
+    await hydrateBufferedSendParams({
+      cfg,
+      channel: "zalo",
+      args,
+      mediaPolicy: { mode: "host", localRoots: ["/tmp"] },
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(args.media).toBeUndefined();
+    expect(args.buffer).toBe(Buffer.from("hello").toString("base64"));
+  });
+
   maybeIt("materializes sandbox buffer payloads into sandbox outbound", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-buffer-sandbox-"));
     try {
