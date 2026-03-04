@@ -550,8 +550,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       }
     : null;
 
-  const routeCache =
-    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
+  const routeCache = !shouldLogDebug ? resolveRouteCacheForConfig(input.cfg) : null;
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
