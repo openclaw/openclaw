@@ -461,15 +461,23 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         sessionEntry = persisted;
       }
-      if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
-        context.addChatRun(idem, {
-          sessionKey: canonicalSessionKey,
-          clientRunId: idem,
-        });
-        if (requestedBestEffortDeliver === undefined) {
-          bestEffortDeliver = true;
-        }
+      // Ensure chat UI clients refresh when this run completes.
+      // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
+      // Previously this was limited to main/global sessions, which could break real-time TUI updates
+      // for non-main sessions (e.g. sub-agent sessions).
+      context.addChatRun(idem, {
+        sessionKey: canonicalSessionKey,
+        clientRunId: idem,
+      });
+
+      // Preserve previous delivery default: treat main/global as best-effort deliver unless explicitly set.
+      if (
+        (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") &&
+        requestedBestEffortDeliver === undefined
+      ) {
+        bestEffortDeliver = true;
       }
+
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
