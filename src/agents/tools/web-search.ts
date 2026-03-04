@@ -1528,6 +1528,13 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      if (dateAfter && dateBefore && dateAfter > dateBefore) {
+        return jsonResult({
+          error: "invalid_date_range",
+          message: "date_after must be before date_before.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const domainFilter = readStringArrayParam(params, "domain_filter");
 
       if (domainFilter && domainFilter.length > 0) {
