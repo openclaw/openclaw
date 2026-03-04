@@ -164,7 +164,8 @@ export async function handleIrcInbound(params: {
       configGroupAllowFrom,
       storeAllowList,
       dmPolicy,
-      groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
+      // IRC uses strict group mode; default to false per config-schema.ts docs.
+      groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore ?? false,
     });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
