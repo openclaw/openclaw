@@ -403,14 +403,20 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  * with existing values. Used during timer ticks when no due jobs were found
  * to prevent silently advancing past-due nextRunAtMs values without execution
  * (see #13992).
+ *
+ * NOTE: This function now also recomputes expired (past) timestamps to fix #34432.
+ * After a gateway restart, jobs with expired nextRunAtMs need to be recomputed
+ * so they can execute.
  */
 export function recomputeNextRunsForMaintenance(state: CronServiceState): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
     let changed = false;
-    // Only compute missing nextRunAtMs, do NOT recompute existing ones.
+    // Compute missing nextRunAtMs OR expired timestamps.
     // If a job was past-due but not found by findDueJobs, recomputing would
     // cause it to be silently skipped.
-    if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
+    // HOWEVER, after a gateway restart, expired timestamps need to be recomputed
+    // so jobs can execute (issue #34432).
+    if (!isFiniteTimestamp(job.state.nextRunAtMs) || now >= job.state.nextRunAtMs) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
