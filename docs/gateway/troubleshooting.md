@@ -359,6 +359,11 @@ openclaw gateway install --force
 openclaw gateway restart
 ```
 
+Important safety notes:
+
+- `openclaw gateway install --force` rewrites service startup metadata. Back up customized startup wrappers first (for example `gateway.cmd`).
+- On Windows, if startup is managed by Task Scheduler, remove/disable any NSSM service before reinstalling to prevent duplicate processes fighting over the same port.
+
 Related:
 
 - [/gateway/pairing](/gateway/pairing)

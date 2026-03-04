@@ -265,7 +265,9 @@ Notes:
 - `openclaw doctor --yes` accepts the default repair prompts.
 - `openclaw doctor --repair` applies recommended fixes without prompts.
 - `openclaw doctor --repair --force` overwrites custom supervisor configs.
-- You can always force a full rewrite via `openclaw gateway install --force`.
+- `openclaw gateway install --force` does a full rewrite and should be treated as last-resort repair.
+- Before using `openclaw gateway install --force`, back up customized startup wrappers (for example `gateway.cmd`) and verify your service manager strategy.
+- On Windows, if you use Task Scheduler for startup, remove/disable any NSSM service first to avoid duplicate gateway processes binding the same port.
 
 ### 16) Gateway runtime + port diagnostics
 
