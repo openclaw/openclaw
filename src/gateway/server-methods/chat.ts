@@ -866,11 +866,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
       const sessionScopeHead = sessionScopeParts[0];
       const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-      const sessionPeerShape = sessionScopeParts[1]?.trim().toLowerCase();
+      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+        .map((part) => (part ?? "").trim().toLowerCase())
+        .filter(Boolean);
       const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
         (sessionScopeHead ?? "").trim().toLowerCase(),
       );
-      const isChannelScopedSession = CHANNEL_SCOPED_SESSION_SHAPES.has(sessionPeerShape ?? "");
+      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+      );
       // Only inherit prior external route metadata for channel-scoped sessions.
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
