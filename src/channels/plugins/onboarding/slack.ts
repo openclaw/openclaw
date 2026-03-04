@@ -30,6 +30,12 @@ const channel = "slack" as const;
 
 function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
+  // Slack apps support up to 25 slash commands. This list covers the most
+  // commonly used native commands. Note: /status is reserved by Slack so
+  // OpenClaw registers it as /agentstatus instead.
+  // Additional commands (think, verbose, reasoning, elevated, exec, model,
+  // models, activation, send, queue, focus, unfocus, agents, export-session)
+  // can be added manually if needed.
   const manifest = {
     display_information: {
       name: safeName,
@@ -45,11 +51,63 @@ function buildSlackManifest(botName: string) {
         messages_tab_read_only_enabled: false,
       },
       slash_commands: [
+        { command: "/help", description: "Show available commands.", should_escape: false },
+        { command: "/commands", description: "List all slash commands.", should_escape: false },
+        { command: "/new", description: "Start a new session.", should_escape: false },
+        { command: "/reset", description: "Reset the current session.", should_escape: false },
+        { command: "/compact", description: "Compact the session context.", should_escape: false },
+        { command: "/stop", description: "Stop the current run.", should_escape: false },
+        { command: "/restart", description: "Restart OpenClaw.", should_escape: false },
+        { command: "/agentstatus", description: "Show current status.", should_escape: false },
+        { command: "/usage", description: "Usage footer or cost summary.", should_escape: false },
+        { command: "/whoami", description: "Show your sender id.", should_escape: false },
         {
-          command: "/openclaw",
-          description: "Send a message to OpenClaw",
+          command: "/session",
+          description: "Manage session-level settings.",
           should_escape: false,
         },
+        {
+          command: "/subagents",
+          description: "List, kill, log, spawn, or steer subagent runs.",
+          should_escape: false,
+        },
+        {
+          command: "/kill",
+          description: "Kill a running subagent (or all).",
+          should_escape: false,
+        },
+        {
+          command: "/steer",
+          description: "Send guidance to a running subagent.",
+          should_escape: false,
+        },
+        {
+          command: "/acp",
+          description: "Manage ACP sessions and runtime options.",
+          should_escape: false,
+        },
+        { command: "/skill", description: "Run a skill by name.", should_escape: false },
+        { command: "/model", description: "Show or set the model.", should_escape: false },
+        {
+          command: "/models",
+          description: "List model providers or provider models.",
+          should_escape: false,
+        },
+        { command: "/think", description: "Set thinking level.", should_escape: false },
+        { command: "/config", description: "Show or set config values.", should_escape: false },
+        { command: "/debug", description: "Set runtime debug overrides.", should_escape: false },
+        {
+          command: "/context",
+          description: "Explain how context is built and used.",
+          should_escape: false,
+        },
+        {
+          command: "/approve",
+          description: "Approve or deny exec requests.",
+          should_escape: false,
+        },
+        { command: "/tts", description: "Control text-to-speech (TTS).", should_escape: false },
+        { command: "/elevated", description: "Toggle elevated mode.", should_escape: false },
       ],
     },
     oauth_config: {
@@ -98,22 +156,21 @@ function buildSlackManifest(botName: string) {
 }
 
 async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Promise<void> {
-  const manifest = buildSlackManifest(botName);
   await prompter.note(
     [
-      "1) Slack API → Create App → From scratch or From manifest (with the JSON below)",
+      "1) Slack API → Create App → From manifest (paste the JSON printed below)",
       "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
       "3) Install App to workspace to get the xoxb- bot token",
       "4) Enable Event Subscriptions (socket) for message events",
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
-      "",
-      "Manifest (JSON):",
-      manifest,
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  // Print the manifest outside the note box so it can be copied as-is.
+  process.stdout.write("\nManifest JSON (copy and paste into Slack API → From manifest):\n\n");
+  process.stdout.write(buildSlackManifest(botName) + "\n\n");
 }
 
 function setSlackChannelAllowlist(
