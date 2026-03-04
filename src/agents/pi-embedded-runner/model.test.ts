@@ -278,6 +278,58 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("prefers configured provider api metadata over discovered registry model", () => {
+    mockDiscoveredModel({
+      provider: "onehub",
+      modelId: "glm-5",
+      templateModel: {
+        id: "glm-5",
+        name: "GLM-5 (cached)",
+        provider: "onehub",
+        api: "anthropic-messages",
+        baseUrl: "https://old-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          onehub: {
+            baseUrl: "http://new-provider.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("glm-5"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 198000,
+                maxTokens: 16000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("onehub", "glm-5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "onehub",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "http://new-provider.example.com/v1",
+      reasoning: true,
+      contextWindow: 198000,
+      maxTokens: 16000,
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 

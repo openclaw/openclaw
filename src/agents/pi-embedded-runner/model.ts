@@ -7,7 +7,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
@@ -23,6 +23,40 @@ type InlineProviderConfig = {
 };
 
 export { buildModelAliasLines };
+
+function resolveConfiguredProviderConfig(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): InlineProviderConfig | undefined {
+  return findNormalizedProviderValue(cfg?.models?.providers, provider);
+}
+
+function applyConfiguredProviderOverrides(params: {
+  discoveredModel: Model<Api>;
+  providerConfig?: InlineProviderConfig;
+  modelId: string;
+}): Model<Api> {
+  const { discoveredModel, providerConfig, modelId } = params;
+  if (!providerConfig) {
+    return discoveredModel;
+  }
+  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api) {
+    return discoveredModel;
+  }
+  return {
+    ...discoveredModel,
+    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+    input: configuredModel?.input ?? discoveredModel.input,
+    cost: configuredModel?.cost ?? discoveredModel.cost,
+    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+    headers: configuredModel?.headers ?? discoveredModel.headers,
+    compat: configuredModel?.compat ?? discoveredModel.compat,
+  };
+}
 
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
@@ -59,6 +93,7 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (!model) {
@@ -100,7 +135,7 @@ export function resolveModel(
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }
-    const providerCfg = providers[provider];
+    const providerCfg = providerConfig;
     if (providerCfg || modelId.startsWith("mock-")) {
       const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
       const fallbackModel: Model<Api> = normalizeModelCompat({
@@ -133,21 +168,17 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  const providerOverride = cfg?.models?.providers?.[provider] as InlineProviderConfig | undefined;
-  if (providerOverride?.baseUrl || providerOverride?.headers) {
-    const overridden: Model<Api> & { headers?: Record<string, string> } = { ...model };
-    if (providerOverride.baseUrl) {
-      overridden.baseUrl = providerOverride.baseUrl;
-    }
-    if (providerOverride.headers) {
-      overridden.headers = {
-        ...(model as Model<Api> & { headers?: Record<string, string> }).headers,
-        ...providerOverride.headers,
-      };
-    }
-    return { model: normalizeModelCompat(overridden), authStorage, modelRegistry };
-  }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  return {
+    model: normalizeModelCompat(
+      applyConfiguredProviderOverrides({
+        discoveredModel: model,
+        providerConfig,
+        modelId,
+      }),
+    ),
+    authStorage,
+    modelRegistry,
+  };
 }
 
 /**
