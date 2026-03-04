@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
@@ -30,6 +32,56 @@ export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
 };
+
+const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscoveryResult }>();
+
+// Keep a short cache window to collapse bursty reloads during startup flows.
+const DEFAULT_DISCOVERY_CACHE_MS = 1000;
+
+export function clearPluginDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
+function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  return Math.max(0, parsed);
+}
+
+function shouldUseDiscoveryCache(env: NodeJS.ProcessEnv): boolean {
+  const disabled = env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim();
+  if (disabled) {
+    return false;
+  }
+  return resolveDiscoveryCacheMs(env) > 0;
+}
+
+function buildDiscoveryCacheKey(params: {
+  workspaceDir?: string;
+  extraPaths?: string[];
+  ownershipUid?: number | null;
+}): string {
+  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
+  const configExtensionsRoot = path.join(resolveConfigDir(), "extensions");
+  const bundledRoot = resolveBundledPluginsDir() ?? "";
+  const normalizedExtraPaths = (params.extraPaths ?? [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolveUserPath(entry))
+    .toSorted();
+  const ownershipUid = params.ownershipUid ?? currentUid();
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
+}
 
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
@@ -223,25 +275,25 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
-function readPackageManifest(dir: string): PackageManifest | null {
+function readPackageManifest(dir: string, rejectHardlinks = true): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) {
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "plugin package directory",
+    rejectHardlinks,
+  });
+  if (!opened.ok) {
     return null;
   }
   try {
-    const raw = fs.readFileSync(manifestPath, "utf-8");
+    const raw = fs.readFileSync(opened.fd, "utf-8");
     return JSON.parse(raw) as PackageManifest;
   } catch {
     return null;
+  } finally {
+    fs.closeSync(opened.fd);
   }
-}
-
-function resolvePackageExtensions(manifest: PackageManifest): string[] {
-  const raw = getPackageManifestMetadata(manifest)?.extensions;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
 function deriveIdHint(params: {
@@ -284,7 +336,7 @@ function addCandidate(params: {
   if (params.seen.has(resolved)) {
     return;
   }
-  const resolvedRoot = path.resolve(params.rootDir);
+  const resolvedRoot = safeRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
   if (
     isUnsafePluginCandidate({
       source: resolved,
@@ -317,13 +369,16 @@ function resolvePackageEntrySource(params: {
   entryPath: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
-  if (
-    !isPathInsideWithRealpath(params.packageDir, source, {
-      requireRealpath: true,
-    })
-  ) {
+  const opened = openBoundaryFileSync({
+    absolutePath: source,
+    rootPath: params.packageDir,
+    boundaryLabel: "plugin package directory",
+    rejectHardlinks: params.rejectHardlinks ?? true,
+  });
+  if (!opened.ok) {
     params.diagnostics.push({
       level: "error",
       message: `extension entry escapes package directory: ${params.entryPath}`,
@@ -331,7 +386,9 @@ function resolvePackageEntrySource(params: {
     });
     return null;
   }
-  return source;
+  const safeSource = opened.path;
+  fs.closeSync(opened.fd);
+  return safeSource;
 }
 
 function discoverInDirectory(params: {
@@ -383,8 +440,10 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const manifest = readPackageManifest(fullPath);
-    const extensions = manifest ? resolvePackageExtensions(manifest) : [];
+    const rejectHardlinks = params.origin !== "bundled";
+    const manifest = readPackageManifest(fullPath, rejectHardlinks);
+    const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -393,6 +452,7 @@ function discoverInDirectory(params: {
           entryPath: extPath,
           sourceLabel: fullPath,
           diagnostics: params.diagnostics,
+          rejectHardlinks,
         });
         if (!resolved) {
           continue;
@@ -418,8 +478,7 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const indexCandidates = ["index.ts", "index.js", "index.mjs", "index.cjs"];
-    const indexFile = indexCandidates
+    const indexFile = [...DEFAULT_PLUGIN_ENTRY_CANDIDATES]
       .map((candidate) => path.join(fullPath, candidate))
       .find((candidate) => fs.existsSync(candidate));
     if (indexFile && isExtensionFile(indexFile)) {
@@ -484,8 +543,10 @@ function discoverFromPath(params: {
   }
 
   if (stat.isDirectory()) {
-    const manifest = readPackageManifest(resolved);
-    const extensions = manifest ? resolvePackageExtensions(manifest) : [];
+    const rejectHardlinks = params.origin !== "bundled";
+    const manifest = readPackageManifest(resolved, rejectHardlinks);
+    const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -494,6 +555,7 @@ function discoverFromPath(params: {
           entryPath: extPath,
           sourceLabel: resolved,
           diagnostics: params.diagnostics,
+          rejectHardlinks,
         });
         if (!source) {
           continue;
@@ -519,8 +581,7 @@ function discoverFromPath(params: {
       return;
     }
 
-    const indexCandidates = ["index.ts", "index.js", "index.mjs", "index.cjs"];
-    const indexFile = indexCandidates
+    const indexFile = [...DEFAULT_PLUGIN_ENTRY_CANDIDATES]
       .map((candidate) => path.join(resolved, candidate))
       .find((candidate) => fs.existsSync(candidate));
 
@@ -558,7 +619,23 @@ export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  cache?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
+  const env = params.env ?? process.env;
+  const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
+  const cacheKey = buildDiscoveryCacheKey({
+    workspaceDir: params.workspaceDir,
+    extraPaths: params.extraPaths,
+    ownershipUid: params.ownershipUid,
+  });
+  if (cacheEnabled) {
+    const cached = discoveryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+  }
+
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
@@ -599,16 +676,6 @@ export function discoverOpenClawPlugins(params: {
     }
   }
 
-  const globalDir = path.join(resolveConfigDir(), "extensions");
-  discoverInDirectory({
-    dir: globalDir,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
-  });
-
   const bundledDir = resolveBundledPluginsDir();
   if (bundledDir) {
     discoverInDirectory({
@@ -621,5 +688,24 @@ export function discoverOpenClawPlugins(params: {
     });
   }
 
-  return { candidates, diagnostics };
+  // Keep auto-discovered global extensions behind bundled plugins.
+  // Users can still intentionally override via plugins.load.paths (origin=config).
+  const globalDir = path.join(resolveConfigDir(), "extensions");
+  discoverInDirectory({
+    dir: globalDir,
+    origin: "global",
+    ownershipUid: params.ownershipUid,
+    candidates,
+    diagnostics,
+    seen,
+  });
+
+  const result = { candidates, diagnostics };
+  if (cacheEnabled) {
+    const ttl = resolveDiscoveryCacheMs(env);
+    if (ttl > 0) {
+      discoveryCache.set(cacheKey, { expiresAt: Date.now() + ttl, result });
+    }
+  }
+  return result;
 }

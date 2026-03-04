@@ -19,8 +19,8 @@ import {
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/googlechat";
+import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -421,7 +421,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         chatId: space,
       };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       if (!mediaUrl) {
         throw new Error("Google Chat mediaUrl is required.");
       }
@@ -443,10 +452,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.channel.media.fetchRemoteMedia({
-        url: mediaUrl,
-        maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-      });
+      const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
+      const loaded = /^https?:\/\//i.test(mediaUrl)
+        ? await runtime.channel.media.fetchRemoteMedia({
+            url: mediaUrl,
+            maxBytes: effectiveMaxBytes,
+          })
+        : await runtime.media.loadWebMedia(mediaUrl, {
+            maxBytes: effectiveMaxBytes,
+            localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+          });
       const upload = await uploadGoogleChatAttachment({
         account,
         space,
@@ -563,14 +578,20 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         webhookUrl: account.config.webhookUrl,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
-        unregister?.();
-        ctx.setStatus({
-          accountId: account.accountId,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      };
+      // Keep the promise pending until abort (webhook mode is passive).
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      unregister?.();
+      ctx.setStatus({
+        accountId: account.accountId,
+        running: false,
+        lastStopAt: Date.now(),
+      });
     },
   },
 };

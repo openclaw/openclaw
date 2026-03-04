@@ -4,7 +4,7 @@ export const EXTERNAL_LINK_TARGET = "_blank";
 
 export function buildExternalLinkRel(currentRel?: string): string {
   const extraTokens: string[] = [];
-  const seen = new Set(REQUIRED_EXTERNAL_REL_TOKENS);
+  const seen = new Set<string>(REQUIRED_EXTERNAL_REL_TOKENS);
 
   for (const rawToken of (currentRel ?? "").split(/\s+/)) {
     const token = rawToken.trim().toLowerCase();

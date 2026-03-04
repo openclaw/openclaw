@@ -39,22 +39,22 @@ class NodeForegroundService : Service() {
           runtime.statusText,
           runtime.serverName,
           runtime.isConnected,
-          runtime.voiceWakeMode,
-          runtime.voiceWakeIsListening,
-        ) { status, server, connected, voiceMode, voiceListening ->
-          Quint(status, server, connected, voiceMode, voiceListening)
-        }.collect { (status, server, connected, voiceMode, voiceListening) ->
+          runtime.micEnabled,
+          runtime.micIsListening,
+        ) { status, server, connected, micEnabled, micListening ->
+          Quint(status, server, connected, micEnabled, micListening)
+        }.collect { (status, server, connected, micEnabled, micListening) ->
           val title = if (connected) "OpenClaw Node · Connected" else "OpenClaw Node"
-          val voiceSuffix =
-            if (voiceMode == VoiceWakeMode.Always) {
-              if (voiceListening) " · Voice Wake: Listening" else " · Voice Wake: Paused"
+          val micSuffix =
+            if (micEnabled) {
+              if (micListening) " · Mic: Listening" else " · Mic: Pending"
             } else {
               ""
             }
-          val text = (server?.let { "$status · $it" } ?: status) + voiceSuffix
+          val text = (server?.let { "$status · $it" } ?: status) + micSuffix
 
           val requiresMic =
-            voiceMode == VoiceWakeMode.Always && hasRecordAudioPermission()
+            micEnabled && hasRecordAudioPermission()
           startForegroundWithTypes(
             notification = buildNotification(title = title, text = text),
             requiresMic = requiresMic,

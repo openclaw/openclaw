@@ -20,19 +20,21 @@ class SecurePrefs(context: Context) {
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
     private const val voiceWakeModeKey = "voiceWake.mode"
+    private const val plainPrefsName = "openclaw.node"
+    private const val securePrefsName = "openclaw.node.secure"
   }
 
   private val appContext = context.applicationContext
   private val json = Json { ignoreUnknownKeys = true }
+  private val plainPrefs: SharedPreferences =
+    appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
 
-  private val masterKey =
-    MasterKey.Builder(context)
+  private val masterKey by lazy {
+    MasterKey.Builder(appContext)
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
-
-  private val prefs: SharedPreferences by lazy {
-    createPrefs(appContext, "openclaw.node.secure")
   }
+  private val securePrefs: SharedPreferences by lazy { createSecurePrefs(appContext, securePrefsName) }
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -41,48 +43,51 @@ class SecurePrefs(context: Context) {
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(prefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode =
-    MutableStateFlow(LocationMode.fromRawValue(prefs.getString("location.enabledMode", "off")))
+    MutableStateFlow(LocationMode.fromRawValue(plainPrefs.getString("location.enabledMode", "off")))
   val locationMode: StateFlow<LocationMode> = _locationMode
 
   private val _locationPreciseEnabled =
-    MutableStateFlow(prefs.getBoolean("location.preciseEnabled", true))
+    MutableStateFlow(plainPrefs.getBoolean("location.preciseEnabled", true))
   val locationPreciseEnabled: StateFlow<Boolean> = _locationPreciseEnabled
 
-  private val _preventSleep = MutableStateFlow(prefs.getBoolean("screen.preventSleep", true))
+  private val _preventSleep = MutableStateFlow(plainPrefs.getBoolean("screen.preventSleep", true))
   val preventSleep: StateFlow<Boolean> = _preventSleep
 
   private val _manualEnabled =
-    MutableStateFlow(prefs.getBoolean("gateway.manual.enabled", false))
+    MutableStateFlow(plainPrefs.getBoolean("gateway.manual.enabled", false))
   val manualEnabled: StateFlow<Boolean> = _manualEnabled
 
   private val _manualHost =
-    MutableStateFlow(prefs.getString("gateway.manual.host", "") ?: "")
+    MutableStateFlow(plainPrefs.getString("gateway.manual.host", "") ?: "")
   val manualHost: StateFlow<String> = _manualHost
 
   private val _manualPort =
-    MutableStateFlow(prefs.getInt("gateway.manual.port", 18789))
+    MutableStateFlow(plainPrefs.getInt("gateway.manual.port", 18789))
   val manualPort: StateFlow<Int> = _manualPort
 
   private val _manualTls =
-    MutableStateFlow(prefs.getBoolean("gateway.manual.tls", true))
+    MutableStateFlow(plainPrefs.getBoolean("gateway.manual.tls", true))
   val manualTls: StateFlow<Boolean> = _manualTls
 
-  private val _gatewayToken =
-    MutableStateFlow(prefs.getString("gateway.manual.token", "") ?: "")
+  private val _gatewayToken = MutableStateFlow("")
   val gatewayToken: StateFlow<String> = _gatewayToken
+
+  private val _onboardingCompleted =
+    MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
+  val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
 
   private val _lastDiscoveredStableId =
     MutableStateFlow(
-      prefs.getString("gateway.lastDiscoveredStableID", "") ?: "",
+      plainPrefs.getString("gateway.lastDiscoveredStableID", "") ?: "",
     )
   val lastDiscoveredStableId: StateFlow<String> = _lastDiscoveredStableId
 
   private val _canvasDebugStatusEnabled =
-    MutableStateFlow(prefs.getBoolean("canvas.debugStatusEnabled", false))
+    MutableStateFlow(plainPrefs.getBoolean("canvas.debugStatusEnabled", false))
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
   private val _wakeWords = MutableStateFlow(loadWakeWords())
@@ -91,119 +96,137 @@ class SecurePrefs(context: Context) {
   private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
   val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
 
-  private val _talkEnabled = MutableStateFlow(prefs.getBoolean("talk.enabled", false))
+  private val _talkEnabled = MutableStateFlow(plainPrefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
+
+  private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
+  val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
-    prefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
+    plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
     _lastDiscoveredStableId.value = trimmed
   }
 
   fun setDisplayName(value: String) {
     val trimmed = value.trim()
-    prefs.edit { putString(displayNameKey, trimmed) }
+    plainPrefs.edit { putString(displayNameKey, trimmed) }
     _displayName.value = trimmed
   }
 
   fun setCameraEnabled(value: Boolean) {
-    prefs.edit { putBoolean("camera.enabled", value) }
+    plainPrefs.edit { putBoolean("camera.enabled", value) }
     _cameraEnabled.value = value
   }
 
   fun setLocationMode(mode: LocationMode) {
-    prefs.edit { putString("location.enabledMode", mode.rawValue) }
+    plainPrefs.edit { putString("location.enabledMode", mode.rawValue) }
     _locationMode.value = mode
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
-    prefs.edit { putBoolean("location.preciseEnabled", value) }
+    plainPrefs.edit { putBoolean("location.preciseEnabled", value) }
     _locationPreciseEnabled.value = value
   }
 
   fun setPreventSleep(value: Boolean) {
-    prefs.edit { putBoolean("screen.preventSleep", value) }
+    plainPrefs.edit { putBoolean("screen.preventSleep", value) }
     _preventSleep.value = value
   }
 
   fun setManualEnabled(value: Boolean) {
-    prefs.edit { putBoolean("gateway.manual.enabled", value) }
+    plainPrefs.edit { putBoolean("gateway.manual.enabled", value) }
     _manualEnabled.value = value
   }
 
   fun setManualHost(value: String) {
     val trimmed = value.trim()
-    prefs.edit { putString("gateway.manual.host", trimmed) }
+    plainPrefs.edit { putString("gateway.manual.host", trimmed) }
     _manualHost.value = trimmed
   }
 
   fun setManualPort(value: Int) {
-    prefs.edit { putInt("gateway.manual.port", value) }
+    plainPrefs.edit { putInt("gateway.manual.port", value) }
     _manualPort.value = value
   }
 
   fun setManualTls(value: Boolean) {
-    prefs.edit { putBoolean("gateway.manual.tls", value) }
+    plainPrefs.edit { putBoolean("gateway.manual.tls", value) }
     _manualTls.value = value
   }
 
   fun setGatewayToken(value: String) {
-    prefs.edit { putString("gateway.manual.token", value) }
-    _gatewayToken.value = value
+    val trimmed = value.trim()
+    securePrefs.edit { putString("gateway.manual.token", trimmed) }
+    _gatewayToken.value = trimmed
+  }
+
+  fun setGatewayPassword(value: String) {
+    saveGatewayPassword(value)
+  }
+
+  fun setOnboardingCompleted(value: Boolean) {
+    plainPrefs.edit { putBoolean("onboarding.completed", value) }
+    _onboardingCompleted.value = value
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
-    prefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
+    plainPrefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
     _canvasDebugStatusEnabled.value = value
   }
 
   fun loadGatewayToken(): String? {
-    val manual = _gatewayToken.value.trim()
+    val manual =
+      _gatewayToken.value.trim().ifEmpty {
+        val stored = securePrefs.getString("gateway.manual.token", null)?.trim().orEmpty()
+        if (stored.isNotEmpty()) _gatewayToken.value = stored
+        stored
+      }
     if (manual.isNotEmpty()) return manual
     val key = "gateway.token.${_instanceId.value}"
-    val stored = prefs.getString(key, null)?.trim()
+    val stored = securePrefs.getString(key, null)?.trim()
     return stored?.takeIf { it.isNotEmpty() }
   }
 
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
-    prefs.edit { putString(key, token.trim()) }
+    securePrefs.edit { putString(key, token.trim()) }
   }
 
   fun loadGatewayPassword(): String? {
     val key = "gateway.password.${_instanceId.value}"
-    val stored = prefs.getString(key, null)?.trim()
+    val stored = securePrefs.getString(key, null)?.trim()
     return stored?.takeIf { it.isNotEmpty() }
   }
 
   fun saveGatewayPassword(password: String) {
     val key = "gateway.password.${_instanceId.value}"
-    prefs.edit { putString(key, password.trim()) }
+    securePrefs.edit { putString(key, password.trim()) }
   }
 
   fun loadGatewayTlsFingerprint(stableId: String): String? {
     val key = "gateway.tls.$stableId"
-    return prefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
+    return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
   fun saveGatewayTlsFingerprint(stableId: String, fingerprint: String) {
     val key = "gateway.tls.$stableId"
-    prefs.edit { putString(key, fingerprint.trim()) }
+    plainPrefs.edit { putString(key, fingerprint.trim()) }
   }
 
   fun getString(key: String): String? {
-    return prefs.getString(key, null)
+    return securePrefs.getString(key, null)
   }
 
   fun putString(key: String, value: String) {
-    prefs.edit { putString(key, value) }
+    securePrefs.edit { putString(key, value) }
   }
 
   fun remove(key: String) {
-    prefs.edit { remove(key) }
+    securePrefs.edit { remove(key) }
   }
 
-  private fun createPrefs(context: Context, name: String): SharedPreferences {
+  private fun createSecurePrefs(context: Context, name: String): SharedPreferences {
     return EncryptedSharedPreferences.create(
       context,
       name,
@@ -214,21 +237,21 @@ class SecurePrefs(context: Context) {
   }
 
   private fun loadOrCreateInstanceId(): String {
-    val existing = prefs.getString("node.instanceId", null)?.trim()
+    val existing = plainPrefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing
     val fresh = UUID.randomUUID().toString()
-    prefs.edit { putString("node.instanceId", fresh) }
+    plainPrefs.edit { putString("node.instanceId", fresh) }
     return fresh
   }
 
   private fun loadOrMigrateDisplayName(context: Context): String {
-    val existing = prefs.getString(displayNameKey, null)?.trim().orEmpty()
+    val existing = plainPrefs.getString(displayNameKey, null)?.trim().orEmpty()
     if (existing.isNotEmpty() && existing != "Android Node") return existing
 
     val candidate = DeviceNames.bestDefaultNodeName(context).trim()
     val resolved = candidate.ifEmpty { "Android Node" }
 
-    prefs.edit { putString(displayNameKey, resolved) }
+    plainPrefs.edit { putString(displayNameKey, resolved) }
     return resolved
   }
 
@@ -236,34 +259,39 @@ class SecurePrefs(context: Context) {
     val sanitized = WakeWords.sanitize(words, defaultWakeWords)
     val encoded =
       JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    prefs.edit { putString("voiceWake.triggerWords", encoded) }
+    plainPrefs.edit { putString("voiceWake.triggerWords", encoded) }
     _wakeWords.value = sanitized
   }
 
   fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    prefs.edit { putString(voiceWakeModeKey, mode.rawValue) }
+    plainPrefs.edit { putString(voiceWakeModeKey, mode.rawValue) }
     _voiceWakeMode.value = mode
   }
 
   fun setTalkEnabled(value: Boolean) {
-    prefs.edit { putBoolean("talk.enabled", value) }
+    plainPrefs.edit { putBoolean("talk.enabled", value) }
     _talkEnabled.value = value
   }
 
+  fun setSpeakerEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
+    _speakerEnabled.value = value
+  }
+
   private fun loadVoiceWakeMode(): VoiceWakeMode {
-    val raw = prefs.getString(voiceWakeModeKey, null)
+    val raw = plainPrefs.getString(voiceWakeModeKey, null)
     val resolved = VoiceWakeMode.fromRawValue(raw)
 
     // Default ON (foreground) when unset.
     if (raw.isNullOrBlank()) {
-      prefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
+      plainPrefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
     }
 
     return resolved
   }
 
   private fun loadWakeWords(): List<String> {
-    val raw = prefs.getString("voiceWake.triggerWords", null)?.trim()
+    val raw = plainPrefs.getString("voiceWake.triggerWords", null)?.trim()
     if (raw.isNullOrEmpty()) return defaultWakeWords
     return try {
       val element = json.parseToJsonElement(raw)
@@ -281,5 +309,4 @@ class SecurePrefs(context: Context) {
       defaultWakeWords
     }
   }
-
 }

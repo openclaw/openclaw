@@ -7,8 +7,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeCameraClipPayloadToFile,
-  writeBase64ToFile,
-  writeUrlToFile,
+  writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
@@ -18,14 +17,17 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
+import { listNodes, resolveNode, resolveNodeId, resolveNodeIdFromList } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -37,16 +39,55 @@ const NODES_TOOL_ACTIONS = [
   "camera_snap",
   "camera_list",
   "camera_clip",
+  "photos_latest",
   "screen_record",
   "location_get",
+  "notifications_list",
+  "notifications_action",
+  "device_status",
+  "device_info",
+  "device_permissions",
+  "device_health",
   "run",
   "invoke",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
+const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+const MEDIA_INVOKE_ACTIONS = {
+  "camera.snap": "camera_snap",
+  "camera.clip": "camera_clip",
+  "photos.latest": "photos_latest",
+  "screen.record": "screen_record",
+} as const;
+const NODE_READ_ACTION_COMMANDS = {
+  camera_list: "camera.list",
+  notifications_list: "notifications.list",
+  device_status: "device.status",
+  device_info: "device.info",
+  device_permissions: "device.permissions",
+  device_health: "device.health",
+} as const;
+type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
+
+async function invokeNodeCommandPayload(params: {
+  gatewayOpts: GatewayCallOptions;
+  node: string;
+  command: string;
+  commandParams?: Record<string, unknown>;
+}): Promise<unknown> {
+  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
+    nodeId,
+    command: params.command,
+    params: params.commandParams ?? {},
+    idempotencyKey: crypto.randomUUID(),
+  });
+  return raw?.payload ?? {};
+}
 
 function isPairingRequiredMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -84,8 +125,9 @@ const NodesToolSchema = Type.Object({
   quality: Type.Optional(Type.Number()),
   delayMs: Type.Optional(Type.Number()),
   deviceId: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number()),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
   fps: Type.Optional(Type.Number()),
@@ -95,6 +137,10 @@ const NodesToolSchema = Type.Object({
   maxAgeMs: Type.Optional(Type.Number()),
   locationTimeoutMs: Type.Optional(Type.Number()),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
+  // notifications_action
+  notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
+  notificationKey: Type.Optional(Type.String()),
+  notificationReplyText: Type.Optional(Type.String()),
   // run
   command: Type.Optional(Type.Array(Type.String())),
   cwd: Type.Optional(Type.String()),
@@ -109,9 +155,19 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
   config?: OpenClawConfig;
+  modelHasVision?: boolean;
+  allowMediaInvokeCommands?: boolean;
 }): AnyAgentTool {
   const sessionKey = options?.agentSessionKey?.trim() || undefined;
+  const turnSourceChannel = options?.agentChannel?.trim() || undefined;
+  const turnSourceTo = options?.currentChannelId?.trim() || undefined;
+  const turnSourceAccountId = options?.agentAccountId?.trim() || undefined;
+  const turnSourceThreadId = options?.currentThreadTs;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -121,7 +177,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/run/invoke).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -183,9 +239,10 @@ export function createNodesTool(options?: {
           }
           case "camera_snap": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facingRaw =
-              typeof params.facing === "string" ? params.facing.toLowerCase() : "both";
+              typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
               facingRaw === "both"
                 ? ["front", "back"]
@@ -197,11 +254,11 @@ export function createNodesTool(options?: {
             const maxWidth =
               typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
                 ? params.maxWidth
-                : undefined;
+                : 1600;
             const quality =
               typeof params.quality === "number" && Number.isFinite(params.quality)
                 ? params.quality
-                : undefined;
+                : 0.95;
             const delayMs =
               typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
                 ? params.delayMs
@@ -210,6 +267,9 @@ export function createNodesTool(options?: {
               typeof params.deviceId === "string" && params.deviceId.trim()
                 ? params.deviceId.trim()
                 : undefined;
+            if (deviceId && facings.length > 1) {
+              throw new Error("facing=both is not allowed when deviceId is set");
+            }
 
             const content: AgentToolResult<unknown>["content"] = [];
             const details: Array<Record<string, unknown>> = [];
@@ -244,13 +304,14 @@ export function createNodesTool(options?: {
                 facing,
                 ext: isJpeg ? "jpg" : "png",
               });
-              if (payload.url) {
-                await writeUrlToFile(filePath, payload.url);
-              } else if (payload.base64) {
-                await writeBase64ToFile(filePath, payload.base64);
-              }
+              await writeCameraPayloadToFile({
+                filePath,
+                payload,
+                expectedHost: resolvedNode.remoteIp,
+                invalidPayloadMessage: "invalid camera.snap payload",
+              });
               content.push({ type: "text", text: `MEDIA:${filePath}` });
-              if (payload.base64) {
+              if (options?.modelHasVision && payload.base64) {
                 content.push({
                   type: "image",
                   data: payload.base64,
@@ -269,22 +330,159 @@ export function createNodesTool(options?: {
             const result: AgentToolResult<unknown> = { content, details };
             return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
-          case "camera_list": {
+          case "photos_latest": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
+            const limitRaw =
+              typeof params.limit === "number" && Number.isFinite(params.limit)
+                ? Math.floor(params.limit)
+                : DEFAULT_PHOTOS_LIMIT;
+            const limit = Math.max(1, Math.min(limitRaw, MAX_PHOTOS_LIMIT));
+            const maxWidth =
+              typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
+                ? params.maxWidth
+                : DEFAULT_PHOTOS_MAX_WIDTH;
+            const quality =
+              typeof params.quality === "number" && Number.isFinite(params.quality)
+                ? params.quality
+                : DEFAULT_PHOTOS_QUALITY;
             const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
-              command: "camera.list",
-              params: {},
+              command: "photos.latest",
+              params: {
+                limit,
+                maxWidth,
+                quality,
+              },
               idempotencyKey: crypto.randomUUID(),
             });
             const payload =
-              raw && typeof raw.payload === "object" && raw.payload !== null ? raw.payload : {};
+              raw?.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+                ? (raw.payload as Record<string, unknown>)
+                : {};
+            const photos = Array.isArray(payload.photos) ? payload.photos : [];
+
+            if (photos.length === 0) {
+              const result: AgentToolResult<unknown> = {
+                content: [],
+                details: [],
+              };
+              return await sanitizeToolResultImages(
+                result,
+                "nodes:photos_latest",
+                imageSanitization,
+              );
+            }
+
+            const content: AgentToolResult<unknown>["content"] = [];
+            const details: Array<Record<string, unknown>> = [];
+
+            for (const [index, photoRaw] of photos.entries()) {
+              const photo = parseCameraSnapPayload(photoRaw);
+              const normalizedFormat = photo.format.toLowerCase();
+              if (
+                normalizedFormat !== "jpg" &&
+                normalizedFormat !== "jpeg" &&
+                normalizedFormat !== "png"
+              ) {
+                throw new Error(`unsupported photos.latest format: ${photo.format}`);
+              }
+              const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
+              const filePath = cameraTempPath({
+                kind: "snap",
+                ext: isJpeg ? "jpg" : "png",
+                id: crypto.randomUUID(),
+              });
+              await writeCameraPayloadToFile({
+                filePath,
+                payload: photo,
+                expectedHost: resolvedNode.remoteIp,
+                invalidPayloadMessage: "invalid photos.latest payload",
+              });
+
+              content.push({ type: "text", text: `MEDIA:${filePath}` });
+              if (options?.modelHasVision && photo.base64) {
+                content.push({
+                  type: "image",
+                  data: photo.base64,
+                  mimeType:
+                    imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+                });
+              }
+
+              const createdAt =
+                photoRaw && typeof photoRaw === "object" && !Array.isArray(photoRaw)
+                  ? (photoRaw as Record<string, unknown>).createdAt
+                  : undefined;
+              details.push({
+                index,
+                path: filePath,
+                width: photo.width,
+                height: photo.height,
+                ...(typeof createdAt === "string" ? { createdAt } : {}),
+              });
+            }
+
+            const result: AgentToolResult<unknown> = { content, details };
+            return await sanitizeToolResultImages(result, "nodes:photos_latest", imageSanitization);
+          }
+          case "camera_list":
+          case "notifications_list":
+          case "device_status":
+          case "device_info":
+          case "device_permissions":
+          case "device_health": {
+            const node = readStringParam(params, "node", { required: true });
+            const command = NODE_READ_ACTION_COMMANDS[action];
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
+              command,
+            });
+            const payload =
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
+            return jsonResult(payload);
+          }
+          case "notifications_action": {
+            const node = readStringParam(params, "node", { required: true });
+            const notificationKey = readStringParam(params, "notificationKey", { required: true });
+            const notificationAction =
+              typeof params.notificationAction === "string"
+                ? params.notificationAction.trim().toLowerCase()
+                : "";
+            if (
+              notificationAction !== "open" &&
+              notificationAction !== "dismiss" &&
+              notificationAction !== "reply"
+            ) {
+              throw new Error("notificationAction must be open|dismiss|reply");
+            }
+            const notificationReplyText =
+              typeof params.notificationReplyText === "string"
+                ? params.notificationReplyText.trim()
+                : undefined;
+            if (notificationAction === "reply" && !notificationReplyText) {
+              throw new Error("notificationReplyText required when notificationAction=reply");
+            }
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
+              command: "notifications.actions",
+              commandParams: {
+                key: notificationKey,
+                action: notificationAction,
+                replyText: notificationReplyText,
+              },
+            });
+            const payload =
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
             return jsonResult(payload);
           }
           case "camera_clip": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facing =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             if (facing !== "front" && facing !== "back") {
@@ -318,6 +516,7 @@ export function createNodesTool(options?: {
             const filePath = await writeCameraClipPayloadToFile({
               payload,
               facing,
+              expectedHost: resolvedNode.remoteIp,
             });
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
@@ -332,12 +531,14 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            const durationMs = Math.min(
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
-                  : 10_000;
+                  : 10_000,
+              300_000,
+            );
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
@@ -377,7 +578,6 @@ export function createNodesTool(options?: {
           }
           case "location_get": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
             const maxAgeMs =
               typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
                 ? params.maxAgeMs
@@ -393,17 +593,17 @@ export function createNodesTool(options?: {
               Number.isFinite(params.locationTimeoutMs)
                 ? params.locationTimeoutMs
                 : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
+            const payload = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
               command: "location.get",
-              params: {
+              commandParams: {
                 maxAgeMs,
                 desiredAccuracy,
                 timeoutMs: locationTimeoutMs,
               },
-              idempotencyKey: crypto.randomUUID(),
             });
-            return jsonResult(raw?.payload ?? {});
+            return jsonResult(payload);
           }
           case "run": {
             const node = readStringParam(params, "node", { required: true });
@@ -443,14 +643,36 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
+            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              gatewayOpts,
+              {
+                nodeId,
+                command: "system.run.prepare",
+                params: {
+                  command,
+                  rawCommand: formatExecCommand(command),
+                  cwd,
+                  agentId,
+                  sessionKey,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            );
+            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            if (!prepared) {
+              throw new Error("invalid system.run.prepare response");
+            }
             const runParams = {
-              command,
-              cwd,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.rawCommand ?? prepared.cmdText,
+              cwd: prepared.plan.cwd ?? cwd,
               env,
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
-              agentId,
-              sessionKey,
+              agentId: prepared.plan.agentId ?? agentId,
+              sessionKey: prepared.plan.sessionKey ?? sessionKey,
             };
 
             // First attempt without approval flags.
@@ -473,19 +695,24 @@ export function createNodesTool(options?: {
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
             const APPROVAL_TIMEOUT_MS = 120_000;
-            const cmdText = command.join(" ");
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
               { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
               {
                 id: approvalId,
-                command: cmdText,
-                cwd,
+                command: prepared.cmdText,
+                commandArgv: prepared.plan.argv,
+                systemRunPlan: prepared.plan,
+                cwd: prepared.plan.cwd ?? cwd,
                 nodeId,
                 host: "node",
-                agentId,
-                sessionKey,
+                agentId: prepared.plan.agentId ?? agentId,
+                sessionKey: prepared.plan.sessionKey ?? sessionKey,
+                turnSourceChannel,
+                turnSourceTo,
+                turnSourceAccountId,
+                turnSourceThreadId,
                 timeoutMs: APPROVAL_TIMEOUT_MS,
               },
             );
@@ -525,6 +752,14 @@ export function createNodesTool(options?: {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
             const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
+            const invokeCommandNormalized = invokeCommand.trim().toLowerCase();
+            const dedicatedAction =
+              MEDIA_INVOKE_ACTIONS[invokeCommandNormalized as keyof typeof MEDIA_INVOKE_ACTIONS];
+            if (dedicatedAction && !options?.allowMediaInvokeCommands) {
+              throw new Error(
+                `invokeCommand "${invokeCommand}" returns media payloads and is blocked to prevent base64 context bloat; use action="${dedicatedAction}"`,
+              );
+            }
             const invokeParamsJson =
               typeof params.invokeParamsJson === "string" ? params.invokeParamsJson.trim() : "";
             let invokeParams: unknown = {};
@@ -575,3 +810,8 @@ export function createNodesTool(options?: {
     },
   };
 }
+
+const DEFAULT_PHOTOS_LIMIT = 1;
+const MAX_PHOTOS_LIMIT = 20;
+const DEFAULT_PHOTOS_MAX_WIDTH = 1600;
+const DEFAULT_PHOTOS_QUALITY = 0.85;
