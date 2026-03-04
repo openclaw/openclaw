@@ -5,6 +5,7 @@ export {
   type RealtimeSTTConfig,
   type RealtimeSTTSession,
 } from "./stt-openai-realtime.js";
+export { LocalWhisperCppSTTProvider, type LocalWhisperCppConfig } from "./stt-local-whispercpp.js";
 export { TelnyxProvider } from "./telnyx.js";
 export { TwilioProvider } from "./twilio.js";
 export { PlivoProvider } from "./plivo.js";
