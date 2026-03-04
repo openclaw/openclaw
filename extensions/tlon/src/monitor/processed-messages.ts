@@ -1,4 +1,4 @@
-import { createDedupeCache } from "openclaw/plugin-sdk/compat";
+import { createDedupeCache } from "openclaw/plugin-sdk/tlon";
 
 export type ProcessedMessageTracker = {
   mark: (id?: string | null) => boolean;

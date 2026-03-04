@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 
 // Mock fetchWithSsrFGuard from plugin-sdk
-vi.mock("openclaw/plugin-sdk/compat", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/compat")>();
+vi.mock("openclaw/plugin-sdk/tlon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/tlon")>();
   return {
     ...actual,
     fetchWithSsrFGuard: vi.fn(),
@@ -24,7 +24,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("fetches image and calls uploadFile, returns uploaded URL", async () => {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/compat");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
     const mockFetch = vi.mocked(fetchWithSsrFGuard);
 
     const { uploadFile } = await import("@tloncorp/api");
@@ -59,7 +59,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("returns original URL if fetch fails", async () => {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/compat");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
     const mockFetch = vi.mocked(fetchWithSsrFGuard);
 
     // Mock fetchWithSsrFGuard to return a failed response
@@ -79,7 +79,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("returns original URL if upload fails", async () => {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/compat");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
     const mockFetch = vi.mocked(fetchWithSsrFGuard);
 
     const { uploadFile } = await import("@tloncorp/api");
@@ -127,7 +127,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("extracts filename from URL path", async () => {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/compat");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
     const mockFetch = vi.mocked(fetchWithSsrFGuard);
 
     const { uploadFile } = await import("@tloncorp/api");
@@ -157,7 +157,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("uses default filename when URL has no path", async () => {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/compat");
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/tlon");
     const mockFetch = vi.mocked(fetchWithSsrFGuard);
 
     const { uploadFile } = await import("@tloncorp/api");
