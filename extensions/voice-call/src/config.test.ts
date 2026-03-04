@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 
-function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
+function createBaseConfig(
+  provider: "telnyx" | "twilio" | "plivo" | "vonage" | "mock",
+): VoiceCallConfig {
   return {
     enabled: true,
     provider,
@@ -56,6 +58,10 @@ describe("validateProviderConfig", () => {
     delete process.env.TELNYX_PUBLIC_KEY;
     delete process.env.PLIVO_AUTH_ID;
     delete process.env.PLIVO_AUTH_TOKEN;
+    delete process.env.VONAGE_APPLICATION_ID;
+    delete process.env.VONAGE_PRIVATE_KEY;
+    delete process.env.VONAGE_PRIVATE_KEY_PATH;
+    delete process.env.VONAGE_SIGNATURE_SECRET;
   };
 
   beforeEach(() => {
@@ -69,7 +75,7 @@ describe("validateProviderConfig", () => {
 
   describe("provider credential sources", () => {
     it("passes validation when credentials come from config or environment", () => {
-      for (const provider of ["twilio", "telnyx", "plivo"] as const) {
+      for (const provider of ["twilio", "telnyx", "plivo", "vonage"] as const) {
         clearProviderEnv();
         const fromConfig = createBaseConfig(provider);
         if (provider === "twilio") {
@@ -80,8 +86,14 @@ describe("validateProviderConfig", () => {
             connectionId: "CONN456",
             publicKey: "public-key",
           };
-        } else {
+        } else if (provider === "plivo") {
           fromConfig.plivo = { authId: "MA123", authToken: "secret" };
+        } else {
+          fromConfig.vonage = {
+            applicationId: "app-id",
+            privateKey: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+            signatureSecret: "secret",
+          };
         }
         expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
 
@@ -93,9 +105,14 @@ describe("validateProviderConfig", () => {
           process.env.TELNYX_API_KEY = "KEY123";
           process.env.TELNYX_CONNECTION_ID = "CONN456";
           process.env.TELNYX_PUBLIC_KEY = "public-key";
-        } else {
+        } else if (provider === "plivo") {
           process.env.PLIVO_AUTH_ID = "MA123";
           process.env.PLIVO_AUTH_TOKEN = "secret";
+        } else {
+          process.env.VONAGE_APPLICATION_ID = "app-id";
+          process.env.VONAGE_PRIVATE_KEY =
+            "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----";
+          process.env.VONAGE_SIGNATURE_SECRET = "secret";
         }
         const fromEnv = resolveVoiceCallConfig(createBaseConfig(provider));
         expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
@@ -191,6 +208,30 @@ describe("validateProviderConfig", () => {
       expect(result.errors).toContain(
         "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
       );
+    });
+  });
+
+  describe("vonage provider", () => {
+    it("fails validation when applicationId is missing", () => {
+      process.env.VONAGE_PRIVATE_KEY =
+        "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----";
+      process.env.VONAGE_SIGNATURE_SECRET = "secret";
+      const result = validateProviderConfig(resolveVoiceCallConfig(createBaseConfig("vonage")));
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        "plugins.entries.voice-call.config.vonage.applicationId is required (or set VONAGE_APPLICATION_ID env)",
+      );
+    });
+
+    it("accepts config with application key material even without signature secret", () => {
+      const config = createBaseConfig("vonage");
+      config.vonage = {
+        applicationId: "app-id",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+      };
+
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
     });
   });
 

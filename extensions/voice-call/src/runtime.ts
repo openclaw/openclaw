@@ -7,6 +7,7 @@ import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
+import { VonageProvider } from "./providers/vonage.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -123,6 +124,21 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           skipVerification: config.skipSignatureVerification,
           ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
           webhookSecurity: config.webhookSecurity,
+        },
+      );
+    case "vonage":
+      return new VonageProvider(
+        {
+          applicationId: config.vonage?.applicationId,
+          privateKey: config.vonage?.privateKey,
+          privateKeyPath: config.vonage?.privateKeyPath,
+          signatureSecret: config.vonage?.signatureSecret,
+        },
+        {
+          publicUrl: config.publicUrl,
+          skipVerification: config.skipSignatureVerification,
+          webhookSecurity: config.webhookSecurity,
+          ringTimeoutSec: Math.max(1, Math.floor(config.ringTimeoutMs / 1000)),
         },
       );
     case "mock":

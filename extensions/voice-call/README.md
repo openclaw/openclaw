@@ -7,6 +7,7 @@ Providers:
 - **Twilio** (Programmable Voice + Media Streams)
 - **Telnyx** (Call Control v2)
 - **Plivo** (Voice API + XML transfer + GetInput speech)
+- **Vonage** (Voice API + NCCO transfer + Input speech)
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
@@ -36,7 +37,7 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "plivo" | "mock"
+  provider: "twilio", // or "telnyx" | "plivo" | "vonage" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
 
@@ -56,6 +57,12 @@ Put under `plugins.entries.voice-call.config`:
   plivo: {
     authId: "MAxxxxxxxxxxxxxxxxxxxx",
     authToken: "your_token",
+  },
+
+  vonage: {
+    applicationId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    privateKeyPath: "/path/to/private.key", // or privateKey: "-----BEGIN PRIVATE KEY-----..."
+    signatureSecret: "your_signature_secret",
   },
 
   // Webhook server
