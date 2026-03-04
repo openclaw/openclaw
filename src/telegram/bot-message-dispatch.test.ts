@@ -311,7 +311,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
-  it("does not overwrite finalized preview when additional final payloads are sent", async () => {
+  it("does not overwrite finalized preview when additional final payloads are sent (block mode)", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -325,7 +325,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
@@ -400,27 +400,47 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it.each(["block", "partial"] as const)(
-    "forces new message when assistant message restarts (%s mode)",
-    async (streamMode) => {
-      const draftStream = createDraftStream(999);
-      createTelegramDraftStream.mockReturnValue(draftStream);
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-        async ({ dispatcherOptions, replyOptions }) => {
-          await replyOptions?.onPartialReply?.({ text: "First response" });
-          await replyOptions?.onAssistantMessageStart?.();
-          await replyOptions?.onPartialReply?.({ text: "After tool call" });
-          await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
-          return { queuedFinal: true };
-        },
-      );
-      deliverReplies.mockResolvedValue({ delivered: true });
+  it("forces new message when assistant message restarts in block mode", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "First response" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "After tool call" });
+        await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
 
-      await dispatchWithContext({ context: createContext(), streamMode });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
-      expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not force new message in partial mode — coalesces across turns", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "First response" });
+        await dispatcherOptions.deliver({ text: "First response" }, { kind: "final" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "After tool call" });
+        await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    // Stream revived after first finalization to allow continued editing
+    expect(draftStream.revive).toHaveBeenCalled();
+  });
 
   it("materializes boundary preview and keeps it when no matching final arrives", async () => {
     const answerDraftStream = createDraftStream(999);
@@ -436,7 +456,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const bot = createBot();
-    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+    await dispatchWithContext({ context: createContext(), streamMode: "block", bot });
 
     expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
@@ -476,7 +496,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledTimes(2);
@@ -507,7 +527,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const bot = createBot();
-    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+    await dispatchWithContext({ context: createContext(), streamMode: "block", bot });
 
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
     const deleteMessageCalls = (
@@ -543,7 +563,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       return { queuedFinal: false };
     });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
@@ -575,7 +595,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
@@ -637,7 +657,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B early");
@@ -684,7 +704,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
     const bot = createBot();
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+    await dispatchWithContext({ context: createContext(), streamMode: "block", bot });
 
     // Early pre-rotation could not force (no streamed partials yet), so the
     // real assistant message_start must still rotate once.
@@ -766,7 +786,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
@@ -1186,7 +1206,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
+        previewTransport: "message",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(

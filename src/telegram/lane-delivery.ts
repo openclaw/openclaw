@@ -81,6 +81,10 @@ type DeliverLaneTextParams = {
   infoKind: string;
   previewButtons?: TelegramInlineButtons;
   allowPreviewUpdateForNonFinal?: boolean;
+  /** When true, ignore the finalizedPreviewByLane guard and allow re-editing
+   *  a previously finalized preview. Used in partial (coalesced) streaming mode
+   *  where multiple finals should edit the same message. */
+  allowRefinalize?: boolean;
 };
 
 type TryUpdatePreviewParams = {
@@ -365,6 +369,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     infoKind,
     previewButtons,
     allowPreviewUpdateForNonFinal = false,
+    allowRefinalize = false,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -384,7 +389,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return archivedResult;
         }
       }
-      if (canEditViaPreview && !params.finalizedPreviewByLane[laneName]) {
+      if (canEditViaPreview && (allowRefinalize || !params.finalizedPreviewByLane[laneName])) {
         await params.flushDraftLane(lane);
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
