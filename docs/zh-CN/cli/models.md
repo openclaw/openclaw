@@ -54,6 +54,8 @@ openclaw models scan
 - `--check`（退出码 1=已过期/缺失，2=即将过期）
 - `--probe`（对已配置的认证配置进行实时探测）
 - `--probe-provider <name>`（探测单个提供商）
+- `--probe-all-models`（探测当前范围内的所有已配置模型）
+- `--probe-model <provider/model>`（可重复或逗号分隔的模型引用）
 - `--probe-profile <id>`（可重复或逗号分隔的配置 ID）
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`

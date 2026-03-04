@@ -345,4 +345,25 @@ describe("modelsStatusCommand auth overview", () => {
       }
     }
   });
+
+  it("requires --probe when --probe-all-models is used", async () => {
+    const localRuntime = createRuntime();
+    await expect(
+      modelsStatusCommand({ probeAllModels: true }, localRuntime as never),
+    ).rejects.toThrow("--probe-all-models and --probe-model require --probe.");
+  });
+
+  it("rejects using --probe-all-models and --probe-model together", async () => {
+    const localRuntime = createRuntime();
+    await expect(
+      modelsStatusCommand(
+        {
+          probe: true,
+          probeAllModels: true,
+          probeModel: "anthropic/claude-opus-4-5",
+        },
+        localRuntime as never,
+      ),
+    ).rejects.toThrow("Choose either --probe-all-models or --probe-model, not both.");
+  });
 });

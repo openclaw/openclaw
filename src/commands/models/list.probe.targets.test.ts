@@ -163,4 +163,60 @@ describe("buildProbeTargets reason codes", () => {
     expect(plan.results[0]?.error).toContain("[unresolved_ref]");
     expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
   });
+
+  it("probes all configured models when --probe-all-models is enabled", async () => {
+    mockAllowedProfiles = ["anthropic:default"];
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        auth: {
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+      options: {
+        probeAllModels: true,
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toHaveLength(0);
+    expect(plan.targets).toHaveLength(2);
+    expect(
+      plan.targets.map((target) => `${target.model?.provider}/${target.model?.model}`),
+    ).toEqual(["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("probes explicit --probe-model refs for a provider", async () => {
+    mockAllowedProfiles = ["anthropic:default"];
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        auth: {
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/claude-haiku-3-5"],
+      options: {
+        probeModels: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"],
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toHaveLength(0);
+    expect(plan.targets).toHaveLength(2);
+    expect(
+      plan.targets.map((target) => `${target.model?.provider}/${target.model?.model}`),
+    ).toEqual(["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"]);
+  });
 });
