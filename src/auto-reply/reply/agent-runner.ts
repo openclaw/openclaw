@@ -546,7 +546,7 @@ export async function runReplyAgent(params: {
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
-    const hasReminderCommitment = replyPayloads.some(
+    const hasReminderCommitment = finalReplyPayloads.some(
       (payload) =>
         !payload.isError &&
         typeof payload.text === "string" &&
@@ -563,8 +563,8 @@ export async function runReplyAgent(params: {
         : false;
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(replyPayloads)
-        : replyPayloads;
+        ? appendUnscheduledReminderNote(finalReplyPayloads)
+        : finalReplyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
