@@ -137,6 +137,16 @@ describe("extractFirstSentence", () => {
     expect(extractFirstSentence('He said "Done." Then left.')).toBe('He said "Done."');
     expect(extractFirstSentence("(That's it.) Moving on.")).toBe("(That's it.)");
   });
+
+  it("handles inline dots in domains and version numbers", () => {
+    expect(extractFirstSentence("Check out example.com for details. It's great.")).toBe(
+      "Check out example.com for details.",
+    );
+    expect(extractFirstSentence("Version 2.0 is here. Download now.")).toBe("Version 2.0 is here.");
+    expect(extractFirstSentence("See docs.openclaw.io for help. Thanks.")).toBe(
+      "See docs.openclaw.io for help.",
+    );
+  });
 });
 
 describe("maybeCreateDiscordAutoThread config integration", () => {

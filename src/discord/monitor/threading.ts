@@ -258,6 +258,11 @@ export function extractFirstSentence(text: string): string {
   // e.g. and i.e.
   sanitized = sanitized.replace(/\b(e)\.(g)\./gi, `$1${placeholder}$2${placeholder}`);
   sanitized = sanitized.replace(/\b(i)\.(e)\./gi, `$1${placeholder}$2${placeholder}`);
+  // Domain-like patterns: protect dots that are between word chars (foo.bar.com)
+  // This catches subdomains and most domain patterns
+  sanitized = sanitized.replace(/(\w)\.(\w)/g, `$1${placeholder}$2`);
+  // Version numbers (2.0, v1.2.3)
+  sanitized = sanitized.replace(/(\d)\.(\d)/g, `$1${placeholder}$2`);
 
   // Now find the first real sentence ending
   const match = sanitized.match(/^[^.!?]*[.!?]["')\]]*(?:\s|$)/);
