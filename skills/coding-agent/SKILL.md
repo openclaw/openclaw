@@ -1,9 +1,13 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.'
+description: 'Delegate coding tasks to Codex, Claude Code, Cursor Agent, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
+    "openclaw":
+      {
+        "emoji": "🧩",
+        "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "cursor-agent"] },
+      },
   }
 ---
 
@@ -13,7 +17,7 @@ Use **bash** (with optional background mode) for all coding agent work. Simple a
 
 ## ⚠️ PTY Mode Required!
 
-Coding agents (Codex, Claude Code, Pi) are **interactive terminal applications** that need a pseudo-terminal (PTY) to work correctly. Without PTY, you'll get broken output, missing colors, or the agent may hang.
+Coding agents (Codex, Claude Code, Cursor Agent, Pi) are **interactive terminal applications** that need a pseudo-terminal (PTY) to work correctly. Without PTY, you'll get broken output, missing colors, or the agent may hang.
 
 **Always use `pty:true`** when running coding agents:
 
@@ -171,6 +175,75 @@ bash pty:true workdir:~/project background:true command:"claude 'Your task'"
 
 ```bash
 bash pty:true workdir:~/project command:"opencode run 'Your task'"
+```
+
+---
+
+## Cursor Agent CLI
+
+**Binary note:** on most setups the executable is `cursor-agent` (not `cursor`).
+
+### Quick Start
+
+```bash
+# Auth check
+bash pty:true command:"cursor-agent status"
+
+# One-shot headless run
+bash pty:true workdir:~/project command:"cursor-agent --trust --yolo --print --output-format text 'Implement retry logic for API calls'"
+
+# Background run for longer tasks
+bash pty:true workdir:~/project background:true command:"cursor-agent --trust --yolo --print --output-format text 'Refactor auth module and summarize file-by-file changes'"
+```
+
+### ⚡ Best Practices (learned the hard way)
+
+**Output format:** Always use `--output-format text`. Alternatives:
+
+- `stream-json` produces noisy token-by-token deltas — unreadable in logs
+- `json` is a single blob at the end — no advantage over text
+- `text` gives clean, readable final output via `process log`
+
+**Keep prompts small and focused.** Cursor spends a long time thinking before acting. A big combined prompt (e.g. "create 20 files + tests + commit") can burn 10+ minutes just thinking and timeout with nothing written. Split into focused steps:
+
+- ✅ "Create the 7 Parse infrastructure files" (3-5 min)
+- ✅ "Create the 10 model files" (3-5 min)
+- ✅ "Create tests and commit everything" (3-5 min)
+- ❌ "Create Parse infra + models + tests + commit" (10+ min thinking, timeout)
+
+**Always use `--trust --yolo`** for autonomous headless work. Without `--trust`, Cursor prompts for workspace trust and hangs. Without `--yolo`, it asks for approval on file writes.
+
+**Silence during thinking is normal.** With `text` format, there's no output until thinking finishes and it starts acting. Don't kill the process just because it's quiet — check with `process poll`.
+
+**Set generous timeouts.** 600s (10 min) minimum for single-step tasks. 900s for anything involving build + test cycles.
+
+### Common Flags
+
+| Flag                       | Effect                                                    |
+| -------------------------- | --------------------------------------------------------- |
+| `--print` / `-p`           | Non-interactive/headless mode (best for automation)       |
+| `--output-format <format>` | `text`, `json`, or `stream-json` output in `--print` mode |
+| `--workspace <path>`       | Pin workspace explicitly instead of relying on CWD        |
+| `--mode plan\|ask`         | Read-only planning or Q&A mode                            |
+| `--model <model>`          | Pick a specific model                                     |
+| `--resume [chatId]`        | Resume an existing chat session                           |
+| `--continue`               | Resume the latest chat session                            |
+| `--approve-mcps`           | Auto-approve MCP servers (headless/print flows)           |
+
+### PR Review Example
+
+```bash
+REVIEW_DIR=$(mktemp -d)
+git clone https://github.com/user/repo.git "$REVIEW_DIR"
+cd "$REVIEW_DIR" && gh pr checkout 130
+
+bash pty:true workdir:"$REVIEW_DIR" command:"cursor-agent --trust --yolo --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
+```
+
+### Structured Output Example
+
+```bash
+bash pty:true workdir:~/project command:"cursor-agent --trust --yolo --print --output-format text 'Create a migration plan for the auth module'"
 ```
 
 ---
