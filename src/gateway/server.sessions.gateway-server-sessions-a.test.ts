@@ -4,6 +4,14 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  appendSessionMemoryAuditEntry,
+  appendSessionMemorySummaryEntry,
+  resolveSessionMemoryAuditFile,
+  resolveSessionMemoryRawDir,
+  resolveSessionMemorySummaryFile,
+  writeSessionMemoryRawEntry,
+} from "../memory/session-sanitization/storage.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -143,6 +151,41 @@ async function writeSingleLineSession(dir: string, sessionId: string, content: s
     `${JSON.stringify({ role: "user", content })}\n`,
     "utf-8",
   );
+}
+
+async function seedSessionMemorySidecars(agentId: string, sessionId: string) {
+  await writeSessionMemoryRawEntry({
+    agentId,
+    sessionId,
+    entry: {
+      messageId: `${sessionId}-msg`,
+      timestamp: "2026-03-03T10:00:00.000Z",
+      expiresAt: "2099-03-03T10:00:00.000Z",
+      transcript: "remember this transcript",
+    },
+  });
+  await appendSessionMemorySummaryEntry({
+    agentId,
+    sessionId,
+    entry: {
+      messageId: `${sessionId}-msg`,
+      timestamp: "2026-03-03T10:00:00.000Z",
+      rawExpiresAt: "2099-03-03T10:00:00.000Z",
+      decisions: ["Remember this summary."],
+      actionItems: [],
+      entities: [],
+      discard: false,
+    },
+  });
+  await appendSessionMemoryAuditEntry({
+    agentId,
+    sessionId,
+    entry: {
+      event: "write",
+      timestamp: "2026-03-03T10:00:00.000Z",
+      messageId: `${sessionId}-msg`,
+    },
+  });
 }
 
 async function seedActiveMainSession() {
@@ -780,6 +823,38 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.delete removes session-memory sidecars for the deleted session", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-delete-sidecars", "hello");
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:dev": {
+          sessionId: "sess-delete-sidecars",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    await seedSessionMemorySidecars("main", "sess-delete-sidecars");
+
+    const rawDir = resolveSessionMemoryRawDir("main", "sess-delete-sidecars");
+    const summaryFile = resolveSessionMemorySummaryFile("main", "sess-delete-sidecars");
+    const auditFile = resolveSessionMemoryAuditFile("main", "sess-delete-sidecars");
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:dev",
+    });
+
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    await expect(fs.stat(rawDir)).rejects.toThrow();
+    await expect(fs.stat(summaryFile)).rejects.toThrow();
+    await expect(fs.stat(auditFile)).rejects.toThrow();
+
+    ws.close();
+  });
+
   test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -996,6 +1071,41 @@ describe("gateway server sessions", () => {
       },
       reason: "session-reset",
     });
+
+    ws.close();
+  });
+
+  test("sessions.reset removes session-memory sidecars for the previous session id", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-reset-sidecars", "hello");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-reset-sidecars",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    await seedSessionMemorySidecars("main", "sess-reset-sidecars");
+
+    const rawDir = resolveSessionMemoryRawDir("main", "sess-reset-sidecars");
+    const summaryFile = resolveSessionMemorySummaryFile("main", "sess-reset-sidecars");
+    const auditFile = resolveSessionMemoryAuditFile("main", "sess-reset-sidecars");
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      ws,
+      "sessions.reset",
+      {
+        key: "main",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-reset-sidecars");
+    await expect(fs.stat(rawDir)).rejects.toThrow();
+    await expect(fs.stat(summaryFile)).rejects.toThrow();
+    await expect(fs.stat(auditFile)).rejects.toThrow();
 
     ws.close();
   });

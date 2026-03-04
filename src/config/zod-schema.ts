@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -87,6 +88,21 @@ const MemoryQmdMcporterSchema = z
   })
   .strict();
 
+const MemorySessionSanitizationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    model: AgentModelSchema.optional(),
+    thinking: z.string().optional(),
+    rawMaxAge: z.string().optional(),
+  })
+  .strict();
+
+const MemorySessionsSchema = z
+  .object({
+    sanitization: MemorySessionSanitizationSchema.optional(),
+  })
+  .strict();
+
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -115,6 +131,7 @@ const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    sessions: MemorySessionsSchema.optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()

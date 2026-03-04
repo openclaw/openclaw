@@ -9,7 +9,12 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
+import {
+  buildAutomaticSessionMemoryPrompt,
+  queueSessionSanitizationWrite,
+} from "../../memory/session-sanitization/service.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -171,6 +176,16 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  const canonicalInbound = deriveInboundMessageHookContext(finalized);
+  if (canonicalInbound.transcript) {
+    queueSessionSanitizationWrite({
+      cfg,
+      agentId,
+      sessionId,
+      canonical: canonicalInbound,
+    });
+  }
 
   await applyResetModelOverride({
     cfg,
@@ -354,6 +369,13 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
+  const transcriptMemorySystemPrompt = await buildAutomaticSessionMemoryPrompt({
+    cfg,
+    agentId,
+    sessionId,
+    query: cleanedBody,
+  });
+
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -398,5 +420,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    transcriptMemorySystemPrompt,
   });
 }

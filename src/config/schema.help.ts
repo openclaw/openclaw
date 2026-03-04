@@ -786,6 +786,18 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
+  "memory.sessions":
+    "Current-session transcript memory sidecars and sanitization runtime. Keep this disabled unless you explicitly want transcript-origin recall sidecars backed by a sandboxed helper.",
+  "memory.sessions.sanitization":
+    "Configures transcript-origin current-session memory sanitization. This feature mirrors raw transcript turns into expiring sidecars, stores sanitized summaries for the active session, and fails closed when sandbox isolation is unavailable.",
+  "memory.sessions.sanitization.enabled":
+    "Enables transcript-origin current-session memory sanitization (default: false). When enabled, OpenClaw writes per-turn expiring raw sidecars plus sanitized per-session summaries and exposes current-session recall/signal tools only if sandbox isolation is available.",
+  "memory.sessions.sanitization.model":
+    "Optional model override for the internal transcript sanitization helper. When unset, the helper falls back to agents.defaults.subagents.model, then agents.defaults.model.",
+  "memory.sessions.sanitization.thinking":
+    'Thinking level for the internal sanitization helper (default: "low"). Keep this low for throughput unless transcript extraction quality clearly needs more reasoning.',
+  "memory.sessions.sanitization.rawMaxAge":
+    'Retention window for per-turn raw transcript sidecars before they expire (default: "24h"). Shorter windows reduce exposure and disk use; longer windows improve raw-backed recall during long sessions.',
   "memory.qmd.command":
     "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
   "memory.qmd.mcporter":

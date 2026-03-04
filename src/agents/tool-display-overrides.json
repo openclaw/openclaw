@@ -82,6 +82,16 @@
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
     },
+    "session_memory_recall": {
+      "emoji": "ðŸ§¾",
+      "title": "Session Memory Recall",
+      "detailKeys": ["query"]
+    },
+    "session_memory_signal": {
+      "emoji": "ðŸ“Œ",
+      "title": "Session Memory Signal",
+      "detailKeys": ["query", "limit"]
+    },
     "web_search": {
       "emoji": "🔎",
       "title": "Web Search",

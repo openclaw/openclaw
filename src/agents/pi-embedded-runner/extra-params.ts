@@ -826,9 +826,16 @@ function createQwenStopTokenWrapper(baseStreamFn: StreamFn | undefined): StreamF
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
+        const qwenThinkingFormat =
+          model.api === "openai-completions"
+            ? (
+                model.compat as
+                  | { thinkingFormat?: "openai" | "zai" | "qwen" }
+                  | undefined
+              )?.thinkingFormat
+            : undefined;
         if (
-          model.api === "openai-completions" &&
-          model.compat?.thinkingFormat === "qwen" &&
+          qwenThinkingFormat === "qwen" &&
           payload &&
           typeof payload === "object"
         ) {

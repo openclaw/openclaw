@@ -27,9 +27,13 @@ vi.mock("../../agents/workspace.js", () => ({
 vi.mock("../../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: vi.fn(() => undefined),
 }));
-vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
-}));
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({})),
+  };
+});
 vi.mock("../../link-understanding/apply.js", () => ({
   applyLinkUnderstanding: vi.fn(async () => undefined),
 }));

@@ -1,4 +1,5 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
+import type { AgentModelConfig } from "./types.agents-shared.js";
 
 export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
@@ -7,7 +8,19 @@ export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  sessions?: MemorySessionsConfig;
   qmd?: MemoryQmdConfig;
+};
+
+export type MemorySessionsConfig = {
+  sanitization?: MemorySessionSanitizationConfig;
+};
+
+export type MemorySessionSanitizationConfig = {
+  enabled?: boolean;
+  model?: AgentModelConfig;
+  thinking?: string;
+  rawMaxAge?: string;
 };
 
 export type MemoryQmdConfig = {

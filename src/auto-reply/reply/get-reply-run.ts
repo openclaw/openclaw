@@ -176,6 +176,7 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  transcriptMemorySystemPrompt?: string;
 };
 
 export async function runPreparedReply(
@@ -218,6 +219,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    transcriptMemorySystemPrompt,
   } = params;
   let {
     sessionEntry,
@@ -272,6 +274,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    transcriptMemorySystemPrompt?.trim(),
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

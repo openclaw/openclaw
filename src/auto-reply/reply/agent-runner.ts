@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { cleanupSessionSanitizationArtifacts } from "../../memory/session-sanitization/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -298,6 +299,12 @@ export async function runReplyAgent(params: {
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
     defaultRuntime.error(buildLogMessage(nextSessionId));
+    if (prevSessionId) {
+      await cleanupSessionSanitizationArtifacts({
+        agentId,
+        sessionId: prevSessionId,
+      });
+    }
     if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
       const resolved = resolveSessionFilePath(
