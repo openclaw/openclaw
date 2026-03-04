@@ -11,25 +11,13 @@ const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 type TelegramApiOk<T> = { ok: true; result: T };
 type TelegramApiErr = { ok: false; description?: string };
+type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elapsedMs">;
 
 export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
-): Promise<TelegramGroupMembershipAudit> {
-  const started = Date.now();
-  const token = params.token?.trim() ?? "";
-  if (!token || params.groupIds.length === 0) {
-    return {
-      ok: true,
-      checkedGroups: 0,
-      unresolvedGroups: 0,
-      hasWildcardUnmentionedGroups: false,
-      groups: [],
-      elapsedMs: Date.now() - started,
-    };
-  }
-
+): Promise<TelegramGroupMembershipAuditData> {
   const fetcher = params.proxyUrl ? makeProxyFetch(params.proxyUrl) : fetch;
-  const base = `${TELEGRAM_API_BASE}/bot${token}`;
+  const base = `${TELEGRAM_API_BASE}/bot${params.token}`;
   const groups: TelegramGroupMembershipAuditEntry[] = [];
 
   for (const chatId of params.groupIds) {
@@ -82,6 +70,5 @@ export async function auditTelegramGroupMembershipImpl(
     unresolvedGroups: 0,
     hasWildcardUnmentionedGroups: false,
     groups,
-    elapsedMs: Date.now() - started,
   };
 }

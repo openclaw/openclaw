@@ -94,8 +94,12 @@ export async function auditTelegramGroupMembership(
   // Lazy import to avoid pulling `undici` (ProxyAgent) into cold-path callers that only need
   // `collectTelegramUnmentionedGroupIds` (e.g. config audits).
   const { auditTelegramGroupMembershipImpl } = await loadAuditMembershipRuntime();
-  return await auditTelegramGroupMembershipImpl({
+  const result = await auditTelegramGroupMembershipImpl({
     ...params,
     token,
   });
+  return {
+    ...result,
+    elapsedMs: Date.now() - started,
+  };
 }
