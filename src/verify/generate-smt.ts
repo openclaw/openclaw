@@ -90,20 +90,24 @@ function main() {
   // 4. Verify with Z3
   if (verify) {
     console.log("--- Verifying with Z3 ---");
-    verifyWithZ3(outputDir);
+    const ok = verifyWithZ3(outputDir);
+    if (!ok) {
+      process.exitCode = 1;
+    }
   }
 
   console.log("=== Done ===");
 }
 
-function verifyWithZ3(outputDir: string) {
+function verifyWithZ3(outputDir: string): boolean {
+  let success = true;
   const modelDir = path.join(outputDir, "model");
 
   // Test individual model files with all.smt2
   const allPath = path.join(modelDir, "all.smt2");
   if (!fs.existsSync(allPath)) {
     console.log("  all.smt2 not found, skipping model verification.");
-    return;
+    return false;
   }
 
   const z3Result = spawnSync("z3", [allPath], {
@@ -119,6 +123,9 @@ function verifyWithZ3(outputDir: string) {
   }
   if (z3Result.stderr) {
     console.log(`    ${z3Result.stderr.trim()}`);
+  }
+  if (z3Result.status !== 0) {
+    success = false;
   }
 
   // Run property checks if available
@@ -139,8 +146,10 @@ function verifyWithZ3(outputDir: string) {
       if (propResult.stderr) {
         console.log(propResult.stderr);
       }
+      success = false;
     }
   }
+  return success;
 }
 
 main();
