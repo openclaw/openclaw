@@ -171,7 +171,7 @@ describe("temporal decay", () => {
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
   });
 
-  // ===== New tests for expanded date pattern matching =====
+  // ===== Tests for expanded date pattern matching =====
 
   describe("expanded date pattern matching", () => {
     it("applies decay to suffixed daily logs (memory/YYYY-MM-DD-suffix.md)", async () => {
@@ -204,7 +204,6 @@ describe("temporal decay", () => {
         keyword: [],
       });
 
-      // Recent suffixed file should rank higher despite lower vectorScore
       expect(merged[0]?.path).toBe("memory/2026-02-09-retro.md");
       expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
     });
@@ -219,9 +218,7 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Old date-subdir file should be heavily decayed
       expect(decayed[0]!.score).toBeLessThan(0.01);
-      // Today's file should keep its score
       expect(decayed[1]!.score).toBeCloseTo(0.8);
     });
 
@@ -235,7 +232,6 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Both should be significantly decayed (months old)
       expect(decayed[0]!.score).toBeLessThan(0.01);
       expect(decayed[1]!.score).toBeLessThan(0.01);
     });
@@ -251,11 +247,8 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Today's file: no decay
       expect(decayed[0]!.score).toBeCloseTo(0.9);
-      // Yesterday's file: minimal decay
       expect(decayed[1]!.score).toBeCloseTo(0.85, 1);
-      // Old file: heavy decay
       expect(decayed[2]!.score).toBeLessThan(0.01);
     });
 
@@ -283,7 +276,6 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Evergreen files should not decay
       expect(decayed[0]!.score).toBeCloseTo(0.9);
       expect(decayed[1]!.score).toBeCloseTo(0.85);
     });
@@ -299,11 +291,9 @@ describe("temporal decay", () => {
 
       const decayed = await applyTemporalDecayToHybridResults({
         results: [
-          // Dated: should decay
           { path: "memory/2025-01-01.md", score: 1, source: "memory" },
           { path: "memory/2025-06-15-standup.md", score: 0.9, source: "memory" },
           { path: "memory/2025-03-20/notes.md", score: 0.85, source: "memory" },
-          // Evergreen: should NOT decay
           { path: "memory/preferences.md", score: 0.7, source: "memory" },
           { path: "MEMORY.md", score: 0.6, source: "memory" },
         ],
@@ -312,11 +302,9 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Dated files: all significantly decayed (months old)
       expect(decayed[0]!.score).toBeLessThan(0.01);
       expect(decayed[1]!.score).toBeLessThan(0.01);
       expect(decayed[2]!.score).toBeLessThan(0.01);
-      // Evergreen files: unchanged
       expect(decayed[3]!.score).toBeCloseTo(0.7);
       expect(decayed[4]!.score).toBeCloseTo(0.6);
     });
@@ -331,10 +319,81 @@ describe("temporal decay", () => {
         nowMs: NOW_MS,
       });
 
-      // Old file should be decayed even with backslash paths
       expect(decayed[0]!.score).toBeLessThan(0.01);
-      // Today's file should keep score
       expect(decayed[1]!.score).toBeCloseTo(0.9);
+    });
+  });
+
+  // ===== Tests for invalid date fallback to fs.stat mtime =====
+
+  describe("invalid date fallback to mtime", () => {
+    it("falls back to mtime for invalid calendar dates like month=13", async () => {
+      const dir = await makeTempDir();
+
+      // Create a file that looks dated but has invalid month (13)
+      const invalidPath = path.join(dir, "memory", "2025-13-40.md");
+      await fs.mkdir(path.dirname(invalidPath), { recursive: true });
+      await fs.writeFile(invalidPath, "invalid date content");
+      const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
+      await fs.utimes(invalidPath, oldMtime, oldMtime);
+
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2025-13-40.md", score: 1, source: "memory" },
+        ],
+        workspaceDir: dir,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Should decay based on mtime (30 days old = half-life), NOT stay at 1.0
+      expect(decayed[0]!.score).toBeCloseTo(0.5, 1);
+    });
+
+    it("falls back to mtime for impossible day like Feb 31", async () => {
+      const dir = await makeTempDir();
+
+      const invalidPath = path.join(dir, "memory", "2026-02-31-notes.md");
+      await fs.mkdir(path.dirname(invalidPath), { recursive: true });
+      await fs.writeFile(invalidPath, "feb 31 does not exist");
+      const recentMtime = new Date(NOW_MS - 3 * DAY_MS);
+      await fs.utimes(invalidPath, recentMtime, recentMtime);
+
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2026-02-31-notes.md", score: 0.9, source: "memory" },
+        ],
+        workspaceDir: dir,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // Should decay slightly based on 3-day-old mtime, NOT be treated as evergreen
+      expect(decayed[0]!.score).toBeLessThan(0.9);
+      expect(decayed[0]!.score).toBeGreaterThan(0.8);
+    });
+
+    it("does not treat invalid-dated files as evergreen", async () => {
+      const dir = await makeTempDir();
+
+      // Invalid date in subdirectory pattern
+      const invalidSubdirPath = path.join(dir, "memory", "2026-00-00", "notes.md");
+      await fs.mkdir(path.dirname(invalidSubdirPath), { recursive: true });
+      await fs.writeFile(invalidSubdirPath, "invalid subdir date");
+      const oldMtime = new Date(NOW_MS - 60 * DAY_MS);
+      await fs.utimes(invalidSubdirPath, oldMtime, oldMtime);
+
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: [
+          { path: "memory/2026-00-00/notes.md", score: 1, source: "memory" },
+        ],
+        workspaceDir: dir,
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+        nowMs: NOW_MS,
+      });
+
+      // 60 days old = 2 half-lives = ~0.25, definitely not 1.0 (evergreen)
+      expect(decayed[0]!.score).toBeCloseTo(0.25, 1);
     });
   });
 });
