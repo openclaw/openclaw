@@ -210,6 +210,9 @@ function handleFileSelect(e: Event, props: ChatProps) {
 }
 
 function handleDragOver(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes("Files")) {
+    return; // Only handle file drags, let text drags fall through
+  }
   e.preventDefault();
   e.stopPropagation();
   const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
@@ -228,17 +231,18 @@ function handleDragLeave(e: DragEvent) {
 }
 
 function handleDrop(e: DragEvent, props: ChatProps) {
-  e.preventDefault();
-  e.stopPropagation();
   const compose = (e.currentTarget as HTMLElement).closest(".chat-compose");
   compose?.classList.remove("chat-compose--dragover");
 
-  if (!props.connected) {
-    return;
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return; // Let non-file drops (text, URLs) fall through to default behavior
   }
 
-  const files = e.dataTransfer?.files;
-  if (!files) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (!props.connected) {
     return;
   }
 
