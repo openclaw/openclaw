@@ -72,7 +72,7 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace: vi.fn(),
 }));
 
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/googlechat";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/compat";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage, uploadGoogleChatAttachment } from "./api.js";
 import { googlechatPlugin } from "./channel.js";
