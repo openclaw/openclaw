@@ -31,6 +31,22 @@ See [Venice AI](/providers/venice).
 }
 ```
 
+## Harness and model quality
+
+Keep this split in mind when debugging:
+
+- OpenClaw is the harness (tools, routing, sessions, and safety controls).
+- Your provider handles API auth and transport.
+- The model controls most output quality and reasoning strength.
+
+If responses are weak or inconsistent but your setup is healthy, switch to a stronger
+state-of-the-art (SOTA) model first:
+
+```bash
+openclaw models list --all
+openclaw models set <provider/model>
+```
+
 ## Supported providers (starter set)
 
 - [OpenAI (API + Codex)](/providers/openai)

@@ -304,6 +304,91 @@ describe("runOnboardingWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
+  it("shows model quality note on first install before model/auth selection", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    promptAuthChoiceGrouped.mockClear();
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const noteMock = note as unknown as {
+      mock: { calls: unknown[][]; invocationCallOrder: number[] };
+    };
+    const modelNoteIndex = noteMock.mock.calls.findIndex((call) => call?.[1] === "Model quality");
+    expect(modelNoteIndex).toBeGreaterThanOrEqual(0);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalled();
+    const modelNoteOrder =
+      noteMock.mock.invocationCallOrder[modelNoteIndex] ?? Number.MAX_SAFE_INTEGER;
+    const authPromptOrder =
+      promptAuthChoiceGrouped.mock.invocationCallOrder[0] ?? Number.MIN_SAFE_INTEGER;
+    expect(modelNoteOrder).toBeLessThan(authPromptOrder);
+  });
+
+  it("does not show model quality note when config already exists", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const noteMock = note as unknown as { mock: { calls: unknown[][] } };
+    const hasModelNote = noteMock.mock.calls.some((call) => call?.[1] === "Model quality");
+    expect(hasModelNote).toBe(false);
+  });
+
   async function runTuiHatchTest(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;
