@@ -117,12 +117,79 @@ Replace with actual implementation or delete if not needed.
 Example real scripts from other skills:
 - pdf/scripts/fill_fillable_fields.py - Fills PDF form fields
 - pdf/scripts/convert_pdf_to_images.py - Converts PDF pages to images
+- docx/scripts/document.py - Document manipulation utilities
 """
 
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("{skill_name}")
+
+
+def process_data(input_file: str, output_file: str) -> bool:
+    """
+    Process input data and write results to output file.
+    
+    Args:
+        input_file: Path to input file
+        output_file: Path to output file
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        input_path = Path(input_file)
+        if not input_path.exists():
+            logger.error("Input file not found: %s", input_file)
+            return False
+        
+        # Replace this placeholder with your actual processing logic.
+        # Common patterns:
+        # - JSON data transformation: data = json.load(input_path); result = process(data); json.dump(result, output_path)
+        # - CSV processing: use csv module to read, transform, and write
+        # - API integration: fetch from API, transform response, save results
+        # - Format conversion: detect input format, convert to target format
+        logger.info("Processing %s...", input_file)
+        
+        # Placeholder: just copy input to output
+        output_path = Path(output_file)
+        output_path.write_text(input_path.read_text())
+        
+        logger.info("Results written to %s", output_file)
+        return True
+        
+    except Exception as e:
+        logger.error("Processing failed: %s", e)
+        return False
+
+
 def main():
-    print("This is an example script for {skill_name}")
-    # TODO: Add actual script logic here
-    # This could be data processing, file conversion, API calls, etc.
+    parser = argparse.ArgumentParser(
+        description="Process data using {skill_name}"
+    )
+    parser.add_argument("--input", required=True, help="Input file path")
+    parser.add_argument("--output", required=True, help="Output file path")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    
+    args = parser.parse_args()
+    
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+    
+    success = process_data(args.input, args.output)
+    sys.exit(0 if success else 1)
+
 
 if __name__ == "__main__":
     main()
