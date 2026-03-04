@@ -101,12 +101,6 @@ export function createTypingSignaler(params: {
     if (renderable) {
       hasRenderableText = true;
     } else if (text?.trim()) {
-      // For thinking mode: don't treat reasoning/thinking content as renderable text
-      // This prevents typing on runs that end up as NO_REPLY
-      if (shouldStartOnReasoning && !hasRenderableText) {
-        // In thinking mode, only start typing if we've already seen renderable text
-        return;
-      }
       return;
     }
     // Skip typing on thinking blocks in thinking mode until we have actual renderable content
