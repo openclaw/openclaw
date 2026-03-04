@@ -55,12 +55,22 @@ export function createAccountListHelpers(
     // default would start a duplicate provider on the same credentials.
     const channel = cfg.channels?.[channelKey];
     const base = channel as Record<string, unknown> | undefined;
-    const hasBaseTokens = Boolean(base?.botToken || base?.appToken || base?.token);
-    if (hasBaseTokens) {
+    const isTruthy = (v: unknown): boolean =>
+      typeof v === "string" ? v.trim().length > 0 : Boolean(v);
+    // Identify which token fields the base config provides.
+    const baseTokenFields = (["botToken", "appToken", "token"] as const).filter((f) =>
+      isTruthy(base?.[f]),
+    );
+    if (baseTokenFields.length > 0) {
       const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
       const everyAccountHasOwnTokens = ids.every((id) => {
         const acct = accounts[id];
-        return acct && Boolean(acct.botToken || acct.appToken || acct.token);
+        if (!acct) {
+          return false;
+        }
+        // An account is only independent if it overrides *every* base token
+        // field.  Partial overrides still inherit the remaining base tokens.
+        return baseTokenFields.every((f) => isTruthy(acct[f]));
       });
       if (everyAccountHasOwnTokens) {
         // Every named account has distinct credentials, so default won't
