@@ -340,6 +340,10 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
+  trigger?: string;
+  /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
+  channelId?: string;
 };
 
 // before_model_resolve hook
@@ -562,17 +566,20 @@ export type PluginHookBeforeMessageWriteResult = {
 export type PluginHookSessionContext = {
   agentId?: string;
   sessionId: string;
+  sessionKey?: string;
 };
 
 // session_start hook
 export type PluginHookSessionStartEvent = {
   sessionId: string;
+  sessionKey?: string;
   resumedFrom?: string;
 };
 
 // session_end hook
 export type PluginHookSessionEndEvent = {
   sessionId: string;
+  sessionKey?: string;
   messageCount: number;
   durationMs?: number;
 };

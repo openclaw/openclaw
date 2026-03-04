@@ -1,4 +1,4 @@
-import { resolveAllowlistMatchByCandidates, type AllowlistMatch } from "openclaw/plugin-sdk";
+import { resolveAllowlistMatchByCandidates, type AllowlistMatch } from "openclaw/plugin-sdk/compat";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);

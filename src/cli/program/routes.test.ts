@@ -102,6 +102,38 @@ describe("program routes", () => {
     expect(runConfigUnsetMock).toHaveBeenCalledWith({ path: "update.channel" });
   });
 
+  it("passes config get path when root value options appear after subcommand", async () => {
+    const route = expectRoute(["config", "get"]);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "config",
+        "get",
+        "--log-level",
+        "debug",
+        "update.channel",
+        "--json",
+      ]),
+    ).resolves.toBe(true);
+    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true });
+  });
+
+  it("passes config unset path when root value options appear after subcommand", async () => {
+    const route = expectRoute(["config", "unset"]);
+    await expect(
+      route?.run(["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"]),
+    ).resolves.toBe(true);
+    expect(runConfigUnsetMock).toHaveBeenCalledWith({ path: "update.channel" });
+  });
+
+  it("returns false for config get route when unknown option appears", async () => {
+    await expectRunFalse(
+      ["config", "get"],
+      ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
+    );
+  });
+
   it("returns false for memory status route when --agent value is missing", async () => {
     await expectRunFalse(["memory", "status"], ["node", "openclaw", "memory", "status", "--agent"]);
   });

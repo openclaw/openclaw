@@ -13,6 +13,7 @@ import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.j
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { stripReasoningTagsFromText } from "../../../shared/text/reasoning-tags.js";
 import { removeSlackReaction } from "../../actions.js";
+import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -141,6 +142,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingReaction = ctx.typingReaction;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       didSetStatus = true;
@@ -149,6 +151,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: statusThreadTs,
         status: "is typing...",
       });
+      if (typingReaction && message.ts) {
+        await reactSlackMessage(message.channel, message.ts, typingReaction, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        }).catch(() => {});
+      }
     },
     stop: async () => {
       if (!didSetStatus) {
@@ -160,6 +168,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: statusThreadTs,
         status: "",
       });
+      if (typingReaction && message.ts) {
+        await removeSlackReaction(message.channel, message.ts, typingReaction, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        }).catch(() => {});
+      }
     },
     onStartError: (err) => {
       logTypingFailure({

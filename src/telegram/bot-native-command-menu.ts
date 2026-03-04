@@ -8,6 +8,7 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -169,7 +170,7 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = await readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      runtime.log?.("telegram: command menu unchanged; skipping sync");
+      logVerbose("telegram: command menu unchanged; skipping sync");
       return;
     }
 
