@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { hasExplicitCliBackend, resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -131,32 +131,38 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const codexCliBackend = resolveCliBackendConfig("codex-cli", params.followupRun.run.config);
+  // Only resolve codex CLI backend for auto-fallback when the user has
+  // explicitly configured it.  resolveCliBackendConfig() always returns
+  // non-null for "codex-cli" because it merges with a built-in default,
+  // so without this guard we'd attempt to spawn the `codex` binary on
+  // every system — even when it isn't installed.
+  const codexCliBackend = hasExplicitCliBackend("codex-cli", params.followupRun.run.config)
+    ? resolveCliBackendConfig("codex-cli", params.followupRun.run.config)
+    : null;
   const modelApiByRef = new Map<string, string | undefined>();
+  const resolveModelApi = (provider: string, model: string): string | undefined => {
+    const key = `${provider}\0${model}`;
+    if (modelApiByRef.has(key)) {
+      return modelApiByRef.get(key);
+    }
+    let resolvedApi: string | undefined;
+    try {
+      const resolved = resolveModel(
+        provider,
+        model,
+        params.followupRun.run.agentDir,
+        params.followupRun.run.config,
+      );
+      resolvedApi = resolved.model?.api;
+    } catch {
+      resolvedApi = undefined;
+    }
+    modelApiByRef.set(key, resolvedApi);
+    return resolvedApi;
+  };
 
   while (true) {
     try {
-      const resolveModelApi = (provider: string, model: string): string | undefined => {
-        const key = `${provider}\0${model}`;
-        if (modelApiByRef.has(key)) {
-          return modelApiByRef.get(key);
-        }
-        let resolvedApi: string | undefined;
-        try {
-          const resolved = resolveModel(
-            provider,
-            model,
-            params.followupRun.run.agentDir,
-            params.followupRun.run.config,
-          );
-          resolvedApi = resolved.model?.api;
-        } catch {
-          resolvedApi = undefined;
-        }
-        modelApiByRef.set(key, resolvedApi);
-        return resolvedApi;
-      };
-
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -304,27 +310,32 @@ export async function runAgentTurnWithFallback(params: {
 
               return result;
             } catch (err) {
-              if (!lifecycleTerminalEmitted) {
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-              }
               // When the codex CLI backend was auto-selected (not explicitly configured
               // by the user) and the CLI binary is unavailable or fails to launch,
               // fall through to the embedded runner instead of surfacing an error.
+              // Don't emit a lifecycle error here — the embedded runner will emit its
+              // own complete lifecycle (start -> end), and emitting error + start would
+              // create an invalid sequence.
               if (isCodexAutoFallback) {
                 defaultRuntime.log(
                   `Codex CLI backend unavailable, falling back to embedded runner: ${String(err)}`,
                 );
+                // Mark as emitted so the finally-block backstop doesn't fire either.
+                lifecycleTerminalEmitted = true;
               } else {
+                if (!lifecycleTerminalEmitted) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "error",
+                      startedAt,
+                      endedAt: Date.now(),
+                      error: String(err),
+                    },
+                  });
+                  lifecycleTerminalEmitted = true;
+                }
                 throw err;
               }
             } finally {
