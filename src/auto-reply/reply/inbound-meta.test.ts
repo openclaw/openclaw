@@ -99,6 +99,17 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("uses webchat channel for control-ui sender when route channel is missing", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      SenderId: "openclaw-control-ui",
+      Provider: "slack",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBe("webchat");
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {
@@ -120,6 +131,17 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toBe("");
+  });
+
+  it("hides conversation info for direct control-ui chats when provider is stale", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderId: "openclaw-control-ui",
+      Provider: "slack",
+      MessageSid: "short-id",
+    } as TemplateContext);
+
+    expect(text).not.toContain("Conversation info (untrusted metadata):");
   });
 
   it("includes message identifiers for direct external-channel chats", () => {

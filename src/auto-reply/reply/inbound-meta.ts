@@ -31,8 +31,19 @@ function formatConversationTimestamp(value: unknown): string | undefined {
   }
 }
 
+function isControlUiSenderId(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "openclaw-control-ui" || normalized === "webchat-ui";
+}
+
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  if (!channelValue && isControlUiSenderId(safeTrim(ctx.SenderId))) {
+    // Control-UI is an internal webchat surface. If upstream route metadata is missing,
+    // prefer the internal webchat channel identity instead of inheriting a stale
+    // external provider (e.g. slack) from prior session routing.
+    channelValue = "webchat";
+  }
   if (!channelValue) {
     const provider = safeTrim(ctx.Provider);
     if (provider !== "webchat" && ctx.Surface !== "webchat") {
