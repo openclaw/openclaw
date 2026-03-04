@@ -14,6 +14,25 @@ public protocol WebSocketTasking: AnyObject {
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
 
+private final class PingContinuationGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(error: Error?) {
+        self.lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        self.lock.unlock()
+
+        guard let continuation else { return }
+        ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+    }
+}
+
 public struct WebSocketTaskBox: @unchecked Sendable {
     public let task: any WebSocketTasking
     public init(task: any WebSocketTasking) {
@@ -44,8 +63,9 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let guardBox = PingContinuationGuard(continuation)
             self.task.sendPing { error in
-                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+                guardBox.resume(error: error)
             }
         }
     }
