@@ -57,7 +57,7 @@ export function createDiscordDraftStream(params: {
         const truncatedText = trimmed.slice(0, maxChars - truncationWarning.length) + truncationWarning;
 
         params.warn?.(
-          `discord stream preview truncated (${"$"}{trimmed.length} > ${"$"}{maxChars} chars). Consider disabling verbose mode for long outputs.`,
+          `discord stream preview truncated (${trimmed.length} > ${maxChars} chars). Consider disabling verbose mode for long outputs.`,
         );
 
         // Send the truncated content
