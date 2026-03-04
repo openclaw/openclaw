@@ -18,6 +18,12 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
+    /** Inject a message into a session and wake the agent immediately. */
+    deliverToSession: (
+      sessionKey: string,
+      message: string,
+      opts?: { timeoutMs?: number; deliver?: boolean; channel?: string; to?: string },
+    ) => Promise<void>;
   };
   media: {
     loadWebMedia: typeof import("../../web/media.js").loadWebMedia;
