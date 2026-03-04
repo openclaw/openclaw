@@ -37,7 +37,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
-  it("suppresses agent events on message_end without <final> tags when enforced", () => {
+  it("recovers plain text via fallback when model omits <final> tags even with enforceFinalTag", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
@@ -49,10 +49,33 @@ describe("subscribeEmbeddedPiSession", () => {
       onAgentEvent,
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    // With enforceFinalTag, text without <final> tags is treated as leaked
-    // reasoning and should NOT be recovered by the message_end fallback.
+    // With enforceFinalTag, text without <final> tags is now recovered via the
+    // message_end fallback so non-compliant models (e.g. MiniMax-M2.5) still
+    // produce visible output instead of silently dropping the reply.
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(0);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("Hello world");
+  });
+
+  it("strips <think> blocks from fallback text when model omits <final> tags", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+    emitMessageStartAndEndForAssistantText({
+      emit,
+      text: "<think>internal reasoning</think>visible reply",
+    });
+    // The <think> block should be stripped; only the user-visible reply emitted.
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].text).toBe("visible reply");
   });
   it("emits via streaming when <final> tags are present and enforcement is on", () => {
     const { session, emit } = createStubSessionHarness();

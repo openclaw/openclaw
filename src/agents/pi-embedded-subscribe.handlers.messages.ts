@@ -288,9 +288,12 @@ export function handleMessageEnd(
   let mediaUrls = parsedText?.mediaUrls;
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
 
-  if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
+  if (!cleanedText && !hasMedia) {
     const rawTrimmed = rawText.trim();
-    const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
+    // Strip <think>…</think> blocks so reasoning content from thinking-enabled
+    // models does not leak into the reply when the model omits required <final> tags.
+    const rawNoThink = rawTrimmed.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    const rawStrippedFinal = rawNoThink.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
       const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
