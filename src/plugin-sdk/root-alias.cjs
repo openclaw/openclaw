@@ -74,24 +74,26 @@ function getJiti() {
   return jitiLoader;
 }
 
+function loadWithJiti(modulePath) {
+  return getJiti()(modulePath);
+}
+
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
-  const jiti = getJiti();
-
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = loadWithJiti(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = loadWithJiti(path.join(__dirname, "index.ts"));
   return monolithicSdk;
 }
 
@@ -106,6 +108,7 @@ function tryLoadMonolithicSdk() {
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
+  __unsafeIsMonolithicLoadedForTest: () => monolithicSdk !== null,
 };
 
 const rootProxy = new Proxy(fastExports, {
@@ -119,7 +122,8 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return Reflect.get(target, prop, receiver);
     }
-    return loadMonolithicSdk()[prop];
+    const monolithic = tryLoadMonolithicSdk();
+    return monolithic ? monolithic[prop] : undefined;
   },
   has(target, prop) {
     if (prop === "__esModule" || prop === "default") {
@@ -133,8 +137,6 @@ const rootProxy = new Proxy(fastExports, {
   },
   ownKeys(target) {
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
-    // Keep Object.keys/property reflection fast and deterministic.
-    // Only expose monolithic keys if it was already loaded by direct access.
     if (monolithicSdk) {
       for (const key of Reflect.ownKeys(monolithicSdk)) {
         keys.add(key);

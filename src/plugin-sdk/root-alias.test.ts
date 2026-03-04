@@ -13,6 +13,12 @@ type EmptySchema = {
       };
 };
 
+type RootAliasTestHooks = {
+  __unsafeIsMonolithicLoadedForTest?: () => boolean;
+  __unsafeResetMonolithicForTest?: () => void;
+  __unsafeSetJitiOverrideForTest?: (loader: (modulePath: string) => unknown) => void;
+};
+
 describe("plugin-sdk root alias", () => {
   it("exposes the fast empty config schema helper", () => {
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
@@ -32,6 +38,28 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
+  });
+
+  it("keeps fast legacy export resolution off the monolithic SDK path", () => {
+    const hooks = rootSdk as RootAliasTestHooks;
+    expect(typeof hooks.__unsafeIsMonolithicLoadedForTest).toBe("function");
+    expect(hooks.__unsafeIsMonolithicLoadedForTest?.()).toBe(false);
+
+    expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
+
+    expect(hooks.__unsafeIsMonolithicLoadedForTest?.()).toBe(false);
+  });
+
+  it("propagates monolithic loader failures for non-fast exports", () => {
+    const hooks = rootSdk as RootAliasTestHooks;
+    hooks.__unsafeResetMonolithicForTest?.();
+    hooks.__unsafeSetJitiOverrideForTest?.(() => {
+      throw new Error("forced-monolithic-load-failure");
+    });
+
+    expect(() => rootSdk.registerPluginHttpRoute).toThrow("forced-monolithic-load-failure");
+
+    hooks.__unsafeResetMonolithicForTest?.();
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
