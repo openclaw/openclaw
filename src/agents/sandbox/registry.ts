@@ -104,21 +104,27 @@ async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): 
     release = resolve;
   });
   await prev;
-  // Acquire the file lock for cross-process safety (e.g. `openclaw sandbox
-  // recreate` CLI running concurrently with the gateway). Because the
-  // in-process mutex above serialises all gateway callers, only one waiter
-  // ever contends for the file lock at a time — acquisition is instant.
-  const fileLock = await acquireSessionWriteLock({
-    sessionFile: registryPath,
-    allowReentrant: false,
-  });
   try {
-    // Race against a timeout so a stalled file write surfaces as an explicit
-    // error instead of silently blocking all subsequent mutations.
+    // Acquire the file lock for cross-process safety (e.g. `openclaw sandbox
+    // recreate` CLI running concurrently with the gateway). Because the
+    // in-process mutex above serialises all gateway callers, only one waiter
+    // ever contends for the file lock at a time — acquisition is instant.
+    // NOTE: placed inside try/finally so release() always fires even if
+    // acquireSessionWriteLock throws (e.g. its 10-second timeout).
+    const fileLock = await acquireSessionWriteLock({
+      sessionFile: registryPath,
+      allowReentrant: false,
+    });
+    // Start fn() eagerly so we can drain it in the finally even when the
+    // timeout fires first — prevents a slow/stalled write from racing the
+    // next mutation's read-modify-write cycle after the file lock is released.
+    const fnPromise = fn();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
+      // Race against a timeout so a stalled file write surfaces as an explicit
+      // error instead of silently blocking all subsequent mutations.
       return await Promise.race([
-        fn(),
+        fnPromise,
         new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(
             () => reject(new Error(`registry mutation timed out: ${registryPath}`)),
@@ -128,9 +134,14 @@ async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): 
       ]);
     } finally {
       clearTimeout(timeoutHandle);
+      // Drain fn() before releasing the file lock so a timed-out write cannot
+      // race the next mutation. The file lock is held until fn() settles.
+      await fnPromise.catch(() => {});
+      await fileLock.release();
     }
   } finally {
-    await fileLock.release();
+    // Always release the in-process mutex so subsequent waiters can proceed,
+    // even if acquireSessionWriteLock or fn() threw.
     release();
   }
 }
