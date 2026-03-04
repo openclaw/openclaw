@@ -12,7 +12,7 @@ import {
   type ChannelOnboardingDmPolicy,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
