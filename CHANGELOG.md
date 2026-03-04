@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/Compaction: compaction now runs with `thinking: off` by default, regardless of the session model's thinking level — preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set `agents.defaults.compaction.thinking: "on"` to inherit the session model's current thinking level. When a compaction run times out with thinking enabled, it retries once without thinking automatically.
 - Discord/allowBots mention gating: add `allowBots: "mentions"` to only accept bot-authored messages that mention the bot. Thanks @thewilloftheshadow.
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
 - Tools/Web search: switch Perplexity provider to Search API with structured results plus new language/region/time filters. (#33822) Thanks @kesku.
