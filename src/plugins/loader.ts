@@ -86,7 +86,7 @@ const resolvePluginSdkAliasFile = (params: {
 };
 
 const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "index.ts", distFile: "index.js" });
+  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
 const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
@@ -94,6 +94,10 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
 
 const resolvePluginSdkCoreAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "core.ts", distFile: "core.js" });
+};
+
+const resolvePluginSdkCompatAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "compat.ts", distFile: "compat.js" });
 };
 
 const resolvePluginSdkTelegramAlias = (): string | null => {
@@ -468,6 +472,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
+    cache: options.cache,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
@@ -501,6 +506,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
     const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
+    const pluginSdkCompatAlias = resolvePluginSdkCompatAlias();
     const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
     const pluginSdkDiscordAlias = resolvePluginSdkDiscordAlias();
     const pluginSdkSlackAlias = resolvePluginSdkSlackAlias();
@@ -511,6 +517,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...(pluginSdkCoreAlias ? { "openclaw/plugin-sdk/core": pluginSdkCoreAlias } : {}),
+      ...(pluginSdkCompatAlias ? { "openclaw/plugin-sdk/compat": pluginSdkCompatAlias } : {}),
       ...(pluginSdkTelegramAlias ? { "openclaw/plugin-sdk/telegram": pluginSdkTelegramAlias } : {}),
       ...(pluginSdkDiscordAlias ? { "openclaw/plugin-sdk/discord": pluginSdkDiscordAlias } : {}),
       ...(pluginSdkSlackAlias ? { "openclaw/plugin-sdk/slack": pluginSdkSlackAlias } : {}),
@@ -608,6 +615,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+
+    // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
+    // This avoids opening/importing heavy memory plugin modules that will never register.
+    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+      const earlyMemoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: "memory",
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
+      if (!earlyMemoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = earlyMemoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
     }
 
     if (!manifestRecord.configSchema) {
