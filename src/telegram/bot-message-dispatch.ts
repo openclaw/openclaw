@@ -91,6 +91,9 @@ export const dispatchTelegramMessage = async ({
   const isPrivateChat = msg.chat.type === "private";
   const draftThreadId = threadSpec.id;
   const draftMaxChars = Math.min(textLimit, 4096);
+  const sidDraftId = Number.parseInt(ctxPayload.MessageSid ?? "", 10);
+  const draftId =
+    Number.isFinite(sidDraftId) && sidDraftId > 0 ? sidDraftId : (msg.message_id ?? Date.now());
   const canStreamDraft =
     streamMode !== "off" &&
     isPrivateChat &&
@@ -100,7 +103,7 @@ export const dispatchTelegramMessage = async ({
     ? createTelegramDraftStream({
         api: bot.api,
         chatId,
-        draftId: msg.message_id || Date.now(),
+        draftId,
         maxChars: draftMaxChars,
         thread: threadSpec,
         log: logVerbose,
