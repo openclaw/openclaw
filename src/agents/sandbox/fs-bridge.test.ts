@@ -80,7 +80,7 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
   const canonicalPath = params?.canonicalPath;
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
-    if (script.includes('readlink -f -- "$cursor"')) {
+    if (script.includes("allow_final") && script.includes("pwd -P")) {
       return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
     }
     if (script.includes('stat -c "%F|%s|%Y"')) {
@@ -349,5 +349,20 @@ describe("sandbox fs bridge shell compatibility", () => {
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat -- "$1"'))).toBe(false);
+  });
+
+  it("resolveCanonicalContainerPath uses POSIX-compatible path resolution (no GNU-only readlink -f)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "a.txt" });
+
+    const scripts = getScriptsFromCalls();
+    const canonicalScript = scripts.find((script) => script.includes("allow_final"));
+    expect(canonicalScript).toBeDefined();
+    // readlink -f is GNU-only and unavailable in strict BusyBox ash without GNU coreutils.
+    // The canonical path script must not use it.
+    expect(canonicalScript).not.toMatch(/readlink\s+-f/);
+    // Must use POSIX-compatible canonical path resolution via cd -P / pwd -P.
+    expect(canonicalScript).toMatch(/pwd\s+-P/);
   });
 });

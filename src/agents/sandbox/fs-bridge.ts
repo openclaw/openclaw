@@ -403,7 +403,13 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       '  suffix="/$base$suffix"',
       '  cursor="$parent"',
       "done",
-      'canonical=$(readlink -f -- "$cursor")',
+      'if [ "$cursor" = "/" ]; then',
+      '  canonical="/"',
+      'elif [ -d "$cursor" ]; then',
+      '  canonical=$(CDPATH= cd -P -- "$cursor" && pwd -P)',
+      "else",
+      '  canonical=$(CDPATH= cd -P -- "$(dirname -- "$cursor")" && printf "%s/%s" "$(pwd -P)" "$(basename -- "$cursor")")',
+      "fi",
       'printf "%s%s\\n" "$canonical" "$suffix"',
     ].join("\n");
     const result = await this.runCommand(script, {
