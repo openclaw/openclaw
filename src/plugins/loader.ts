@@ -100,6 +100,30 @@ const resolvePluginSdkTelegramAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "telegram.ts", distFile: "telegram.js" });
 };
 
+const resolvePluginSdkDiscordAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "discord.ts", distFile: "discord.js" });
+};
+
+const resolvePluginSdkSlackAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "slack.ts", distFile: "slack.js" });
+};
+
+const resolvePluginSdkSignalAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "signal.ts", distFile: "signal.js" });
+};
+
+const resolvePluginSdkIMessageAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "imessage.ts", distFile: "imessage.js" });
+};
+
+const resolvePluginSdkWhatsAppAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "whatsapp.ts", distFile: "whatsapp.js" });
+};
+
+const resolvePluginSdkLineAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "line.ts", distFile: "line.js" });
+};
+
 export const __testing = {
   resolvePluginSdkAliasFile,
 };
@@ -478,10 +502,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
     const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
     const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
+    const pluginSdkDiscordAlias = resolvePluginSdkDiscordAlias();
+    const pluginSdkSlackAlias = resolvePluginSdkSlackAlias();
+    const pluginSdkSignalAlias = resolvePluginSdkSignalAlias();
+    const pluginSdkIMessageAlias = resolvePluginSdkIMessageAlias();
+    const pluginSdkWhatsAppAlias = resolvePluginSdkWhatsAppAlias();
+    const pluginSdkLineAlias = resolvePluginSdkLineAlias();
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...(pluginSdkCoreAlias ? { "openclaw/plugin-sdk/core": pluginSdkCoreAlias } : {}),
       ...(pluginSdkTelegramAlias ? { "openclaw/plugin-sdk/telegram": pluginSdkTelegramAlias } : {}),
+      ...(pluginSdkDiscordAlias ? { "openclaw/plugin-sdk/discord": pluginSdkDiscordAlias } : {}),
+      ...(pluginSdkSlackAlias ? { "openclaw/plugin-sdk/slack": pluginSdkSlackAlias } : {}),
+      ...(pluginSdkSignalAlias ? { "openclaw/plugin-sdk/signal": pluginSdkSignalAlias } : {}),
+      ...(pluginSdkIMessageAlias ? { "openclaw/plugin-sdk/imessage": pluginSdkIMessageAlias } : {}),
+      ...(pluginSdkWhatsAppAlias ? { "openclaw/plugin-sdk/whatsapp": pluginSdkWhatsAppAlias } : {}),
+      ...(pluginSdkLineAlias ? { "openclaw/plugin-sdk/line": pluginSdkLineAlias } : {}),
       ...(pluginSdkAccountIdAlias
         ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
         : {}),
