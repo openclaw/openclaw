@@ -1,3 +1,4 @@
+import type { Bot } from "grammy";
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -499,6 +500,7 @@ export const registerTelegramHandlers = ({
     msg?: Message;
     ctx: TelegramContext;
     botUsername?: string;
+    bot: Bot;
   }) => {
     const {
       isGroup,
@@ -514,13 +516,14 @@ export const registerTelegramHandlers = ({
       msg,
       botUsername,
       ctx,
+      bot,
     } = params;
     
     // Helper to send auth hint if bot is mentioned
     const sendAuthHint = async () => {
       if (msg && botUsername && hasBotMention(msg, botUsername)) {
         try {
-          await ctx.reply("You are not authorized to use this bot in this group.", {
+          await bot.api.sendMessage(chatId, "You are not authorized to use this bot in this group.", {
             reply_parameters: { message_id: msg.message_id },
           });
         } catch (err) {
@@ -543,20 +546,20 @@ export const registerTelegramHandlers = ({
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
         logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        await sendAuthHint(baseAccess.reason);
+        await sendAuthHint();
         return true;
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
           `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
         );
-        await sendAuthHint(baseAccess.reason);
+        await sendAuthHint();
         return true;
       }
       logVerbose(
         `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
       );
-      await sendAuthHint(baseAccess.reason);
+      await sendAuthHint();
       return true;
     }
     if (!isGroup) {
@@ -583,28 +586,28 @@ export const registerTelegramHandlers = ({
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
         logVerbose("Blocked telegram group message (groupPolicy: disabled)");
-        await sendAuthHint(policyAccess.reason);
+        await sendAuthHint();
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-no-sender") {
         logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
-        await sendAuthHint(policyAccess.reason);
+        await sendAuthHint();
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-empty") {
         logVerbose(
           "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
         );
-        await sendAuthHint(policyAccess.reason);
+        await sendAuthHint();
         return true;
       }
       if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
         logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
-        await sendAuthHint(policyAccess.reason);
+        await sendAuthHint();
         return true;
       }
       logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
-      await sendAuthHint(policyAccess.reason);
+      await sendAuthHint();
       return true;
     }
     return false;
@@ -683,8 +686,9 @@ export const registerTelegramHandlers = ({
     mode: TelegramEventAuthorizationMode;
     ctx: TelegramContext;
     context: TelegramEventAuthorizationContext;
+    bot: Bot;
   }): Promise<TelegramEventAuthorizationResult> => {
-    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context, ctx } = params;
+    const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context, ctx, bot } = params;
     const {
       dmPolicy,
       resolvedThreadId,
@@ -715,6 +719,7 @@ export const registerTelegramHandlers = ({
         groupConfig,
         topicConfig,
         ctx,
+        bot,
       })
     ) {
       return { allowed: false, reason: "group-policy" };
@@ -794,6 +799,7 @@ export const registerTelegramHandlers = ({
         mode: "reaction",
         context: eventAuthContext,
         ctx,
+        bot,
       });
       if (!senderAuthorization.allowed) {
         return;
@@ -1164,6 +1170,7 @@ export const registerTelegramHandlers = ({
         mode: authorizationMode,
         context: eventAuthContext,
         ctx,
+        bot,
       });
       if (!senderAuthorization.allowed) {
         return;
@@ -1465,6 +1472,7 @@ export const registerTelegramHandlers = ({
           msg: event.msg,
           botUsername: ctx.me?.username,
           ctx,
+          bot,
         })
       ) {
         return;
