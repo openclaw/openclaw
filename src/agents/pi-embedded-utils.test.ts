@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   stripDowngradedToolCallText,
+  stripOrphanedToolXmlAndDelimiters,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -546,6 +547,47 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("stripOrphanedToolXmlAndDelimiters", () => {
+  it("strips template boundary delimiters", () => {
+    expect(stripOrphanedToolXmlAndDelimiters("<|assistant|>Hello")).toBe("Hello");
+    expect(stripOrphanedToolXmlAndDelimiters("text<|tool_call_argument_begin|>more")).toBe(
+      "textmore",
+    );
+  });
+
+  it("strips orphaned tool call XML tags", () => {
+    expect(stripOrphanedToolXmlAndDelimiters("result</arg_value></tool_call>")).toBe("result");
+    expect(stripOrphanedToolXmlAndDelimiters("<tool_call>inner</tool_call>")).toBe("inner");
+    expect(stripOrphanedToolXmlAndDelimiters("text<arguments>data</arguments>end")).toBe(
+      "textdataend",
+    );
+  });
+
+  it("preserves normal text without tags", () => {
+    expect(stripOrphanedToolXmlAndDelimiters("Normal response text.")).toBe(
+      "Normal response text.",
+    );
+  });
+
+  it("preserves code blocks and legitimate HTML", () => {
+    expect(stripOrphanedToolXmlAndDelimiters("<div>content</div>")).toBe("<div>content</div>");
+    expect(stripOrphanedToolXmlAndDelimiters("```<tool_call>```")).toBe("``````");
+  });
+
+  it("handles empty/falsy input", () => {
+    expect(stripOrphanedToolXmlAndDelimiters("")).toBe("");
+  });
+
+  it("strips via extractAssistantText pipeline", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Done.</arg_value></tool_call><|assistant|>" }],
+      timestamp: Date.now(),
+    });
+    expect(extractAssistantText(msg)).toBe("Done.");
   });
 });
 
