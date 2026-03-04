@@ -94,7 +94,11 @@ export function buildSandboxBrowserResolvedConfig(params: {
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
-    // Default to trusted-network mode (same as normal browser) to allow localhost access
+    // Unconditionally match the normal browser's trusted-network default.
+    // Without this, the SSRF guard blocks localhost/private-IP at the bridge server
+    // layer regardless of shareNetworkNamespace. This is independent of namespace
+    // sharing -- even without it, failing at the SSRF layer instead of the network
+    // layer just produces a confusing error for the same outcome.
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
   };
 }
@@ -294,15 +298,24 @@ export async function ensureSandboxBrowser(params: {
 
   // When using namespace join, browser ports live on the sandbox container's network
   // namespace and are published via the sandbox container's port mappings.
+  // Fall back to the browser container if the desired source has no mapping -- this
+  // handles the "hot" reuse path where config changed but the old container was kept.
   const portSourceContainer =
     useNamespaceJoin && params.sandboxContainerName ? params.sandboxContainerName : containerName;
-  const mappedCdp = await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort);
+  const mappedCdp =
+    (await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort)) ??
+    (portSourceContainer !== containerName
+      ? await readDockerPort(containerName, params.cfg.browser.cdpPort)
+      : null);
   if (!mappedCdp) {
     throw new Error(`Failed to resolve CDP port mapping for ${portSourceContainer}.`);
   }
 
   const mappedNoVnc = noVncEnabled
-    ? await readDockerPort(portSourceContainer, params.cfg.browser.noVncPort)
+    ? ((await readDockerPort(portSourceContainer, params.cfg.browser.noVncPort)) ??
+      (portSourceContainer !== containerName
+        ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+        : null))
     : null;
   if (noVncEnabled && !noVncPassword) {
     noVncPassword =
