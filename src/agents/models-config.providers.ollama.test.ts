@@ -279,6 +279,7 @@ describe("Ollama provider", () => {
     expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
   it("registers ollama when explicitly configured even if discovery throws", async () => {
+    enableDiscoveryEnv();
     const agentDir = createAgentDir();
     vi.stubGlobal(
       "fetch",
