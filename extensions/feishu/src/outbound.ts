@@ -68,8 +68,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, replyToId, threadId, accountId }) => {
-    // Map outbound context to Feishu API params
-    const replyToMessageId = replyToId ?? (typeof threadId === "string" ? threadId : undefined);
+    // Map outbound context to Feishu API params (coerce numeric threadId to string for consistency with Slack adapter)
+    const replyToMessageId = replyToId ?? (threadId != null ? String(threadId) : undefined);
     // Enable reply_in_thread when threadId is explicitly provided
     const replyInThread = threadId != null;
 
@@ -105,8 +105,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     return { channel: "feishu", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, replyToId, threadId, accountId, mediaLocalRoots }) => {
-    // Map outbound context to Feishu API params
-    const replyToMessageId = replyToId ?? (typeof threadId === "string" ? threadId : undefined);
+    // Map outbound context to Feishu API params (coerce numeric threadId to string for consistency with Slack adapter)
+    const replyToMessageId = replyToId ?? (threadId != null ? String(threadId) : undefined);
     const replyInThread = threadId != null;
 
     // Send text first if provided
