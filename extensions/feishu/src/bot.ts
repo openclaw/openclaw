@@ -19,6 +19,7 @@ import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
+import { stripReactionSuffix } from "./message-id.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -1337,7 +1338,7 @@ export async function handleFeishuMessage(params: {
     const messageCreateTimeMs = event.message.create_time
       ? parseInt(event.message.create_time, 10)
       : undefined;
-    const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
+    const replyTargetMessageId = stripReactionSuffix(ctx.rootId ?? ctx.messageId);
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
