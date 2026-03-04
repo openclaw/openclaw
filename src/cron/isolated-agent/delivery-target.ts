@@ -174,7 +174,9 @@ export async function resolveDeliveryTarget(
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     const effectiveSendList = normalizedAllowSendTo ?? allowFromOverride;
-    const hasWildcard = (allowSendToOverride ?? allowFromOverride).includes("*");
+    const hasWildcard = (allowSendToOverride ?? allowFromOverride)?.some(
+      (entry) => String(entry).trim() === "*",
+    );
 
     if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
