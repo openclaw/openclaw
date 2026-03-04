@@ -72,7 +72,18 @@ def package_skill(skill_path, output_dir=None):
 
     skill_filename = output_path / f"{skill_name}.skill"
 
-    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}
+    # Skip common VCS/cache/dependency/build directories that should never ship in a .skill bundle.
+    EXCLUDED_DIRS = {
+        ".git",
+        ".svn",
+        ".hg",
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        "venv",
+        "build",
+        "dist",
+    }
 
     # Create the .skill file (zip format)
     try:

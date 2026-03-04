@@ -155,6 +155,25 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("self-output-skill/script.py", names)
         self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
+    def test_skips_common_local_env_directories(self):
+        skill_dir = self.create_skill("env-skip-skill")
+        env_dir = skill_dir / ".venv" / "lib"
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / "site.py").write_text("print('should not be packaged')\n")
+
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "env-skip-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("env-skip-skill/SKILL.md", names)
+        self.assertIn("env-skip-skill/script.py", names)
+        self.assertNotIn("env-skip-skill/.venv/lib/site.py", names)
+
 
 if __name__ == "__main__":
     main()
