@@ -137,11 +137,13 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
+  const rawBaseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
     /\/+$/,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  // Avoid double /v1beta when baseUrl already includes the version segment (#34312)
+  const baseUrl = rawBaseUrl.endsWith("/v1beta") ? rawBaseUrl : `${rawBaseUrl}/v1beta`;
+  const url = `${baseUrl}/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
