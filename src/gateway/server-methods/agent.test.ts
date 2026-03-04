@@ -41,6 +41,7 @@ vi.mock("../../config/sessions.js", async () => {
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
+  agentCommandFromIngress: mocks.agentCommand,
 }));
 
 vi.mock("../../config/config.js", async () => {
