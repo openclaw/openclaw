@@ -1679,12 +1679,22 @@ export async function runEmbeddedAttempt(
                     if (typeof b?.text === "string") {
                       return s + b.text.length;
                     }
-                    // Count tool-call arguments (serialized JSON in the model input)
-                    if (typeof b?.arguments === "string") {
-                      return s + b.arguments.length;
+                    // Count tool-call arguments (may be string or object; serialized in model input)
+                    if (b?.arguments != null) {
+                      return (
+                        s +
+                        (typeof b.arguments === "string"
+                          ? b.arguments.length
+                          : JSON.stringify(b.arguments).length)
+                      );
                     }
-                    if (typeof b?.input === "string") {
-                      return s + b.input.length;
+                    if (b?.input != null) {
+                      return (
+                        s +
+                        (typeof b.input === "string"
+                          ? b.input.length
+                          : JSON.stringify(b.input).length)
+                      );
                     }
                     return s;
                   }, 0)
