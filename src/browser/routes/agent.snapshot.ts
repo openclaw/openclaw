@@ -298,10 +298,9 @@ export function registerBrowserAgentSnapshotRoutes(
       }
 
       const snap =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl
+        !tab.wsUrl
           ? (() => {
-              // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-              // Also covers cases where wsUrl is missing/unusable.
+              // Use Playwright CDP sessions only when we lack a per-tab websocket URL.
               return requirePwAi(res, "aria snapshot").then(async (pw) => {
                 if (!pw) {
                   return null;
