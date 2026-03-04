@@ -255,7 +255,13 @@ export function resolveHeartbeatJitterMs(
     jitterMs = Math.floor(intervalMs * 0.1);
   }
   // Clamp so the first run never waits longer than the interval itself
-  return Math.min(jitterMs, intervalMs);
+  if (jitterMs > intervalMs) {
+    log.warn(
+      `heartbeat: jitter (${raw ?? "default"}) exceeds interval; clamped to ${intervalMs}ms`,
+    );
+    return intervalMs;
+  }
+  return jitterMs;
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
