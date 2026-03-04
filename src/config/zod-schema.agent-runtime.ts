@@ -40,7 +40,7 @@ export const HeartbeatSchema = z
   .superRefine((val, ctx) => {
     if (val.jitter) {
       try {
-        parseDurationMs(val.jitter, { defaultUnit: "m" });
+        parseDurationMs(val.jitter.trim(), { defaultUnit: "m" });
       } catch {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

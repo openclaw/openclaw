@@ -254,7 +254,7 @@ export function resolveHeartbeatJitterMs(
   } else {
     jitterMs = Math.floor(intervalMs * 0.1);
   }
-  // Clamp so the first run never waits longer than the interval itself
+  // Clamp so jitter never exceeds the interval (max first-run delay is just under 2× interval)
   if (jitterMs > intervalMs) {
     log.warn(
       `heartbeat: jitter (${raw ?? "default"}) exceeds interval; clamped to ${intervalMs}ms`,
@@ -1039,7 +1039,8 @@ export function startHeartbeatRunner(opts: {
     if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
       return prevState.nextDueMs;
     }
-    // Cold start: stagger with jitter to avoid thundering herd
+    // Cold start: stagger with jitter to avoid thundering herd.
+    // Max first-run delay is just under now + intervalMs + jitterMs (i.e. up to ~2× interval when jitter == interval).
     return now + intervalMs + Math.floor(Math.random() * jitterMs);
   };
 
