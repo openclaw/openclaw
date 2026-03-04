@@ -164,11 +164,31 @@ async function execSystemctl(
       code?: unknown;
       message?: unknown;
     };
+    const stdout = typeof e.stdout === "string" ? e.stdout : "";
+    const stderr =
+      typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "";
+    const code = typeof e.code === "number" ? e.code : 1;
+    const detail = `${stderr} ${stdout}`.toLowerCase();
+    const noUserBus =
+      args.includes("--user") &&
+      (detail.includes("failed to connect to bus") || detail.includes("no medium found"));
+    if (noUserBus) {
+      try {
+        const fallbackArgs = args.filter((arg) => arg !== "--user");
+        const fallback = await execFileAsync("systemctl", fallbackArgs, { encoding: "utf8" });
+        return {
+          stdout: String(fallback.stdout ?? ""),
+          stderr: String(fallback.stderr ?? ""),
+          code: 0,
+        };
+      } catch {
+        // keep original user-scope error for clearer diagnostics
+      }
+    }
     return {
-      stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
-      code: typeof e.code === "number" ? e.code : 1,
+      stdout,
+      stderr,
+      code,
     };
   }
 }
