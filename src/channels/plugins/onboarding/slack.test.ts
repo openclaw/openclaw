@@ -60,9 +60,14 @@ describe("slackOnboardingAdapter.configure", () => {
     expect(result.cfg.channels?.slack?.accounts?.work?.botToken).toBe("xoxb-test-token");
     expect(result.cfg.channels?.slack?.accounts?.work?.appToken).toBe("xapp-test-token");
 
-    const helpNote = harness.note.mock.calls.find(
-      (call) => call[1] === "Slack socket mode tokens",
-    )?.[0];
+    const helpNoteCall = harness.note.mock.calls.find(
+      (call) =>
+        Array.isArray(call) &&
+        typeof (call as unknown as [unknown, unknown])[1] === "string" &&
+        (call as unknown as [unknown, unknown])[1] === "Slack socket mode tokens",
+    );
+    const helpNoteRaw = (helpNoteCall as unknown as [unknown, unknown] | undefined)?.[0];
+    const helpNote = typeof helpNoteRaw === "string" ? helpNoteRaw : "";
     expect(helpNote).toContain('Manifest for "OpenClaw Bot" is printed below as raw JSON.');
     expect(helpNote).not.toContain('"display_information"');
 
