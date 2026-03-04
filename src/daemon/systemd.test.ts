@@ -90,6 +90,23 @@ describe("isSystemdServiceEnabled", () => {
       "systemctl is-enabled unavailable: Failed to connect to bus",
     );
   });
+
+  it("returns false when systemctl exits with code 4 (unit not found)", async () => {
+    // systemctl is-enabled exits with code 4 when the unit file does not exist.
+    // stdout is "not-found", stderr is empty. execFileUtf8 folds empty stderr
+    // into e.message (the command line), so readSystemctlDetail returns the
+    // command string rather than "not-found" — this test would throw before the fix.
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 4;
+      cb(err, "not-found", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
 });
 
 describe("systemd runtime parsing", () => {
