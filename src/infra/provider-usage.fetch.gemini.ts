@@ -1,4 +1,4 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJsonWithRetry } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -16,7 +16,8 @@ export async function fetchGeminiUsage(
   fetchFn: typeof fetch,
   provider: UsageProviderId,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
+  const res = await fetchJsonWithRetry(
+    provider,
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
     {
       method: "POST",

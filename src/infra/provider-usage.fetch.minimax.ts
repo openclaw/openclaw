@@ -1,7 +1,7 @@
 import { isRecord } from "../utils.js";
 import {
   buildUsageHttpErrorSnapshot,
-  fetchJson,
+  fetchJsonWithRetry,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -301,7 +301,8 @@ export async function fetchMinimaxUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
+  const res = await fetchJsonWithRetry(
+    "minimax",
     "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
     {
       method: "GET",
