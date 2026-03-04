@@ -1,7 +1,24 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/discord";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
+
+/** Read a string parameter by key, returning undefined when absent or empty. */
+function readStr(params: Record<string, unknown>, key: string): string | undefined {
+  const raw = params[key];
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
+/** Wrap a payload into the AgentToolResult shape expected by the action adapter. */
+function toJsonResult(payload: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
 
 export const feishuMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -9,8 +26,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const actions: ChannelMessageActionName[] = ["react", "reactions"];
-    return actions;
+    return ["react", "reactions"];
   },
 
   supportsAction: ({ action }) => action === "react" || action === "reactions",
@@ -22,8 +38,8 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "react") {
       const messageId =
-        readStringParam(params, "messageId") ??
-        readStringParam(params, "message_id") ??
+        readStr(params, "messageId") ??
+        readStr(params, "message_id") ??
         (ctx.toolContext?.currentMessageId != null
           ? String(ctx.toolContext.currentMessageId)
           : undefined);
@@ -37,7 +53,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
       const remove = typeof params.remove === "boolean" ? params.remove : false;
 
       if (remove) {
-        const reactionId = readStringParam(params, "reactionId");
+        const reactionId = readStr(params, "reactionId");
         if (!reactionId) {
           throw new Error(
             'reactionId is required to remove a reaction. Use message(action="reactions") to list reaction IDs first.',
@@ -49,13 +65,11 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
           reactionId,
           accountId: resolvedAccountId,
         });
-        return jsonResult({ ok: true, action: "react", removed: true, messageId, reactionId });
+        return toJsonResult({ ok: true, action: "react", removed: true, messageId, reactionId });
       }
 
       const rawEmoji =
-        readStringParam(params, "emoji") ??
-        readStringParam(params, "emojiName") ??
-        readStringParam(params, "emojiType");
+        readStr(params, "emoji") ?? readStr(params, "emojiName") ?? readStr(params, "emojiType");
 
       const emojiType = normalizeFeishuEmoji(rawEmoji);
 
@@ -66,13 +80,13 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         accountId: resolvedAccountId,
       });
 
-      return jsonResult({ ok: true, action: "react", messageId, emojiType, ...result });
+      return toJsonResult({ ok: true, action: "react", messageId, emojiType, ...result });
     }
 
     if (action === "reactions") {
       const messageId =
-        readStringParam(params, "messageId") ??
-        readStringParam(params, "message_id") ??
+        readStr(params, "messageId") ??
+        readStr(params, "message_id") ??
         (ctx.toolContext?.currentMessageId != null
           ? String(ctx.toolContext.currentMessageId)
           : undefined);
@@ -81,7 +95,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         throw new Error("messageId is required to list reactions.");
       }
 
-      const emojiType = readStringParam(params, "emojiType");
+      const emojiType = readStr(params, "emojiType");
       const reactions = await listReactionsFeishu({
         cfg,
         messageId,
@@ -89,7 +103,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         accountId: resolvedAccountId,
       });
 
-      return jsonResult({ ok: true, action: "reactions", messageId, reactions });
+      return toJsonResult({ ok: true, action: "reactions", messageId, reactions });
     }
 
     throw new Error(`Unsupported feishu action: ${action}`);
