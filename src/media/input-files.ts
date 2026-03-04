@@ -310,15 +310,16 @@ async function extractPdfContent(params: {
   limits: InputFileLimits;
 }): Promise<{ text: string; images: InputImageContent[] }> {
   const timeoutMs = params.limits.pdfTimeoutMs;
-  return Promise.race([
-    extractPdfContentInner(params),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`PDF processing timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      ),
-    ),
-  ]);
+  return new Promise<{ text: string; images: InputImageContent[] }>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`PDF processing timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    extractPdfContentInner(params).then(
+      (result) => { clearTimeout(timer); resolve(result); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
 }
 
 export async function extractImageContentFromSource(
