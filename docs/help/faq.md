@@ -1,5 +1,8 @@
 ---
 summary: "Frequently asked questions about OpenClaw setup, configuration, and usage"
+read_when:
+  - Answering common setup, install, onboarding, or runtime support questions
+  - Triaging user-reported issues before deeper debugging
 title: "FAQ"
 ---
 
@@ -10,7 +13,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup]
-  - [Im stuck whats the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
+  - [Im stuck what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
@@ -27,6 +30,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How long does install and onboarding usually take?](#how-long-does-install-and-onboarding-usually-take)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
   - [Windows install says git not found or openclaw not recognized](#windows-install-says-git-not-found-or-openclaw-not-recognized)
+  - [Windows exec output shows garbled Chinese text what should I do](#windows-exec-output-shows-garbled-chinese-text-what-should-i-do)
   - [The docs didn't answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question-how-do-i-get-a-better-answer)
   - [How do I install OpenClaw on Linux?](#how-do-i-install-openclaw-on-linux)
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
@@ -97,6 +101,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
+  - [How do I disable funny CLI taglines?](#how-do-i-disable-funny-cli-taglines)
   - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [config.apply wiped my config. How do I recover and avoid this?](#configapply-wiped-my-config-how-do-i-recover-and-avoid-this)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
@@ -126,7 +131,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why did context get truncated mid-task? How do I prevent it?](#why-did-context-get-truncated-midtask-how-do-i-prevent-it)
   - [How do I completely reset OpenClaw but keep it installed?](#how-do-i-completely-reset-openclaw-but-keep-it-installed)
   - [I'm getting "context too large" errors - how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
-  - [Why am I seeing "LLM request rejected: messages.N.content.X.tool_use.input: Field required"?](#why-am-i-seeing-llm-request-rejected-messagesncontentxtooluseinput-field-required)
+  - [Why am I seeing "LLM request rejected: messages.content.tool_use.input field required"?](#why-am-i-seeing-llm-request-rejected-messagescontenttool_useinput-field-required)
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a "bot account" to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [How do I get the JID of a WhatsApp group?](#how-do-i-get-the-jid-of-a-whatsapp-group)
@@ -143,7 +148,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-53-for-coding)
   - [Why do I see "Model … is not allowed" and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
-  - [Why do I see "Unknown model: minimax/MiniMax-M2.1"?](#why-do-i-see-unknown-model-minimaxminimaxm21)
+  - [Why do I see "Unknown model: minimax/MiniMax-M2.5"?](#why-do-i-see-unknown-model-minimaxminimaxm25)
   - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
   - [Are opus / sonnet / gpt built-in shortcuts?](#are-opus-sonnet-gpt-builtin-shortcuts)
   - [How do I define/override model shortcuts (aliases)?](#how-do-i-defineoverride-model-shortcuts-aliases)
@@ -262,7 +267,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### Im stuck whats the fastest way to get unstuck
+### Im stuck what's the fastest way to get unstuck
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
@@ -348,7 +353,7 @@ The wizard opens your browser with a clean (non-tokenized) dashboard URL right a
 
 **Not on localhost:**
 
-- **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy auth (no token).
+- **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no token, assumes trusted gateway host); HTTP APIs still require token/password.
 - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
 - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/` and paste the token in Control UI settings.
 
@@ -440,7 +445,7 @@ Newest entries are at the top. If the top section is marked **Unreleased**, the 
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
 **Fixes** (plus docs/other sections when needed).
 
-### I cant access docs.openclaw.ai SSL error What now
+### I can't access docs.openclaw.ai SSL error What now
 
 Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
 Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
@@ -464,7 +469,7 @@ that same version to `latest`**. That's why beta and stable can point at the
 See what changed:
 [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
-### How do I install the beta version and whats the difference between beta and dev
+### How do I install the beta version and what's the difference between beta and dev
 
 **Beta** is the npm dist-tag `beta` (may match `latest`).
 **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
@@ -575,13 +580,41 @@ Two common Windows issues:
   npm config get prefix
   ```
 
-- Ensure `<prefix>\\bin` is on PATH (on most systems it is `%AppData%\\npm`).
+- Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
 - Close and reopen PowerShell after updating PATH.
 
 If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
 Docs: [Windows](/platforms/windows).
 
-### The docs didnt answer my question how do I get a better answer
+### Windows exec output shows garbled Chinese text what should I do
+
+This is usually a console code page mismatch on native Windows shells.
+
+Symptoms:
+
+- `system.run`/`exec` output renders Chinese as mojibake
+- The same command looks fine in another terminal profile
+
+Quick workaround in PowerShell:
+
+```powershell
+chcp 65001
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+```
+
+Then restart the Gateway and retry your command:
+
+```powershell
+openclaw gateway restart
+```
+
+If you still reproduce this on latest OpenClaw, track/report it in:
+
+- [Issue #30640](https://github.com/openclaw/openclaw/issues/30640)
+
+### The docs didn't answer my question how do I get a better answer
 
 Use the **hackable (git) install** so you have the full source and docs locally, then ask
 your bot (or Claude/Codex) _from that folder_ so it can read the repo and answer precisely.
@@ -656,7 +689,7 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 
 `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-- **Model/auth setup** (Anthropic **setup-token** recommended for Claude subscriptions, OpenAI Codex OAuth supported, API keys optional, LM Studio local models supported)
+- **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
 - **Workspace** location + bootstrap files
 - **Gateway settings** (bind/port/auth/tailscale)
 - **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
@@ -671,6 +704,10 @@ No. You can run OpenClaw with **API keys** (Anthropic/OpenAI/others) or with
 **local-only models** so your data stays on your device. Subscriptions (Claude
 Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
+If you choose Anthropic subscription auth, decide for yourself whether to use it:
+Anthropic has blocked some subscription usage outside Claude Code in the past.
+OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
+
 Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
 [Local models](/gateway/local-models), [Models](/concepts/models).
 
@@ -680,9 +717,9 @@ Yes. You can authenticate with a **setup-token**
 instead of an API key. This is the subscription path.
 
 Claude Pro/Max subscriptions **do not include an API key**, so this is the
-correct approach for subscription accounts. Important: you must verify with
-Anthropic that this usage is allowed under their subscription policy and terms.
-If you want the most explicit, supported path, use an Anthropic API key.
+technical path for subscription accounts. But this is your decision: Anthropic
+has blocked some subscription usage outside Claude Code in the past.
+If you want the clearest and safest supported path for production, use an Anthropic API key.
 
 ### How does Anthropic setuptoken auth work
 
@@ -702,17 +739,27 @@ Copy the token it prints, then choose **Anthropic token (paste setup-token)** in
 
 Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
-Note: Claude subscription access is governed by Anthropic's terms. For production or multi-user workloads, API keys are usually the safer choice.
+Important: this is technical compatibility, not a policy guarantee. Anthropic
+has blocked some subscription usage outside Claude Code in the past.
+You need to decide whether to use it and verify Anthropic's current terms.
+For production or multi-user workloads, Anthropic API key auth is the safer, recommended choice.
 
 ### Why am I seeing HTTP 429 ratelimiterror from Anthropic
 
 That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use a **Claude subscription** (setup-token or Claude Code OAuth), wait for the window to
+use a **Claude subscription** (setup-token), wait for the window to
 reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
 for usage/billing and raise limits as needed.
 
+If the message is specifically:
+`Extra usage is required for long context requests`, the request is trying to use
+Anthropic's 1M context beta (`context1m: true`). That only works when your
+credential is eligible for long-context billing (API key billing or subscription
+with Extra Usage enabled).
+
 Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
-See [Models](/cli/models) and [OAuth](/concepts/oauth).
+See [Models](/cli/models), [OAuth](/concepts/oauth), and
+[/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
 ### Is AWS Bedrock supported
 
@@ -724,8 +771,9 @@ OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizar
 
 ### Do you support OpenAI subscription auth Codex OAuth
 
-Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**. The onboarding wizard
-can run the OAuth flow for you.
+Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
+OpenAI explicitly allows subscription OAuth usage in external tools/workflows
+like OpenClaw. The onboarding wizard can run the OAuth flow for you.
 
 See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
 
@@ -742,7 +790,7 @@ This stores OAuth tokens in auth profiles on the gateway host. Details: [Model p
 
 ### Is a local model OK for casual chats
 
-Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
+Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
 
 ### How do I keep hosted model traffic in a specific region
 
@@ -1038,6 +1086,26 @@ cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
 Docs: [Sub-agents](/tools/subagents).
 
+### How do thread-bound subagent sessions work on Discord
+
+Use thread bindings. You can bind a Discord thread to a subagent or session target so follow-up messages in that thread stay on that bound session.
+
+Basic flow:
+
+- Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"` for persistent follow-up).
+- Or manually bind with `/focus <target>`.
+- Use `/agents` to inspect binding state.
+- Use `/session idle <duration|off>` and `/session max-age <duration|off>` to control auto-unfocus.
+- Use `/unfocus` to detach the thread.
+
+Required config:
+
+- Global defaults: `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
+- Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`.
+- Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
+
+Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
+
 ### Cron or reminders do not fire What should I check
 
 Cron runs inside the Gateway process. If the Gateway is not running continuously,
@@ -1228,14 +1296,16 @@ still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`)
 If you don't set a provider explicitly, OpenClaw auto-selects a provider when it
 can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
 It prefers OpenAI if an OpenAI key resolves, otherwise Gemini if a Gemini key
-resolves. If neither key is available, memory search stays disabled until you
-configure it. If you have a local model path configured and present, OpenClaw
-prefers `local`.
+resolves, then Voyage, then Mistral. If no remote key is available, memory
+search stays disabled until you configure it. If you have a local model path
+configured and present, OpenClaw
+prefers `local`. Ollama is supported when you explicitly set
+`memorySearch.provider = "ollama"`.
 
 If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
 `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
 `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-`memorySearch.remote.apiKey`). We support **OpenAI, Gemini, or local** embedding
+`memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, Ollama, or local** embedding
 models - see [Memory](/concepts/memory) for the setup details.
 
 ### Does memory persist forever What are the limits
@@ -1267,16 +1337,17 @@ Related: [Agent workspace](/concepts/agent-workspace), [Memory](/concepts/memory
 
 Everything lives under `$OPENCLAW_STATE_DIR` (default: `~/.openclaw`):
 
-| Path                                                            | Purpose                                                      |
-| --------------------------------------------------------------- | ------------------------------------------------------------ |
-| `$OPENCLAW_STATE_DIR/openclaw.json`                             | Main config (JSON5)                                          |
-| `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Legacy OAuth import (copied into auth profiles on first use) |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys)                             |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Runtime auth cache (managed automatically)                   |
-| `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)      |
-| `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                        |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Conversation history & state (per agent)                     |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Session metadata (per agent)                                 |
+| Path                                                            | Purpose                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `$OPENCLAW_STATE_DIR/openclaw.json`                             | Main config (JSON5)                                                |
+| `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Legacy OAuth import (copied into auth profiles on first use)       |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth, API keys, and optional `keyRef`/`tokenRef`)  |
+| `$OPENCLAW_STATE_DIR/secrets.json`                              | Optional file-backed secret payload for `file` SecretRef providers |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
+| `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |
+| `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                              |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Conversation history & state (per agent)                           |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Session metadata (per agent)                                       |
 
 Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
@@ -1314,7 +1385,7 @@ Put your **agent workspace** in a **private** git repo and back it up somewhere
 private (for example GitHub private). This captures memory + AGENTS/SOUL/USER
 files, and lets you restore the assistant's "mind" later.
 
-Do **not** commit anything under `~/.openclaw` (credentials, sessions, tokens).
+Do **not** commit anything under `~/.openclaw` (credentials, sessions, tokens, or encrypted secrets payloads).
 If you need a full restore, back up both the workspace and the state directory
 separately (see the migration question above).
 
@@ -1380,7 +1451,8 @@ Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.au
 
 Notes:
 
-- `gateway.remote.token` is for **remote CLI calls** only; it does not enable local gateway auth.
+- `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
+- Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
 - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
 
 ### Why do I need a token on localhost now
@@ -1395,6 +1467,25 @@ The Gateway watches the config and supports hot-reload:
 
 - `gateway.reload.mode: "hybrid"` (default): hot-apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
+
+### How do I disable funny CLI taglines
+
+Set `cli.banner.taglineMode` in config:
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `off`: hides tagline text but keeps the banner title/version line.
+- `default`: uses `All your chats, one OpenClaw.` every time.
+- `random`: rotating funny/seasonal taglines (default behavior).
+- If you want no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
 
 ### How do I enable web search and web fetch
 
@@ -1494,8 +1585,8 @@ Typical setup:
 5. Approve the node on the Gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 No separate TCP bridge is required; nodes connect over the Gateway WebSocket.
@@ -1664,8 +1755,8 @@ Recommended setup:
 3. **Approve the node** on the gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 Docs: [Gateway protocol](/gateway/protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
@@ -1839,7 +1930,7 @@ If it keeps happening:
 
 Docs: [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning), [Session management](/concepts/session).
 
-### Why am I seeing LLM request rejected messagesNcontentXtooluseinput Field required
+### Why am I seeing "LLM request rejected: messages.content.tool_use.input field required"?
 
 This is a provider validation error: the model emitted a `tool_use` block without the required
 `input`. It usually means the session history is stale or corrupted (often after long threads
@@ -1906,7 +1997,7 @@ openclaw directory groups list --channel whatsapp
 
 Docs: [WhatsApp](/channels/whatsapp), [Directory](/cli/directory), [Logs](/cli/logs).
 
-### Why doesnt OpenClaw reply in a group
+### Why doesn't OpenClaw reply in a group
 
 Two common causes:
 
@@ -1915,7 +2006,7 @@ Two common causes:
 
 See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
-### Do groupsthreads share context with DMs
+### Do groups/threads share context with DMs
 
 Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
@@ -1966,12 +2057,11 @@ Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-6`)
 
 ### What model do you recommend
 
-**Recommended default:** `anthropic/claude-opus-4-6`.
-**Good alternative:** `anthropic/claude-sonnet-4-5`.
-**Reliable (less character):** `openai/gpt-5.2` - nearly as good as Opus, just less personality.
-**Budget:** `zai/glm-4.7`.
+**Recommended default:** use the strongest latest-generation model available in your provider stack.
+**For tool-enabled or untrusted-input agents:** prioritize model strength over cost.
+**For routine/low-stakes chat:** use cheaper fallback models and route by agent role.
 
-MiniMax M2.1 has its own docs: [MiniMax](/providers/minimax) and
+MiniMax M2.5 has its own docs: [MiniMax](/providers/minimax) and
 [Local models](/gateway/local-models).
 
 Rule of thumb: use the **best model you can afford** for high-stakes work, and a cheaper
@@ -2015,8 +2105,9 @@ Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/con
 
 ### What do OpenClaw, Flawd, and Krill use for models
 
-- **OpenClaw + Flawd:** Anthropic Opus (`anthropic/claude-opus-4-6`) - see [Anthropic](/providers/anthropic).
-- **Krill:** MiniMax M2.1 (`minimax/MiniMax-M2.1`) - see [MiniMax](/providers/minimax).
+- These deployments can differ and may change over time; there is no fixed provider recommendation.
+- Check the current runtime setting on each gateway with `openclaw models status`.
+- For security-sensitive/tool-enabled agents, use the strongest latest-generation model available.
 
 ### How do I switch models on the fly without restarting
 
@@ -2083,7 +2174,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 That error is returned **instead of** a normal reply. Fix: add the model to
 `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
 
-### Why do I see Unknown model minimaxMiniMaxM21
+### Why do I see Unknown model minimaxMiniMaxM25
 
 This means the **provider isn't configured** (no MiniMax provider config or auth
 profile was found), so the model can't be resolved. A fix for this detection is
@@ -2094,8 +2185,8 @@ Fix checklist:
 1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
-3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.1` or
-   `minimax/MiniMax-M2.1-lightning`.
+3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
+   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
 4. Run:
 
    ```bash
@@ -2118,9 +2209,9 @@ Fallbacks are for **errors**, not "hard tasks," so use `/model` or a separate ag
   env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "minimax/MiniMax-M2.1" },
+      model: { primary: "minimax/MiniMax-M2.5" },
       models: {
-        "minimax/MiniMax-M2.1": { alias: "minimax" },
+        "minimax/MiniMax-M2.5": { alias: "minimax" },
         "openai/gpt-5.2": { alias: "gpt" },
       },
     },
@@ -2198,8 +2289,8 @@ Z.AI (GLM models):
 {
   agents: {
     defaults: {
-      model: { primary: "zai/glm-4.7" },
-      models: { "zai/glm-4.7": {} },
+      model: { primary: "zai/glm-5" },
+      models: { "zai/glm-5": {} },
     },
   },
   env: { ZAI_API_KEY: "..." },
@@ -2335,7 +2426,7 @@ To target a specific agent:
 openclaw models auth order set --provider anthropic --agent main anthropic:default
 ```
 
-### OAuth vs API key whats the difference
+### OAuth vs API key what's the difference
 
 OpenClaw supports both:
 
@@ -2423,7 +2514,7 @@ Fix:
 - In the Control UI settings, paste the same token.
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
-### I set gatewaybind tailnet but it cant bind nothing listens
+### I set gatewaybind tailnet but it can't bind nothing listens
 
 `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine isn't on Tailscale (or the interface is down), there's nothing to bind to.
 
@@ -2451,7 +2542,7 @@ Quick setup (recommended):
 - Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
 - Install a per-profile service: `openclaw --profile <name> gateway install`.
 
-Profiles also suffix service names (`bot.molt.<profile>`; legacy `com.openclaw.*`, `openclaw-gateway-<profile>.service`, `OpenClaw Gateway (<profile>)`).
+Profiles also suffix service names (`ai.openclaw.<profile>`; legacy `com.openclaw.*`, `openclaw-gateway-<profile>.service`, `OpenClaw Gateway (<profile>)`).
 Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does invalid handshake code 1008 mean
@@ -2506,7 +2597,7 @@ Service/supervisor logs (when the gateway runs via launchd/systemd):
 
 See [Troubleshooting](/gateway/troubleshooting#log-locations) for more.
 
-### How do I startstoprestart the Gateway service
+### How do I start/stop/restart the Gateway service
 
 Use the gateway helpers:
 
@@ -2681,8 +2772,8 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 - Default behavior on DM-capable channels is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
-  - Approve with: `openclaw pairing approve <channel> <code>`
-  - Pending requests are capped at **3 per channel**; check `openclaw pairing list <channel>` if a code didn't arrive.
+  - Approve with: `openclaw pairing approve --channel <channel> [--account <id>] <code>`
+  - Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code didn't arrive.
 - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `openclaw doctor` to surface risky DM policies.
@@ -2732,7 +2823,7 @@ more susceptible to instruction hijacking, so avoid them for tool-enabled agents
 or when reading untrusted content. If you must use a smaller model, lock down
 tools and run inside a sandbox. See [Security](/gateway/security).
 
-### I ran start in Telegram but didnt get a pairing code
+### I ran start in Telegram but didn't get a pairing code
 
 Pairing codes are sent **only** when an unknown sender messages the bot and
 `dmPolicy: "pairing"` is enabled. `/start` by itself doesn't generate a code.
@@ -2790,6 +2881,19 @@ Send any of these **as a standalone message** (no slash):
 
 ```
 stop
+stop action
+stop current action
+stop run
+stop current run
+stop agent
+stop the agent
+stop openclaw
+openclaw stop
+stop don't do anything
+stop do not do anything
+stop doing anything
+please stop
+stop please
 abort
 esc
 wait

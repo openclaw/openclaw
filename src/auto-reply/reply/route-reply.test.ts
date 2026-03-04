@@ -70,7 +70,6 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   channels,
   providers: [],
   gatewayHandlers: {},
-  httpHandlers: [],
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
@@ -144,6 +143,18 @@ describe("routeReply", () => {
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
+  it("suppresses reasoning payloads", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: "Reasoning:\n_step_", isReasoning: true },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
   it("drops silent token payloads", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
@@ -156,7 +167,7 @@ describe("routeReply", () => {
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
-  it("drops payloads that start with the silent token", async () => {
+  it("does not drop payloads that merely start with the silent token", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },
@@ -165,7 +176,11 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
+      expect.any(Object),
+    );
   });
 
   it("applies responsePrefix when routing", async () => {
@@ -368,6 +383,8 @@ describe("routeReply", () => {
       channel: "slack",
       to: "channel:C123",
       sessionKey: "agent:main:main",
+      isGroup: true,
+      groupId: "channel:C123",
       cfg: {} as never,
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
@@ -375,6 +392,8 @@ describe("routeReply", () => {
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
           text: "hi",
+          isGroup: true,
+          groupId: "channel:C123",
         }),
       }),
     );

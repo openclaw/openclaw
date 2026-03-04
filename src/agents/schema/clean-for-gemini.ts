@@ -304,14 +304,20 @@ function cleanSchemaForGeminiWithDefs(
       continue;
     }
 
-    if (key === "properties" && value && typeof value === "object") {
-      const props = value as Record<string, unknown>;
-      cleaned[key] = Object.fromEntries(
-        Object.entries(props).map(([k, v]) => [
-          k,
-          cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
-        ]),
-      );
+    if (key === "properties") {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const props = value as Record<string, unknown>;
+        cleaned[key] = Object.fromEntries(
+          Object.entries(props).map(([k, v]) => [
+            k,
+            cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
+          ]),
+        );
+      } else {
+        // Guard malformed schemas (e.g. properties: null) that can trigger
+        // downstream Object.* crashes in strict provider validators.
+        cleaned[key] = {};
+      }
     } else if (key === "items" && value) {
       if (Array.isArray(value)) {
         cleaned[key] = value.map((entry) =>
@@ -339,7 +345,61 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
+  // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
+  // simplifyUnionVariants runs above. Flatten remaining unions as a fallback:
+  // pick the common type or use the first variant's type so the tool
+  // declaration is accepted by Google's validation layer.
+  if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
+    const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
+    if (flattened) {
+      return flattened;
+    }
+  }
+  if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
+    const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
+    if (flattened) {
+      return flattened;
+    }
+  }
+
   return cleaned;
+}
+
+/**
+ * Last-resort flattening for anyOf/oneOf arrays that could not be simplified
+ * by `simplifyUnionVariants`. Picks a representative type so the schema is
+ * accepted by Google's restricted JSON Schema validation.
+ */
+function flattenUnionFallback(
+  obj: Record<string, unknown>,
+  variants: unknown[],
+): Record<string, unknown> | undefined {
+  const objects = variants.filter(
+    (v): v is Record<string, unknown> => !!v && typeof v === "object",
+  );
+  if (objects.length === 0) {
+    return undefined;
+  }
+  const types = new Set(objects.map((v) => v.type).filter(Boolean));
+  if (objects.length === 1) {
+    const merged: Record<string, unknown> = { ...objects[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  if (types.size === 1) {
+    const merged: Record<string, unknown> = { type: Array.from(types)[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const first = objects[0];
+  if (first?.type) {
+    const merged: Record<string, unknown> = { type: first.type };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const merged: Record<string, unknown> = {};
+  copySchemaMeta(obj, merged);
+  return merged;
 }
 
 export function cleanSchemaForGemini(schema: unknown): unknown {

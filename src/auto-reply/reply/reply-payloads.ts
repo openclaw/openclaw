@@ -1,7 +1,9 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -67,6 +69,10 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   );
 }
 
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
+
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -99,16 +105,35 @@ export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
 }): ReplyPayload[] {
+  const normalizeMediaForDedupe = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (!trimmed.toLowerCase().startsWith("file://")) {
+      return trimmed;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === "file:") {
+        return decodeURIComponent(parsed.pathname || "");
+      }
+    } catch {
+      // Keep fallback below for non-URL-like inputs.
+    }
+    return trimmed.replace(/^file:\/\//i, "");
+  };
+
   const { payloads, sentMediaUrls } = params;
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls);
+  const sentSet = new Set(sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean));
   return payloads.map((payload) => {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(normalizeMediaForDedupe(u)));
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload; // No change
     }
@@ -120,9 +145,21 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
-function normalizeAccountId(value?: string): string | undefined {
+const PROVIDER_ALIAS_MAP: Record<string, string> = {
+  lark: "feishu",
+};
+
+function normalizeProviderForComparison(value?: string): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  const normalizedChannel = normalizeChannelId(trimmed);
+  if (normalizedChannel) {
+    return normalizedChannel;
+  }
+  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {
@@ -131,7 +168,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   originatingTo?: string;
   accountId?: string;
 }): boolean {
-  const provider = params.messageProvider?.trim().toLowerCase();
+  const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
     return false;
   }
@@ -139,23 +176,26 @@ export function shouldSuppressMessagingToolReplies(params: {
   if (!originTarget) {
     return false;
   }
-  const originAccount = normalizeAccountId(params.accountId);
+  const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
     return false;
   }
   return sentTargets.some((target) => {
-    if (!target?.provider) {
+    const targetProvider = normalizeProviderForComparison(target?.provider);
+    if (!targetProvider) {
       return false;
     }
-    if (target.provider.trim().toLowerCase() !== provider) {
+    const isGenericMessageProvider = targetProvider === "message";
+    if (!isGenericMessageProvider && targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(provider, target.to);
+    const targetNormalizationProvider = isGenericMessageProvider ? provider : targetProvider;
+    const targetKey = normalizeTargetForProvider(targetNormalizationProvider, target.to);
     if (!targetKey) {
       return false;
     }
-    const targetAccount = normalizeAccountId(target.accountId);
+    const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }

@@ -124,8 +124,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("falls back when argv1 realpath throws", async () => {
-    const { resolveOpenClawPackageRootSync } = await import("./openclaw-root.js");
-
     const project = fx("realpath-throw-scenario");
     const argv1 = path.join(project, "node_modules", ".bin", "openclaw");
     const pkgRoot = path.join(project, "node_modules", "openclaw");
@@ -158,8 +156,6 @@ describe("resolveOpenClawPackageRoot", () => {
   });
 
   it("async resolver returns null when no package roots exist", async () => {
-    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
-
     await expect(resolveOpenClawPackageRoot({ cwd: fx("missing") })).resolves.toBeNull();
   });
 });

@@ -1,11 +1,11 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
+import { normalizeAccountId as normalizeSharedAccountId } from "../../routing/account-id.js";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -41,11 +41,6 @@ function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): stri
   return path.join(stateDir, "discord", "model-picker-preferences.json");
 }
 
-function normalizeAccountId(value?: string): string {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || "default";
-}
-
 function normalizeId(value?: string): string {
   return value?.trim() ?? "";
 }
@@ -57,7 +52,7 @@ export function buildDiscordModelPickerPreferenceKey(
   if (!userId) {
     return null;
   }
-  const accountId = normalizeAccountId(scope.accountId);
+  const accountId = normalizeSharedAccountId(scope.accountId);
   const guildId = normalizeId(scope.guildId);
   if (guildId) {
     return `discord:${accountId}:guild:${guildId}:user:${userId}`;
@@ -97,32 +92,6 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
     }
   }
   return deduped;
-}
-
-async function readJsonFileWithFallback<T>(
-  filePath: string,
-  fallback: T,
-): Promise<{ value: T; exists: boolean }> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as T;
-    return { value: parsed, exists: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return { value: fallback, exists: false };
-    }
-    return { value: fallback, exists: false };
-  }
-}
-
-async function writeJsonFileAtomically(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {

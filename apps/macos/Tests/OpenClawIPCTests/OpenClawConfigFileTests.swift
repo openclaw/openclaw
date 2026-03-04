@@ -4,12 +4,16 @@ import Testing
 
 @Suite(.serialized)
 struct OpenClawConfigFileTests {
-    @Test
-    func configPathRespectsEnvOverride() async {
-        let override = FileManager().temporaryDirectory
+    private func makeConfigOverridePath() -> String {
+        FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
+    }
+
+    @Test
+    func configPathRespectsEnvOverride() async {
+        let override = makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             #expect(OpenClawConfigFile.url().path == override)
@@ -19,10 +23,7 @@ struct OpenClawConfigFileTests {
     @MainActor
     @Test
     func remoteGatewayPortParsesAndMatchesHost() async {
-        let override = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
-            .appendingPathComponent("openclaw.json")
-            .path
+        let override = makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -42,10 +43,7 @@ struct OpenClawConfigFileTests {
     @MainActor
     @Test
     func setRemoteGatewayUrlPreservesScheme() async {
-        let override = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
-            .appendingPathComponent("openclaw.json")
-            .path
+        let override = makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -59,6 +57,28 @@ struct OpenClawConfigFileTests {
             let root = OpenClawConfigFile.loadDict()
             let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
             #expect(url == "wss://new-host:2222")
+        }
+    }
+
+    @MainActor
+    @Test
+    func clearRemoteGatewayUrlRemovesOnlyUrlField() async {
+        let override = makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "url": "wss://old-host:111",
+                        "token": "tok",
+                    ],
+                ],
+            ])
+            OpenClawConfigFile.clearRemoteGatewayUrl()
+            let root = OpenClawConfigFile.loadDict()
+            let remote = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
+            #expect((remote["url"] as? String) == nil)
+            #expect((remote["token"] as? String) == "tok")
         }
     }
 

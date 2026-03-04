@@ -1,8 +1,29 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
+import {
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
+  matchesFormatErrorPattern,
+} from "./failover-matches.js";
 import type { FailoverReason } from "./types.js";
+
+export {
+  isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
+} from "./failover-matches.js";
+
+const log = createSubsystemLogger("errors");
 
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
@@ -31,11 +52,39 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
+function isReasoningConstraintErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("reasoning is mandatory") ||
+    lower.includes("reasoning is required") ||
+    lower.includes("requires reasoning") ||
+    (lower.includes("reasoning") && lower.includes("cannot be disabled"))
+  );
+}
+
+function hasRateLimitTpmHint(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   const lower = errorMessage.toLowerCase();
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  if (hasRateLimitTpmHint(errorMessage)) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
   const hasRequestSizeExceeds = lower.includes("request size exceeds");
   const hasContextWindow =
     lower.includes("context window") ||
@@ -48,9 +97,20 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
     lower.includes("exceeds model context window") ||
+    lower.includes("model token limit") ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
-    (lower.includes("413") && lower.includes("too large"))
+    lower.includes("exceed context limit") ||
+    lower.includes("exceeds the model's maximum context") ||
+    (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
+    (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
+    (lower.includes("413") && lower.includes("too large")) ||
+    // Chinese proxy error messages for context overflow
+    errorMessage.includes("上下文过长") ||
+    errorMessage.includes("上下文超出") ||
+    errorMessage.includes("上下文长度超") ||
+    errorMessage.includes("超出最大上下文") ||
+    errorMessage.includes("请压缩上下文")
   );
 }
 
@@ -64,6 +124,16 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  if (hasRateLimitTpmHint(errorMessage)) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
@@ -111,13 +181,11 @@ const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
-const BILLING_ERROR_HEAD_RE =
-  /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
-const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 521, 522, 523, 524, 529]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -241,18 +309,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     isLikelyHttpErrorText(raw) ||
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
-  );
-}
-
-function shouldRewriteBillingText(raw: string): boolean {
-  if (!isBillingErrorMessage(raw)) {
-    return false;
-  }
-  return (
-    isRawApiErrorPayload(raw) ||
-    isLikelyHttpErrorText(raw) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    BILLING_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -455,6 +511,13 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isReasoningConstraintErrorMessage(raw)) {
+    return (
+      "Reasoning is required for this model endpoint. " +
+      "Use /think minimal (or any non-off level) and try again."
+    );
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -499,7 +562,7 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
@@ -552,13 +615,6 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  // Preserve legacy behavior for explicit billing-head text outside known
-  // error contexts (e.g., "billing: please upgrade your plan"), while
-  // keeping conversational billing mentions untouched.
-  if (shouldRewriteBillingText(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
   const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -572,67 +628,6 @@ export function isRateLimitAssistantError(msg: AssistantMessage | undefined): bo
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
 
-type ErrorPattern = RegExp | string;
-
-const ERROR_PATTERNS = {
-  rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
-    "exceeded your current quota",
-    "resource has been exhausted",
-    "quota exceeded",
-    "resource_exhausted",
-    "usage limit",
-  ],
-  overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
-    "overloaded",
-    "service unavailable",
-    "high demand",
-  ],
-  timeout: [
-    "timeout",
-    "timed out",
-    "deadline exceeded",
-    "context deadline exceeded",
-    /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*abort\b/i,
-    /\breason:\s*abort\b/i,
-    /\bunhandled stop reason:\s*abort\b/i,
-  ],
-  billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
-    "payment required",
-    "insufficient credits",
-    "credit balance",
-    "plans & billing",
-    "insufficient balance",
-  ],
-  auth: [
-    /invalid[_ ]?api[_ ]?key/,
-    "incorrect api key",
-    "invalid token",
-    "authentication",
-    "re-authenticate",
-    "oauth token refresh failed",
-    "unauthorized",
-    "forbidden",
-    "access denied",
-    "expired",
-    "token has expired",
-    /\b401\b/,
-    /\b403\b/,
-    "no credentials found",
-    "no api key found",
-  ],
-  format: [
-    "string should match pattern",
-    "tool_use.id",
-    "tool_use_id",
-    "messages.1.content.1.tool_use.id",
-    "invalid request format",
-  ],
-} as const;
-
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
@@ -642,43 +637,6 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
-
-function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
-  if (!raw) {
-    return false;
-  }
-  const value = raw.toLowerCase();
-  return patterns.some((pattern) =>
-    pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
-  );
-}
-
-export function isRateLimitErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
-}
-
-export function isTimeoutErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
-}
-
-export function isBillingErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  if (!value) {
-    return false;
-  }
-  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
-    return true;
-  }
-  if (!BILLING_ERROR_HEAD_RE.test(raw)) {
-    return false;
-  }
-  return (
-    value.includes("upgrade") ||
-    value.includes("credits") ||
-    value.includes("payment") ||
-    value.includes("plan")
-  );
-}
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
@@ -694,12 +652,14 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
-export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
-}
-
-export function isOverloadedErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+function isJsonApiInternalServerError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  // Anthropic often wraps transient 500s in JSON payloads like:
+  // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
+  return value.includes('"type":"api_error"') && value.includes("internal server error");
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -755,7 +715,7 @@ export function isImageSizeError(errorMessage?: string): boolean {
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+  return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
 }
 
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -796,6 +756,27 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isCliSessionExpiredErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("session not found") ||
+    lower.includes("session does not exist") ||
+    lower.includes("session expired") ||
+    lower.includes("session invalid") ||
+    lower.includes("conversation not found") ||
+    lower.includes("conversation does not exist") ||
+    lower.includes("conversation expired") ||
+    lower.includes("conversation invalid") ||
+    lower.includes("no such session") ||
+    lower.includes("invalid session") ||
+    lower.includes("session id not found") ||
+    lower.includes("conversation id not found")
+  );
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -803,11 +784,17 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageSizeError(raw)) {
     return null;
   }
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "session_expired";
+  }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.
+    return "timeout";
+  }
+  if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
   if (isRateLimitErrorMessage(raw)) {
@@ -824,6 +811,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
+  }
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";

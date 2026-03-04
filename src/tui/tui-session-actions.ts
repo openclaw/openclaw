@@ -1,5 +1,4 @@
 import type { TUI } from "@mariozechner/pi-tui";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -9,7 +8,7 @@ import {
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
-import type { TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionContext = {
   client: GatewayChatClient;
@@ -34,21 +33,9 @@ type SessionInfoDefaults = {
   contextTokens?: number | null;
 };
 
-type SessionInfoEntry = {
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  model?: string;
-  modelProvider?: string;
+type SessionInfoEntry = SessionInfo & {
   modelOverride?: string;
   providerOverride?: string;
-  contextTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
-  totalTokens?: number | null;
-  responseUsage?: "on" | "off" | "tokens" | "full";
-  updatedAt?: number | null;
-  displayName?: string;
 };
 
 export function createSessionActions(context: SessionActionContext) {
@@ -327,7 +314,7 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(stripInboundMetadata(text));
+            chatLog.addUser(text);
           }
           continue;
         }

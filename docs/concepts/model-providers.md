@@ -43,6 +43,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
 - Example model: `openai/gpt-5.1-codex`
 - CLI: `openclaw onboard --auth-choice openai-api-key`
+- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 
 ```json5
 {
@@ -57,6 +60,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
+- Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
 
 ```json5
 {
@@ -70,6 +75,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.3-codex`
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
 ```json5
 {
@@ -102,6 +110,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
+- Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
   - Enable: `openclaw plugins enable google-antigravity-auth`
   - Login: `openclaw models auth login --provider google-antigravity --set-default`
@@ -115,7 +124,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-4.7`
+- Example model: `zai/glm-5`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
 
@@ -126,16 +135,31 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
+### Kilo Gateway
+
+- Provider: `kilocode`
+- Auth: `KILOCODE_API_KEY`
+- Example model: `kilocode/anthropic/claude-opus-4.6`
+- CLI: `openclaw onboard --kilocode-api-key <key>`
+- Base URL: `https://api.kilo.ai/api/gateway/`
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+
+See [/providers/kilocode](/providers/kilocode) for setup details.
+
 ### Other built-in providers
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
+- Example model: `kilocode/anthropic/claude-opus-4.6`
 - xAI: `xai` (`XAI_API_KEY`)
+- Mistral: `mistral` (`MISTRAL_API_KEY`)
+- Example model: `mistral/mistral-large-latest`
+- CLI: `openclaw onboard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
@@ -154,14 +178,20 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 
 Kimi K2 model IDs:
 
-{/_moonshot-kimi-k2-model-refs:start_/ && null}
+<!-- markdownlint-disable MD037 -->
+
+{/_ moonshot-kimi-k2-model-refs:start _/ && null}
+
+<!-- markdownlint-enable MD037 -->
 
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-0905-preview`
 - `moonshot/kimi-k2-turbo-preview`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
-  {/_moonshot-kimi-k2-model-refs:end_/ && null}
+  <!-- markdownlint-disable MD037 -->
+  {/_ moonshot-kimi-k2-model-refs:end _/ && null}
+  <!-- markdownlint-enable MD037 -->
 
 ```json5
 {
@@ -216,19 +246,83 @@ Model refs:
 
 See [/providers/qwen](/providers/qwen) for setup details and notes.
 
+### Volcano Engine (Doubao)
+
+Volcano Engine (火山引擎) provides access to Doubao and other models in China.
+
+- Provider: `volcengine` (coding: `volcengine-plan`)
+- Auth: `VOLCANO_ENGINE_API_KEY`
+- Example model: `volcengine/doubao-seed-1-8-251228`
+- CLI: `openclaw onboard --auth-choice volcengine-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } },
+  },
+}
+```
+
+Available models:
+
+- `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
+- `volcengine/doubao-seed-code-preview-251028`
+- `volcengine/kimi-k2-5-260127` (Kimi K2.5)
+- `volcengine/glm-4-7-251222` (GLM 4.7)
+- `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2 128K)
+
+Coding models (`volcengine-plan`):
+
+- `volcengine-plan/ark-code-latest`
+- `volcengine-plan/doubao-seed-code`
+- `volcengine-plan/kimi-k2.5`
+- `volcengine-plan/kimi-k2-thinking`
+- `volcengine-plan/glm-4.7`
+
+### BytePlus (International)
+
+BytePlus ARK provides access to the same models as Volcano Engine for international users.
+
+- Provider: `byteplus` (coding: `byteplus-plan`)
+- Auth: `BYTEPLUS_API_KEY`
+- Example model: `byteplus/seed-1-8-251228`
+- CLI: `openclaw onboard --auth-choice byteplus-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "byteplus/seed-1-8-251228" } },
+  },
+}
+```
+
+Available models:
+
+- `byteplus/seed-1-8-251228` (Seed 1.8)
+- `byteplus/kimi-k2-5-260127` (Kimi K2.5)
+- `byteplus/glm-4-7-251222` (GLM 4.7)
+
+Coding models (`byteplus-plan`):
+
+- `byteplus-plan/ark-code-latest`
+- `byteplus-plan/doubao-seed-code`
+- `byteplus-plan/kimi-k2.5`
+- `byteplus-plan/kimi-k2-thinking`
+- `byteplus-plan/glm-4.7`
+
 ### Synthetic
 
 Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
-- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`
+- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.5`
 - CLI: `openclaw onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
+    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" } },
   },
   models: {
     mode: "merge",
@@ -237,7 +331,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
         baseUrl: "https://api.synthetic.new/anthropic",
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
+        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.5", name: "MiniMax M2.5" }],
       },
     },
   },
@@ -311,8 +405,8 @@ Example (OpenAI‑compatible):
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.1-gs32" },
-      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } },
+      model: { primary: "lmstudio/minimax-m2.5-gs32" },
+      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
     },
   },
   models: {
@@ -323,8 +417,8 @@ Example (OpenAI‑compatible):
         api: "openai-completions",
         models: [
           {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1",
+            id: "minimax-m2.5-gs32",
+            name: "MiniMax M2.5",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -348,6 +442,9 @@ Notes:
   - `contextWindow: 200000`
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
+- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+- If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
+- For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
 
 ## CLI examples
 

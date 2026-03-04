@@ -10,10 +10,11 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "partial" | "block" | "off";
+export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -31,6 +32,11 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -53,6 +59,11 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -107,6 +118,10 @@ export type DiscordVoiceConfig = {
   enabled?: boolean;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -142,9 +157,53 @@ export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
 };
 
+export type DiscordThreadBindingsConfig = {
+  /**
+   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
+   * when set.
+   */
+  enabled?: boolean;
+  /**
+   * Inactivity window for thread-bound sessions in hours.
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   */
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions in hours.
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
+   * threads for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
+};
+
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+};
+
+export type DiscordAutoPresenceConfig = {
+  /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
+  enabled?: boolean;
+  /** Poll interval for evaluating runtime availability state (ms). Default: 30000. */
+  intervalMs?: number;
+  /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
+  minUpdateIntervalMs?: number;
+  /** Optional custom status text while runtime is healthy; supports plain text. */
+  healthyText?: string;
+  /** Optional custom status text while runtime/quota state is degraded or unknown. */
+  degradedText?: string;
+  /** Optional custom status text while runtime detects quota/token exhaustion. */
+  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = {
@@ -160,11 +219,16 @@ export type DiscordAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
-  token?: string;
+  token?: SecretInput;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
+  /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
+  allowBots?: boolean | "mentions";
+  /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
@@ -179,14 +243,20 @@ export type DiscordAccountConfig = {
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**
-   * Live preview streaming mode (edit-based, like Telegram).
-   * - "partial": send a message and continuously edit it with new content as tokens arrive.
-   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
-   * - "off": no preview streaming (default).
-   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   * Live stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in chunked preview updates
+   * - "progress": alias that maps to "partial" on Discord
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streamMode?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  streaming?: DiscordStreamMode | boolean;
+  /**
+   * @deprecated Legacy key; migrated automatically to `streaming`.
+   */
+  streamMode?: "partial" | "block" | "off";
+  /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
@@ -233,6 +303,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Slash command configuration. */
   slashCommand?: DiscordSlashCommandConfig;
+  /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+  threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */
@@ -246,17 +318,37 @@ export type DiscordAccountConfig = {
    * Discord supports both unicode emoji and custom emoji names.
    */
   ackReaction?: string;
+  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
   status?: "online" | "dnd" | "idle" | "invisible";
+  /** Automatic runtime/quota presence signaling (status text + status mapping). */
+  autoPresence?: DiscordAutoPresenceConfig;
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
+  /**
+   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
+   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
+   * to prevent the event queue from killing long-running message handlers.
+   */
+  eventQueue?: {
+    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    listenerTimeout?: number;
+    /** Max events queued before backpressure is applied. Default: 10000. */
+    maxQueueSize?: number;
+    /** Max concurrent event processing operations. Default: 50. */
+    maxConcurrency?: number;
+  };
 };
 
 export type DiscordConfig = {
   /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & DiscordAccountConfig;

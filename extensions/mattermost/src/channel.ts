@@ -6,6 +6,8 @@ import {
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
@@ -170,6 +172,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    nativeCommands: true,
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
@@ -228,8 +231,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.mattermost !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -273,10 +280,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
       const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
+        mediaLocalRoots,
         replyToId: replyToId ?? undefined,
       });
       return { channel: "mattermost", ...result };

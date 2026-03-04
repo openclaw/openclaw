@@ -10,27 +10,16 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { loggingState } from "./state.js";
-
-type ConsoleSnapshot = {
-  log: typeof console.log;
-  info: typeof console.info;
-  warn: typeof console.warn;
-  error: typeof console.error;
-  debug: typeof console.debug;
-  trace: typeof console.trace;
-};
+import {
+  captureConsoleSnapshot,
+  type ConsoleSnapshot,
+  restoreConsoleSnapshot,
+} from "./test-helpers/console-snapshot.js";
 
 let snapshot: ConsoleSnapshot;
 
 beforeEach(() => {
-  snapshot = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    trace: console.trace,
-  };
+  snapshot = captureConsoleSnapshot();
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -39,12 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  console.log = snapshot.log;
-  console.info = snapshot.info;
-  console.warn = snapshot.warn;
-  console.error = snapshot.error;
-  console.debug = snapshot.debug;
-  console.trace = snapshot.trace;
+  restoreConsoleSnapshot(snapshot);
   loggingState.consolePatched = false;
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
@@ -125,20 +109,15 @@ describe("enableConsoleCapture", () => {
     expect(log).toHaveBeenCalledWith(payload);
   });
 
-  it("swallows async EPIPE on stdout", () => {
+  it.each([
+    { name: "stdout", stream: process.stdout },
+    { name: "stderr", stream: process.stderr },
+  ])("swallows async EPIPE on $name", ({ stream }) => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => process.stdout.emit("error", epipe)).not.toThrow();
-  });
-
-  it("swallows async EPIPE on stderr", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    enableConsoleCapture();
-    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-    epipe.code = "EPIPE";
-    expect(() => process.stderr.emit("error", epipe)).not.toThrow();
+    expect(() => stream.emit("error", epipe)).not.toThrow();
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

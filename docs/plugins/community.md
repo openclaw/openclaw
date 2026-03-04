@@ -43,7 +43,12 @@ Use this format when adding entries:
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
 
-## Community plugins
+## Listed plugins
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`
 
 - **SMS Gateway** — Enable OpenClaw to send and receive SMS via an Android phone
   npm: `openclaw-sms-gateway`

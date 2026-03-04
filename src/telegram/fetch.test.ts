@@ -3,6 +3,15 @@ import { resolveFetch } from "../infra/fetch.js";
 import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.js";
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const setDefaultResultOrder = vi.hoisted(() => vi.fn());
+const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const getGlobalDispatcherState = vi.hoisted(() => ({ value: undefined as unknown }));
+const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => getGlobalDispatcherState.value));
+const EnvHttpProxyAgentCtor = vi.hoisted(() =>
+  vi.fn(function MockEnvHttpProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+);
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -12,11 +21,47 @@ vi.mock("node:net", async () => {
   };
 });
 
+vi.mock("node:dns", async () => {
+  const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
+  return {
+    ...actual,
+    setDefaultResultOrder,
+  };
+});
+
+vi.mock("undici", () => ({
+  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+  getGlobalDispatcher,
+  setGlobalDispatcher,
+}));
+
 const originalFetch = globalThis.fetch;
+
+function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFamily: boolean }) {
+  expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(params.nth, {
+    connect: {
+      autoSelectFamily: params.autoSelectFamily,
+      autoSelectFamilyAttemptTimeout: 300,
+    },
+  });
+}
+
+function resolveTelegramFetchOrThrow() {
+  const resolved = resolveTelegramFetch();
+  if (!resolved) {
+    throw new Error("expected resolved fetch");
+  }
+  return resolved;
+}
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
+  setDefaultResultOrder.mockReset();
+  setGlobalDispatcher.mockReset();
+  getGlobalDispatcher.mockClear();
+  getGlobalDispatcherState.value = undefined;
+  EnvHttpProxyAgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -104,5 +149,146 @@ describe("resolveTelegramFetch", () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);
+  });
+
+  it("applies dns result order from config", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "verbatim" } });
+    expect(setDefaultResultOrder).toHaveBeenCalledWith("verbatim");
+  });
+
+  it("retries dns setter on next call when previous attempt threw", async () => {
+    setDefaultResultOrder.mockImplementationOnce(() => {
+      throw new Error("dns setter failed once");
+    });
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+
+    expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces global undici dispatcher with proxy-aware EnvHttpProxyAgent", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+  });
+
+  it("keeps an existing proxy-like global dispatcher", async () => {
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+  });
+
+  it("updates proxy-like dispatcher when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets global dispatcher only once across repeated equal decisions", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
+  });
+
+  it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const unreachableErr = Object.assign(
+      new Error("connect ENETUNREACH 2001:67c:4e8:f004::9:443"),
+      {
+        code: "ENETUNREACH",
+      },
+    );
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("aggregate"), {
+        errors: [timeoutErr, unreachableErr],
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
+  });
+
+  it("retries with ipv4 fallback once per request, not once per process", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+    await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry when fetch fails without fallback network error codes", async () => {
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNRESET"), {
+        code: "ECONNRESET",
+      }),
+    });
+    const fetchMock = vi.fn().mockRejectedValue(fetchError);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+
+    await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
