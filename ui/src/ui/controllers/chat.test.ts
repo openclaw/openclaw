@@ -566,3 +566,87 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 });
+
+describe("handleChatEvent - duplicate rendering prevention", () => {
+  it("clears chatStream before updating chatMessages on final to prevent duplicate rendering", () => {
+    // Regression test for: Control UI webchat duplicate assistant messages rendered on every reply.
+    // Root cause: Lit's async batch rendering could see both chatStream and chatMessages
+    // containing the same content when chatMessages was updated before chatStream was cleared.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello world",
+      chatStreamStartedAt: 100,
+    });
+
+    let capturedStreamAtMessageUpdate: string | null | undefined = undefined;
+    let messagesValue = state.chatMessages;
+    Object.defineProperty(state, "chatMessages", {
+      get() {
+        return messagesValue;
+      },
+      set(value) {
+        capturedStreamAtMessageUpdate = state.chatStream;
+        messagesValue = value;
+      },
+      configurable: true,
+    });
+
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+        timestamp: 101,
+      },
+    };
+
+    handleChatEvent(state, payload);
+
+    // chatStream must already be null at the moment chatMessages is written
+    expect(capturedStreamAtMessageUpdate).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(messagesValue).toEqual([payload.message]);
+  });
+
+  it("clears chatStream before updating chatMessages on aborted to prevent duplicate rendering", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+      chatStreamStartedAt: 100,
+    });
+
+    let capturedStreamAtMessageUpdate: string | null | undefined = undefined;
+    let messagesValue = state.chatMessages;
+    Object.defineProperty(state, "chatMessages", {
+      get() {
+        return messagesValue;
+      },
+      set(value) {
+        capturedStreamAtMessageUpdate = state.chatStream;
+        messagesValue = value;
+      },
+      configurable: true,
+    });
+
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial reply" }],
+        timestamp: 101,
+      },
+    };
+
+    handleChatEvent(state, payload);
+
+    expect(capturedStreamAtMessageUpdate).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(messagesValue).toEqual([payload.message]);
+  });
+});

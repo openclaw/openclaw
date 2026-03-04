@@ -273,27 +273,36 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    // Clear stream state before appending to chatMessages so that Lit's async
+    // batch rendering never sees both chatStream and chatMessages containing the
+    // same content at the same time, which would cause duplicate rendering.
+    const streamSnapshot = state.chatStream;
+    state.chatStream = null;
+    state.chatRunId = null;
+    state.chatStreamStartedAt = null;
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+    } else if (streamSnapshot?.trim() && !isSilentReplyStream(streamSnapshot)) {
       state.chatMessages = [
         ...state.chatMessages,
         {
           role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
+          content: [{ type: "text", text: streamSnapshot }],
           timestamp: Date.now(),
         },
       ];
     }
+  } else if (payload.state === "aborted") {
+    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+    // Same ordering fix as "final": clear stream before updating chatMessages.
+    const streamSnapshot = state.chatStream;
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
-  } else if (payload.state === "aborted") {
-    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
-      const streamedText = state.chatStream ?? "";
+      const streamedText = streamSnapshot ?? "";
       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
         state.chatMessages = [
           ...state.chatMessages,
@@ -305,9 +314,6 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ];
       }
     }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
