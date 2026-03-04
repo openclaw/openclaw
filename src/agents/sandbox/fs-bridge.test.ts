@@ -272,6 +272,55 @@ describe("sandbox fs bridge shell compatibility", () => {
     await expectMkdirpAllowsExistingDirectory({ forceBoundaryIoFallback: true });
   });
 
+  it("allows mkdirp when boundary open fails and host path does not exist yet", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-new-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "io",
+        error: Object.assign(new Error("EISDIR"), { code: "EISDIR" }),
+      }));
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "new-subdir/nested" })).resolves.toBeUndefined();
+
+      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+      expect(mkdirCall).toBeDefined();
+      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+      expect(mkdirPath).toBe("/workspace/new-subdir/nested");
+    });
+  });
+
+  it("allows mkdirp for workspace root when boundary open returns io error", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-root-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "validation",
+        error: new Error("platform open failed"),
+      }));
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "." })).resolves.toBeUndefined();
+    });
+  });
+
   it("rejects mkdirp when target exists as a file", async () => {
     await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");

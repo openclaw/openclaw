@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
@@ -333,11 +334,17 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
         // Some platforms cannot open directories via openSync(O_RDONLY), even when
-        // the path is a valid in-boundary directory. Allow mkdirp to proceed in that
-        // narrow case by verifying the host path is an existing directory.
-        const canFallbackToDirectoryStat =
-          options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
-        if (!canFallbackToDirectoryStat) {
+        // the path is a valid in-boundary directory. Allow mkdirp to proceed when:
+        // (a) the host path is an existing directory (original fallback), or
+        // (b) the host path does not exist yet AND resolves lexically inside the
+        //     mount root — the actual mkdir -p runs inside the container so the
+        //     host-side open check is not required for non-existent paths.
+        const canFallbackToDirectoryCheck =
+          options.allowedType === "directory" &&
+          (this.pathIsExistingDirectory(target.hostPath) ||
+            (!this.hostPathExists(target.hostPath) &&
+              this.hostPathIsInsideMount(target.hostPath, lexicalMount)));
+        if (!canFallbackToDirectoryCheck) {
           throw guarded.error instanceof Error
             ? guarded.error
             : new Error(
@@ -372,6 +379,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     } catch {
       return false;
     }
+  }
+
+  private hostPathExists(hostPath: string): boolean {
+    try {
+      fs.lstatSync(hostPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Check if host path is the mount root itself or a descendant of it. */
+  private hostPathIsInsideMount(hostPath: string, mount: SandboxFsMount): boolean {
+    const resolved = path.resolve(hostPath);
+    const root = path.resolve(mount.hostRoot);
+    return resolved === root || resolved.startsWith(root + path.sep);
   }
 
   private resolveMountByContainerPath(containerPath: string): SandboxFsMount | null {
