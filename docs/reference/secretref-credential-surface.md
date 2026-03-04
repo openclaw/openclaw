@@ -34,6 +34,7 @@ Scope intent:
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
 - `tools.web.search.kimi.apiKey`
+- `tools.web.search.exa.apiKey`
 - `tools.web.search.perplexity.apiKey`
 - `gateway.auth.password`
 - `gateway.remote.token`

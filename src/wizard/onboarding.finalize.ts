@@ -458,31 +458,35 @@ export async function finalizeOnboardingWizard(
   const webSearchKey =
     webSearchProvider === "perplexity"
       ? (nextConfig.tools?.web?.search?.perplexity?.apiKey ?? "").trim()
-      : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
+      : webSearchProvider === "exa"
+        ? (nextConfig.tools?.web?.search?.exa?.apiKey ?? "").trim()
+        : (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
   const webSearchEnv =
     webSearchProvider === "perplexity"
       ? (process.env.PERPLEXITY_API_KEY ?? "").trim()
-      : (process.env.BRAVE_API_KEY ?? "").trim();
+      : webSearchProvider === "exa"
+        ? (process.env.EXA_API_KEY ?? "").trim()
+        : (process.env.BRAVE_API_KEY ?? "").trim();
   const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
   await prompter.note(
     hasWebSearchKey
       ? [
           "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : "Brave Search"}`,
+          `Provider: ${webSearchProvider === "perplexity" ? "Perplexity Search" : webSearchProvider === "exa" ? "Exa Search" : "Brave Search"}`,
           webSearchKey
-            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : "apiKey"}).`
-            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
+            ? `API key: stored in config (tools.web.search.${webSearchProvider === "perplexity" ? "perplexity.apiKey" : webSearchProvider === "exa" ? "exa.apiKey" : "apiKey"}).`
+            : `API key: provided via ${webSearchProvider === "perplexity" ? "PERPLEXITY_API_KEY" : webSearchProvider === "exa" ? "EXA_API_KEY" : "BRAVE_API_KEY"} env var (Gateway environment).`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
-          "To enable web search, your agent will need an API key for either Perplexity Search or Brave Search.",
+          "To enable web search, your agent will need an API key for Perplexity Search, Exa Search, or Brave Search.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
           "- Choose a provider and paste your API key",
           "",
-          "Alternative: set PERPLEXITY_API_KEY or BRAVE_API_KEY in the Gateway environment (no config changes).",
+          "Alternative: set PERPLEXITY_API_KEY, EXA_API_KEY, or BRAVE_API_KEY in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
     "Web search (optional)",
