@@ -210,11 +210,11 @@ struct SettingsTab: View {
 
                             Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
 
-                            TextField("Gateway Auth Token", text: self.$gatewayToken)
+                            TextField("HiClaw Cloud Token", text: self.$gatewayToken)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
 
-                            SecureField("Gateway Password", text: self.$gatewayPassword)
+                            SecureField("HiClaw Cloud Password", text: self.$gatewayPassword)
 
                             Button("Reset Onboarding", role: .destructive) {
                                 self.showResetOnboardingAlert = true

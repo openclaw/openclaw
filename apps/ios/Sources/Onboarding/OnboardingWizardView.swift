@@ -500,17 +500,17 @@ struct OnboardingWizardView: View {
     private var authStep: some View {
         Group {
             Section("Authentication") {
-                TextField("Gateway Auth Token", text: self.$gatewayToken)
+                TextField("HiClaw Cloud Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                SecureField("Gateway Password", text: self.$gatewayPassword)
+                SecureField("HiClaw Cloud Password", text: self.$gatewayPassword)
 
                 if self.issue.needsAuthToken {
-                    Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
+                    Text("HiClaw Cloud credentials were rejected. Scan a fresh QR code or update HiClaw Cloud token/password.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Auth token looks valid.")
+                    Text("HiClaw Cloud token looks valid.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

@@ -57,8 +57,8 @@ export const zh_TW: TranslationMap = {
       title: "網關訪問",
       subtitle: "儀表板連接的位置及其身份驗證方式。",
       wsUrl: "WebSocket URL",
-      token: "網關令牌",
-      password: "密碼 (不存儲)",
+      token: "HiClaw 雲端令牌",
+      password: "HiClaw 雲端密碼 (不存儲)",
       sessionKey: "默認會話密鑰",
       language: "語言",
       connectHint: "點擊連接以應用連接更改。",
@@ -92,13 +92,14 @@ export const zh_TW: TranslationMap = {
       cronText: "為重複運行使用隔離的會話。",
     },
     auth: {
-      required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
-      failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      required: "此閘道需要 HiClaw 雲端身份驗證。新增 HiClaw 雲端令牌或密碼，然後點擊連接。",
+      failed:
+        "HiClaw 雲端身份驗證失敗。請使用 {command} 重新複製帶令牌的 URL，或更新 HiClaw 雲端令牌，然後點擊連接。",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
       mobileHint:
-        "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
+        "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...），用於 HiClaw 雲端登入。",
     },
     insecure: {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",

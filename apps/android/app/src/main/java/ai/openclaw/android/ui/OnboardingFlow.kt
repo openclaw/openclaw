@@ -1156,11 +1156,11 @@ private fun GatewayStep(
             )
           }
 
-          Text("TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          Text("HICLAW CLOUD TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
           OutlinedTextField(
             value = gatewayToken,
             onValueChange = onTokenChange,
-            placeholder = { Text("token", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            placeholder = { Text("HiClaw Cloud token", color = onboardingTextTertiary, style = onboardingBodyStyle) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
@@ -1178,11 +1178,11 @@ private fun GatewayStep(
               ),
           )
 
-          Text("PASSWORD (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          Text("HICLAW CLOUD PASSWORD (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
           OutlinedTextField(
             value = gatewayPassword,
             onValueChange = onPasswordChange,
-            placeholder = { Text("password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            placeholder = { Text("HiClaw Cloud password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
@@ -1556,7 +1556,7 @@ private fun FinalStep(
     SummaryField(label = "Enabled Permissions", value = enabledPermissions)
 
     if (!attemptedConnect) {
-      Text("Press Connect to verify gateway reachability and auth.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+      Text("Press Connect to verify gateway reachability and HiClaw Cloud auth.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
     } else {
       Text("Status: $statusText", style = onboardingCalloutStyle, color = if (isConnected) onboardingSuccess else onboardingTextSecondary)
       if (isConnected) {

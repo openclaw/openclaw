@@ -111,7 +111,7 @@ export function renderOverview(props: OverviewProps) {
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
             <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">openclaw doctor --generate-gateway-token</span> → set HiClaw Cloud token
           </div>
           <div style="margin-top: 6px">
             <a
@@ -222,7 +222,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onSettingsChange({ ...props.settings, token: v });
                     }}
-                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                    placeholder="HiClaw Cloud token (OPENCLAW_GATEWAY_TOKEN)"
                   />
                 </label>
                 <label class="field">
@@ -234,7 +234,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onPasswordChange(v);
                     }}
-                    placeholder="system or shared password"
+                    placeholder="HiClaw Cloud password"
                   />
                 </label>
               `

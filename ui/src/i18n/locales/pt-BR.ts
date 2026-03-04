@@ -57,8 +57,8 @@ export const pt_BR: TranslationMap = {
       title: "Acesso ao Gateway",
       subtitle: "Onde o dashboard se conecta e como ele se autentica.",
       wsUrl: "URL WebSocket",
-      token: "Token do Gateway",
-      password: "Senha (não armazenada)",
+      token: "Token da HiClaw Cloud",
+      password: "Senha da HiClaw Cloud (não armazenada)",
       sessionKey: "Chave de Sessão Padrão",
       language: "Idioma",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
@@ -94,14 +94,14 @@ export const pt_BR: TranslationMap = {
     },
     auth: {
       required:
-        "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
+        "Este gateway requer autenticação da HiClaw Cloud. Adicione um token ou senha da HiClaw Cloud e clique em Conectar.",
       failed:
-        "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
+        "Falha na autenticação da HiClaw Cloud. Recopie uma URL com token usando {command}, ou atualize o token da HiClaw Cloud e clique em Conectar.",
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
       mobileHint:
-        "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
+        "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop para login na HiClaw Cloud.",
     },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
