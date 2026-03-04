@@ -1,3 +1,34 @@
+/**
+ * Gateway-level timestamp injection for agent messages.
+ *
+ * This module is part of OpenClaw's timestamp injection architecture, which
+ * provides agents with date/time awareness WITHOUT including timestamps in
+ * the system prompt (which would break prompt cache stability).
+ *
+ * ## Architecture overview
+ *
+ * The system prompt intentionally contains only the user timezone — not the
+ * current date or time. Timestamps reach agents through five complementary
+ * paths:
+ *
+ * | Path                       | Handler                      | Format                                |
+ * |----------------------------|------------------------------|---------------------------------------|
+ * | TUI / Webchat              | `chat.send` (BodyForAgent)   | `[Wed 2026-01-28 22:30 EST] message`  |
+ * | Subagents / sessions_send  | `agent` handler              | `[Wed 2026-01-28 22:30 EST] message`  |
+ * | Channel plugins            | Envelope formatting          | `[Discord user 2026-01-28 22:30 EST]` |
+ * | Heartbeat / cron           | `appendCronStyleCurrentTime` | `Current time: Wednesday, Jan 28...`  |
+ * | On-demand                  | `session_status` tool        | Full status card with timestamp       |
+ *
+ * This module handles the first two rows — gateway-originated messages that
+ * bypass channel plugins.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/3658 — Original feature request
+ * @see https://github.com/openclaw/openclaw/issues/34422 — Related request (solved here)
+ * @see https://github.com/openclaw/openclaw/pull/3705 — Implementation PR
+ * @see `buildTimeSection` in `agents/system-prompt.ts` — Why the system prompt is timezone-only
+ * @see `docs/date-time.md` — Full date/time architecture documentation
+ * @module
+ */
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";

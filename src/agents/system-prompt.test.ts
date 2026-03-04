@@ -397,12 +397,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("current date");
   });
 
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
-  // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
+  // ┌─────────────────────────────────────────────────────────────────────────────┐
+  // │ GUARDIAN TEST — System prompt must NOT contain date/time (cache stability) │
+  // │                                                                             │
+  // │ WHY: Anthropic and OpenAI cache system prompts by prefix. Including a       │
+  // │ timestamp that changes every minute invalidates the cache on every request,  │
+  // │ increasing cost and latency at scale.                                        │
+  // │                                                                             │
+  // │ HOW AGENTS GET THE TIME INSTEAD:                                            │
+  // │  1. Gateway-level injection: `agent` and `chat.send` handlers prepend       │
+  // │     `[Wed 2026-01-28 22:30 EST]` to messages (agent-timestamp.ts)           │
+  // │  2. Channel envelopes: Discord/Telegram/Signal etc. add timestamps          │
+  // │  3. Heartbeat/cron: `appendCronStyleCurrentTimeLine` adds `Current time:`   │
+  // │  4. session_status tool: on-demand time lookup                              │
+  // │  5. Per-message metadata: conversation info block includes timestamp        │
+  // │                                                                             │
+  // │ If you want to put date/time back in the system prompt, DON'T.              │
+  // │ See the architecture documentation in docs/date-time.md and                 │
+  // │ the gateway injection in gateway/server-methods/agent-timestamp.ts.         │
+  // │                                                                             │
+  // │ History:                                                                    │
+  // │  - Removed in commit 66eec295b for cache stability                          │
+  // │  - Gateway injection added in PR #3705 (closes #3658)                       │
+  // │  - Architecture documented in PR closing #34422                             │
+  // │                                                                             │
+  // │ Related issues: #1897, #3658, #34422                                        │
+  // └─────────────────────────────────────────────────────────────────────────────┘
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
@@ -411,15 +431,19 @@ describe("buildAgentSystemPrompt", () => {
       userTimeFormat: "12",
     });
 
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    // The prompt MUST contain the timezone — this is the stable, cacheable part.
     expect(prompt).toContain("Time zone: America/Chicago");
+
+    // The prompt MUST NOT contain any date or time string.
+    // Agents receive timestamps through gateway-level message injection instead.
+    // See: buildTimeSection JSDoc in system-prompt.ts for the full architecture.
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
+
+    // Also verify no other date formats leak through
+    expect(prompt).not.toMatch(/\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/); // ISO-ish
+    expect(prompt).not.toMatch(/\bJanuary \d{1,2}(?:st|nd|rd|th), \d{4}\b/); // Verbose
   });
 
   it("includes model alias guidance when aliases are provided", () => {

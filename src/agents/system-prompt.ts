@@ -93,6 +93,41 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
+/**
+ * Builds the "Current Date & Time" section of the system prompt.
+ *
+ * **Design decision:** This section intentionally contains ONLY the timezone,
+ * not the current date or time. This is a deliberate architectural choice for
+ * prompt cache stability — Anthropic and OpenAI cache system prompts by prefix,
+ * and including a timestamp that changes every minute would invalidate the cache
+ * on every request, increasing both cost and latency.
+ *
+ * Agents receive the current date/time through other mechanisms:
+ *
+ * 1. **Gateway-level message injection** — The `agent` and `chat.send` handlers
+ *    prepend a compact timestamp (`[Wed 2026-01-28 22:30 EST]`) to every message
+ *    that doesn't already have one. See {@link injectTimestamp} in
+ *    `gateway/server-methods/agent-timestamp.ts`.
+ *
+ * 2. **Channel envelope timestamps** — Discord, Telegram, Signal, etc. inject
+ *    their own timestamps in the message envelope before auto-reply dispatch.
+ *
+ * 3. **Heartbeat/cron timestamps** — Heartbeat polls and cron jobs append
+ *    `Current time: ...` via {@link appendCronStyleCurrentTimeLine}.
+ *
+ * 4. **`session_status` tool** — Agents can call this tool to get the current
+ *    date/time on demand (the system prompt hints at this).
+ *
+ * 5. **Per-message conversation metadata** — The `inbound_meta` user-role block
+ *    includes a `timestamp` field for channel messages.
+ *
+ * This means the system prompt stays cacheable while agents always have date/time
+ * context from the most recent message or tool call.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/3658 — Original gateway injection feature
+ * @see https://github.com/openclaw/openclaw/issues/34422 — Related request (solved by injection)
+ * @see https://github.com/openclaw/openclaw/pull/3705 — Gateway injection implementation
+ */
 function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
