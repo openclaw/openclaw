@@ -31,7 +31,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 
 ## Notes
 
-- `OPENCODE_ZEN_API_KEY` is also supported.
+- `OPENCODE_GO_API_KEY` is also supported.
 - OpenCode Go uses the same OpenCode API key as OpenCode Zen.
 - OpenCode Go is subscription-based, while OpenCode Zen is pay-as-you-go.
 - Current Go models are `glm-5`, `kimi-k2.5`, and `minimax-m2.5`.

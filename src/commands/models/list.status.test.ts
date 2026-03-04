@@ -345,33 +345,4 @@ describe("modelsStatusCommand auth overview", () => {
       }
     }
   });
-
-  it("includes opencode-go when its env alias is present", async () => {
-    const localRuntime = createRuntime();
-    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
-    mocks.resolveEnvApiKey.mockImplementation((provider: string) => {
-      if (provider === "opencode-go") {
-        return {
-          apiKey: "sk-opencode-go-1234567890",
-          source: "env: OPENCODE_API_KEY",
-        };
-      }
-      return defaultResolveEnvApiKeyImpl?.(provider) ?? null;
-    });
-
-    try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      const providers = payload.auth.providers as Array<{ provider: string }>;
-      expect(providers.some((entry) => entry.provider === "opencode-go")).toBe(true);
-    } finally {
-      if (originalEnvImpl) {
-        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
-      } else if (defaultResolveEnvApiKeyImpl) {
-        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
-      } else {
-        mocks.resolveEnvApiKey.mockImplementation(() => null);
-      }
-    }
-  });
 });

@@ -140,7 +140,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "opencode-go",
     label: "OpenCode Go",
-    hint: "$10/month open-model subscription",
+    hint: "Subscription-based OpenCoding models",
     choices: ["opencode-go"],
   },
   {
@@ -294,8 +294,8 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   {
     value: "opencode-go",
-    label: "OpenCode Go",
-    hint: "GLM-5, Kimi K2.5, MiniMax M2.5 via opencode.ai/zen/go",
+    label: "OpenCode Go (subscription)",
+    hint: "Open coding models via opencode.ai/zen/go",
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
   {

@@ -133,16 +133,6 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Go example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice opencode-go \
-      --opencode-go-api-key "$OPENCODE_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
   <Accordion title="Custom provider example">
     ```bash
     openclaw onboard --non-interactive \

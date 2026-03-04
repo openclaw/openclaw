@@ -57,6 +57,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("Z.ai")).toBe("zai");
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
+      expect(normalizeProviderId("OpenCode-Go")).toBe("opencode-go");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
       expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
@@ -67,6 +68,7 @@ describe("model-selection", () => {
 
   describe("normalizeProviderIdForAuth", () => {
     it("maps coding-plan variants to base provider for auth lookup", () => {
+      expect(normalizeProviderIdForAuth("opencode-go")).toBe("opencode");
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");

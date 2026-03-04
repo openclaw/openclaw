@@ -500,7 +500,7 @@ describe("onboard (non-interactive): provider auth", () => {
       await withEnvAsync(
         {
           OPENCODE_API_KEY: "opencode-go-env-key",
-          OPENCODE_ZEN_API_KEY: undefined,
+          OPENCODE_GO_API_KEY: undefined,
         },
         async () => {
           const cfg = await runOnboardingAndReadConfig(env, {
@@ -524,7 +524,7 @@ describe("onboard (non-interactive): provider auth", () => {
       await withEnvAsync(
         {
           OPENCODE_API_KEY: undefined,
-          OPENCODE_ZEN_API_KEY: "opencode-go-zen-env-key",
+          OPENCODE_GO_API_KEY: "opencode-go-zen-env-key",
         },
         async () => {
           await runNonInteractiveOnboardingWithDefaults(runtime, {
@@ -541,7 +541,7 @@ describe("onboard (non-interactive): provider auth", () => {
             expect(profile.keyRef).toEqual({
               source: "env",
               provider: "default",
-              id: "OPENCODE_ZEN_API_KEY",
+              id: "OPENCODE_GO_API_KEY",
             });
           }
         },

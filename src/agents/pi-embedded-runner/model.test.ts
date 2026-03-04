@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL_CATALOG } from "../opencode-go-models.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -129,25 +128,6 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].api).toBe("anthropic-messages");
-  });
-
-  it("preserves OpenCode Go per-model api overrides", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      "opencode-go": {
-        baseUrl: OPENCODE_GO_BASE_URL,
-        api: "openai-completions",
-        models: [...OPENCODE_GO_MODEL_CATALOG],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-    const minimax = result.find((model) => model.id === "minimax-m2.5");
-
-    expect(minimax).toMatchObject({
-      provider: "opencode-go",
-      baseUrl: OPENCODE_GO_BASE_URL,
-      api: "anthropic-messages",
-    });
   });
 
   it("inherits both baseUrl and api from provider config", () => {

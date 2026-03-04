@@ -876,7 +876,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       cfg: baseConfig,
       flagValue: opts.opencodeGoApiKey,
       flagName: "--opencode-go-api-key",
-      envVar: "OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY)",
+      envVar: "OPENCODE_API_KEY (or OPENCODE_GO_API_KEY)",
       runtime,
     });
     if (!resolved) {

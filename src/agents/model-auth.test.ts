@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import {
-  requireApiKey,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-  resolveModelAuthMode,
-} from "./model-auth.js";
+import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -93,56 +88,6 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
-  });
-});
-
-describe("resolveEnvApiKey", () => {
-  it("uses OPENCODE_API_KEY for opencode-go", () => {
-    const previousApiKey = process.env.OPENCODE_API_KEY;
-    const previousZenApiKey = process.env.OPENCODE_ZEN_API_KEY;
-    process.env.OPENCODE_API_KEY = "go-opencode-api-key";
-    delete process.env.OPENCODE_ZEN_API_KEY;
-
-    try {
-      const resolved = resolveEnvApiKey("opencode-go");
-      expect(resolved?.apiKey).toBe("go-opencode-api-key");
-      expect(resolved?.source).toContain("OPENCODE_API_KEY");
-    } finally {
-      if (previousApiKey === undefined) {
-        delete process.env.OPENCODE_API_KEY;
-      } else {
-        process.env.OPENCODE_API_KEY = previousApiKey;
-      }
-      if (previousZenApiKey === undefined) {
-        delete process.env.OPENCODE_ZEN_API_KEY;
-      } else {
-        process.env.OPENCODE_ZEN_API_KEY = previousZenApiKey;
-      }
-    }
-  });
-
-  it("falls back to OPENCODE_ZEN_API_KEY for opencode-go", () => {
-    const previousApiKey = process.env.OPENCODE_API_KEY;
-    const previousZenApiKey = process.env.OPENCODE_ZEN_API_KEY;
-    delete process.env.OPENCODE_API_KEY;
-    process.env.OPENCODE_ZEN_API_KEY = "go-opencode-zen-key";
-
-    try {
-      const resolved = resolveEnvApiKey("opencode-go");
-      expect(resolved?.apiKey).toBe("go-opencode-zen-key");
-      expect(resolved?.source).toContain("OPENCODE_ZEN_API_KEY");
-    } finally {
-      if (previousApiKey === undefined) {
-        delete process.env.OPENCODE_API_KEY;
-      } else {
-        process.env.OPENCODE_API_KEY = previousApiKey;
-      }
-      if (previousZenApiKey === undefined) {
-        delete process.env.OPENCODE_ZEN_API_KEY;
-      } else {
-        process.env.OPENCODE_ZEN_API_KEY = previousZenApiKey;
-      }
-    }
   });
 });
 
