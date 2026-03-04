@@ -17,6 +17,18 @@ function generateRawBase64Keypair(): { publicKey: string; privateKey: string } {
   };
 }
 
+async function writeSignedPolicy(params: {
+  policyPath: string;
+  sigPath: string;
+  payload: Record<string, unknown>;
+  privateKey: string;
+}): Promise<void> {
+  const raw = JSON.stringify(params.payload);
+  const signature = signEd25519Payload({ payload: raw, privateKey: params.privateKey });
+  await fs.writeFile(params.policyPath, raw, "utf8");
+  await fs.writeFile(params.sigPath, `${signature}\n`, "utf8");
+}
+
 describe("policy manager", () => {
   beforeEach(() => {
     clearPolicyManagerCacheForTests();
@@ -26,11 +38,14 @@ describe("policy manager", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-"));
     const policyPath = path.join(dir, "POLICY.json");
     const sigPath = path.join(dir, "POLICY.sig");
+    const statePath = path.join(dir, "POLICY.state.json");
     const keys = generateRawBase64Keypair();
-    const payload = JSON.stringify({ version: 1 });
-    const signature = signEd25519Payload({ payload, privateKey: keys.privateKey });
-    await fs.writeFile(policyPath, payload, "utf8");
-    await fs.writeFile(sigPath, `${signature}\n`, "utf8");
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, policySerial: 5 },
+      privateKey: keys.privateKey,
+    });
 
     const config: OpenClawConfig = {
       policy: {
@@ -38,6 +53,7 @@ describe("policy manager", () => {
         failClosed: true,
         policyPath,
         sigPath,
+        statePath,
         publicKey: keys.publicKey,
       },
     };
@@ -46,6 +62,7 @@ describe("policy manager", () => {
     expect(state.valid).toBe(true);
     expect(state.lockdown).toBe(false);
     expect(state.policy?.version).toBe(1);
+    expect(state.lastAcceptedSerial).toBe(5);
   });
 
   it("enters lockdown when failClosed is enabled and signature is missing", async () => {
@@ -66,5 +83,80 @@ describe("policy manager", () => {
     expect(state.enabled).toBe(true);
     expect(state.valid).toBe(false);
     expect(state.lockdown).toBe(true);
+  });
+
+  it("verifies keyId policies against a trusted key set", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-keyset-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const statePath = path.join(dir, "POLICY.state.json");
+    const keyA = generateRawBase64Keypair();
+    const keyB = generateRawBase64Keypair();
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, keyId: "next", policySerial: 7 },
+      privateKey: keyB.privateKey,
+    });
+
+    const config: OpenClawConfig = {
+      policy: {
+        enabled: true,
+        failClosed: true,
+        policyPath,
+        sigPath,
+        statePath,
+        publicKeys: {
+          active: keyA.publicKey,
+          next: keyB.publicKey,
+        },
+      },
+    };
+
+    const state = await getPolicyManagerState({ config, forceReload: true });
+    expect(state.valid).toBe(true);
+    expect(state.lockdown).toBe(false);
+    expect(state.verifiedKeyId).toBe("next");
+    expect(state.lastAcceptedSerial).toBe(7);
+  });
+
+  it("rejects rollback to a lower policySerial", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-policy-rollback-"));
+    const policyPath = path.join(dir, "POLICY.json");
+    const sigPath = path.join(dir, "POLICY.sig");
+    const statePath = path.join(dir, "POLICY.state.json");
+    const keys = generateRawBase64Keypair();
+
+    const config: OpenClawConfig = {
+      policy: {
+        enabled: true,
+        failClosed: true,
+        policyPath,
+        sigPath,
+        statePath,
+        publicKey: keys.publicKey,
+      },
+    };
+
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, policySerial: 9 },
+      privateKey: keys.privateKey,
+    });
+    const first = await getPolicyManagerState({ config, forceReload: true });
+    expect(first.valid).toBe(true);
+    expect(first.lastAcceptedSerial).toBe(9);
+
+    await writeSignedPolicy({
+      policyPath,
+      sigPath,
+      payload: { version: 1, policySerial: 8 },
+      privateKey: keys.privateKey,
+    });
+    const second = await getPolicyManagerState({ config, forceReload: true });
+    expect(second.valid).toBe(false);
+    expect(second.lockdown).toBe(true);
+    expect(second.reason).toContain("policy rollback detected");
   });
 });

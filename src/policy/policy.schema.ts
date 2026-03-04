@@ -45,6 +45,8 @@ export const ConfigMutationPolicySchema = z
 export const SignedPolicySchema = z
   .object({
     version: z.literal(1),
+    keyId: PolicyTokenSchema.optional(),
+    policySerial: z.number().int().nonnegative().optional(),
     issuedAt: z.string().optional(),
     expiresAt: z.string().optional(),
     tools: ToolPolicySchema.optional(),

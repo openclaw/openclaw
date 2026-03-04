@@ -383,10 +383,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Filesystem path to POLICY.json (default: ~/.openclaw/POLICY.json). Keep this file immutable in production and rotate it through controlled signed releases.",
   "policy.sigPath":
     "Filesystem path to detached POLICY signature (default: ~/.openclaw/POLICY.sig). Keep signature updates atomic with policy file updates to avoid fail-closed lockouts.",
+  "policy.statePath":
+    "Filesystem path to persisted anti-rollback state (default: ~/.openclaw/POLICY.state.json). Keep this file owner-restricted and durable across restarts so rollback protection stays effective.",
   "policy.publicKey":
     "Base64 ed25519 public key used to verify POLICY.sig against POLICY.json. Keep this pinned and rotated intentionally, because changing keys without updated signatures triggers policy invalidation.",
+  "policy.publicKeys":
+    "Trusted ed25519 public keys keyed by policy keyId for rotation. Keep only active+next keys, remove retired keys promptly, and include keyId in each signed policy.",
   "policy.failClosed":
     "When true (default), invalid or missing signatures force lockdown mode and deny dangerous tools, installs, and config mutations. Set false only for controlled troubleshooting windows.",
+  "policy.strictFilePermissions":
+    "When true (default), require secure ownership and non-group/world-writable permissions for policy artifacts before they are trusted.",
+  "policy.enforceMonotonicSerial":
+    "When true (default), enforce non-decreasing policySerial values and persist last accepted serial to block signed-policy rollback attacks.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
