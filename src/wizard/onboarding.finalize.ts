@@ -481,23 +481,38 @@ export async function finalizeOnboardingWizard(
     const label = entry?.label ?? webSearchProvider;
     const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
     const envAvailable = entry ? hasKeyInEnv(entry) : false;
+    const hasKey = Boolean(storedKey) || envAvailable;
     const keySource = storedKey
       ? "API key: stored in config."
       : envAvailable
         ? `API key: provided via ${entry?.envKeys.join(" / ")} env var.`
         : undefined;
-    await prompter.note(
-      [
-        "Web search is enabled, so your agent can look things up online when needed.",
-        "",
-        `Provider: ${label}`,
-        keySource,
-        "Docs: https://docs.openclaw.ai/tools/web",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Web search",
-    );
+    if (hasKey) {
+      await prompter.note(
+        [
+          "Web search is enabled, so your agent can look things up online when needed.",
+          "",
+          `Provider: ${label}`,
+          keySource,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Web search",
+      );
+    } else {
+      await prompter.note(
+        [
+          `Provider ${label} is selected but no API key was found.`,
+          "web_search will not work until a key is added.",
+          `  ${formatCliCommand("openclaw configure --section web")}`,
+          "",
+          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
   } else {
     await prompter.note(
       [
