@@ -20,6 +20,12 @@ import {
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import {
+  BATCH_FAILURE_LIMIT,
+  EMBEDDING_CACHE_TABLE,
+  FTS_TABLE,
+  VECTOR_TABLE,
+} from "./manager-constants.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
@@ -32,10 +38,6 @@ import type {
   MemorySyncProgressUpdate,
 } from "./types.js";
 const SNIPPET_MAX_CHARS = 700;
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
-const BATCH_FAILURE_LIMIT = 2;
 
 const log = createSubsystemLogger("memory");
 

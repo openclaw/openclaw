@@ -17,19 +17,21 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
+import {
+  BATCH_FAILURE_LIMIT,
+  EMBEDDING_CACHE_TABLE,
+  FTS_TABLE,
+  VECTOR_TABLE,
+} from "./manager-constants.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import type { SessionFileEntry } from "./session-files.js";
 import type { MemorySource } from "./types.js";
 
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
-const BATCH_FAILURE_LIMIT = 2;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;

@@ -62,10 +62,9 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+import { EMBEDDING_CACHE_TABLE, FTS_TABLE, VECTOR_TABLE } from "./manager-constants.js";
+
 const META_KEY = "memory_index_meta_v1";
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
