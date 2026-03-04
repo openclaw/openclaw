@@ -75,7 +75,7 @@ export function createSessionsSpawnTool(opts?: {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot. mode="session" is persistent/thread-bound and only works when the requester channel supports thread bindings.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
