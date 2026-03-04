@@ -98,6 +98,7 @@ export function createDirectTextMediaOutbound<
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => number | undefined;
+  transformText?: (text: string, cfg: OpenClawConfig, accountId?: string | null) => string;
   buildTextOptions: (params: DirectSendOptions) => TOpts;
   buildMediaOptions: (params: DirectSendOptions) => TOpts;
 }): ChannelOutboundAdapter {
@@ -117,9 +118,12 @@ export function createDirectTextMediaOutbound<
       cfg: sendParams.cfg,
       accountId: sendParams.accountId,
     });
+    const finalText = params.transformText
+      ? params.transformText(sendParams.text, sendParams.cfg, sendParams.accountId)
+      : sendParams.text;
     const result = await send(
       sendParams.to,
-      sendParams.text,
+      finalText,
       sendParams.buildOptions({
         mediaUrl: sendParams.mediaUrl,
         mediaLocalRoots: sendParams.mediaLocalRoots,

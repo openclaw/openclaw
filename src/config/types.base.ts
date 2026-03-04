@@ -36,6 +36,8 @@ export type MarkdownTableMode = "off" | "bullets" | "code";
 export type MarkdownConfig = {
   /** Table rendering mode (off|bullets|code). */
   tables?: MarkdownTableMode;
+  /** Strip markdown formatting from outbound messages (default: false). */
+  strip?: boolean;
 };
 
 export type HumanDelayConfig = {
