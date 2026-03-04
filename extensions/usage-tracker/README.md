@@ -36,11 +36,11 @@ Add to your `openclaw.json`:
 
 The plugin registers a `usage_tracker` tool with these actions:
 
-| Action | Description |
-|--------|-------------|
-| `status` | Overview: total records, date range, top tools/skills |
-| `query` | Aggregated tool/skill usage with groupBy (tool, skill, day, agent) |
-| `skill_health` | Per-skill read metrics: entry/sub reads, errors, avg duration |
+| Action           | Description                                                        |
+| ---------------- | ------------------------------------------------------------------ |
+| `status`         | Overview: total records, date range, top tools/skills              |
+| `query`          | Aggregated tool/skill usage with groupBy (tool, skill, day, agent) |
+| `skill_health`   | Per-skill read metrics: entry/sub reads, errors, avg duration      |
 | `skill_sessions` | Full skill lifecycle analysis: duration, tool chains, end patterns |
 
 ### Web dashboard

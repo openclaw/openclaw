@@ -2,7 +2,8 @@
  * Aggregation engine: query usage data by tool, skill, day, date range.
  */
 
-import type { UsageRecord, UsageStorage } from "./storage.js";
+import { aggregateSkillSessions, type SkillSessionHealth } from "./skill-session.js";
+import type { UsageRecord, UsageStorage, SkillSessionStorage } from "./storage.js";
 
 export type QueryParams = {
   startDay?: string; // YYYY-MM-DD
@@ -233,9 +234,6 @@ export async function queryStatus(storage: UsageStorage): Promise<StatusResult> 
 }
 
 // ── Skill Session queries ──────────────────────────────────────────────
-
-import { aggregateSkillSessions, type SkillSessionHealth } from "./skill-session.js";
-import type { SkillSessionStorage } from "./storage.js";
 
 export async function querySkillSessions(
   skillSessionStorage: SkillSessionStorage,

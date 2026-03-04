@@ -1,6 +1,6 @@
 /**
  * Skill Session tracking.
- * 
+ *
  * A "skill session" is the full lifecycle from reading a SKILL.md to the agent
  * delivering a final text response. It captures:
  * - Total wall-clock duration
@@ -9,16 +9,14 @@
  * - How the session ended (text response, user message, different skill, eof)
  */
 
-import type { UsageRecord } from "./storage.js";
-
 export type SkillSession = {
   skill: string;
-  startTs: number;     // seconds epoch
-  endTs: number;       // seconds epoch
+  startTs: number; // seconds epoch
+  endTs: number; // seconds epoch
   durationSec: number; // wall-clock seconds
-  toolCalls: number;   // total tool calls during this session
+  toolCalls: number; // total tool calls during this session
   toolBreakdown: Record<string, number>; // tool name → count
-  subReads: number;    // sub-file reads within the skill directory
+  subReads: number; // sub-file reads within the skill directory
   endReason: "text_response" | "user_msg" | "different_skill" | "eof";
   sessionKey?: string;
   agent?: string;
@@ -29,12 +27,12 @@ export type SkillSession = {
  * Each entry represents one message (user/assistant/toolResult).
  */
 export type TranscriptEntry = {
-  tsMs: number;        // millisecond epoch
-  role: string;        // user | assistant | toolResult | tool
+  tsMs: number; // millisecond epoch
+  role: string; // user | assistant | toolResult | tool
   toolCalls: Array<{ name: string; path?: string }>;
   hasTextResponse: boolean; // assistant message with substantial text, no tool calls
-  skillEntry?: string;      // skill name if this entry reads a SKILL.md
-  skillSubRead?: string;    // skill name if this entry reads a skill sub-file
+  skillEntry?: string; // skill name if this entry reads a SKILL.md
+  skillSubRead?: string; // skill name if this entry reads a skill sub-file
 };
 
 export function extractSkillSessions(entries: TranscriptEntry[]): SkillSession[] {
@@ -43,7 +41,7 @@ export function extractSkillSessions(entries: TranscriptEntry[]): SkillSession[]
 
   while (i < entries.length) {
     const e = entries[i];
-    
+
     // Look for skill entry point (SKILL.md read)
     if (!e.skillEntry) {
       i++;

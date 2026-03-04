@@ -6,7 +6,13 @@ import path from "node:path";
 import type { OpenClawPluginApi, GatewayRequestHandlerOptions } from "openclaw/plugin-sdk";
 import { runBackfill, backfillSkillSessions } from "./src/backfill.js";
 import { createAfterToolCallHandler } from "./src/hook.js";
-import { queryUsage, querySkillHealth, queryStatus, querySkillSessions, type QueryParams } from "./src/query.js";
+import {
+  queryUsage,
+  querySkillHealth,
+  queryStatus,
+  querySkillSessions,
+  type QueryParams,
+} from "./src/query.js";
 import { UsageStorage, SkillSessionStorage } from "./src/storage.js";
 import { createUsageTrackerTool } from "./src/tool.js";
 import { createDashboardHandler } from "./src/web/dashboard.js";
@@ -45,12 +51,13 @@ export default function register(api: OpenClawPluginApi) {
           endDay: typeof p.endDay === "string" ? p.endDay : undefined,
           tool: typeof p.tool === "string" ? p.tool : undefined,
           skill: typeof p.skill === "string" ? p.skill : undefined,
-          groupBy: typeof p.groupBy === "string" ? (p.groupBy as QueryParams["groupBy"]) : undefined,
+          groupBy:
+            typeof p.groupBy === "string" ? (p.groupBy as QueryParams["groupBy"]) : undefined,
         };
         const result = await queryUsage(storage, queryParams);
         respond(true, result);
       } catch (err) {
-        respond(false, undefined, { code: -1, message: String(err) });
+        respond(false, undefined, { code: "error", message: String(err) });
       }
     },
   );
@@ -68,7 +75,7 @@ export default function register(api: OpenClawPluginApi) {
           skillSessionsFound: sessionResult.skillSessionsFound,
         });
       } catch (err) {
-        respond(false, undefined, { code: -1, message: String(err) });
+        respond(false, undefined, { code: "error", message: String(err) });
       }
     },
   );
@@ -80,7 +87,7 @@ export default function register(api: OpenClawPluginApi) {
         const result = await queryStatus(storage);
         respond(true, result);
       } catch (err) {
-        respond(false, undefined, { code: -1, message: String(err) });
+        respond(false, undefined, { code: "error", message: String(err) });
       }
     },
   );

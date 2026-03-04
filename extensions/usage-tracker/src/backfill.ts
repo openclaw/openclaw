@@ -9,7 +9,13 @@ import path from "node:path";
 import readline from "node:readline";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { classifyReadPath } from "./classifier.js";
-import type { UsageRecord, UsageStorage } from "./storage.js";
+import { extractSkillSessions, type TranscriptEntry } from "./skill-session.js";
+import type {
+  SkillSessionRecord,
+  SkillSessionStorage,
+  UsageRecord,
+  UsageStorage,
+} from "./storage.js";
 
 type PendingToolCall = {
   toolName: string;
@@ -277,16 +283,10 @@ export async function runBackfill(params: {
 
 // ── Skill Session extraction during backfill ──────────────────────────
 
-
-import { extractSkillSessions, type TranscriptEntry } from "./skill-session.js";
-import type { SkillSessionRecord, SkillSessionStorage } from "./storage.js";
-
 /**
  * Extract transcript entries suitable for skill session analysis from a session file.
  */
-async function extractTranscriptEntries(
-  filePath: string,
-): Promise<TranscriptEntry[]> {
+async function extractTranscriptEntries(filePath: string): Promise<TranscriptEntry[]> {
   const entries: TranscriptEntry[] = [];
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl2 = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -315,9 +315,10 @@ async function extractTranscriptEntries(
         if (!Number.isNaN(d.valueOf())) tsMs = d.getTime();
       }
       if (!tsMs && typeof message.timestamp === "number") {
-        tsMs = (message.timestamp as number) > 1e12
-          ? (message.timestamp as number)
-          : (message.timestamp as number) * 1000;
+        tsMs =
+          (message.timestamp as number) > 1e12
+            ? (message.timestamp as number)
+            : (message.timestamp as number) * 1000;
       }
 
       const toolCalls: Array<{ name: string; path?: string }> = [];
@@ -336,8 +337,12 @@ async function extractTranscriptEntries(
             const name = typeof b.name === "string" ? b.name.trim() : "";
             if (!name) continue;
             const args = (b.arguments ?? b.input) as Record<string, unknown> | undefined;
-            const p = typeof args?.file_path === "string" ? args.file_path
-              : typeof args?.path === "string" ? args.path : undefined;
+            const p =
+              typeof args?.file_path === "string"
+                ? args.file_path
+                : typeof args?.path === "string"
+                  ? args.path
+                  : undefined;
             toolCalls.push({ name, path: p });
 
             // Classify for skill detection
@@ -425,6 +430,8 @@ export async function backfillSkillSessions(params: {
     }
   }
 
-  logger.info(`usage-tracker: skill session backfill — ${totalSkillSessions} sessions from ${files.length} files`);
+  logger.info(
+    `usage-tracker: skill session backfill — ${totalSkillSessions} sessions from ${files.length} files`,
+  );
   return { sessionsScanned: files.length, skillSessionsFound: totalSkillSessions };
 }
