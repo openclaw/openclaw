@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../config/sessions/paths.js";
@@ -151,7 +151,13 @@ export function runPatternMatching(
   directionFilter: "inbound" | "outbound",
 ): string[] {
   // Strip bracket metadata only for inbound (envelope headers, structural markers)
-  const body = directionFilter === "inbound" ? text.replace(/\[[^\]]+\]\s*/g, "") : text;
+  let body = directionFilter === "inbound" ? text.replace(/\[[^\]]+\]\s*/g, "") : text;
+
+  // Strip WhatsApp LID references (not real phone numbers) to avoid false positives
+  // LID format: digits followed by @lid (e.g. "133436211732579@lid")
+  if (directionFilter === "inbound") {
+    body = body.replace(/\d+@lid\b/g, "");
+  }
 
   const alerts: string[] = [];
   const seenMatches = new Set<string>();
