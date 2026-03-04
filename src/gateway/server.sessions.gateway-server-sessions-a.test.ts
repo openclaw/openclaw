@@ -1134,6 +1134,62 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset with reason=new clears lastChannel and lastTo", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          lastChannel: "imessage",
+          lastTo: "user@example.com",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: Record<string, unknown> }>(
+      ws,
+      "sessions.reset",
+      { key: "main", reason: "new" },
+    );
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry).toBeDefined();
+    expect(reset.payload?.entry?.lastChannel).toBeUndefined();
+    expect(reset.payload?.entry?.lastTo).toBeUndefined();
+    ws.close();
+  });
+
+  test("sessions.reset without reason=new preserves lastChannel and lastTo", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string; entry: Record<string, unknown> }>(
+      ws,
+      "sessions.reset",
+      { key: "main" },
+    );
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry).toBeDefined();
+    expect(reset.payload?.entry?.lastChannel).toBe("whatsapp");
+    expect(reset.payload?.entry?.lastTo).toBe("+1555");
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
 

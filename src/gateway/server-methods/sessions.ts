@@ -510,8 +510,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
         origin: snapshotSessionOrigin(entry),
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
+        lastChannel: commandReason === "new" ? undefined : entry?.lastChannel,
+        lastTo: commandReason === "new" ? undefined : entry?.lastTo,
         skillsSnapshot: entry?.skillsSnapshot,
         // Reset token counts to 0 on session reset (#1523)
         inputTokens: 0,
