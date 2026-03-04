@@ -390,16 +390,13 @@ function pruneSeenIds(): void {
     log.debug("pruneSeenIds: no pruning needed");
     return;
   }
-  // Drop oldest entries (Set iterates in insertion order).
-  const excess = seenIds.size - MAX_SEEN_IDS;
-  log.debug(`pruneSeenIds: pruning ${excess} entries`);
-  let dropped = 0;
-  for (const id of seenIds) {
-    if (dropped >= excess) {
-      break;
-    }
-    seenIds.delete(id);
-    dropped += 1;
-  }
+  // Keep the most recent entries. Since Set iterates in insertion order and
+  // polling adds page 1 (newest) first, we convert to array and slice from
+  // the end to retain recent IDs and drop the oldest ones.
+  const idsArray = Array.from(seenIds);
+  const excess = idsArray.length - MAX_SEEN_IDS;
+  log.debug(`pruneSeenIds: pruning ${excess} oldest entries`);
+  const keptIds = idsArray.slice(excess);
+  seenIds = new Set(keptIds);
   log.debug(`pruneSeenIds: new size=${seenIds.size}`);
 }
