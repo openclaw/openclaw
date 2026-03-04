@@ -156,9 +156,10 @@ export function clearSlackThreadParticipationCache(): void {
     persistTimer = null;
   }
   // Persist the empty state so the clear survives restarts.
-  if (loaded) {
-    persistToDisk();
-  }
+  // We persist even if the cache hasn't been loaded yet — an existing
+  // persist file with stale entries should be wiped.
+  persistToDisk();
+  loaded = true;
 }
 
 /** @internal — test helper to override persist path and reset load state. */

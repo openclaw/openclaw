@@ -125,6 +125,35 @@ describe("slack sent-thread-cache persistence", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
   });
 
+  it("clear persists empty state so entries do not return after restart", () => {
+    setup();
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+    _flushPersist();
+
+    clearSlackThreadParticipationCache();
+
+    // Simulate restart
+    _resetForTests(tempFile);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+  });
+
+  it("clear before first load still wipes existing persist file", () => {
+    setup();
+    // Write a file with entries, then reset without loading
+    const entries: Record<string, number> = {
+      "A1:C123:1700000000.000001": Date.now(),
+    };
+    fs.writeFileSync(tempFile, JSON.stringify(entries), "utf8");
+    _resetForTests(tempFile);
+
+    // Clear before any read — should still wipe the file
+    clearSlackThreadParticipationCache();
+
+    // Simulate restart
+    _resetForTests(tempFile);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+  });
+
   it("handles corrupt persist file gracefully", () => {
     setup();
     fs.writeFileSync(tempFile, "not json!!!", "utf8");
