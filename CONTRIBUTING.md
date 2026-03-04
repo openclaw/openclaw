@@ -160,3 +160,19 @@ For issues that don't fit a specific repo, or if you're unsure, email **security
 8. **Remediation Advice**
 
 Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
+
+## Feishu/Lark Contributions
+
+We especially welcome contributions to the Feishu/Lark plugin! 🎉
+
+### Areas we need help:
+- **Documentation** - Improve Feishu setup guides and tool documentation
+- **Testing** - Add unit tests for Feishu tools and channel integration
+- **Bug fixes** - Report and fix issues with Feishu messaging
+- **Features** - New Feishu-specific tools and integrations
+
+### Related PRs:
+- #34099 - Feishu reaction tool implementation
+- Documentation improvements for Feishu channel
+
+See [extensions/feishu/README.md](extensions/feishu/README.md) for plugin details.
