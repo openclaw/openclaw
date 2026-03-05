@@ -293,12 +293,15 @@ export function createSynologyChatPlugin() {
                 deliver: async (payload: { text?: string; body?: string }) => {
                   const text = payload?.text ?? payload?.body;
                   if (text) {
-                    await sendMessage(
+                    const ok = await sendMessage(
                       account.incomingUrl,
                       text,
                       sendUserId,
                       account.allowInsecureSsl,
                     );
+                    if (!ok) {
+                      throw new Error("Failed to deliver message chunk to Synology Chat");
+                    }
                   }
                 },
                 onReplyStart: () => {

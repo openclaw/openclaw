@@ -45,6 +45,9 @@ vi.mock("zod", () => ({
 
 const { createSynologyChatPlugin } = await import("./channel.js");
 const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk/synology-chat");
+const { sendMessage: sendMessageMock } = await import("./client.js");
+const { createWebhookHandler: createWebhookHandlerMock } = await import("./webhook-handler.js");
+const { getSynologyRuntime: getSynologyRuntimeMock } = await import("./runtime.js");
 
 describe("createSynologyChatPlugin", () => {
   it("returns a plugin object with all required sections", () => {
@@ -397,6 +400,82 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
       abortController.abort();
       await result;
+    });
+
+    it("dispatch deliver throws when sendMessage fails", async () => {
+      // Capture the outer deliver function passed to createWebhookHandler
+      let outerDeliver: ((msg: any) => Promise<any>) | undefined;
+      vi.mocked(createWebhookHandlerMock).mockImplementation((opts: any) => {
+        outerDeliver = opts.deliver;
+        return vi.fn();
+      });
+
+      // Mock runtime so dispatchReplyWithBufferedBlockDispatcher invokes the inner deliver
+      vi.mocked(getSynologyRuntimeMock).mockReturnValue({
+        config: { loadConfig: vi.fn().mockResolvedValue({}) },
+        channel: {
+          reply: {
+            finalizeInboundContext: vi.fn((ctx: any) => ctx),
+            dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (opts: any) => {
+              await opts.dispatcherOptions.deliver({ text: "chunk" });
+              return { counts: {} };
+            }),
+          },
+        },
+      } as any);
+
+      // Make sendMessage return false (all retries exhausted)
+      vi.mocked(sendMessageMock).mockResolvedValue(false);
+
+      const plugin = createSynologyChatPlugin();
+      const abortController = new AbortController();
+      const ctx = {
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              webhookPath: "/webhook/synology",
+              dmPolicy: "open",
+            },
+          },
+        },
+        accountId: "default",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortController.signal,
+      };
+
+      const startPromise = plugin.gateway.startAccount(ctx);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(outerDeliver).toBeDefined();
+
+      await expect(
+        outerDeliver!({
+          body: "test",
+          from: "user1",
+          chatUserId: 4,
+          sessionKey: "default:synology-chat:user1",
+          chatType: "direct",
+          senderName: "Tester",
+        }),
+      ).rejects.toThrow("Failed to deliver message chunk");
+
+      // Restore mocks for subsequent tests
+      vi.mocked(sendMessageMock).mockResolvedValue(true);
+      vi.mocked(createWebhookHandlerMock).mockImplementation(() => vi.fn());
+      vi.mocked(getSynologyRuntimeMock).mockReturnValue({
+        config: { loadConfig: vi.fn().mockResolvedValue({}) },
+        channel: {
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue({ counts: {} }),
+          },
+        },
+      } as any);
+      vi.mocked(registerPluginHttpRoute).mockClear();
+
+      abortController.abort();
+      await startPromise;
     });
 
     it("deregisters stale route before re-registering same account/path", async () => {
