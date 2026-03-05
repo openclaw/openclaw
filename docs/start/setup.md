@@ -128,7 +128,7 @@ Use this when debugging auth or deciding what to back up:
 
 - **WhatsApp**: `~/.hanzo/bot/credentials/whatsapp/<accountId>/creds.json`
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile`
-- **Discord bot token**: config/env (token file not yet supported)
+- **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**: `~/.hanzo/bot/credentials/<channel>-allowFrom.json`
 - **Model auth profiles**: `~/.hanzo/bot/agents/<agentId>/agent/auth-profiles.json`

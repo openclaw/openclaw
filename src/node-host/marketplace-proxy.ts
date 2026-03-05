@@ -8,7 +8,7 @@
  * 4. Sends a final done event with token usage
  *
  * API priority:
- *   HANZO_API_KEY + api.hanzo.ai → Hanzo Cloud proxy (OpenAI-compatible, preferred)
+ *   HANZO_API_KEY + zen.hanzo.ai → Zen API Gateway (OpenAI-compatible, preferred)
  *   ANTHROPIC_API_KEY + api.anthropic.com → direct Anthropic (seller's own key)
  *
  * Privacy: prompts are held in memory only during the API call, never logged to disk.
@@ -31,8 +31,8 @@ type UsageInfo = {
   output_tokens: number;
 };
 
-/** Hanzo Cloud API — OpenAI-compatible chat completions. */
-const HANZO_API_URL = "https://api.hanzo.ai/v1/chat/completions";
+/** Zen API Gateway — OpenAI-compatible chat completions (routes to DO-AI/Fireworks). */
+const HANZO_API_URL = "https://zen.hanzo.ai/v1/chat/completions";
 /** Anthropic direct API — native Messages format. */
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_API_VERSION = "2023-06-01";
@@ -48,20 +48,30 @@ type ResolvedApi = {
 };
 
 /**
- * Model name mapping for Hanzo Cloud API.
- * The Hanzo API uses short model aliases (no anthropic/ prefix).
+ * Model name mapping for Zen API Gateway.
+ * Maps Anthropic versioned model IDs and short aliases to Zen model names.
+ * Zen routes these to the appropriate upstream (DO-AI, Fireworks, etc.).
  */
 const HANZO_MODEL_MAP: Record<string, string> = {
-  "claude-sonnet-4-20250514": "claude-sonnet-4",
-  "claude-opus-4-20250514": "claude-opus-4",
-  "claude-opus-4-20250620": "claude-opus-4-6",
-  "claude-sonnet-4-20250929": "claude-sonnet-4-5",
-  "claude-haiku-3-5-20241022": "claude-haiku-4-5",
-  "claude-3-5-sonnet-20241022": "claude-sonnet-4",
-  "claude-3-5-haiku-20241022": "claude-3-5-haiku",
-  "claude-3-opus-20240229": "claude-opus-4",
-  "claude-3-sonnet-20240229": "claude-sonnet-4",
-  "claude-3-haiku-20240307": "claude-3-5-haiku",
+  // Sonnet → zen4.1 (DO-AI: anthropic-claude-sonnet-4.6)
+  "claude-sonnet-4-20250514": "zen4.1",
+  "claude-sonnet-4-20250929": "zen4.1",
+  "claude-sonnet-4": "zen4.1",
+  "claude-sonnet-4-5": "zen4.1",
+  "claude-sonnet-4-6": "zen4.1",
+  "claude-3-5-sonnet-20241022": "zen4.1",
+  // Opus → zen4-max (DO-AI: anthropic-claude-opus-4.6)
+  "claude-opus-4-20250514": "zen4-max",
+  "claude-opus-4-20250620": "zen4-max",
+  "claude-opus-4": "zen4-max",
+  "claude-opus-4-6": "zen4-max",
+  "claude-3-opus-20240229": "zen4-max",
+  // Haiku → zen4-mini (DO-AI: openai-gpt-5-nano)
+  "claude-haiku-3-5-20241022": "zen4-mini",
+  "claude-3-5-haiku-20241022": "zen4-mini",
+  "claude-3-5-haiku": "zen4-mini",
+  "claude-haiku-4-5": "zen4-mini",
+  "claude-3-haiku-20240307": "zen4-mini",
 };
 
 function mapModelForHanzo(model: string): string {
@@ -72,7 +82,7 @@ function mapModelForHanzo(model: string): string {
  * Resolve which API endpoint and key to use.
  *
  * Priority:
- *   1. HANZO_API_KEY or hk-* config key → api.hanzo.ai (OpenAI format, most reliable)
+ *   1. HANZO_API_KEY or hk-* config key → zen.hanzo.ai (OpenAI format, most reliable)
  *   2. Explicit ANTHROPIC_API_KEY (sk-ant-*) → api.anthropic.com (Anthropic format)
  *   3. config.claudeApiKey (if Anthropic key) → api.anthropic.com (Anthropic format)
  */

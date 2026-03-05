@@ -11,6 +11,13 @@ function expectCronStaggerMs(job: CronJob, expected: number): void {
   }
 }
 
+function expectCronStaggerMs(job: CronJob, expected: number): void {
+  expect(job.schedule.kind).toBe("cron");
+  if (job.schedule.kind === "cron") {
+    expect(job.schedule.staggerMs).toBe(expected);
+  }
+}
+
 describe("applyJobPatch", () => {
   const createIsolatedAgentTurnJob = (
     id: string,

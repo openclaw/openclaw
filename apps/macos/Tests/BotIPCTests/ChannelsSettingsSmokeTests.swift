@@ -5,6 +5,39 @@ import Testing
 
 private typealias SnapshotAnyCodable = HanzoBot.AnyCodable
 
+private let channelOrder = ["whatsapp", "telegram", "signal", "imessage"]
+private let channelLabels = [
+    "whatsapp": "WhatsApp",
+    "telegram": "Telegram",
+    "signal": "Signal",
+    "imessage": "iMessage",
+]
+private let channelDefaultAccountId = [
+    "whatsapp": "default",
+    "telegram": "default",
+    "signal": "default",
+    "imessage": "default",
+]
+
+@MainActor
+private func makeChannelsStore(
+    channels: [String: SnapshotAnyCodable],
+    ts: Double = 1_700_000_000_000) -> ChannelsStore
+{
+    let store = ChannelsStore(isPreview: true)
+    store.snapshot = ChannelsStatusSnapshot(
+        ts: ts,
+        channelOrder: channelOrder,
+        channelLabels: channelLabels,
+        channelDetailLabels: nil,
+        channelSystemImages: nil,
+        channelMeta: nil,
+        channels: channels,
+        channelAccounts: [:],
+        channelDefaultAccountId: channelDefaultAccountId)
+    return store
+}
+
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {

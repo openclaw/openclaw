@@ -5,6 +5,7 @@ import type {
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { validateIamToken } from "./auth-iam.js";
@@ -249,9 +250,11 @@ export function resolveGatewayAuth(params: {
     }
   }
   const env = params.env ?? process.env;
+  const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
+  const passwordRef = resolveSecretInputRef({ value: authConfig.password }).ref;
   const resolvedCredentials = resolveGatewayCredentialsFromValues({
-    configToken: authConfig.token,
-    configPassword: authConfig.password,
+    configToken: tokenRef ? undefined : authConfig.token,
+    configPassword: passwordRef ? undefined : authConfig.password,
     env,
     includeLegacyEnv: false,
     tokenPrecedence: "config-first",

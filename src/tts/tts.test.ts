@@ -129,6 +129,10 @@ describe("tts", () => {
       expect(isValidOpenAIVoice("alloy ")).toBe(false);
       expect(isValidOpenAIVoice(" alloy")).toBe(false);
     });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
+    });
   });
 
   describe("isValidOpenAIModel", () => {
@@ -150,6 +154,10 @@ describe("tts", () => {
       for (const testCase of cases) {
         expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
       }
+    });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
     });
   });
 
@@ -276,6 +284,29 @@ describe("tts", () => {
 
       expect(result.cleanedText).toBe(input);
       expect(result.overrides.provider).toBeUndefined();
+    });
+
+    it("accepts custom voices and models when openaiBaseUrl is a non-default endpoint", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
+      const customBaseUrl = "http://localhost:8880/v1";
+
+      const result = parseTtsDirectives(input, policy, customBaseUrl);
+
+      expect(result.overrides.openai?.voice).toBe("kokoro-chinese");
+      expect(result.overrides.openai?.model).toBe("kokoro-v1");
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("rejects unknown voices and models when openaiBaseUrl is the default OpenAI endpoint", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
+      const defaultBaseUrl = "https://api.openai.com/v1";
+
+      const result = parseTtsDirectives(input, policy, defaultBaseUrl);
+
+      expect(result.overrides.openai?.voice).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
   });
 
@@ -434,6 +465,58 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+  });
+
+  describe("resolveTtsConfig – openai.baseUrl", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("defaults to the official OpenAI endpoint", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("https://api.openai.com/v1");
+      });
+    });
+
+    it("picks up OPENAI_TTS_BASE_URL env var when no config baseUrl is set", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+    });
+
+    it("config baseUrl takes precedence over env var", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+        },
+      };
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+        const config = resolveTtsConfig(cfg);
+        expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
+      });
+    });
+
+    it("strips trailing slashes from the resolved baseUrl", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
+    });
+
+    it("strips trailing slashes from env var baseUrl", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
     });
   });
 

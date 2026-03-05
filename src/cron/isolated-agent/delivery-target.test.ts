@@ -46,6 +46,17 @@ function makeTelegramBoundCfg(accountId = "account-b"): BotConfig {
   });
 }
 
+function makeTelegramBoundCfg(accountId = "account-b"): OpenClawConfig {
+  return makeCfg({
+    bindings: [
+      {
+        agentId: AGENT_ID,
+        match: { channel: "telegram", accountId },
+      },
+    ],
+  });
+}
+
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = {
   channel: "telegram" as const,

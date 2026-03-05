@@ -138,6 +138,25 @@ describe("gateway auth", () => {
     });
   });
 
+  it("treats env-template auth secrets as SecretRefs instead of plaintext", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: {
+          token: "${OPENCLAW_GATEWAY_TOKEN}",
+          password: "${OPENCLAW_GATEWAY_PASSWORD}",
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "env-token",
+          OPENCLAW_GATEWAY_PASSWORD: "env-password",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      token: "env-token",
+      password: "env-password",
+      mode: "password",
+    });
+  });
+
   it("resolves explicit auth mode none from config", () => {
     expect(
       resolveGatewayAuth({

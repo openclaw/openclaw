@@ -920,6 +920,75 @@ export function buildKilocodeProvider(): ProviderConfig {
   };
 }
 
+// Zen API Gateway — private LLM proxy routing Zen model names to upstream providers.
+const ZEN_BASE_URL = "https://zen.hanzo.ai/v1";
+const ZEN_DEFAULT_CONTEXT_WINDOW = 200_000;
+const ZEN_DEFAULT_MAX_TOKENS = 8192;
+const ZEN_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+export function buildHanzoProvider(): ProviderConfig {
+  return {
+    baseUrl: ZEN_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "zen4.1",
+        name: "Zen 4.1",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 3.0, output: 9.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: ZEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zen4-pro",
+        name: "Zen 4 Pro",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 3.6, output: 3.6, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: ZEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zen4-max",
+        name: "Zen 4 Max",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: ZEN_DEFAULT_COST,
+        contextWindow: ZEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zen4-mini",
+        name: "Zen 4 Mini",
+        reasoning: false,
+        input: ["text"],
+        cost: ZEN_DEFAULT_COST,
+        contextWindow: 128_000,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zen4-coder",
+        name: "Zen 4 Coder",
+        reasoning: false,
+        input: ["text"],
+        cost: ZEN_DEFAULT_COST,
+        contextWindow: ZEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zen4-ultra",
+        name: "Zen 4 Ultra",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 2.7, output: 2.7, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: ZEN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZEN_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -928,6 +997,14 @@ export async function resolveImplicitProviders(params: {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
+
+  // Hanzo/Zen provider — routes via Zen API Gateway to upstream LLM providers.
+  const hanzoKey =
+    resolveEnvApiKeyVarName("hanzo") ??
+    resolveApiKeyFromProfiles({ provider: "hanzo", store: authStore });
+  if (hanzoKey) {
+    providers.hanzo = { ...buildHanzoProvider(), apiKey: hanzoKey };
+  }
 
   const minimaxKey =
     resolveEnvApiKeyVarName("minimax") ??

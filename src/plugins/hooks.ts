@@ -50,6 +50,7 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "./types.js";
+import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 
 // Re-export types for consumers
 export type {
@@ -140,10 +141,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext:
-      acc?.prependContext && next.prependContext
-        ? `${acc.prependContext}\n\n${next.prependContext}`
-        : (next.prependContext ?? acc?.prependContext),
+    prependContext: concatOptionalTextSegments({
+      left: acc?.prependContext,
+      right: next.prependContext,
+    }),
+    prependSystemContext: concatOptionalTextSegments({
+      left: acc?.prependSystemContext,
+      right: next.prependSystemContext,
+    }),
+    appendSystemContext: concatOptionalTextSegments({
+      left: acc?.appendSystemContext,
+      right: next.appendSystemContext,
+    }),
   });
 
   const mergeSubagentSpawningResult = (

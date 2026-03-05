@@ -1,7 +1,7 @@
 /**
- * Tier-to-model routing for Hanzo bot.
- * Free tier (developer): claude-sonnet-4-6 via Hanzo gateway -> DO GenAI (cheap)
- * Paid tier (pro/team/enterprise): zen4-pro via Hanzo gateway -> Fireworks (premium)
+ * Tier-to-model routing for Hanzo bot via Zen API Gateway.
+ * Free tier (developer): zen4.1 → Claude Sonnet 4.6 on DO-AI (cheap)
+ * Paid tier (pro/team/enterprise): zen4-pro → Kimi K2.5 on Fireworks (premium)
  */
 
 export type PlanTier = "developer" | "pro" | "team" | "enterprise";
@@ -12,7 +12,7 @@ export interface ModelRef {
 }
 
 const TIER_MODELS: Record<PlanTier, ModelRef> = {
-  developer: { provider: "hanzo", model: "claude-sonnet-4-6" },
+  developer: { provider: "hanzo", model: "zen4.1" },
   pro: { provider: "hanzo", model: "zen4-pro" },
   team: { provider: "hanzo", model: "zen4-pro" },
   enterprise: { provider: "hanzo", model: "zen4-pro" },
@@ -29,7 +29,7 @@ export function shouldUpgradeModel(opts: {
 }): ModelRef | null {
   const { tier, currentProvider, currentModel } = opts;
   // Only upgrade if user is on the free-tier default -- respect explicit overrides
-  if (currentProvider !== "hanzo" || currentModel !== "claude-sonnet-4-6") {
+  if (currentProvider !== "hanzo" || currentModel !== "zen4.1") {
     return null;
   }
   if (tier === "developer") {

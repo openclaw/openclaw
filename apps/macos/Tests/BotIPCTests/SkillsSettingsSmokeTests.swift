@@ -2,6 +2,42 @@ import HanzoBotProtocol
 import Testing
 @testable import HanzoBot
 
+private func makeSkillStatus(
+    name: String,
+    description: String,
+    source: String,
+    filePath: String,
+    skillKey: String,
+    primaryEnv: String? = nil,
+    emoji: String,
+    homepage: String? = nil,
+    disabled: Bool = false,
+    eligible: Bool,
+    requirements: SkillRequirements = SkillRequirements(bins: [], env: [], config: []),
+    missing: SkillMissing = SkillMissing(bins: [], env: [], config: []),
+    configChecks: [SkillStatusConfigCheck] = [],
+    install: [SkillInstallOption] = [])
+    -> SkillStatus
+{
+    SkillStatus(
+        name: name,
+        description: description,
+        source: source,
+        filePath: filePath,
+        baseDir: "/tmp/skills",
+        skillKey: skillKey,
+        primaryEnv: primaryEnv,
+        emoji: emoji,
+        homepage: homepage,
+        always: false,
+        disabled: disabled,
+        eligible: eligible,
+        requirements: requirements,
+        missing: missing,
+        configChecks: configChecks,
+        install: install)
+}
+
 @Suite(.serialized)
 @MainActor
 struct SkillsSettingsSmokeTests {

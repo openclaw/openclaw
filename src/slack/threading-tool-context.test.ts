@@ -21,6 +21,23 @@ function resolveReplyToModeWithConfig(params: {
   return result.replyToMode;
 }
 
+function resolveReplyToModeWithConfig(params: {
+  slackConfig: Record<string, unknown>;
+  context: Record<string, unknown>;
+}) {
+  const cfg = {
+    channels: {
+      slack: params.slackConfig,
+    },
+  } as OpenClawConfig;
+  const result = buildSlackThreadingToolContext({
+    cfg,
+    accountId: null,
+    context: params.context as never,
+  });
+  return result.replyToMode;
+}
+
 describe("buildSlackThreadingToolContext", () => {
   it("uses top-level replyToMode by default", () => {
     const cfg = {

@@ -3,9 +3,9 @@ import { resolveTierDefaultModel, shouldUpgradeModel, type PlanTier } from "./ti
 
 describe("tier-model", () => {
   describe("resolveTierDefaultModel", () => {
-    it("returns claude-sonnet-4-6 for developer tier", () => {
+    it("returns zen4.1 for developer tier", () => {
       const ref = resolveTierDefaultModel("developer");
-      expect(ref).toEqual({ provider: "hanzo", model: "claude-sonnet-4-6" });
+      expect(ref).toEqual({ provider: "hanzo", model: "zen4.1" });
     });
 
     it("returns zen4-pro for pro tier", () => {
@@ -25,7 +25,7 @@ describe("tier-model", () => {
 
     it("falls back to developer for unknown tier", () => {
       const ref = resolveTierDefaultModel("unknown" as PlanTier);
-      expect(ref).toEqual({ provider: "hanzo", model: "claude-sonnet-4-6" });
+      expect(ref).toEqual({ provider: "hanzo", model: "zen4.1" });
     });
   });
 
@@ -34,7 +34,7 @@ describe("tier-model", () => {
       const result = shouldUpgradeModel({
         tier: "developer",
         currentProvider: "hanzo",
-        currentModel: "claude-sonnet-4-6",
+        currentModel: "zen4.1",
       });
       expect(result).toBeNull();
     });
@@ -43,7 +43,7 @@ describe("tier-model", () => {
       const result = shouldUpgradeModel({
         tier: "pro",
         currentProvider: "hanzo",
-        currentModel: "claude-sonnet-4-6",
+        currentModel: "zen4.1",
       });
       expect(result).toEqual({ provider: "hanzo", model: "zen4-pro" });
     });
@@ -52,7 +52,7 @@ describe("tier-model", () => {
       const result = shouldUpgradeModel({
         tier: "team",
         currentProvider: "hanzo",
-        currentModel: "claude-sonnet-4-6",
+        currentModel: "zen4.1",
       });
       expect(result).toEqual({ provider: "hanzo", model: "zen4-pro" });
     });
@@ -61,7 +61,7 @@ describe("tier-model", () => {
       const result = shouldUpgradeModel({
         tier: "enterprise",
         currentProvider: "hanzo",
-        currentModel: "claude-sonnet-4-6",
+        currentModel: "zen4.1",
       });
       expect(result).toEqual({ provider: "hanzo", model: "zen4-pro" });
     });

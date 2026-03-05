@@ -23,6 +23,7 @@ export type DiscordMessagePreflightContext = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  abortSignal?: AbortSignal;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
@@ -93,6 +94,7 @@ export type DiscordMessagePreflightParams = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  abortSignal?: AbortSignal;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
