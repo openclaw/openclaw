@@ -158,4 +158,37 @@ describe("gateway usage helpers", () => {
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
   });
+
+  it("loadCostUsageSummaryCached bounds cache size and refreshes entry recency", async () => {
+    const config = {} as OpenClawConfig;
+    const max = __test.MAX_COST_USAGE_CACHE_ENTRIES;
+
+    for (let i = 0; i < max + 5; i += 1) {
+      await __test.loadCostUsageSummaryCached({
+        startMs: i,
+        endMs: i,
+        config,
+      });
+    }
+
+    expect(__test.costUsageCache.size).toBe(max);
+    expect(__test.costUsageCache.has("0-0")).toBe(false);
+
+    const promotedKey = `5-5`;
+    await __test.loadCostUsageSummaryCached({
+      startMs: 5,
+      endMs: 5,
+      config,
+    });
+
+    await __test.loadCostUsageSummaryCached({
+      startMs: max + 5,
+      endMs: max + 5,
+      config,
+    });
+
+    expect(__test.costUsageCache.size).toBe(max);
+    expect(__test.costUsageCache.has(promotedKey)).toBe(true);
+    expect(__test.costUsageCache.has("6-6")).toBe(false);
+  });
 });

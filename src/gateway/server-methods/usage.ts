@@ -44,6 +44,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const MAX_COST_USAGE_CACHE_ENTRIES = 64;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -58,6 +59,20 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+function setCostUsageCacheEntry(cacheKey: string, entry: CostUsageCacheEntry): void {
+  if (costUsageCache.has(cacheKey)) {
+    costUsageCache.delete(cacheKey);
+  }
+  costUsageCache.set(cacheKey, entry);
+  while (costUsageCache.size > MAX_COST_USAGE_CACHE_ENTRIES) {
+    const oldestKey = costUsageCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    costUsageCache.delete(oldestKey);
+  }
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -288,6 +303,7 @@ async function loadCostUsageSummaryCached(params: {
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
+    setCostUsageCacheEntry(cacheKey, cached);
     return cached.summary;
   }
 
@@ -305,7 +321,7 @@ async function loadCostUsageSummaryCached(params: {
     config: params.config,
   })
     .then((summary) => {
-      costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      setCostUsageCacheEntry(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
     })
     .catch((err) => {
@@ -318,12 +334,12 @@ async function loadCostUsageSummaryCached(params: {
       const current = costUsageCache.get(cacheKey);
       if (current?.inFlight === inFlight) {
         current.inFlight = undefined;
-        costUsageCache.set(cacheKey, current);
+        setCostUsageCacheEntry(cacheKey, current);
       }
     });
 
   entry.inFlight = inFlight;
-  costUsageCache.set(cacheKey, entry);
+  setCostUsageCacheEntry(cacheKey, entry);
 
   if (entry.summary) {
     return entry.summary;
@@ -343,6 +359,7 @@ export const __test = {
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
+  MAX_COST_USAGE_CACHE_ENTRIES,
 };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
