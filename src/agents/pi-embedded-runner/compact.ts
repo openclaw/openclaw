@@ -75,6 +75,7 @@ import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
+  applyParallelOptionsToSession,
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
@@ -585,6 +586,7 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         resourceLoader,
       });
+      applyParallelOptionsToSession(session.agent, params.config?.agents?.defaults?.parallel);
       applySystemPromptOverrideToSession(session, systemPromptOverride());
 
       try {

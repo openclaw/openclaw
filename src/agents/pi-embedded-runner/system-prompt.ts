@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentParallelConfig } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -105,4 +106,38 @@ export function applySystemPromptOverrideToSession(
   };
   mutableSession._baseSystemPrompt = prompt;
   mutableSession._rebuildSystemPrompt = () => prompt;
+}
+
+/**
+ * Apply parallel engine options from config to the agent instance.
+ * This is called once after createAgentSession() to wire up config values.
+ */
+export function applyParallelOptionsToSession(
+  agent: AgentSession["agent"],
+  parallel: AgentParallelConfig | undefined,
+): void {
+  if (!parallel) {
+    return;
+  }
+  const setParallelOptions = (
+    agent as unknown as {
+      setParallelOptions?: (opts: {
+        toolTimeoutMs?: number;
+        toolCacheMs?: number;
+        maxParallelTools?: number;
+        toolResultCompression?:
+          | { ageTurns?: number; maxChars?: number; maxAssistantChars?: number }
+          | false;
+      }) => void;
+    }
+  ).setParallelOptions;
+  if (typeof setParallelOptions !== "function") {
+    return;
+  }
+  setParallelOptions({
+    toolTimeoutMs: parallel.toolTimeoutMs,
+    toolCacheMs: parallel.toolCacheMs,
+    maxParallelTools: parallel.maxParallelTools,
+    ...(parallel.compression !== undefined ? { toolResultCompression: parallel.compression } : {}),
+  });
 }

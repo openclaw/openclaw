@@ -488,6 +488,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "stats",
+      nativeName: "stats",
+      description: "Show iris token usage stats for the last 7 days.",
+      textAlias: "/stats",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "stop",
       nativeName: "stop",
       description: "Stop the current run.",

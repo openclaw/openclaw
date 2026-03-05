@@ -5,7 +5,7 @@ import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown> & {
+export type AnyAgentTool = AgentTool<any> & {
   ownerOnly?: boolean;
 };
 

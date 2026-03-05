@@ -180,6 +180,24 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    parallel: z
+      .object({
+        toolTimeoutMs: z.number().int().min(0).optional(),
+        toolCacheMs: z.number().int().min(-1).optional(),
+        maxParallelTools: z.number().int().min(1).max(32).optional(),
+        compression: z
+          .union([
+            z.object({
+              ageTurns: z.number().int().min(0).optional(),
+              maxChars: z.number().int().min(0).optional(),
+              maxAssistantChars: z.number().int().min(0).optional(),
+            }),
+            z.literal(false),
+          ])
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
