@@ -384,10 +384,6 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
-// Scoped element refs for file inputs (avoids global ID collisions)
-let fileInputEl: HTMLInputElement | null = null;
-let cameraInputEl: HTMLInputElement | null = null;
-
 export function renderChat(props: ChatProps) {
   // Update mutable refs so async attachment callbacks always read latest state
   latestAttachments = props.attachments ?? [];
@@ -597,15 +593,12 @@ export function renderChat(props: ChatProps) {
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
-          <!-- Hidden file inputs (scoped via ref to avoid global ID collisions) -->
+          <!-- Hidden file inputs (no global IDs or module-level refs; buttons query their own row) -->
           <input
             type="file"
             accept="image/*"
             multiple
             class="chat-compose__file-input"
-            ${ref((el) => {
-              fileInputEl = el as HTMLInputElement | null;
-            })}
             @change=${(e: Event) => handleFileInput(e, props)}
           />
           <input
@@ -613,9 +606,6 @@ export function renderChat(props: ChatProps) {
             accept="image/*"
             capture="environment"
             class="chat-compose__file-input"
-            ${ref((el) => {
-              cameraInputEl = el as HTMLInputElement | null;
-            })}
             @change=${(e: Event) => handleFileInput(e, props)}
           />
 
@@ -626,7 +616,14 @@ export function renderChat(props: ChatProps) {
               title="Attach image"
               aria-label="Attach image"
               ?disabled=${!props.connected}
-              @click=${() => fileInputEl?.click()}
+              @click=${(e: MouseEvent) => {
+                const row = (e.currentTarget as HTMLElement).closest(".chat-compose__row");
+                (
+                  row?.querySelector(
+                    ".chat-compose__file-input:not([capture])",
+                  ) as HTMLInputElement | null
+                )?.click();
+              }}
             >
               ${icons.paperclip}
             </button>
@@ -636,7 +633,14 @@ export function renderChat(props: ChatProps) {
               title="Take photo"
               aria-label="Take photo"
               ?disabled=${!props.connected}
-              @click=${() => cameraInputEl?.click()}
+              @click=${(e: MouseEvent) => {
+                const row = (e.currentTarget as HTMLElement).closest(".chat-compose__row");
+                (
+                  row?.querySelector(
+                    ".chat-compose__file-input[capture]",
+                  ) as HTMLInputElement | null
+                )?.click();
+              }}
             >
               ${icons.camera}
             </button>
