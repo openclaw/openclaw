@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Agents/openai-responses tool_choice: inject `tool_choice: "auto"` on the openai-responses payload path when tools are present but no explicit tool_choice is set, so custom providers (e.g. `api: openai-responses` with a non-openai provider) no longer silently produce text-only output when tool execution is required. (#36057)
 - Cron/update fallbacks persistence: persist `payload.fallbacks` in `cron.update` same-kind merge and kind-change rebuilds so fallback model lists are no longer silently dropped when updating cron jobs. (#36263)
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
