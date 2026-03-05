@@ -347,6 +347,44 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("allows webchat-ui client with stale device identity when control-ui device auth is disabled", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const challengeNonce = await readConnectChallengeNonce(ws);
+        expect(challengeNonce).toBeTruthy();
+        const { device } = await createSignedDevice({
+          token: "secret",
+          scopes: [],
+          clientId: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+          clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          signedAtMs: Date.now() - 60 * 60 * 1000,
+          nonce: String(challengeNonce),
+        });
+        const res = await connectReq(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          device,
+          client: {
+            ...CONTROL_UI_CLIENT,
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+          },
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
+        ws.close();
+      });
+    } finally {
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);

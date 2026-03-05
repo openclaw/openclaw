@@ -495,6 +495,7 @@ export function attachGatewayWsMessageHandler(params: {
         connectParams.scopes = scopes;
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        const isControlUiWebchatClient = connectParams.client.id === GATEWAY_CLIENT_IDS.WEBCHAT_UI;
         const isWebchat = isWebchatConnect(connectParams);
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
@@ -538,7 +539,7 @@ export function attachGatewayWsMessageHandler(params: {
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const controlUiAuthPolicy = resolveControlUiAuthPolicy({
-          isControlUi,
+          isControlUi: isControlUi || isControlUiWebchatClient,
           controlUiConfig: configSnapshot.gateway?.controlUi,
           deviceRaw,
         });
