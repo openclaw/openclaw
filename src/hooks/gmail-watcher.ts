@@ -172,23 +172,12 @@ export function spawnGwsWatch(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gws process error: ${String(err)}`);
   });
 
-  child.on("exit", (code, signal) => {
-    // Flush remaining buffer
+  // Flush remaining buffer on exit (restart logic is handled by callers)
+  child.on("exit", () => {
     if (buffer.trim()) {
       handleLine(buffer);
       buffer = "";
     }
-    if (shuttingDown) {
-      return;
-    }
-    log.warn(`gws exited (code=${code}, signal=${signal}); restarting in 5s`);
-    watcherProcess = null;
-    setTimeout(() => {
-      if (shuttingDown || !currentConfig) {
-        return;
-      }
-      watcherProcess = spawnGwsWatch(currentConfig);
-    }, 5000);
   });
 
   return child;
@@ -251,7 +240,26 @@ async function startGogWatcher(
  */
 function startGwsWatcher(runtimeConfig: GmailHookRuntimeConfig): GmailWatcherStartResult {
   shuttingDown = false;
-  watcherProcess = spawnGwsWatch(runtimeConfig);
+
+  function spawnAndWatch() {
+    const proc = spawnGwsWatch(runtimeConfig);
+    watcherProcess = proc;
+    proc.on("exit", (code, signal) => {
+      if (shuttingDown) {
+        return;
+      }
+      log.warn(`gws exited (code=${code}, signal=${signal}); restarting in 5s`);
+      watcherProcess = null;
+      setTimeout(() => {
+        if (shuttingDown || !currentConfig) {
+          return;
+        }
+        spawnAndWatch();
+      }, 5000);
+    });
+  }
+
+  spawnAndWatch();
   log.info(`gmail watcher (gws) started for ${runtimeConfig.account}`);
   return { started: true };
 }

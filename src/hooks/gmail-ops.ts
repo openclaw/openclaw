@@ -371,19 +371,23 @@ export async function runGmailService(opts: GmailRunOptions) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  child.on("exit", () => {
-    if (shuttingDown) {
-      detachSignals();
-      return;
-    }
-    defaultRuntime.log("gog watch serve exited; restarting in 2s");
-    setTimeout(() => {
+  function attachExitHandler(proc: ReturnType<typeof spawnGogServe>) {
+    proc.on("exit", () => {
       if (shuttingDown) {
+        detachSignals();
         return;
       }
-      child = spawnGogServe(runtimeConfig);
-    }, 2000);
-  });
+      defaultRuntime.log("gog watch serve exited; restarting in 2s");
+      setTimeout(() => {
+        if (shuttingDown) {
+          return;
+        }
+        child = spawnGogServe(runtimeConfig);
+        attachExitHandler(child);
+      }, 2000);
+    });
+  }
+  attachExitHandler(child);
 }
 
 /**
@@ -413,19 +417,23 @@ function runGwsService(runtimeConfig: GmailHookRuntimeConfig) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  child.on("exit", () => {
-    if (shuttingDown) {
-      detachSignals();
-      return;
-    }
-    defaultRuntime.log("gws gmail +watch exited; restarting in 2s");
-    setTimeout(() => {
+  function attachExitHandler(proc: ReturnType<typeof spawnGwsWatch>) {
+    proc.on("exit", () => {
       if (shuttingDown) {
+        detachSignals();
         return;
       }
-      child = spawnGwsWatch(runtimeConfig);
-    }, 2000);
-  });
+      defaultRuntime.log("gws gmail +watch exited; restarting in 2s");
+      setTimeout(() => {
+        if (shuttingDown) {
+          return;
+        }
+        child = spawnGwsWatch(runtimeConfig);
+        attachExitHandler(child);
+      }, 2000);
+    });
+  }
+  attachExitHandler(child);
 }
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
