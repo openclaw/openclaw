@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -555,5 +556,46 @@ describe("empty input handling", () => {
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
+  });
+});
+
+describe("promoteThinkingTagsToBlocks", () => {
+  it("handles malformed content entries (null, undefined, non-objects)", () => {
+    const message = makeAssistantMessage({
+      role: "assistant",
+      content: [null, { type: "text", text: "ok" }, undefined, "string"],
+    });
+    // Should not throw
+    promoteThinkingTagsToBlocks(message);
+    // Should preserve content
+    expect(message.content).toEqual([null, { type: "text", text: "ok" }, undefined, "string"]);
+  });
+
+  it("promotes thinking tags to blocks when present in text", () => {
+    const message = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "<thinking>secret</thinking>Hello" }],
+    });
+    promoteThinkingTagsToBlocks(message);
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "secret" },
+      { type: "text", text: "Hello" },
+    ]);
+  });
+
+  it("skips promotion when thinking block already exists", () => {
+    const message = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "already thinking" },
+        { type: "text", text: "Hello" },
+      ],
+    });
+    promoteThinkingTagsToBlocks(message);
+    // Should not modify content since thinking block already exists
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "already thinking" },
+      { type: "text", text: "Hello" },
+    ]);
   });
 });

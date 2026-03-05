@@ -333,7 +333,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  // Skip malformed content entries (null, undefined, non-objects)
+  const hasThinkingBlock = message.content.some(
+    (block) => block && typeof block === "object" && block.type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -342,6 +345,11 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
+    // Skip malformed blocks
+    if (!block || typeof block !== "object") {
+      next.push(block);
+      continue;
+    }
     if (block.type !== "text") {
       next.push(block);
       continue;

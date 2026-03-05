@@ -171,6 +171,48 @@ function runContextHandler(
 }
 
 describe("context-pruning", () => {
+  it("handles malformed assistant content blocks without crashing", () => {
+    // Issue #35026: malformed thinking block (no thinking string)
+    // Issue #35017: malformed text block (no text string)
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      {
+        role: "assistant",
+        content: [
+          null,
+          { type: "thinking" },
+          { type: "text" },
+          { type: "thinking", thinking: "valid" },
+          { type: "text", text: "valid" },
+          "string",
+          123,
+        ],
+        api: "openai-responses",
+        provider: "openai",
+        model: "fake",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    ];
+
+    // Should not throw
+    const next = pruneContextMessages({
+      messages,
+      settings: { mode: "aggressive" },
+      ctx: CONTEXT_WINDOW_1000,
+    });
+    // Should preserve the message content
+    expect(next[1].role).toBe("assistant");
+  });
+
   it("mode off disables pruning", () => {
     expect(computeEffectiveSettings({ mode: "off" })).toBeNull();
     expect(computeEffectiveSettings({})).toBeNull();
