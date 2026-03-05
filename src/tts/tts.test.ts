@@ -129,6 +129,10 @@ describe("tts", () => {
       expect(isValidOpenAIVoice("alloy ")).toBe(false);
       expect(isValidOpenAIVoice(" alloy")).toBe(false);
     });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
+    });
   });
 
   describe("isValidOpenAIModel", () => {
@@ -150,6 +154,10 @@ describe("tts", () => {
       for (const testCase of cases) {
         expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
       }
+    });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
     });
   });
 

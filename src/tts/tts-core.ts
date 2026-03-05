@@ -33,6 +33,14 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_OPENAI_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
 function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
@@ -337,10 +345,13 @@ export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as con
  * Note: Read at runtime (not module load) to support config.env loading.
  */
 function getOpenAITtsBaseUrl(): string {
-  return (process.env.OPENAI_TTS_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, "");
+  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL);
 }
 
-function isCustomOpenAIEndpoint(): boolean {
+function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
+  if (baseUrl != null) {
+    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
+  }
   return getOpenAITtsBaseUrl() !== DEFAULT_OPENAI_BASE_URL;
 }
 export const OPENAI_TTS_VOICES = [
@@ -364,7 +375,7 @@ type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
 export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
   // Allow any model when using custom endpoint (e.g., Kokoro, LocalAI)
-  if (baseUrl ? baseUrl !== DEFAULT_OPENAI_BASE_URL : isCustomOpenAIEndpoint()) {
+  if (isCustomOpenAIEndpoint(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
@@ -372,7 +383,7 @@ export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
   // Allow any voice when using custom endpoint (e.g., Kokoro Chinese voices)
-  if (baseUrl ? baseUrl !== DEFAULT_OPENAI_BASE_URL : isCustomOpenAIEndpoint()) {
+  if (isCustomOpenAIEndpoint(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
