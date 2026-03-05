@@ -248,6 +248,48 @@ describe("sendMessageMatrix threads", () => {
   });
 });
 
+describe("sendMessageMatrix rate limit retry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({});
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("retries once on M_LIMIT_EXCEEDED using retry_after_ms", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, sendMessage } = makeClient();
+      sendMessage
+        .mockRejectedValueOnce({
+          errcode: "M_LIMIT_EXCEEDED",
+          error: "Too Many Requests",
+          retry_after_ms: 5,
+        })
+        .mockResolvedValueOnce("evt-retried");
+
+      const promise = sendMessageMatrix("room:!room:example", "hello", { client });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(result.messageId).toBe("evt-retried");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry non-rate-limit send errors", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", { client })).rejects.toThrow(
+      "send failed",
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("sendMessageMatrix cfg threading", () => {
   beforeEach(() => {
     vi.clearAllMocks();
