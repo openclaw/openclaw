@@ -74,7 +74,6 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const RESET_COMMAND_NAMES = new Set(["new", "reset"]);
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -175,6 +174,11 @@ async function resolveTelegramCommandAuth(params: {
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup,
+    isForum,
+    messageThreadId,
+  });
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -210,9 +214,10 @@ async function resolveTelegramCommandAuth(params: {
   const senderUsername = msg.from?.username ?? "";
 
   const sendAuthMessage = async (text: string) => {
+    const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, text),
+      fn: () => bot.api.sendMessage(chatId, text, threadParams),
     });
     return null;
   };
@@ -495,20 +500,6 @@ export const registerTelegramNativeCommands = ({
     const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
     return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
   };
-  const sendCommandUnauthorizedReply = async (params: {
-    chatId: number;
-    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
-  }) => {
-    const threadParams = buildTelegramThreadParams(params.threadSpec) ?? {};
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime,
-      fn: () =>
-        bot.api.sendMessage(params.chatId, "You are not authorized to use this command.", {
-          ...threadParams,
-        }),
-    });
-  };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
     accountId: string;
@@ -545,7 +536,6 @@ export const registerTelegramNativeCommands = ({
           if (shouldSkipUpdate(ctx)) {
             return;
           }
-          const isSessionResetCommand = RESET_COMMAND_NAMES.has(normalizedCommandName);
           const auth = await resolveTelegramCommandAuth({
             msg,
             bot,
@@ -557,7 +547,7 @@ export const registerTelegramNativeCommands = ({
             useAccessGroups,
             resolveGroupPolicy,
             resolveTelegramGroupConfig,
-            requireAuth: !isSessionResetCommand,
+            requireAuth: true,
           });
           if (!auth) {
             return;
@@ -574,15 +564,6 @@ export const registerTelegramNativeCommands = ({
             commandAuthorized: initialCommandAuthorized,
           } = auth;
           let commandAuthorized = initialCommandAuthorized;
-          const threadSpec = resolveTelegramThreadSpec({
-            isGroup,
-            isForum,
-            messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
-          });
-          if (isSessionResetCommand && !commandAuthorized) {
-            await sendCommandUnauthorizedReply({ chatId, threadSpec });
-            return;
-          }
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
@@ -592,7 +573,7 @@ export const registerTelegramNativeCommands = ({
           if (!runtimeContext) {
             return;
           }
-          const { route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,

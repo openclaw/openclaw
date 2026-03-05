@@ -953,7 +953,9 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
-      SessionKey: "agent:codex-acp:session-1",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-1",
       CommandBody: "/new continue with deployment",
       BodyForCommands: "/new continue with deployment",
       BodyForAgent: "/new continue with deployment",

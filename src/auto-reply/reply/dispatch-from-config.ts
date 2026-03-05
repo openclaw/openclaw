@@ -165,6 +165,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
+  const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -328,7 +329,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       cfg,
       dispatcher,
-      sessionKey,
+      sessionKey: acpDispatchSessionKey,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
@@ -442,7 +443,7 @@ export async function dispatchReplyFromConfig(params: {
         ctx,
         cfg,
         dispatcher,
-        sessionKey,
+        sessionKey: acpDispatchSessionKey,
         inboundAudio,
         sessionTtsAuto,
         ttsChannel,
