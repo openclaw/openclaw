@@ -1457,6 +1457,61 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     archiveSpy.mockRestore();
   });
 
+  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
+    // Daily resets occur when the session becomes stale (not via /new or /reset command).
+    // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
+    // old transcript files orphaned on disk. Refs #35481.
+    vi.useFakeTimers();
+    try {
+      // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:archive-stale-user";
+      const existingSessionId = "stale-session-to-be-archived";
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const sessionUtils = await import("../../gateway/session-utils.fs.js");
+      const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(archiveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: existingSessionId,
+          storePath,
+          reason: "reset",
+        }),
+      );
+      archiveSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
     const storePath = await createStorePath("openclaw-idle-no-preserve-");
     const sessionKey = "agent:main:telegram:dm:new-user";

@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Sessions/daily reset transcript archival: archive prior transcript files during stale-session scheduled/daily resets by capturing the previous session entry before rollover, preventing orphaned transcript files on disk. (#35493) Thanks @byungsker.
 - Feishu/group slash command detection: normalize group mention wrappers before command-authorization probing so mention-prefixed commands (for example `@Bot/model` and `@Bot /reset`) are recognized as gateway commands instead of being forwarded to the agent. (#35994) Thanks @liuxiaopai-ai.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
