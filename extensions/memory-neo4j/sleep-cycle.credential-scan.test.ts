@@ -3,11 +3,13 @@
  *
  * Verifies that CREDENTIAL_PATTERNS and detectCredential() correctly
  * identify credential-like content in memory text while not flagging
- * clean text.
+ * clean text, and that the sleep cycle paginated batch scan works correctly.
  */
 
-import { describe, it, expect } from "vitest";
-import { CREDENTIAL_PATTERNS, detectCredential } from "./sleep-cycle.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ExtractionConfig } from "./config.js";
+import type { Logger } from "./schema.js";
+import { CREDENTIAL_PATTERNS, detectCredential, runSleepCycle } from "./sleep-cycle.js";
 
 describe("Credential Detection", () => {
   // --------------------------------------------------------------------------
@@ -161,5 +163,168 @@ describe("Credential Detection", () => {
         expect(typeof label).toBe("string");
       }
     });
+  });
+});
+
+// ============================================================================
+// Phase 5b: Paginated credential scan via runSleepCycle
+// ============================================================================
+
+/** Build a minimal db mock that passes all phases without errors. */
+function makeDb(overrides: Record<string, unknown> = {}): any {
+  return {
+    findDuplicateClusters: vi.fn().mockResolvedValue([]),
+    mergeMemoryCluster: vi.fn().mockResolvedValue({ survivorId: "s1", deletedCount: 0 }),
+    findConflictingMemories: vi.fn().mockResolvedValue([]),
+    invalidateMemory: vi.fn().mockResolvedValue(undefined),
+    reconcileEntityMentionCounts: vi.fn().mockResolvedValue(undefined),
+    findDuplicateEntityPairs: vi.fn().mockResolvedValue([]),
+    mergeEntityPair: vi.fn().mockResolvedValue(true),
+    countByExtractionStatus: vi
+      .fn()
+      .mockResolvedValue({ pending: 0, complete: 0, failed: 0, skipped: 0 }),
+    listPendingExtractions: vi.fn().mockResolvedValue([]),
+    listUntaggedMemories: vi.fn().mockResolvedValue([]),
+    updateExtractionStatus: vi.fn().mockResolvedValue(undefined),
+    findDecayedMemories: vi.fn().mockResolvedValue([]),
+    pruneMemories: vi.fn().mockResolvedValue(0),
+    fetchMemoriesForTemporalCheck: vi.fn().mockResolvedValue([]),
+    findOrphanEntities: vi.fn().mockResolvedValue([]),
+    deleteOrphanEntities: vi.fn().mockResolvedValue(0),
+    findOrphanTags: vi.fn().mockResolvedValue([]),
+    deleteOrphanTags: vi.fn().mockResolvedValue(0),
+    findSingleUseTags: vi.fn().mockResolvedValue([]),
+    deleteMemoriesByPattern: vi.fn().mockResolvedValue(0),
+    // Credential scan methods — overridden per test
+    fetchMemoriesForCredentialScan: vi.fn().mockResolvedValue([]),
+    deleteMemoriesByIds: vi.fn().mockResolvedValue(0),
+    ...overrides,
+  };
+}
+
+const mockLogger: Logger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+};
+
+const mockEmbeddings = {
+  embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+  embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+};
+
+const mockConfig: ExtractionConfig = {
+  enabled: false, // disable LLM-dependent phases
+  apiKey: "test-key",
+  model: "test-model",
+  baseUrl: "https://test.ai/api/v1",
+  temperature: 0.0,
+  maxRetries: 0,
+};
+
+describe("Phase 5b: credential scan — paginated batch loop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("single batch (< 200 memories): fetches once, deletes credential, stops", async () => {
+    const cleanMemory = { id: "clean-1", text: "Remember to buy groceries" };
+    const credMemory = { id: "cred-1", text: "Use sk-abc123def456ghi789jkl012mno345 for the API" };
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi.fn().mockResolvedValueOnce([cleanMemory, credMemory]),
+      deleteMemoriesByIds: vi.fn().mockResolvedValue(1),
+    });
+
+    const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
+
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(1);
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledWith(0, 200, undefined);
+    expect(db.deleteMemoriesByIds).toHaveBeenCalledWith(["cred-1"]);
+    expect(result.credentialScan.memoriesScanned).toBe(2);
+    expect(result.credentialScan.credentialsFound).toBe(1);
+    expect(result.credentialScan.memoriesRemoved).toBe(1);
+  });
+
+  it("multiple batches: processes first batch of 200 then second batch of 50", async () => {
+    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+    const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
+    const batch2 = Array.from({ length: 50 }, (_, i) => makeMem(200 + i));
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi
+        .fn()
+        .mockResolvedValueOnce(batch1)
+        .mockResolvedValueOnce(batch2),
+    });
+
+    const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
+
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(2);
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(1, 0, 200, undefined);
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(2, 200, 200, undefined);
+    expect(result.credentialScan.memoriesScanned).toBe(250);
+    expect(result.credentialScan.credentialsFound).toBe(0);
+  });
+
+  it("batch boundary: exactly 200 triggers second fetch; empty second batch stops", async () => {
+    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+    const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi
+        .fn()
+        .mockResolvedValueOnce(batch1)
+        .mockResolvedValueOnce([]), // empty second page → stop
+    });
+
+    const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
+
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(2);
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(2, 200, 200, undefined);
+    expect(result.credentialScan.memoriesScanned).toBe(200);
+  });
+
+  it("AbortSignal respected between batches: loop exits after first batch when signal aborted", async () => {
+    const controller = new AbortController();
+    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+    const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi.fn().mockImplementation(async (offset: number) => {
+        if (offset === 0) {
+          // Abort the signal after returning the first full batch
+          controller.abort();
+          return batch1;
+        }
+        return [];
+      }),
+    });
+
+    await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger, {
+      abortSignal: controller.signal,
+    });
+
+    // Only the first fetch should have been called; loop exits on abort check
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(1);
+  });
+
+  it("no credentials found — no memories deleted", async () => {
+    const mems = [
+      { id: "m1", text: "Normal memory about groceries" },
+      { id: "m2", text: "Remember the meeting at 3pm" },
+    ];
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi.fn().mockResolvedValueOnce(mems),
+      deleteMemoriesByIds: vi.fn(),
+    });
+
+    const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
+
+    expect(db.deleteMemoriesByIds).not.toHaveBeenCalled();
+    expect(result.credentialScan.credentialsFound).toBe(0);
+    expect(result.credentialScan.memoriesRemoved).toBe(0);
   });
 });

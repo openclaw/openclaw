@@ -2382,10 +2382,42 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
   }
 
   /**
-   * Fetch all memories (id + text) for a given agent, or all agents.
+   * Fetch a paginated batch of memories (id + text) for credential scanning.
    * Used by the sleep cycle credential scanner — scans every memory
    * including core, since credentials must never be persisted regardless
    * of category or pin status.
+   *
+   * Uses ORDER BY m.createdAt ASC for a stable cursor across pages.
+   */
+  async fetchMemoriesForCredentialScan(
+    offset: number,
+    limit: number,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE ($agentId IS NULL OR m.agentId = $agentId)
+         RETURN m.id AS id, m.text AS text
+         ORDER BY m.createdAt ASC
+         SKIP $offset
+         LIMIT $limit`,
+        { agentId: agentId ?? null, offset, limit },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * @deprecated Use fetchMemoriesForCredentialScan with pagination instead.
+   * Fetch all memories (id + text) for a given agent, or all agents.
    */
   async fetchAllMemoriesForScan(agentId?: string): Promise<Array<{ id: string; text: string }>> {
     await this.ensureInitialized();

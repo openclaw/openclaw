@@ -1228,36 +1228,50 @@ export async function runSleepCycle(
   // Scans all memories for accidentally stored credentials (API keys,
   // passwords, tokens) and removes them. This is a security measure
   // to prevent credential leaks in the memory store.
+  // Paginated in batches of 200 to avoid unbounded heap allocation.
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
     onPhaseStart?.("credentialScan");
     logger.info("memory-neo4j: [sleep] Phase 5b: Credential Scanning");
 
     try {
-      const allMemories = await db.fetchAllMemoriesForScan(agentId);
-      result.credentialScan.memoriesScanned = allMemories.length;
+      const CREDENTIAL_SCAN_BATCH = 200;
+      let offset = 0;
 
-      const toRemove: string[] = [];
-      for (const { id, text } of allMemories) {
-        if (abortSignal?.aborted) {
-          break;
-        }
-        const matched = detectCredential(text);
-        if (matched) {
-          toRemove.push(id);
-          result.credentialScan.credentialsFound++;
-          onProgress?.(
-            "credentialScan",
-            `Found ${matched} in memory ${id.slice(0, 8)}...: "${text.slice(0, 40)}..."`,
-          );
-          logger.warn(
-            `memory-neo4j: [sleep] Credential detected (${matched}) in memory ${id} — removing`,
-          );
-        }
-      }
+      while (true) {
+        if (abortSignal?.aborted) break;
 
-      if (toRemove.length > 0) {
-        result.credentialScan.memoriesRemoved = await db.deleteMemoriesByIds(toRemove);
+        const batch = await db.fetchMemoriesForCredentialScan(
+          offset,
+          CREDENTIAL_SCAN_BATCH,
+          agentId,
+        );
+        if (batch.length === 0) break;
+
+        result.credentialScan.memoriesScanned += batch.length;
+
+        const toRemove: string[] = [];
+        for (const { id, text } of batch) {
+          const matched = detectCredential(text);
+          if (matched) {
+            toRemove.push(id);
+            result.credentialScan.credentialsFound++;
+            onProgress?.(
+              "credentialScan",
+              `Found ${matched} in memory ${id.slice(0, 8)}...: "${text.slice(0, 40)}..."`,
+            );
+            logger.warn(
+              `memory-neo4j: [sleep] Credential detected (${matched}) in memory ${id} — removing`,
+            );
+          }
+        }
+
+        if (toRemove.length > 0) {
+          result.credentialScan.memoriesRemoved += await db.deleteMemoriesByIds(toRemove);
+        }
+
+        if (batch.length < CREDENTIAL_SCAN_BATCH) break; // last page
+        offset += batch.length;
       }
 
       logger.info(
