@@ -727,6 +727,10 @@ export async function prepareSlackMessage(params: {
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
+    // Include actual Slack channel ID for reactions and other channel-specific operations.
+    // This is needed for DMs where OriginatingTo is user:<id> but reactions need
+    // to actual channel ID (issue #34414).
+    slack_channel_id: message.channel,
   }) satisfies FinalizedMsgContext;
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
