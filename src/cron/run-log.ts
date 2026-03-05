@@ -140,7 +140,11 @@ export async function appendCronRunLog(
     .catch(() => undefined)
     .then(async () => {
       await fs.mkdir(path.dirname(resolved), { recursive: true });
+      // Fix permissions for existing directories (upgrade safety)
+      await fs.chmod(path.dirname(resolved), 0o700).catch(() => undefined);
       await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, "utf-8");
+      // Fix permissions for existing files (upgrade safety)
+      await fs.chmod(resolved, 0o600).catch(() => undefined);
       await pruneIfNeeded(resolved, {
         maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
         keepLines: opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
