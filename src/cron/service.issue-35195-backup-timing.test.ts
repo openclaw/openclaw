@@ -60,12 +60,22 @@ describe("cron backup timing for edit", () => {
 
     await writeCronStoreSnapshot(store.storePath, [normalizedJob]);
 
-    await service.list();
+    service.stop();
+    const service2 = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await service2.start();
 
     const backupAfterNormalize = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(backupAfterNormalize)).toEqual(JSON.parse(beforeEditRaw));
 
-    service.stop();
+    service2.stop();
     await store.cleanup();
   });
 });
