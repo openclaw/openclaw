@@ -41,7 +41,12 @@ function applyConfiguredProviderOverrides(params: {
     return discoveredModel;
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
-  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerConfig.headers) {
+  if (
+    !configuredModel &&
+    !providerConfig.baseUrl &&
+    !providerConfig.api &&
+    !providerConfig.headers
+  ) {
     return discoveredModel;
   }
   return {
@@ -56,9 +61,9 @@ function applyConfiguredProviderOverrides(params: {
     headers:
       providerConfig.headers || configuredModel?.headers
         ? {
-            ...(discoveredModel.headers ?? {}),
-            ...(providerConfig.headers ?? {}),
-            ...(configuredModel?.headers ?? {}),
+            ...discoveredModel.headers,
+            ...providerConfig.headers,
+            ...configuredModel?.headers,
           }
         : discoveredModel.headers,
     compat: configuredModel?.compat ?? discoveredModel.compat,
