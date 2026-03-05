@@ -1693,7 +1693,7 @@ Further restrict tools for specific providers or models. Order: base profile →
   tools: {
     profile: "coding",
     byProvider: {
-      "google-antigravity": { profile: "minimal" },
+      "google-gemini-cli": { profile: "minimal" },
       "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] },
     },
   },

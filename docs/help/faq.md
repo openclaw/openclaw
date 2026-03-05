@@ -2371,13 +2371,6 @@ If your model config includes Google Gemini as a fallback (or you switched to a 
 
 Fix: either provide Google auth, or remove/avoid Google models in `agents.defaults.model.fallbacks` / aliases so fallback doesn't route there.
 
-**LLM request rejected message thinking signature required google antigravity**
-
-Cause: the session history contains **thinking blocks without signatures** (often from
-an aborted/partial stream). Google Antigravity requires signatures for thinking blocks.
-
-Fix: OpenClaw now strips unsigned thinking blocks for Google Antigravity Claude. If it still appears, start a **new session** or set `/thinking off` for that agent.
-
 ## Auth profiles: what they are and how to manage them
 
 Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-account patterns)
