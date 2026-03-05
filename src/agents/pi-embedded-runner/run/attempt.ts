@@ -794,12 +794,19 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
-    const allowedToolNames = collectAllowedToolNames({
-      tools,
-      clientTools: params.clientTools,
-    });
-    logToolSchemasForGoogle({ tools, provider: params.provider });
+    const disableTools = (params.provider ?? "").trim().toLowerCase() === "ollama";
+    const tools = disableTools
+      ? []
+      : sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    const allowedToolNames = disableTools
+      ? new Set<string>()
+      : collectAllowedToolNames({
+          tools,
+          clientTools: params.clientTools,
+        });
+    if (!disableTools) {
+      logToolSchemasForGoogle({ tools, provider: params.provider });
+    }
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
