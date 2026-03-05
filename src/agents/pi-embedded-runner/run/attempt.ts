@@ -1582,6 +1582,17 @@ export async function runEmbeddedAttempt(
               }
               if (event.type === "message_end" && hookRunner.hasHooks("after_llm_call")) {
                 const msg = event.message;
+                // Only fire for assistant messages — message_end also fires for
+                // user/system messages. Firing on non-assistant messages would
+                // clear the gate (via the "no result" path) and drop any
+                // previously computed allowlist/block for this turn.
+                const msgRole =
+                  msg && typeof msg === "object" && "role" in msg
+                    ? (msg as { role: string }).role
+                    : undefined;
+                if (msgRole !== "assistant") {
+                  return;
+                }
                 // Capture iteration at event time — hookTurnIteration is mutable
                 // and may increment before the async .then() fires. Without this,
                 // a slow handler for turn N could set a gate for turn N+1.
@@ -1989,9 +2000,16 @@ export async function runEmbeddedAttempt(
               channel: params.messageChannel ?? params.messageProvider,
             });
             if (modifiedContent !== undefined) {
-              // Replace last assistant text with hook-modified content.
-              // assistantTexts.length > 0 is guaranteed by the outer guard.
-              assistantTexts[assistantTexts.length - 1] = modifiedContent;
+              if (modifiedContent === "") {
+                // Blocked — suppress the entire accumulated response, not just
+                // the last chunk. Earlier tool-loop iterations may have added
+                // text that would otherwise escape the hook.
+                assistantTexts.splice(0, assistantTexts.length);
+              } else {
+                // Replace last assistant text with hook-modified content.
+                // assistantTexts.length > 0 is guaranteed by the outer guard.
+                assistantTexts[assistantTexts.length - 1] = modifiedContent;
+              }
               // Refresh messagesSnapshot so downstream consumers (agent_end,
               // llm_output, cache trace) see the post-redaction content, not
               // the original pre-hook text.

@@ -243,6 +243,29 @@ describe("after_llm_call hook", () => {
     expect(result?.blockReason).toBe("security policy");
   });
 
+  it("toolCalls use intersection — later handler cannot widen allowlist", async () => {
+    const h1 = vi.fn().mockResolvedValue({
+      toolCalls: [{ id: "tc-1", name: "safe_read", arguments: {} }],
+    });
+    const h2 = vi.fn().mockResolvedValue({
+      toolCalls: [
+        { id: "tc-1", name: "safe_read", arguments: {} },
+        { id: "tc-2", name: "exec", arguments: {} },
+      ],
+    });
+    const runner = createHookRunner(
+      makeRegistry([
+        { pluginId: "security", hookName: "after_llm_call", handler: h1, source: "test" },
+        { pluginId: "permissive", hookName: "after_llm_call", handler: h2, source: "test" },
+      ]),
+    );
+
+    const result = await runner.runAfterLlmCall(baseEvent, agentCtx);
+    // Intersection: only tc-1 is in both lists
+    expect(result?.toolCalls).toHaveLength(1);
+    expect(result?.toolCalls?.[0].id).toBe("tc-1");
+  });
+
   it("returns tool call filter from handler", async () => {
     const filtered = [{ id: "tc-1", name: "read", arguments: { path: "/tmp/x" } }];
     const handler = vi.fn().mockResolvedValue({ toolCalls: filtered });

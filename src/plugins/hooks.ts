@@ -742,7 +742,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       (acc, next) => ({
         messages: next.messages ?? acc?.messages,
         systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-        tools: next.tools ?? acc?.tools,
+        // Intersection latch: if both handlers provide tools, only keep tools
+        // present in both lists. Prevents a later handler from widening the allowlist.
+        tools:
+          acc?.tools !== undefined && next.tools !== undefined
+            ? next.tools.filter((t) => acc.tools!.some((a) => a.name === t.name))
+            : (next.tools ?? acc?.tools),
         block: next.block || acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
       }),
@@ -767,7 +772,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       (acc, next) => ({
         block: next.block || acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
-        toolCalls: next.toolCalls ?? acc?.toolCalls,
+        // Intersection latch: if both handlers filter tool calls, only keep
+        // calls present in both lists. Prevents widening the allowlist.
+        toolCalls:
+          acc?.toolCalls !== undefined && next.toolCalls !== undefined
+            ? next.toolCalls.filter((tc) => acc.toolCalls!.some((a) => a.id === tc.id))
+            : (next.toolCalls ?? acc?.toolCalls),
       }),
     );
   }
