@@ -2,7 +2,7 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -12,7 +12,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/msteams";
 import { listMSTeamsDirectoryGroupsLive, listMSTeamsDirectoryPeersLive } from "./directory-live.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";

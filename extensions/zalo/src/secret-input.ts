@@ -2,7 +2,7 @@ import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalo";
 import { z } from "zod";
 
 export { hasConfiguredSecretInput, normalizeResolvedSecretInputString, normalizeSecretInputString };

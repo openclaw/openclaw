@@ -1,5 +1,5 @@
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk/compat";
-import { createLoggerBackedRuntime, createReplyPrefixOptions } from "openclaw/plugin-sdk/compat";
+import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
+import { createLoggerBackedRuntime, createReplyPrefixOptions } from "openclaw/plugin-sdk/tlon";
 import { getTlonRuntime } from "../runtime.js";
 import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";

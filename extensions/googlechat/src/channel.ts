@@ -19,8 +19,8 @@ import {
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/compat";
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/googlechat";
+import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,

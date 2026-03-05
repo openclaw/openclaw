@@ -6,14 +6,14 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
   isDangerousNameMatchingEnabled,
   logTypingFailure,
   resolveControlCommandGate,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/mattermost";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
