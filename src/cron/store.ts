@@ -52,7 +52,15 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   }
 }
 
-export async function saveCronStore(storePath: string, store: CronStoreFile) {
+type SaveCronStoreOptions = {
+  skipBackup?: boolean;
+};
+
+export async function saveCronStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronStoreOptions,
+) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
@@ -77,7 +85,7 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
 
   // Backup must be created BEFORE any write operations to ensure it captures
   // the original content. See issue #35195.
-  if (previous !== null) {
+  if (previous !== null && !opts?.skipBackup) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
     } catch {
