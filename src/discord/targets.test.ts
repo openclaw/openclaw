@@ -10,43 +10,33 @@ vi.mock("./directory-live.js", () => ({
 
 describe("parseDiscordTarget", () => {
   it("parses user mention and prefixes", () => {
-    expect(parseDiscordTarget("<@123>")).toMatchObject({
-      kind: "user",
-      id: "123",
-      normalized: "user:123",
-    });
-    expect(parseDiscordTarget("<@!456>")).toMatchObject({
-      kind: "user",
-      id: "456",
-      normalized: "user:456",
-    });
-    expect(parseDiscordTarget("user:789")).toMatchObject({
-      kind: "user",
-      id: "789",
-      normalized: "user:789",
-    });
-    expect(parseDiscordTarget("discord:987")).toMatchObject({
-      kind: "user",
-      id: "987",
-      normalized: "user:987",
-    });
+    const cases = [
+      { input: "<@123>", id: "123", normalized: "user:123" },
+      { input: "<@!456>", id: "456", normalized: "user:456" },
+      { input: "user:789", id: "789", normalized: "user:789" },
+      { input: "discord:987", id: "987", normalized: "user:987" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(parseDiscordTarget(testCase.input), testCase.input).toMatchObject({
+        kind: "user",
+        id: testCase.id,
+        normalized: testCase.normalized,
+      });
+    }
   });
 
   it("parses channel targets", () => {
-    expect(parseDiscordTarget("channel:555")).toMatchObject({
-      kind: "channel",
-      id: "555",
-      normalized: "channel:555",
-    });
-    expect(parseDiscordTarget("general")).toMatchObject({
-      kind: "channel",
-      id: "general",
-      normalized: "channel:general",
-    });
-  });
-
-  it("rejects ambiguous numeric ids without a default kind", () => {
-    expect(() => parseDiscordTarget("123")).toThrow(/Ambiguous Discord recipient/);
+    const cases = [
+      { input: "channel:555", id: "555", normalized: "channel:555" },
+      { input: "general", id: "general", normalized: "channel:general" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(parseDiscordTarget(testCase.input), testCase.input).toMatchObject({
+        kind: "channel",
+        id: testCase.id,
+        normalized: testCase.normalized,
+      });
+    }
   });
 
   it("accepts numeric ids when a default kind is provided", () => {
@@ -57,8 +47,16 @@ describe("parseDiscordTarget", () => {
     });
   });
 
-  it("rejects non-numeric @ mentions", () => {
-    expect(() => parseDiscordTarget("@bob")).toThrow(/Discord DMs require a user id/);
+  it("rejects invalid parse targets", () => {
+    const cases = [
+      { input: "123", expectedMessage: /Ambiguous Discord recipient/ },
+      { input: "@bob", expectedMessage: /Discord DMs require a user id/ },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => parseDiscordTarget(testCase.input), testCase.input).toThrow(
+        testCase.expectedMessage,
+      );
+    }
   });
 });
 
@@ -78,7 +76,7 @@ describe("resolveDiscordTarget", () => {
   const listPeers = vi.mocked(listDiscordDirectoryPeersLive);
 
   beforeEach(() => {
-    listPeers.mockReset();
+    listPeers.mockClear();
   });
 
   it("returns a resolved user for usernames", async () => {

@@ -13,6 +13,18 @@ function createProvider(maxInputTokens: number): EmbeddingProvider {
   };
 }
 
+function createProviderWithoutMaxInputTokens(params: {
+  id: string;
+  model: string;
+}): EmbeddingProvider {
+  return {
+    id: params.id,
+    model: params.model,
+    embedQuery: async () => [0],
+    embedBatch: async () => [[0]],
+  };
+}
+
 describe("embedding chunk limits", () => {
   it("splits oversized chunks so each embedding input stays <= maxInputTokens bytes", () => {
     const provider = createProvider(8192);
@@ -48,5 +60,43 @@ describe("embedding chunk limits", () => {
 
     // If we split inside surrogate pairs we'd likely end up with replacement chars.
     expect(out.map((chunk) => chunk.text).join("")).not.toContain("\uFFFD");
+  });
+
+  it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {
+    const provider = createProviderWithoutMaxInputTokens({
+      id: "local",
+      model: "unknown-local-embedding",
+    });
+
+    const out = enforceEmbeddingMaxInputTokens(provider, [
+      {
+        startLine: 1,
+        endLine: 1,
+        text: "x".repeat(3000),
+        hash: "ignored",
+      },
+    ]);
+
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 2048)).toBe(true);
+  });
+
+  it("honors hard safety caps lower than provider maxInputTokens", () => {
+    const provider = createProvider(8192);
+    const out = enforceEmbeddingMaxInputTokens(
+      provider,
+      [
+        {
+          startLine: 1,
+          endLine: 1,
+          text: "x".repeat(8100),
+          hash: "ignored",
+        },
+      ],
+      8000,
+    );
+
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ import Testing
         #expect(opts.thinking == "low")
         #expect(opts.deliver == true)
         #expect(opts.to == nil)
-        #expect(opts.channel == .last)
+        #expect(opts.channel == .webchat)
+        #expect(opts.channel.shouldDeliver(opts.deliver) == false)
     }
 }

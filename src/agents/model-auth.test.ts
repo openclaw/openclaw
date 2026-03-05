@@ -77,6 +77,18 @@ describe("resolveModelAuthMode", () => {
       ),
     ).toBe("aws-sdk");
   });
+
+  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
+  });
+
+  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
+  });
 });
 
 describe("requireApiKey", () => {

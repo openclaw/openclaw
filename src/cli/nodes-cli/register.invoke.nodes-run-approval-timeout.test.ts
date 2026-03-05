@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 
@@ -33,14 +33,18 @@ vi.mock("../progress.js", () => ({
 }));
 
 describe("nodes run: approval transport timeout (#12098)", () => {
+  let callGatewayCli: typeof import("./rpc.js").callGatewayCli;
+
+  beforeAll(async () => {
+    ({ callGatewayCli } = await import("./rpc.js"));
+  });
+
   beforeEach(() => {
-    callGatewaySpy.mockReset();
+    callGatewaySpy.mockClear();
     callGatewaySpy.mockResolvedValue({ decision: "allow-once" });
   });
 
   it("callGatewayCli forwards opts.timeout as the transport timeoutMs", async () => {
-    const { callGatewayCli } = await import("./rpc.js");
-
     await callGatewayCli("exec.approval.request", { timeout: "35000" } as never, {
       timeoutMs: 120_000,
     });
@@ -52,8 +56,6 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   });
 
   it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {
-    const { callGatewayCli } = await import("./rpc.js");
-
     const approvalTimeoutMs = 120_000;
     // Mirror the production code: parseTimeoutMs(opts.timeout) ?? 0
     const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTimeoutMs + 10_000);
@@ -73,8 +75,6 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   });
 
   it("fix: user-specified timeout larger than approval is preserved", async () => {
-    const { callGatewayCli } = await import("./rpc.js");
-
     const approvalTimeoutMs = 120_000;
     const userTimeout = 200_000;
     // Mirror the production code: parseTimeoutMs preserves valid large values
@@ -96,8 +96,6 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   });
 
   it("fix: non-numeric timeout falls back to approval floor", async () => {
-    const { callGatewayCli } = await import("./rpc.js");
-
     const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN

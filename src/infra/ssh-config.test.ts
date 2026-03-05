@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 type MockSpawnChild = EventEmitter & {
   stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
@@ -40,9 +40,15 @@ vi.mock("node:child_process", () => {
 
 const spawnMock = vi.mocked(spawn);
 
+let parseSshConfigOutput: typeof import("./ssh-config.js").parseSshConfigOutput;
+let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
+
 describe("ssh-config", () => {
-  it("parses ssh -G output", async () => {
-    const { parseSshConfigOutput } = await import("./ssh-config.js");
+  beforeAll(async () => {
+    ({ parseSshConfigOutput, resolveSshConfig } = await import("./ssh-config.js"));
+  });
+
+  it("parses ssh -G output", () => {
     const parsed = parseSshConfigOutput(
       "user bob\nhostname example.com\nport 2222\nidentityfile none\nidentityfile /tmp/id\n",
     );
@@ -53,7 +59,6 @@ describe("ssh-config", () => {
   });
 
   it("resolves ssh config via ssh -G", async () => {
-    const { resolveSshConfig } = await import("./ssh-config.js");
     const config = await resolveSshConfig({ user: "me", host: "alias", port: 22 });
     expect(config?.user).toBe("steipete");
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
@@ -74,7 +79,6 @@ describe("ssh-config", () => {
       },
     );
 
-    const { resolveSshConfig } = await import("./ssh-config.js");
     const config = await resolveSshConfig({ user: "me", host: "bad-host", port: 22 });
     expect(config).toBeNull();
   });

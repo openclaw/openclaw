@@ -55,6 +55,45 @@ Minimal config:
 }
 ```
 
+## Native slash commands
+
+Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands via
+the Mattermost API and receives callback POSTs on the gateway HTTP server.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      commands: {
+        native: true,
+        nativeSkills: true,
+        callbackPath: "/api/channels/mattermost/command",
+        // Use when Mattermost cannot reach the gateway directly (reverse proxy/public URL).
+        callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `native: "auto"` defaults to disabled for Mattermost. Set `native: true` to enable.
+- If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
+- For multi-account setups, `commands` can be set at the top level or under
+  `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
+- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
+  - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
+  - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
+  - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from OpenClaw, not `404`.
+- Mattermost egress allowlist requirement:
+  - If your callback targets private/tailnet/internal addresses, set Mattermost
+    `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
+  - Use host/domain entries, not full URLs.
+    - Good: `gateway.tailnet-name.ts.net`
+    - Bad: `https://gateway.tailnet-name.ts.net`
+
 ## Environment variables (default account)
 
 Set these on the gateway host if you prefer env vars:
@@ -101,8 +140,10 @@ Notes:
 ## Channels (groups)
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
-- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs or `@username`).
+- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
+- Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## Targets for outbound delivery
 

@@ -14,6 +14,13 @@ actor MicLevelMonitor {
         if self.running { return }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.engine = nil
+            throw NSError(
+                domain: "MicLevelMonitor",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
         let engine = AVAudioEngine()
         self.engine = engine
         let input = engine.inputNode

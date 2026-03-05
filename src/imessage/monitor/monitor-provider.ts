@@ -1,38 +1,51 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import {
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
-import { mediaKindFromMime } from "../../media/constants.js";
+import {
+  isInboundPathAllowed,
+  resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../../media/inbound-path-policy.js";
+import { kindFromMime } from "../../media/mime.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
+import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
+import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
@@ -69,51 +82,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/**
- * Cache for recently sent messages, used for echo detection.
- * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
- * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
- */
-class SentMessageCache {
-  private cache = new Map<string, number>();
-  private readonly ttlMs = 5000; // 5 seconds
-
-  remember(scope: string, text: string): void {
-    if (!text?.trim()) {
-      return;
-    }
-    const key = `${scope}:${text.trim()}`;
-    this.cache.set(key, Date.now());
-    this.cleanup();
-  }
-
-  has(scope: string, text: string): boolean {
-    if (!text?.trim()) {
-      return false;
-    }
-    const key = `${scope}:${text.trim()}`;
-    const timestamp = this.cache.get(key);
-    if (!timestamp) {
-      return false;
-    }
-    const age = Date.now() - timestamp;
-    if (age > this.ttlMs) {
-      this.cache.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [text, timestamp] of this.cache.entries()) {
-      if (now - timestamp > this.ttlMs) {
-        this.cache.delete(text);
-      }
-    }
-  }
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -129,7 +97,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const sentMessageCache = new SentMessageCache();
+  const sentMessageCache = createSentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -137,27 +105,58 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       imessageCfg.groupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = imessageCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.imessage !== undefined,
+    groupPolicy: imessageCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "imessage",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
   const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+  const attachmentRoots = resolveIMessageAttachmentRoots({
+    cfg,
+    accountId: accountInfo.accountId,
+  });
+  const remoteAttachmentRoots = resolveIMessageRemoteAttachmentRoots({
+    cfg,
+    accountId: accountInfo.accountId,
+  });
 
-  // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
-  let remoteHost = imessageCfg.remoteHost;
+  // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script.
+  // Accept only a safe host token to avoid option/argument injection into SCP.
+  const configuredRemoteHost = normalizeScpRemoteHost(imessageCfg.remoteHost);
+  if (imessageCfg.remoteHost && !configuredRemoteHost) {
+    logVerbose("imessage: ignoring unsafe channels.imessage.remoteHost value");
+  }
+
+  let remoteHost = configuredRemoteHost;
   if (!remoteHost && cliPath && cliPath !== "imsg") {
-    remoteHost = await detectRemoteHostFromCliPath(cliPath);
+    const detected = await detectRemoteHostFromCliPath(cliPath);
+    const normalizedDetected = normalizeScpRemoteHost(detected);
+    if (detected && !normalizedDetected) {
+      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
+    }
+    remoteHost = normalizedDetected;
     if (remoteHost) {
       logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
     }
   }
 
-  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
-  const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
-    debounceMs: inboundDebounceMs,
+  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
+    message: IMessagePayload;
+  }>({
+    cfg,
+    channel: "imessage",
     buildKey: (entry) => {
       const sender = entry.message.sender?.trim();
       if (!sender) {
@@ -170,14 +169,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
-      const text = entry.message.text?.trim() ?? "";
-      if (!text) {
-        return false;
-      }
-      if (entry.message.attachments && entry.message.attachments.length > 0) {
-        return false;
-      }
-      return !hasControlCommand(text, cfg);
+      return shouldDebounceTextInbound({
+        text: entry.message.text,
+        cfg,
+        hasMedia: Boolean(entry.message.attachments && entry.message.attachments.length > 0),
+      });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -208,19 +204,37 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    // Filter to valid attachments with paths
-    const validAttachments = attachments.filter((entry) => entry?.original_path && !entry?.missing);
+    const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
+    const validAttachments = attachments.filter((entry) => {
+      const attachmentPath = entry?.original_path?.trim();
+      if (!attachmentPath || entry?.missing) {
+        return false;
+      }
+      if (isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
+        return true;
+      }
+      logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
+      return false;
+    });
     const firstAttachment = validAttachments[0];
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;
     // Build arrays for all attachments (for multi-image support)
     const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = mediaKindFromMime(mediaType ?? undefined);
-    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
+    const kind = kindFromMime(mediaType ?? undefined);
+    const placeholder = kind
+      ? `<media:${kind}>`
+      : validAttachments.length
+        ? "<media:attachment>"
+        : "";
     const bodyText = messageText || placeholder;
 
-    const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(() => []);
+    const storeAllowFrom = await readChannelAllowFromStore(
+      "imessage",
+      process.env,
+      accountInfo.accountId,
+    ).catch(() => []);
     const decision = resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -252,6 +266,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const { code, created } = await upsertChannelPairingRequest({
         channel: "imessage",
         id: decision.senderId,
+        accountId: accountInfo.accountId,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
@@ -305,6 +320,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     const updateTarget = chatTarget || decision.sender;
+    const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: cfg.session?.dmScope,
+      allowFrom,
+      normalizeEntry: normalizeIMessageHandle,
+    });
     await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
@@ -316,6 +336,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               channel: "imessage",
               to: updateTarget,
               accountId: decision.route.accountId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && decision.senderNormalized
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: decision.senderNormalized,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        logVerbose(
+                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
             }
           : undefined,
       onRecordError: (err) => {
@@ -469,3 +501,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await client.stop();
   }
 }
+
+export const __testing = {
+  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+};

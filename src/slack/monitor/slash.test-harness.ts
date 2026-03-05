@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   finalizeInboundContextMock: vi.fn(),
   resolveConversationLabelMock: vi.fn(),
   createReplyPrefixOptionsMock: vi.fn(),
+  recordSessionMetaFromInboundMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
 }));
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", () => ({
@@ -35,6 +37,12 @@ vi.mock("../../channels/reply-prefix.js", () => ({
   createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
 }));
 
+vi.mock("../../config/sessions.js", () => ({
+  recordSessionMetaFromInbound: (...args: unknown[]) =>
+    mocks.recordSessionMetaFromInboundMock(...args),
+  resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
+}));
+
 type SlashHarnessMocks = {
   dispatchMock: ReturnType<typeof vi.fn>;
   readAllowFromStoreMock: ReturnType<typeof vi.fn>;
@@ -43,6 +51,8 @@ type SlashHarnessMocks = {
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
   createReplyPrefixOptionsMock: ReturnType<typeof vi.fn>;
+  recordSessionMetaFromInboundMock: ReturnType<typeof vi.fn>;
+  resolveStorePathMock: ReturnType<typeof vi.fn>;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -61,4 +71,6 @@ export function resetSlackSlashMocks() {
   mocks.finalizeInboundContextMock.mockReset().mockImplementation((ctx: unknown) => ctx);
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
   mocks.createReplyPrefixOptionsMock.mockReset().mockReturnValue({ onModelSelected: () => {} });
+  mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
+  mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
 }

@@ -43,40 +43,52 @@ describe("parseBooleanValue", () => {
 });
 
 describe("isReasoningTagProvider", () => {
-  it("returns false for ollama - native reasoning field, no tags needed (#2279)", () => {
-    expect(isReasoningTagProvider("ollama")).toBe(false);
-    expect(isReasoningTagProvider("Ollama")).toBe(false);
-  });
+  const cases: Array<{
+    name: string;
+    value: string | null | undefined;
+    expected: boolean;
+  }> = [
+    {
+      name: "returns false for ollama - native reasoning field, no tags needed (#2279)",
+      value: "ollama",
+      expected: false,
+    },
+    {
+      name: "returns false for case-insensitive ollama",
+      value: "Ollama",
+      expected: false,
+    },
+    {
+      name: "returns true for google (gemini-api-key auth provider)",
+      value: "google",
+      expected: true,
+    },
+    {
+      name: "returns true for Google (case-insensitive)",
+      value: "Google",
+      expected: true,
+    },
+    { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
+    {
+      name: "returns true for google-generative-ai",
+      value: "google-generative-ai",
+      expected: true,
+    },
+    { name: "returns true for minimax", value: "minimax", expected: true },
+    { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
+    { name: "returns false for null", value: null, expected: false },
+    { name: "returns false for undefined", value: undefined, expected: false },
+    { name: "returns false for empty", value: "", expected: false },
+    { name: "returns false for anthropic", value: "anthropic", expected: false },
+    { name: "returns false for openai", value: "openai", expected: false },
+    { name: "returns false for openrouter", value: "openrouter", expected: false },
+  ];
 
-  it("returns true for google-gemini-cli", () => {
-    expect(isReasoningTagProvider("google-gemini-cli")).toBe(true);
-  });
-
-  it("returns true for google-generative-ai", () => {
-    expect(isReasoningTagProvider("google-generative-ai")).toBe(true);
-  });
-
-  it("returns true for google-antigravity", () => {
-    expect(isReasoningTagProvider("google-antigravity")).toBe(true);
-    expect(isReasoningTagProvider("google-antigravity/gemini-3")).toBe(true);
-  });
-
-  it("returns true for minimax", () => {
-    expect(isReasoningTagProvider("minimax")).toBe(true);
-    expect(isReasoningTagProvider("minimax-cn")).toBe(true);
-  });
-
-  it("returns false for null/undefined/empty", () => {
-    expect(isReasoningTagProvider(null)).toBe(false);
-    expect(isReasoningTagProvider(undefined)).toBe(false);
-    expect(isReasoningTagProvider("")).toBe(false);
-  });
-
-  it("returns false for standard providers", () => {
-    expect(isReasoningTagProvider("anthropic")).toBe(false);
-    expect(isReasoningTagProvider("openai")).toBe(false);
-    expect(isReasoningTagProvider("openrouter")).toBe(false);
-  });
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      expect(isReasoningTagProvider(testCase.value)).toBe(testCase.expected);
+    });
+  }
 });
 
 describe("splitShellArgs", () => {

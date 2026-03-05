@@ -41,6 +41,7 @@ export const ConfigUiHintSchema = Type.Object(
   {
     label: Type.Optional(Type.String()),
     help: Type.Optional(Type.String()),
+    tags: Type.Optional(Type.Array(Type.String())),
     group: Type.Optional(Type.String()),
     order: Type.Optional(Type.Integer()),
     advanced: Type.Optional(Type.Boolean()),

@@ -52,6 +52,7 @@ export type EmbeddedPiSubscribeState = {
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
+  reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
@@ -131,7 +132,13 @@ export type EmbeddedPiSubscribeContext = {
  */
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
-  "runId" | "onBlockReplyFlush" | "onAgentEvent" | "onToolResult"
+  | "runId"
+  | "onBlockReplyFlush"
+  | "onAgentEvent"
+  | "onToolResult"
+  | "sessionKey"
+  | "sessionId"
+  | "agentId"
 >;
 
 export type ToolHandlerState = Pick<

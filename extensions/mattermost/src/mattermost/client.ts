@@ -58,7 +58,7 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
   return `${normalized}/api/v4${suffix}`;
 }
 
-async function readMattermostError(res: Response): Promise<string> {
+export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
@@ -188,6 +188,19 @@ export async function createMattermostPost(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type MattermostTeam = {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+};
+
+export async function fetchMattermostUserTeams(
+  client: MattermostClient,
+  userId: string,
+): Promise<MattermostTeam[]> {
+  return await client.request<MattermostTeam[]>(`/users/${userId}/teams`);
 }
 
 export async function uploadMattermostFile(

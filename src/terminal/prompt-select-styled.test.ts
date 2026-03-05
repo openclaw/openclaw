@@ -19,7 +19,7 @@ import { selectStyled } from "./prompt-select-styled.js";
 
 describe("selectStyled", () => {
   beforeEach(() => {
-    selectMock.mockReset();
+    selectMock.mockClear();
     stylePromptMessageMock.mockClear();
     stylePromptHintMock.mockClear();
   });

@@ -1,14 +1,19 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -61,6 +66,17 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+type CopilotTokenState = {
+  githubToken: string;
+  expiresAt: number;
+  refreshTimer?: ReturnType<typeof setTimeout>;
+  refreshInFlight?: Promise<void>;
+};
+
+const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
+const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
+
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
@@ -99,7 +115,20 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 });
 
 function createCompactionDiagId(): string {
-  return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+// Defensive guard for the outer run loop across all retry branches.
+const BASE_RUN_RETRY_ITERATIONS = 24;
+const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
+const MIN_RUN_RETRY_ITERATIONS = 32;
+const MAX_RUN_RETRY_ITERATIONS = 160;
+
+function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 const hasUsageValues = (
@@ -160,6 +189,54 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   };
 };
 
+function resolveActiveErrorContext(params: {
+  lastAssistant: { provider?: string; model?: string } | undefined;
+  provider: string;
+  model: string;
+}): { provider: string; model: string } {
+  return {
+    provider: params.lastAssistant?.provider ?? params.provider,
+    model: params.lastAssistant?.model ?? params.model,
+  };
+}
+
+/**
+ * Build agentMeta for error return paths, preserving accumulated usage so that
+ * session totalTokens reflects the actual context size rather than going stale.
+ * Without this, error returns omit usage and the session keeps whatever
+ * totalTokens was set by the previous successful run.
+ */
+function buildErrorAgentMeta(params: {
+  sessionId: string;
+  provider: string;
+  model: string;
+  usageAccumulator: UsageAccumulator;
+  lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+  lastAssistant?: { usage?: unknown } | null;
+  /** API-reported total from the most recent call, mirroring the success path correction. */
+  lastTurnTotal?: number;
+}): EmbeddedPiAgentMeta {
+  const usage = toNormalizedUsage(params.usageAccumulator);
+  // Apply the same lastTurnTotal correction the success path uses so
+  // usage.total reflects the API-reported context size, not accumulated totals.
+  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
+    usage.total = params.lastTurnTotal;
+  }
+  const lastCallUsage = params.lastAssistant
+    ? normalizeUsage(params.lastAssistant.usage as UsageLike)
+    : undefined;
+  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  return {
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.model,
+    // Only include usage fields when we have actual data from prior API calls.
+    ...(usage ? { usage } : {}),
+    ...(lastCallUsage ? { lastCallUsage } : {}),
+    ...(promptTokens ? { promptTokens } : {}),
+  };
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -202,8 +279,11 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-      const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+      const fallbackConfigured = hasConfiguredModelFallbacks({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -212,6 +292,7 @@ export async function runEmbeddedPiAgent(
       // Legacy compatibility: before_agent_start is also checked for override
       // fields if present. New hook takes precedence when both are set.
       let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         agentId: workspaceResolution.agentId,
@@ -219,6 +300,8 @@ export async function runEmbeddedPiAgent(
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -232,14 +315,16 @@ export async function runEmbeddedPiAgent(
       }
       if (hookRunner?.hasHooks("before_agent_start")) {
         try {
-          const legacyResult = await hookRunner.runBeforeAgentStart(
+          legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
             { prompt: params.prompt },
             hookCtx,
           );
           modelResolveOverride = {
             providerOverride:
-              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
-            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+              modelResolveOverride?.providerOverride ??
+              legacyBeforeAgentStartResult?.providerOverride,
+            modelOverride:
+              modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
           };
         } catch (hookErr) {
           log.warn(
@@ -263,7 +348,11 @@ export async function runEmbeddedPiAgent(
         params.config,
       );
       if (!model) {
-        throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
 
       const ctxInfo = resolveContextWindowInfo({
@@ -326,13 +415,121 @@ export async function runEmbeddedPiAgent(
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
       let lastProfileId: string | undefined;
+      const copilotTokenState: CopilotTokenState | null =
+        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
+      let copilotRefreshCancelled = false;
+      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
+
+      const clearCopilotRefreshTimer = () => {
+        if (!copilotTokenState?.refreshTimer) {
+          return;
+        }
+        clearTimeout(copilotTokenState.refreshTimer);
+        copilotTokenState.refreshTimer = undefined;
+      };
+
+      const stopCopilotRefreshTimer = () => {
+        if (!copilotTokenState) {
+          return;
+        }
+        copilotRefreshCancelled = true;
+        clearCopilotRefreshTimer();
+      };
+
+      const refreshCopilotToken = async (reason: string): Promise<void> => {
+        if (!copilotTokenState) {
+          return;
+        }
+        if (copilotTokenState.refreshInFlight) {
+          await copilotTokenState.refreshInFlight;
+          return;
+        }
+        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+        copilotTokenState.refreshInFlight = (async () => {
+          const githubToken = copilotTokenState.githubToken.trim();
+          if (!githubToken) {
+            throw new Error("Copilot refresh requires a GitHub token.");
+          }
+          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          copilotTokenState.expiresAt = copilotToken.expiresAt;
+          const remaining = copilotToken.expiresAt - Date.now();
+          log.debug(
+            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
+          );
+        })()
+          .catch((err) => {
+            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
+            throw err;
+          })
+          .finally(() => {
+            copilotTokenState.refreshInFlight = undefined;
+          });
+        await copilotTokenState.refreshInFlight;
+      };
+
+      const scheduleCopilotRefresh = (): void => {
+        if (!copilotTokenState || copilotRefreshCancelled) {
+          return;
+        }
+        if (!hasCopilotGithubToken()) {
+          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
+          return;
+        }
+        clearCopilotRefreshTimer();
+        const now = Date.now();
+        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
+        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        const timer = setTimeout(() => {
+          if (copilotRefreshCancelled) {
+            return;
+          }
+          refreshCopilotToken("scheduled")
+            .then(() => scheduleCopilotRefresh())
+            .catch(() => {
+              if (copilotRefreshCancelled) {
+                return;
+              }
+              const retryTimer = setTimeout(() => {
+                if (copilotRefreshCancelled) {
+                  return;
+                }
+                refreshCopilotToken("scheduled-retry")
+                  .then(() => scheduleCopilotRefresh())
+                  .catch(() => undefined);
+              }, COPILOT_REFRESH_RETRY_MS);
+              copilotTokenState.refreshTimer = retryTimer;
+              if (copilotRefreshCancelled) {
+                clearTimeout(retryTimer);
+                copilotTokenState.refreshTimer = undefined;
+              }
+            });
+        }, delayMs);
+        copilotTokenState.refreshTimer = timer;
+        if (copilotRefreshCancelled) {
+          clearTimeout(timer);
+          copilotTokenState.refreshTimer = undefined;
+        }
+      };
 
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
         message: string;
+        profileIds?: Array<string | undefined>;
       }): FailoverReason => {
         if (params.allInCooldown) {
-          return "rate_limit";
+          const profileIds = (params.profileIds ?? profileCandidates).filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          );
+          return (
+            resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds,
+            }) ?? "rate_limit"
+          );
         }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
@@ -351,6 +548,7 @@ export async function runEmbeddedPiAgent(
         const reason = resolveAuthProfileFailoverReason({
           allInCooldown: params.allInCooldown,
           message,
+          profileIds: profileCandidates,
         });
         if (fallbackConfigured) {
           throw new FailoverError(message, {
@@ -396,6 +594,11 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          if (copilotTokenState) {
+            copilotTokenState.githubToken = apiKeyInfo.apiKey;
+            copilotTokenState.expiresAt = copilotToken.expiresAt;
+            scheduleCopilotRefresh();
+          }
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
@@ -459,14 +662,97 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      const maybeRefreshCopilotForAuthError = async (
+        errorText: string,
+        retried: boolean,
+      ): Promise<boolean> => {
+        if (!copilotTokenState || retried) {
+          return false;
+        }
+        if (!isFailoverErrorMessage(errorText)) {
+          return false;
+        }
+        if (classifyFailoverReason(errorText) !== "auth") {
+          return false;
+        }
+        try {
+          await refreshCopilotToken("auth-error");
+          scheduleCopilotRefresh();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let bootstrapPromptWarningSignaturesSeen =
+        params.bootstrapPromptWarningSignaturesSeen ??
+        (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let runLoopIterations = 0;
+      const maybeMarkAuthProfileFailure = async (failure: {
+        profileId?: string;
+        reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        config?: RunEmbeddedPiAgentParams["config"];
+        agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+      }) => {
+        const { profileId, reason } = failure;
+        if (!profileId || !reason || reason === "timeout") {
+          return;
+        }
+        await markAuthProfileFailure({
+          store: authStore,
+          profileId,
+          reason,
+          cfg: params.config,
+          agentDir,
+        });
+      };
       try {
+        let authRetryPending = false;
+        // Hoisted so the retry-limit error path can use the most recent API total.
+        let lastTurnTotal: number | undefined;
         while (true) {
+          if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+            const message =
+              `Exceeded retry limit after ${runLoopIterations} attempts ` +
+              `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
+            log.error(
+              `[run-retry-limit] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
+                `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
+            );
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request failed after repeated internal retries. " +
+                    "Please try again, or use /new to start a fresh session.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: params.sessionId,
+                  provider,
+                  model: model.id,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastTurnTotal,
+                }),
+                error: { kind: "retry_limit", message },
+              },
+            };
+          }
+          runLoopIterations += 1;
+          const copilotAuthRetry = authRetryPending;
+          authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -476,6 +762,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            trigger: params.trigger,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
@@ -488,6 +775,7 @@ export async function runEmbeddedPiAgent(
             senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
@@ -504,6 +792,7 @@ export async function runEmbeddedPiAgent(
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
+            legacyBeforeAgentStartResult,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -530,6 +819,9 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature:
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
 
           const {
@@ -540,20 +832,36 @@ export async function runEmbeddedPiAgent(
             sessionIdUsed,
             lastAssistant,
           } = attempt;
+          bootstrapPromptWarningSignaturesSeen =
+            attempt.bootstrapPromptWarningSignaturesSeen ??
+            (attempt.bootstrapPromptWarningSignature
+              ? Array.from(
+                  new Set([
+                    ...bootstrapPromptWarningSignaturesSeen,
+                    attempt.bootstrapPromptWarningSignature,
+                  ]),
+                )
+              : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
+          const activeErrorContext = resolveActiveErrorContext({
+            lastAssistant,
+            provider,
+            model: modelId,
+          });
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
                 sessionKey: params.sessionKey ?? params.sessionId,
-                provider,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
               })
             : undefined;
           const assistantErrorText =
@@ -693,8 +1001,8 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Session is now smaller; allow compaction retries again.
-                  overflowCompactionAttempts = 0;
+                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
+                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(
@@ -732,11 +1040,15 @@ export async function runEmbeddedPiAgent(
               ],
               meta: {
                 durationMs: Date.now() - started,
-                agentMeta: {
+                agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
                   provider,
                   model: model.id,
-                },
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant,
+                  lastTurnTotal,
+                }),
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
               },
@@ -745,6 +1057,10 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+              authRetryPending = true;
+              continue;
+            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
@@ -758,11 +1074,15 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
                 },
@@ -786,26 +1106,25 @@ export async function runEmbeddedPiAgent(
                 ],
                 meta: {
                   durationMs: Date.now() - started,
-                  agentMeta: {
+                  agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
-                  },
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
                 },
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
-            if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
-              await markAuthProfileFailure({
-                store: authStore,
-                profileId: lastProfileId,
-                reason: promptFailoverReason,
-                cfg: params.config,
-                agentDir: params.agentDir,
-              });
-            }
+            await maybeMarkAuthProfileFailure({
+              profileId: lastProfileId,
+              reason: promptFailoverReason,
+            });
             if (
               isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
@@ -858,6 +1177,16 @@ export async function runEmbeddedPiAgent(
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
+          if (
+            authFailure &&
+            (await maybeRefreshCopilotForAuthError(
+              lastAssistant?.errorMessage ?? "",
+              copilotAuthRetry,
+            ))
+          ) {
+            authRetryPending = true;
+            continue;
+          }
           if (imageDimensionError && lastProfileId) {
             const details = [
               imageDimensionError.messageIndex !== undefined
@@ -877,8 +1206,8 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // Rotate on timeout to try another account/model path in this turn,
+          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
@@ -888,17 +1217,15 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
-              await markAuthProfileFailure({
-                store: authStore,
+              // Skip cooldown for timeouts: a timeout is model/network-specific,
+              // not an auth issue. Marking the profile would poison fallback models
+              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
+              await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
-                cfg: params.config,
-                agentDir: params.agentDir,
               });
               if (timedOut && !isProbeSession) {
-                log.warn(
-                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
-                );
+                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
               if (cloudCodeAssistFormatError) {
                 log.warn(
@@ -919,7 +1246,8 @@ export async function runEmbeddedPiAgent(
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
-                      provider,
+                      provider: activeErrorContext.provider,
+                      model: activeErrorContext.model,
                     })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
@@ -928,7 +1256,10 @@ export async function runEmbeddedPiAgent(
                   : rateLimitFailure
                     ? "LLM request rate limited."
                     : billingFailure
-                      ? formatBillingErrorMessage(provider)
+                      ? formatBillingErrorMessage(
+                          activeErrorContext.provider,
+                          activeErrorContext.model,
+                        )
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -937,8 +1268,8 @@ export async function runEmbeddedPiAgent(
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
-                provider,
-                model: modelId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
               });
@@ -973,12 +1304,14 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
-            provider,
+            provider: activeErrorContext.provider,
+            model: activeErrorContext.model,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1032,11 +1365,15 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              // Propagate the LLM stop reason so callers (lifecycle events,
+              // ACP bridge) can distinguish end_turn from max_tokens.
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
-                      id: `call_${Date.now()}`,
+                      id: randomBytes(5).toString("hex").slice(0, 9),
                       name: attempt.clientToolCall.name,
                       arguments: JSON.stringify(attempt.clientToolCall.params),
                     },
@@ -1051,6 +1388,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

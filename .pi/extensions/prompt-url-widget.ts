@@ -114,6 +114,17 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
     }
   };
 
+  const renderPromptMatch = (ctx: ExtensionContext, match: PromptMatch) => {
+    setWidget(ctx, match);
+    applySessionName(ctx, match);
+    void fetchGhMetadata(pi, match.kind, match.url).then((meta) => {
+      const title = meta?.title?.trim();
+      const authorText = formatAuthor(meta?.author);
+      setWidget(ctx, match, title, authorText);
+      applySessionName(ctx, match, title);
+    });
+  };
+
   pi.on("before_agent_start", async (event, ctx) => {
     if (!ctx.hasUI) {
       return;
@@ -123,14 +134,7 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
       return;
     }
 
-    setWidget(ctx, match);
-    applySessionName(ctx, match);
-    void fetchGhMetadata(pi, match.kind, match.url).then((meta) => {
-      const title = meta?.title?.trim();
-      const authorText = formatAuthor(meta?.author);
-      setWidget(ctx, match, title, authorText);
-      applySessionName(ctx, match, title);
-    });
+    renderPromptMatch(ctx, match);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
@@ -177,14 +181,7 @@ export default function promptUrlWidgetExtension(pi: ExtensionAPI) {
       return;
     }
 
-    setWidget(ctx, match);
-    applySessionName(ctx, match);
-    void fetchGhMetadata(pi, match.kind, match.url).then((meta) => {
-      const title = meta?.title?.trim();
-      const authorText = formatAuthor(meta?.author);
-      setWidget(ctx, match, title, authorText);
-      applySessionName(ctx, match, title);
-    });
+    renderPromptMatch(ctx, match);
   };
 
   pi.on("session_start", async (_event, ctx) => {

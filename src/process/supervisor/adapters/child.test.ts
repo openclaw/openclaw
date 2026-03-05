@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -9,12 +9,14 @@ const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../spawn-utils.js", () => ({
-  spawnWithFallback: (...args: unknown[]) => spawnWithFallbackMock(...args),
+  spawnWithFallback: spawnWithFallbackMock,
 }));
 
 vi.mock("../../kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+  killProcessTree: killProcessTreeMock,
 }));
+
+let createChildAdapter: typeof import("./child.js").createChildAdapter;
 
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
@@ -33,7 +35,6 @@ async function createAdapterHarness(params?: {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const { createChildAdapter } = await import("./child.js");
   const { child, killMock } = createStubChild(params?.pid);
   spawnWithFallbackMock.mockResolvedValue({
     child,
@@ -48,9 +49,13 @@ async function createAdapterHarness(params?: {
 }
 
 describe("createChildAdapter", () => {
+  beforeAll(async () => {
+    ({ createChildAdapter } = await import("./child.js"));
+  });
+
   beforeEach(() => {
-    spawnWithFallbackMock.mockReset();
-    killProcessTreeMock.mockReset();
+    spawnWithFallbackMock.mockClear();
+    killProcessTreeMock.mockClear();
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {

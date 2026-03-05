@@ -15,7 +15,7 @@ let probeLineBot: typeof import("./probe.js").probeLineBot;
 
 afterEach(() => {
   vi.useRealTimers();
-  getBotInfoMock.mockReset();
+  getBotInfoMock.mockClear();
 });
 
 describe("probeLineBot", () => {

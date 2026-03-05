@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct HealthStoreStateTests {
-    @Test @MainActor func linkedChannelProbeFailureDegradesState() async throws {
+    @Test @MainActor func linkedChannelProbeFailureDegradesState() {
         let snap = HealthSnapshot(
             ok: true,
             ts: 0,

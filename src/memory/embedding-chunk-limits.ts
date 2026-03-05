@@ -6,8 +6,13 @@ import { hashText, type MemoryChunk } from "./internal.js";
 export function enforceEmbeddingMaxInputTokens(
   provider: EmbeddingProvider,
   chunks: MemoryChunk[],
+  hardMaxInputTokens?: number,
 ): MemoryChunk[] {
-  const maxInputTokens = resolveEmbeddingMaxInputTokens(provider);
+  const providerMaxInputTokens = resolveEmbeddingMaxInputTokens(provider);
+  const maxInputTokens =
+    typeof hardMaxInputTokens === "number" && hardMaxInputTokens > 0
+      ? Math.min(providerMaxInputTokens, hardMaxInputTokens)
+      : providerMaxInputTokens;
   const out: MemoryChunk[] = [];
 
   for (const chunk of chunks) {

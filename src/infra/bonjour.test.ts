@@ -103,11 +103,11 @@ describe("gateway bonjour advertiser", () => {
       process.env[key] = value;
     }
 
-    createService.mockReset();
-    shutdown.mockReset();
-    registerUnhandledRejectionHandler.mockReset();
-    logWarn.mockReset();
-    logDebug.mockReset();
+    createService.mockClear();
+    shutdown.mockClear();
+    registerUnhandledRejectionHandler.mockClear();
+    logWarn.mockClear();
+    logDebug.mockClear();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

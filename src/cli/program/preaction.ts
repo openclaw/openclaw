@@ -1,8 +1,14 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
+import {
+  getCommandPathWithRootOptions,
+  getVerboseFlag,
+  hasFlag,
+  hasHelpOrVersion,
+} from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
 
@@ -20,7 +26,75 @@ function setProcessTitleForCommand(actionCommand: Command) {
 }
 
 // Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set(["message", "channels", "directory"]);
+const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "message",
+  "channels",
+  "directory",
+  "agents",
+  "configure",
+  "onboard",
+]);
+const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]);
+const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
+let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
+let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+
+function shouldBypassConfigGuard(commandPath: string[]): boolean {
+  const [primary, secondary] = commandPath;
+  if (!primary) {
+    return false;
+  }
+  if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
+    return true;
+  }
+  // config validate is the explicit validation command; let it render
+  // validation failures directly without preflight guard output duplication.
+  if (primary === "config" && secondary === "validate") {
+    return true;
+  }
+  return false;
+}
+
+function loadConfigGuardModule() {
+  configGuardModulePromise ??= import("./config-guard.js");
+  return configGuardModulePromise;
+}
+
+function loadPluginRegistryModule() {
+  pluginRegistryModulePromise ??= import("../plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
+
+function getRootCommand(command: Command): Command {
+  let current = command;
+  while (current.parent) {
+    current = current.parent;
+  }
+  return current;
+}
+
+function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
+  const root = getRootCommand(actionCommand);
+  if (typeof root.getOptionValueSource !== "function") {
+    return undefined;
+  }
+  if (root.getOptionValueSource("logLevel") !== "cli") {
+    return undefined;
+  }
+  const logLevel = root.opts<Record<string, unknown>>().logLevel;
+  return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+}
+
+function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
+  if (!hasFlag(argv, "--json")) {
+    return false;
+  }
+  const key = `${commandPath[0] ?? ""} ${commandPath[1] ?? ""}`.trim();
+  if (JSON_PARSE_ONLY_COMMANDS.has(key)) {
+    return false;
+  }
+  return true;
+}
 
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -29,7 +103,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (hasHelpOrVersion(argv)) {
       return;
     }
-    const commandPath = getCommandPath(argv, 2);
+    const commandPath = getCommandPathWithRootOptions(argv, 2);
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
@@ -40,17 +114,26 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
+    const cliLogLevel = getCliLogLevel(actionCommand);
+    if (cliLogLevel) {
+      process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
+    }
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (commandPath[0] === "doctor" || commandPath[0] === "completion") {
+    if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
+    const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
+    const { ensureConfigReady } = await loadConfigGuardModule();
+    await ensureConfigReady({
+      runtime: defaultRuntime,
+      commandPath,
+      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+    });
     // Load plugins for commands that need channel access
     if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
-      const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");
+      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
       ensurePluginRegistryLoaded();
     }
   });

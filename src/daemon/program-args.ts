@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
@@ -7,16 +8,6 @@ type GatewayProgramArgs = {
 };
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
-
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
-}
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -148,10 +139,10 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const { execSync } = await import("node:child_process");
+  const { execFileSync } = await import("node:child_process");
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    const output = execSync(`${cmd} ${binary}`, { encoding: "utf8" }).trim();
+    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
     if (!resolved) {
       throw new Error("empty");

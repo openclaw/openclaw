@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export async function createBaseDiscordMessageContext(
   overrides: Record<string, unknown> = {},
@@ -67,6 +68,32 @@ export async function createBaseDiscordMessageContext(
       sessionKey: "agent:main:discord:guild:g1",
       mainSessionKey: "agent:main:main",
     },
+    threadBindings: createNoopThreadBindingManager("default"),
     ...overrides,
   } as unknown as DiscordMessagePreflightContext;
+}
+
+export function createDiscordDirectMessageContextOverrides(): Record<string, unknown> {
+  return {
+    data: { guild: null },
+    channelInfo: null,
+    channelName: undefined,
+    isGuildMessage: false,
+    isDirectMessage: true,
+    isGroupDm: false,
+    shouldRequireMention: false,
+    canDetectMention: false,
+    effectiveWasMentioned: false,
+    displayChannelSlug: "",
+    guildInfo: null,
+    guildSlug: "",
+    baseSessionKey: "agent:main:discord:direct:u1",
+    route: {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:main:discord:direct:u1",
+      mainSessionKey: "agent:main:main",
+    },
+  };
 }

@@ -1,7 +1,19 @@
 import os from "node:os";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { approveDevicePairing, listDevicePairing } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/device-pair";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  resolveGatewayBindUrl,
+  runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
+} from "openclaw/plugin-sdk/device-pair";
 import qrcode from "qrcode-terminal";
+import {
+  armPairNotifyOnce,
+  formatPendingRequests,
+  handleNotifyCommand,
+  registerPairingNotifierService,
+} from "./notify.js";
 
 function renderQrAscii(data: string): Promise<string> {
   return new Promise((resolve) => {
@@ -166,54 +178,13 @@ function pickTailnetIPv4(): string | null {
   return pickMatchingIPv4(isTailnetIPv4);
 }
 
-async function resolveTailnetHost(api: OpenClawPluginApi): Promise<string | null> {
-  const candidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-  for (const candidate of candidates) {
-    try {
-      const result = await api.runtime.system.runCommandWithTimeout(
-        [candidate, "status", "--json"],
-        {
-          timeoutMs: 5000,
-        },
-      );
-      if (result.code !== 0) {
-        continue;
-      }
-      const raw = result.stdout.trim();
-      if (!raw) {
-        continue;
-      }
-      const parsed = parsePossiblyNoisyJsonObject(raw);
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const ips = Array.isArray(self?.TailscaleIPs) ? (self?.TailscaleIPs as string[]) : [];
-      if (ips.length > 0) {
-        return ips[0] ?? null;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return {};
-  }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+async function resolveTailnetHost(): Promise<string | null> {
+  return await resolveTailnetHostWithRunner((argv, opts) =>
+    runPluginCommandWithTimeout({
+      argv,
+      timeoutMs: opts.timeoutMs,
+    }),
+  );
 }
 
 function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
@@ -243,9 +214,12 @@ function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-function pickFirstDefined(candidates: Array<string | undefined>): string | null {
+function pickFirstDefined(candidates: Array<unknown>): string | null {
   for (const value of candidates) {
-    const trimmed = value?.trim();
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
     if (trimmed) {
       return trimmed;
     }
@@ -283,7 +257,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
-    const host = await resolveTailnetHost(api);
+    const host = await resolveTailnetHost();
     if (!host) {
       return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
     }
@@ -298,29 +272,16 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     }
   }
 
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind === "custom") {
-    const host = cfg.gateway?.customBindHost?.trim();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=custom" };
-    }
-    return { error: "gateway.bind=custom requires gateway.customBindHost." };
-  }
-
-  if (bind === "tailnet") {
-    const host = pickTailnetIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=tailnet" };
-    }
-    return { error: "gateway.bind=tailnet set, but no tailnet IP was found." };
-  }
-
-  if (bind === "lan") {
-    const host = pickLanIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=lan" };
-    }
-    return { error: "gateway.bind=lan set, but no private LAN IP was found." };
+  const bindResult = resolveGatewayBindUrl({
+    bind: cfg.gateway?.bind,
+    customBindHost: cfg.gateway?.customBindHost,
+    scheme,
+    port,
+    pickTailnetHost: pickTailnetIPv4,
+    pickLanHost: pickLanIPv4,
+  });
+  if (bindResult) {
+    return bindResult;
   }
 
   return {
@@ -362,36 +323,9 @@ function formatSetupInstructions(): string {
   ].join("\n");
 }
 
-type PendingPairingRequest = {
-  requestId: string;
-  deviceId: string;
-  displayName?: string;
-  platform?: string;
-  remoteIp?: string;
-  ts?: number;
-};
-
-function formatPendingRequests(pending: PendingPairingRequest[]): string {
-  if (pending.length === 0) {
-    return "No pending device pairing requests.";
-  }
-  const lines: string[] = ["Pending device pairing requests:"];
-  for (const req of pending) {
-    const label = req.displayName?.trim() || req.deviceId;
-    const platform = req.platform?.trim();
-    const ip = req.remoteIp?.trim();
-    const parts = [
-      `- ${req.requestId}`,
-      label ? `name=${label}` : null,
-      platform ? `platform=${platform}` : null,
-      ip ? `ip=${ip}` : null,
-    ].filter(Boolean);
-    lines.push(parts.join(" · "));
-  }
-  return lines.join("\n");
-}
-
 export default function register(api: OpenClawPluginApi) {
+  registerPairingNotifierService(api);
+
   api.registerCommand({
     name: "pair",
     description: "Generate setup codes and approve device pairing requests.",
@@ -409,6 +343,15 @@ export default function register(api: OpenClawPluginApi) {
       if (action === "status" || action === "pending") {
         const list = await listDevicePairing();
         return { text: formatPendingRequests(list.pending) };
+      }
+
+      if (action === "notify") {
+        const notifyAction = tokens[1]?.trim().toLowerCase() ?? "status";
+        return await handleNotifyCommand({
+          api,
+          ctx,
+          action: notifyAction,
+        });
       }
 
       if (action === "approve") {
@@ -473,6 +416,19 @@ export default function register(api: OpenClawPluginApi) {
 
         const channel = ctx.channel;
         const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+        let autoNotifyArmed = false;
+
+        if (channel === "telegram" && target) {
+          try {
+            autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
+          } catch (err) {
+            api.logger.warn?.(
+              `device-pair: failed to arm one-shot pairing notify (${String(
+                (err as Error)?.message ?? err,
+              )})`,
+            );
+          }
+        }
 
         if (channel === "telegram" && target) {
           try {
@@ -493,7 +449,15 @@ export default function register(api: OpenClawPluginApi) {
                   `Gateway: ${payload.url}`,
                   `Auth: ${authLabel}`,
                   "",
-                  "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  autoNotifyArmed
+                    ? "After scanning, wait here for the pairing request ping."
+                    : "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  ...(autoNotifyArmed
+                    ? [
+                        "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                        "If the ping does not arrive, run `/pair approve latest` manually.",
+                      ]
+                    : []),
                 ].join("\n"),
               };
             }
@@ -512,7 +476,15 @@ export default function register(api: OpenClawPluginApi) {
           `Gateway: ${payload.url}`,
           `Auth: ${authLabel}`,
           "",
-          "After scanning, run `/pair approve` to complete pairing.",
+          autoNotifyArmed
+            ? "After scanning, wait here for the pairing request ping."
+            : "After scanning, run `/pair approve` to complete pairing.",
+          ...(autoNotifyArmed
+            ? [
+                "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                "If the ping does not arrive, run `/pair approve latest` manually.",
+              ]
+            : []),
         ];
 
         // WebUI + CLI/TUI: ASCII QR

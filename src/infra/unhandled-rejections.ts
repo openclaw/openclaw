@@ -1,5 +1,10 @@
 import process from "node:process";
-import { extractErrorCode, formatUncaughtError } from "./errors.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatUncaughtError,
+  readErrorName,
+} from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -35,11 +40,49 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_BODY_TIMEOUT",
 ]);
 
+const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
+  "AbortError",
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+  "TimeoutError",
+]);
+
+const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+
+const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
+  "getaddrinfo",
+  "socket hang up",
+  "client network socket disconnected before secure tls connection was established",
+  "network error",
+  "network is unreachable",
+  "temporary failure in name resolution",
+];
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
   }
   return (err as { cause?: unknown }).cause;
+}
+
+function extractErrorCodeOrErrno(err: unknown): string | undefined {
+  const code = extractErrorCode(err);
+  if (code) {
+    return code.trim().toUpperCase();
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const errno = (err as { errno?: unknown }).errno;
+  if (typeof errno === "string" && errno.trim()) {
+    return errno.trim().toUpperCase();
+  }
+  if (typeof errno === "number" && Number.isFinite(errno)) {
+    return String(errno);
+  }
+  return undefined;
 }
 
 function extractErrorCodeWithCause(err: unknown): string | undefined {
@@ -88,30 +131,50 @@ export function isTransientNetworkError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-
-  const code = extractErrorCodeWithCause(err);
-  if (code && TRANSIENT_NETWORK_CODES.has(code)) {
-    return true;
-  }
-
-  // "fetch failed" TypeError from undici (Node's native fetch)
-  if (err instanceof TypeError && err.message === "fetch failed") {
-    const cause = getErrorCause(err);
-    if (cause) {
-      return isTransientNetworkError(cause);
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
     }
-    return true;
-  }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
 
-  // Check the cause chain recursively
-  const cause = getErrorCause(err);
-  if (cause && cause !== err) {
-    return isTransientNetworkError(cause);
-  }
+    const name = readErrorName(candidate);
+    if (name && TRANSIENT_NETWORK_ERROR_NAMES.has(name)) {
+      return true;
+    }
 
-  // AggregateError may wrap multiple causes
-  if (err instanceof AggregateError && err.errors?.length) {
-    return err.errors.some((e) => isTransientNetworkError(e));
+    if (candidate instanceof TypeError && candidate.message === "fetch failed") {
+      return true;
+    }
+
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    if (!message) {
+      continue;
+    }
+    if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
+      return true;
+    }
+    if (message === "fetch failed") {
+      return true;
+    }
+    if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      return true;
+    }
   }
 
   return false;

@@ -7,6 +7,7 @@ import type {
   CronJob,
   CronStatus,
   SkillStatusReport,
+  ToolsCatalogResult,
 } from "../types.ts";
 import {
   renderAgentFiles,
@@ -23,7 +24,7 @@ import {
   parseFallbackList,
   resolveAgentConfig,
   resolveAgentEmoji,
-  resolveModelFallbacks,
+  resolveEffectiveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
@@ -62,6 +63,9 @@ export type AgentsProps = {
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsError: string | null;
   agentSkillsAgentId: string | null;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: ToolsCatalogResult | null;
   skillsFilter: string;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
@@ -210,6 +214,9 @@ export function renderAgents(props: AgentsProps) {
                         configLoading: props.configLoading,
                         configSaving: props.configSaving,
                         configDirty: props.configDirty,
+                        toolsCatalogLoading: props.toolsCatalogLoading,
+                        toolsCatalogError: props.toolsCatalogError,
+                        toolsCatalogResult: props.toolsCatalogResult,
                         onProfileChange: props.onToolsProfileChange,
                         onOverridesChange: props.onToolsOverridesChange,
                         onConfigReload: props.onConfigReload,
@@ -383,7 +390,10 @@ function renderAgentOverview(params: {
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
   const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
-  const modelFallbacks = resolveModelFallbacks(config.entry?.model);
+  const modelFallbacks = resolveEffectiveModelFallbacks(
+    config.entry?.model,
+    config.defaults?.model,
+  );
   const fallbackText = modelFallbacks ? modelFallbacks.join(", ") : "";
   const identityName =
     agentIdentity?.name?.trim() ||

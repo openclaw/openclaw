@@ -1,61 +1,153 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildTelegramMessageContext } from "./bot-message-context.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const transcribeFirstAudioMock = vi.fn();
+const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
+const DEFAULT_WORKSPACE = "/tmp/openclaw";
+const DEFAULT_MENTION_PATTERN = "\\bbot\\b";
 
 vi.mock("../media-understanding/audio-preflight.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
+async function buildGroupVoiceContext(params: {
+  messageId: number;
+  chatId: number;
+  title: string;
+  date: number;
+  fromId: number;
+  firstName: string;
+  fileId: string;
+  mediaPath: string;
+  groupDisableAudioPreflight?: boolean;
+  topicDisableAudioPreflight?: boolean;
+}) {
+  const groupConfig = {
+    requireMention: true,
+    ...(params.groupDisableAudioPreflight === undefined
+      ? {}
+      : { disableAudioPreflight: params.groupDisableAudioPreflight }),
+  };
+  const topicConfig =
+    params.topicDisableAudioPreflight === undefined
+      ? undefined
+      : { disableAudioPreflight: params.topicDisableAudioPreflight };
+
+  return buildTelegramMessageContextForTest({
+    message: {
+      message_id: params.messageId,
+      chat: { id: params.chatId, type: "supergroup", title: params.title },
+      date: params.date,
+      text: undefined,
+      from: { id: params.fromId, first_name: params.firstName },
+      voice: { file_id: params.fileId },
+    },
+    allMedia: [{ path: params.mediaPath, contentType: "audio/ogg" }],
+    options: { forceWasMentioned: true },
+    cfg: {
+      agents: { defaults: { model: DEFAULT_MODEL, workspace: DEFAULT_WORKSPACE } },
+      channels: { telegram: {} },
+      messages: { groupChat: { mentionPatterns: [DEFAULT_MENTION_PATTERN] } },
+    },
+    resolveGroupActivation: () => true,
+    resolveGroupRequireMention: () => true,
+    resolveTelegramGroupConfig: () => ({
+      groupConfig,
+      topicConfig,
+    }),
+  });
+}
+
+function expectTranscriptRendered(
+  ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>,
+  transcript: string,
+) {
+  expect(ctx).not.toBeNull();
+  expect(ctx?.ctxPayload?.BodyForAgent).toBe(transcript);
+  expect(ctx?.ctxPayload?.Body).toContain(transcript);
+  expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+}
+
+function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGroupVoiceContext>>) {
+  expect(ctx).not.toBeNull();
+  expect(ctx?.ctxPayload?.Body).toContain("<media:audio>");
+}
+
 describe("buildTelegramMessageContext audio transcript body", () => {
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
-    const ctx = await buildTelegramMessageContext({
-      primaryCtx: {
-        message: {
-          message_id: 1,
-          chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
-          date: 1700000000,
-          from: { id: 42, first_name: "Alice" },
-          voice: { file_id: "voice-1" },
-        },
-        me: { id: 7, username: "bot" },
-      } as never,
-      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
-      storeAllowFrom: [],
-      options: { forceWasMentioned: true },
-      bot: {
-        api: {
-          sendChatAction: vi.fn(),
-          setMessageReaction: vi.fn(),
-        },
-      } as never,
-      cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
-        channels: { telegram: {} },
-        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
-      } as never,
-      account: { accountId: "default" } as never,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      dmPolicy: "open",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ackReactionScope: "off",
-      logger: { info: vi.fn() },
-      resolveGroupActivation: () => true,
-      resolveGroupRequireMention: () => true,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: true },
-        topicConfig: undefined,
-      }),
+    const ctx = await buildGroupVoiceContext({
+      messageId: 1,
+      chatId: -1001234567890,
+      title: "Test Group",
+      date: 1700000000,
+      fromId: 42,
+      firstName: "Alice",
+      fileId: "voice-1",
+      mediaPath: "/tmp/voice.ogg",
     });
 
-    expect(ctx).not.toBeNull();
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(ctx?.ctxPayload?.BodyForAgent).toBe("hey bot please help");
-    expect(ctx?.ctxPayload?.Body).toContain("hey bot please help");
-    expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
+    expectTranscriptRendered(ctx, "hey bot please help");
+  });
+
+  it("skips preflight transcription when disableAudioPreflight is true", async () => {
+    transcribeFirstAudioMock.mockClear();
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 2,
+      chatId: -1001234567891,
+      title: "Test Group 2",
+      date: 1700000100,
+      fromId: 43,
+      firstName: "Bob",
+      fileId: "voice-2",
+      mediaPath: "/tmp/voice2.ogg",
+      groupDisableAudioPreflight: true,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expectAudioPlaceholderRendered(ctx);
+  });
+
+  it("uses topic disableAudioPreflight=false to override group disableAudioPreflight=true", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("topic override transcript");
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 3,
+      chatId: -1001234567892,
+      title: "Test Group 3",
+      date: 1700000200,
+      fromId: 44,
+      firstName: "Cara",
+      fileId: "voice-3",
+      mediaPath: "/tmp/voice3.ogg",
+      groupDisableAudioPreflight: true,
+      topicDisableAudioPreflight: false,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectTranscriptRendered(ctx, "topic override transcript");
+  });
+
+  it("uses topic disableAudioPreflight=true to override group disableAudioPreflight=false", async () => {
+    transcribeFirstAudioMock.mockClear();
+
+    const ctx = await buildGroupVoiceContext({
+      messageId: 4,
+      chatId: -1001234567893,
+      title: "Test Group 4",
+      date: 1700000300,
+      fromId: 45,
+      firstName: "Dan",
+      fileId: "voice-4",
+      mediaPath: "/tmp/voice4.ogg",
+      groupDisableAudioPreflight: false,
+      topicDisableAudioPreflight: true,
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expectAudioPlaceholderRendered(ctx);
   });
 });

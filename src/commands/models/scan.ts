@@ -2,8 +2,8 @@ import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompt
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
-import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
@@ -11,6 +11,7 @@ import {
   stylePromptTitle,
 } from "../../terminal/prompt-style.js";
 import { pad, truncate } from "./list.format.js";
+import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -166,7 +167,7 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
   const probe = opts.probe ?? true;
   let storedKey: string | undefined;
   if (probe) {
@@ -297,9 +298,7 @@ export async function modelsScanCommand(
         nextModels[entry] = {};
       }
     }
-    const existingImageModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
     const nextImageModel =
       selectedImages.length > 0
         ? {
@@ -308,9 +307,7 @@ export async function modelsScanCommand(
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
     const defaults = {
       ...cfg.agents?.defaults,
       model: {

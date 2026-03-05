@@ -14,6 +14,7 @@
 import type { WebClient } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "../globals.js";
+import { normalizeSlackOutboundText } from "./format.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +37,18 @@ export type StartSlackStreamParams = {
   threadTs: string;
   /** Optional initial markdown text to include in the stream start. */
   text?: string;
+  /**
+   * The team ID of the workspace this stream belongs to.
+   * Required by the Slack API for `chat.startStream` / `chat.stopStream`.
+   * Obtain from `auth.test` response (`team_id`).
+   */
+  teamId?: string;
+  /**
+   * The user ID of the message recipient (required for DM streaming).
+   * Without this, `chat.stopStream` fails with `missing_recipient_user_id`
+   * in direct message conversations.
+   */
+  userId?: string;
 };
 
 export type AppendSlackStreamParams = {
@@ -64,13 +77,17 @@ export type StopSlackStreamParams = {
 export async function startSlackStream(
   params: StartSlackStreamParams,
 ): Promise<SlackStreamSession> {
-  const { client, channel, threadTs, text } = params;
+  const { client, channel, threadTs, text, teamId, userId } = params;
 
-  logVerbose(`slack-stream: starting stream in ${channel} thread=${threadTs}`);
+  logVerbose(
+    `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
+  );
 
   const streamer = client.chatStream({
     channel,
     thread_ts: threadTs,
+    ...(teamId ? { recipient_team_id: teamId } : {}),
+    ...(userId ? { recipient_user_id: userId } : {}),
   });
 
   const session: SlackStreamSession = {
@@ -83,7 +100,7 @@ export async function startSlackStream(
   // If initial text is provided, send it as the first append which will
   // trigger the ChatStreamer to call chat.startStream under the hood.
   if (text) {
-    await streamer.append({ markdown_text: text });
+    await streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
     logVerbose(`slack-stream: appended initial text (${text.length} chars)`);
   }
 
@@ -105,7 +122,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     return;
   }
 
-  await session.streamer.append({ markdown_text: text });
+  await session.streamer.append({ markdown_text: normalizeSlackOutboundText(text) });
   logVerbose(`slack-stream: appended ${text.length} chars`);
 }
 
@@ -131,7 +148,9 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop(text ? { markdown_text: text } : undefined);
+  await session.streamer.stop(
+    text ? { markdown_text: normalizeSlackOutboundText(text) } : undefined,
+  );
 
   logVerbose("slack-stream: stream stopped");
 }

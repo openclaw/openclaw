@@ -79,10 +79,40 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for fetch failed with unclassified cause", () => {
+    const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
+    const error = Object.assign(new TypeError("fetch failed"), { cause });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for nested cause chain with network error", () => {
     const innerCause = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
     const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
     const error = Object.assign(new TypeError("fetch failed"), { cause: outerCause });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for Slack request errors that wrap network codes in .original", () => {
+    const error = Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN"), {
+      code: "slack_webapi_request_error",
+      original: {
+        errno: -3001,
+        code: "EAI_AGAIN",
+        syscall: "getaddrinfo",
+        hostname: "slack.com",
+      },
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for network codes nested in .data payloads", () => {
+    const error = {
+      code: "slack_webapi_request_error",
+      message: "A request error occurred",
+      data: {
+        code: "EAI_AGAIN",
+      },
+    };
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
@@ -100,6 +130,18 @@ describe("isTransientNetworkError", () => {
 
   it("returns false for errors with non-network codes", () => {
     const error = Object.assign(new Error("test"), { code: "INVALID_CONFIG" });
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns false for Slack request errors without network indicators", () => {
+    const error = Object.assign(new Error("A request error occurred"), {
+      code: "slack_webapi_request_error",
+    });
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns false for non-transient undici codes that only appear in message text", () => {
+    const error = new Error("Request failed with UND_ERR_INVALID_ARG");
     expect(isTransientNetworkError(error)).toBe(false);
   });
 

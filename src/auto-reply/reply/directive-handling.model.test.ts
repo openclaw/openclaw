@@ -39,6 +39,24 @@ function baseConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+function resolveModelSelectionForCommand(params: {
+  command: string;
+  allowedModelKeys: Set<string>;
+  allowedModelCatalog: Array<{ provider: string; id: string }>;
+}) {
+  return resolveModelSelectionFromDirective({
+    directives: parseInlineDirectives(params.command),
+    cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+    agentDir: "/tmp/agent",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-5",
+    aliasIndex: baseAliasIndex(),
+    allowedModelKeys: params.allowedModelKeys,
+    allowedModelCatalog: params.allowedModelCatalog,
+    provider: "anthropic",
+  });
+}
+
 describe("/model chat UX", () => {
   it("shows summary for /model with no args", async () => {
     const directives = parseInlineDirectives("/model");
@@ -63,6 +81,32 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("shows active runtime model when different from selected model", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "fireworks",
+      model: "fireworks/minimax-m2p5",
+      defaultProvider: "fireworks",
+      defaultModel: "fireworks/minimax-m2p5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      sessionEntry: {
+        modelProvider: "deepinfra",
+        model: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
+    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+  });
+
   it("auto-applies closest match for typos", () => {
     const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
@@ -85,6 +129,63 @@ describe("/model chat UX", () => {
       isDefault: true,
     });
     expect(resolved.errorText).toBeUndefined();
+  });
+
+  it("rejects numeric /model selections with a guided error", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model 99",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain("Numeric model selection is not supported in chat.");
+    expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
+  });
+
+  it("treats explicit default /model selection as resettable default", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model anthropic/claude-opus-4-5",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      isDefault: true,
+    });
+  });
+
+  it("keeps openrouter provider/model split for exact selections", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openrouter/anthropic/claude-opus-4-5",
+      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-opus-4-5",
+      isDefault: false,
+    });
+  });
+
+  it("keeps cloudflare @cf model segments for exact selections", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/@cf/openai/gpt-oss-20b",
+      allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "@cf/openai/gpt-oss-20b",
+      isDefault: false,
+    });
   });
 });
 

@@ -45,6 +45,122 @@ function recordSuccessfulCall(
   });
 }
 
+function recordRepeatedSuccessfulCalls(params: {
+  state: SessionState;
+  toolName: string;
+  toolParams: unknown;
+  result: unknown;
+  count: number;
+  startIndex?: number;
+}) {
+  const startIndex = params.startIndex ?? 0;
+  for (let i = 0; i < params.count; i += 1) {
+    recordSuccessfulCall(
+      params.state,
+      params.toolName,
+      params.toolParams,
+      params.result,
+      startIndex + i,
+    );
+  }
+}
+
+function createNoProgressPollFixture(sessionId: string) {
+  return {
+    params: { action: "poll", sessionId },
+    result: {
+      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      details: { status: "running", aggregated: "steady" },
+    },
+  };
+}
+
+function createReadNoProgressFixture() {
+  return {
+    toolName: "read",
+    params: { path: "/same.txt" },
+    result: {
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    },
+  } as const;
+}
+
+function createPingPongFixture() {
+  return {
+    state: createState(),
+    readParams: { path: "/a.txt" },
+    listParams: { dir: "/workspace" },
+  };
+}
+
+function detectLoopAfterRepeatedCalls(params: {
+  toolName: string;
+  toolParams: unknown;
+  result: unknown;
+  count: number;
+  config?: ToolLoopDetectionConfig;
+}) {
+  const state = createState();
+  recordRepeatedSuccessfulCalls({
+    state,
+    toolName: params.toolName,
+    toolParams: params.toolParams,
+    result: params.result,
+    count: params.count,
+  });
+  return detectToolCallLoop(
+    state,
+    params.toolName,
+    params.toolParams,
+    params.config ?? enabledLoopDetectionConfig,
+  );
+}
+
+function recordSuccessfulPingPongCalls(params: {
+  state: SessionState;
+  readParams: { path: string };
+  listParams: { dir: string };
+  count: number;
+  textAtIndex: (toolName: "read" | "list", index: number) => string;
+}) {
+  for (let i = 0; i < params.count; i += 1) {
+    if (i % 2 === 0) {
+      recordSuccessfulCall(
+        params.state,
+        "read",
+        params.readParams,
+        { content: [{ type: "text", text: params.textAtIndex("read", i) }], details: { ok: true } },
+        i,
+      );
+    } else {
+      recordSuccessfulCall(
+        params.state,
+        "list",
+        params.listParams,
+        { content: [{ type: "text", text: params.textAtIndex("list", i) }], details: { ok: true } },
+        i,
+      );
+    }
+  }
+}
+
+function expectPingPongLoop(
+  loopResult: ReturnType<typeof detectToolCallLoop>,
+  expected: { level: "warning" | "critical"; count: number; expectCriticalText?: boolean },
+) {
+  expect(loopResult.stuck).toBe(true);
+  if (!loopResult.stuck) {
+    return;
+  }
+  expect(loopResult.level).toBe(expected.level);
+  expect(loopResult.detector).toBe("ping_pong");
+  expect(loopResult.count).toBe(expected.count);
+  if (expected.expectCriticalText) {
+    expect(loopResult.message).toContain("CRITICAL");
+  }
+}
+
 describe("tool-loop-detection", () => {
   describe("hashToolCall", () => {
     it("creates consistent hash for same tool and params", () => {
@@ -184,18 +300,13 @@ describe("tool-loop-detection", () => {
     });
 
     it("keeps generic loops warn-only below global breaker threshold", () => {
-      const state = createState();
-      const params = { path: "/same.txt" };
-      const result = {
-        content: [{ type: "text", text: "same output" }],
-        details: { ok: true },
-      };
-
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "read", params, result, i);
-      }
-
-      const loopResult = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
+      const fixture = createReadNoProgressFixture();
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: CRITICAL_THRESHOLD,
+      });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
@@ -204,11 +315,7 @@ describe("tool-loop-detection", () => {
 
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-custom" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
+      const { params, result } = createNoProgressPollFixture("sess-custom");
       const config: ToolLoopDetectionConfig = {
         enabled: true,
         warningThreshold: 2,
@@ -220,17 +327,27 @@ describe("tool-loop-detection", () => {
         },
       };
 
-      for (let i = 0; i < 2; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+      });
       const warningResult = detectToolCallLoop(state, "process", params, config);
       expect(warningResult.stuck).toBe(true);
       if (warningResult.stuck) {
         expect(warningResult.level).toBe("warning");
       }
 
-      recordSuccessfulCall(state, "process", params, result, 2);
-      recordSuccessfulCall(state, "process", params, result, 3);
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+        startIndex: 2,
+      });
       const criticalResult = detectToolCallLoop(state, "process", params, config);
       expect(criticalResult.stuck).toBe(true);
       if (criticalResult.stuck) {
@@ -241,11 +358,7 @@ describe("tool-loop-detection", () => {
 
     it("can disable specific detectors", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-no-detectors" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
+      const { params, result } = createNoProgressPollFixture("sess-no-detectors");
       const config: ToolLoopDetectionConfig = {
         enabled: true,
         detectors: {
@@ -255,27 +368,26 @@ describe("tool-loop-detection", () => {
         },
       };
 
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
 
       const loopResult = detectToolCallLoop(state, "process", params, config);
       expect(loopResult.stuck).toBe(false);
     });
 
     it("warns for known polling no-progress loops", () => {
-      const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
-
-      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
-
-      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: WARNING_THRESHOLD,
+      });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
@@ -285,18 +397,13 @@ describe("tool-loop-detection", () => {
     });
 
     it("blocks known polling no-progress loops at critical threshold", () => {
-      const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
-
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
-
-      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
@@ -322,18 +429,13 @@ describe("tool-loop-detection", () => {
     });
 
     it("blocks any tool with global no-progress breaker at 30", () => {
-      const state = createState();
-      const params = { path: "/same.txt" };
-      const result = {
-        content: [{ type: "text", text: "same output" }],
-        details: { ok: true },
-      };
-
-      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "read", params, result, i);
-      }
-
-      const loopResult = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
+      const fixture = createReadNoProgressFixture();
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
@@ -356,83 +458,47 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
+      expectPingPongLoop(loopResult, { level: "warning", count: WARNING_THRESHOLD });
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(WARNING_THRESHOLD);
         expect(loopResult.message).toContain("ping-pong loop");
       }
     });
 
     it("blocks ping-pong alternating patterns at critical threshold", () => {
-      const state = createState();
-      const readParams = { path: "/a.txt" };
-      const listParams = { dir: "/workspace" };
+      const { state, readParams, listParams } = createPingPongFixture();
 
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          recordSuccessfulCall(
-            state,
-            "read",
-            readParams,
-            { content: [{ type: "text", text: "read stable" }], details: { ok: true } },
-            i,
-          );
-        } else {
-          recordSuccessfulCall(
-            state,
-            "list",
-            listParams,
-            { content: [{ type: "text", text: "list stable" }], details: { ok: true } },
-            i,
-          );
-        }
-      }
+      recordSuccessfulPingPongCalls({
+        state,
+        readParams,
+        listParams,
+        count: CRITICAL_THRESHOLD - 1,
+        textAtIndex: (toolName) => (toolName === "read" ? "read stable" : "list stable"),
+      });
 
       const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
+      expectPingPongLoop(loopResult, {
+        level: "critical",
+        count: CRITICAL_THRESHOLD,
+        expectCriticalText: true,
+      });
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
-        expect(loopResult.message).toContain("CRITICAL");
         expect(loopResult.message).toContain("ping-pong loop");
       }
     });
 
     it("does not block ping-pong at critical threshold when outcomes are progressing", () => {
-      const state = createState();
-      const readParams = { path: "/a.txt" };
-      const listParams = { dir: "/workspace" };
+      const { state, readParams, listParams } = createPingPongFixture();
 
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          recordSuccessfulCall(
-            state,
-            "read",
-            readParams,
-            { content: [{ type: "text", text: `read ${i}` }], details: { ok: true } },
-            i,
-          );
-        } else {
-          recordSuccessfulCall(
-            state,
-            "list",
-            listParams,
-            { content: [{ type: "text", text: `list ${i}` }], details: { ok: true } },
-            i,
-          );
-        }
-      }
+      recordSuccessfulPingPongCalls({
+        state,
+        readParams,
+        listParams,
+        count: CRITICAL_THRESHOLD - 1,
+        textAtIndex: (toolName, index) => `${toolName} ${index}`,
+      });
 
       const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
-      }
+      expectPingPongLoop(loopResult, { level: "warning", count: CRITICAL_THRESHOLD });
     });
 
     it("does not flag ping-pong when alternation is broken", () => {
