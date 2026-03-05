@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -40,6 +41,12 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+export type ChannelHookContext = {
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
@@ -55,6 +62,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Channel context for message_sending/message_sent hooks. */
+  channelContext?: ChannelHookContext;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -155,9 +164,67 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+
+        const hookRunner = getGlobalHookRunner();
+        const ctx = options.channelContext ?? {};
+        const channelId = ctx.channelId ?? "unknown";
+        const targetId = ctx.conversationId ?? channelId;
+
+        // Run message_sending hook (may modify content or cancel)
+        let effectivePayload = normalized;
+        if (hookRunner?.hasHooks("message_sending")) {
+          try {
+            const sendingResult = await hookRunner.runMessageSending(
+              {
+                to: targetId,
+                content: normalized.text ?? "",
+                metadata: { kind, channelId },
+              },
+              {
+                channelId,
+                accountId: ctx.accountId,
+                conversationId: ctx.conversationId,
+              },
+            );
+            if (sendingResult?.cancel) {
+              return; // Cancel sending
+            }
+            if (sendingResult?.content != null) {
+              effectivePayload = { ...normalized, text: sendingResult.content };
+            }
+          } catch {
+            // Don't block delivery on hook failure
+          }
+        }
+
+        // Call original deliver
+        let success = true;
+        try {
+          await options.deliver(effectivePayload, { kind });
+        } catch (err) {
+          success = false;
+          throw err;
+        } finally {
+          // Run message_sent hook
+          if (hookRunner?.hasHooks("message_sent")) {
+            try {
+              await hookRunner.runMessageSent(
+                {
+                  to: targetId,
+                  content: effectivePayload.text ?? "",
+                  success,
+                },
+                {
+                  channelId,
+                  accountId: ctx.accountId,
+                  conversationId: ctx.conversationId,
+                },
+              );
+            } catch {
+              // Ignore hook errors
+            }
+          }
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

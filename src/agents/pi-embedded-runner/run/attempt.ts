@@ -1749,6 +1749,7 @@ export async function runEmbeddedAttempt(
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
+                runId: params.runId,
               },
             )
             .catch((err) => {

@@ -340,6 +340,8 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  runId?: string;
+  conversationId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
@@ -492,6 +494,7 @@ export type PluginHookToolContext = {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  conversationId?: string;
   toolName: string;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
