@@ -127,6 +127,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   qiniuApiKey?: string;
+  qiniuModelId?: string;
   xiaomiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;

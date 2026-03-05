@@ -206,4 +206,11 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliOption: "--qiniu-api-key <key>",
     description: "Qiniu Cloud API key",
   },
+  {
+    optionKey: "qiniuModelId",
+    authChoice: "qiniu-api-key",
+    cliFlag: "--qiniu-model-id",
+    cliOption: "--qiniu-model-id <modelId>",
+    description: "Qiniu Cloud model ID (default: minimax/minimax-m2.5)",
+  },
 ];

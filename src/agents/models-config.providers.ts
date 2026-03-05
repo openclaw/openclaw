@@ -109,8 +109,8 @@ const XIAOMI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 const QINIU_BASE_URL = "https://api.qnaigc.com/v1";
-export const QINIU_DEFAULT_MODEL_ID = "deepseek-r1";
-const QINIU_DEFAULT_CONTEXT_WINDOW = 131072;
+export const QINIU_DEFAULT_MODEL_ID = "minimax/minimax-m2.5";
+const QINIU_DEFAULT_CONTEXT_WINDOW = 205000;
 const QINIU_DEFAULT_MAX_TOKENS = 8192;
 const QINIU_DEFAULT_COST = {
   input: 0,
@@ -765,19 +765,34 @@ export function buildXiaomiProvider(): ProviderConfig {
     ],
   };
 }
-export function buildQiniuProvider(): ProviderConfig {
+export function buildQiniuProvider(modelId?: string): ProviderConfig {
+  const allModels = [
+    { id: "minimax/minimax-m2.5", name: "MiniMax M2.5", reasoning: true, contextWindow: 205000, maxTokens: 8192 },
+    { id: "minimax/minimax-m2.1", name: "MiniMax M2.1", reasoning: true, contextWindow: 205000, maxTokens: 8192 },
+    { id: "minimax/minimax-m2", name: "MiniMax M2", reasoning: true, contextWindow: 200000, maxTokens: 8192 },
+    { id: "qiniu/deepseek-r1", name: "DeepSeek R1", reasoning: true, contextWindow: 128000, maxTokens: 8192 },
+    { id: "qiniu/deepseek-v3", name: "DeepSeek V3", contextWindow: 128000, maxTokens: 8192 },
+    { id: "qiniu/qwen3-32b", name: "Qwen3 32B", contextWindow: 40000, maxTokens: 8192 },
+    { id: "qiniu/gpt-5-pro", name: "GPT-5 Pro", contextWindow: 400000, maxTokens: 8192 },
+    { id: "qiniu/gemini-3-pro", name: "Gemini 3.1 Pro", contextWindow: 11000000, maxTokens: 8192 },
+    { id: "qiniu/claude-4-sonnet", name: "Claude 4 Sonnet", contextWindow: 200000, maxTokens: 8192 },
+  ];
+
+  const selectedModelId = modelId || QINIU_DEFAULT_MODEL_ID;
+  const model = allModels.find((m) => m.id === selectedModelId) || allModels[0];
+
   return {
     baseUrl: QINIU_BASE_URL,
     api: "openai-completions",
     models: [
       {
-        id: QINIU_DEFAULT_MODEL_ID,
-        name: "DeepSeek R1",
-        reasoning: true,
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
         input: ["text"],
         cost: QINIU_DEFAULT_COST,
-        contextWindow: QINIU_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: QINIU_DEFAULT_MAX_TOKENS,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
       },
     ],
   };
