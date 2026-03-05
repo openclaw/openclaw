@@ -71,6 +71,18 @@ describe("checkExecBlockedPath", () => {
     expect(checkExecBlockedPath("cat ~/.ssh/id_rsa")).toBeNull();
   });
 
+  it("throws on invalid config format", () => {
+    readFileSyncSpy.mockReturnValue(JSON.stringify({ not: "an array" }));
+    _resetExecBlockedPaths();
+    expect(() => checkExecBlockedPath("test")).toThrow("invalid format");
+  });
+
+  it("throws on malformed JSON", () => {
+    readFileSyncSpy.mockReturnValue("{invalid json");
+    _resetExecBlockedPaths();
+    expect(() => checkExecBlockedPath("test")).toThrow("invalid JSON");
+  });
+
   it("caches blocked paths after first load", () => {
     checkExecBlockedPath("test1");
     checkExecBlockedPath("test2");

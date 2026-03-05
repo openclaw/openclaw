@@ -287,10 +287,20 @@ function getExecBlockedPaths(): string[] {
     if (Array.isArray(parsed) && parsed.every((p) => typeof p === "string")) {
       _execBlockedPaths = parsed;
     } else {
-      logWarn(`exec-blocked-paths: invalid format in ${configPath}, expected string[]`);
-      _execBlockedPaths = [];
+      // Fail closed: invalid config should not silently disable all blocking
+      throw new Error(`exec-blocked-paths: invalid format in ${configPath}, expected string[]`);
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      // Malformed JSON: fail closed
+      throw new Error(`exec-blocked-paths: invalid JSON in ${configPath}: ${err.message}`, {
+        cause: err,
+      });
+    }
+    if (err instanceof Error && err.message.startsWith("exec-blocked-paths:")) {
+      throw err;
+    }
+    // File not found: no blocking configured (valid state)
     _execBlockedPaths = [];
   }
   return _execBlockedPaths;
@@ -331,7 +341,10 @@ export async function runExecProcess(opts: {
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   // L2.5: Block commands referencing sensitive paths before spawning any process
-  const blockedPath = checkExecBlockedPath(opts.command);
+  // Check both display command and actual exec command (which may differ for safeBins)
+  const blockedPath =
+    checkExecBlockedPath(opts.command) ??
+    (opts.execCommand ? checkExecBlockedPath(opts.execCommand) : null);
   if (blockedPath) {
     const msg = `Access denied: blocked path (${blockedPath})`;
     logWarn(`exec-blocked: "${opts.command}" → ${msg}`);
