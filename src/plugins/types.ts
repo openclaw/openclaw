@@ -360,6 +360,11 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_stop",
 ] as const satisfies readonly PluginHookName[];
 
+type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
+type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
+const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
+void assertAllPluginHookNamesListed;
+
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
