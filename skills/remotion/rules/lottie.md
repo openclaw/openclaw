@@ -9,7 +9,7 @@ metadata:
 
 ## Prerequisites
 
-First, the @remotion/lottie package needs to be installed.
+First, the @remotion/lottie package needs to be installed.  
 If it is not, use the following command:
 
 ```bash
@@ -56,3 +56,4 @@ export const MyAnimation = () => {
 
   return <Lottie animationData={animationData} loop animationSpeed={1} />;
 };
+```
