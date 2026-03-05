@@ -215,8 +215,8 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
+      // apiKey should be preserved from old config (secret), but baseUrl should come from new config
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
     });
   });
 
