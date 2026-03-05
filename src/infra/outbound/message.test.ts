@@ -16,6 +16,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveSessionAgentId: () => "main",
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -65,6 +66,25 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({ agentId: "work" }),
+        channel: "telegram",
+        to: "123456",
+      }),
+    );
+  });
+
+  it("passes sessionKey to outbound delivery so internal message:sent hooks can fire without mirror", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      agentId: "work",
+      sessionKey: "s-test",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ agentId: "work", key: "s-test" }),
         channel: "telegram",
         to: "123456",
       }),

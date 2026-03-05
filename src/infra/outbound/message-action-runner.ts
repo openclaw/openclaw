@@ -523,6 +523,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
+      sessionKey: outboundRoute?.sessionKey ?? input.sessionKey,
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,

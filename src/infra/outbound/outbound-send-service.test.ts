@@ -61,6 +61,35 @@ describe("executeSendAction", () => {
     );
   });
 
+  it("forwards ctx.sessionKey to sendMessage so internal message:sent hooks can dispatch", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: {},
+        agentId: "work",
+        sessionKey: "s-test",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "s-test",
+      }),
+    );
+  });
+
   it("uses plugin poll action when available", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue({
       ok: true,
