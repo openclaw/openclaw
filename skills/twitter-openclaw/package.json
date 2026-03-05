@@ -1,0 +1,10 @@
+{
+  "name": "twitter-openclaw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw skill to read and write Twitter/X via API",
+  "bin": {
+    "twclaw": "bin/twclaw.js"
+  },
+  "type": "module"
+}

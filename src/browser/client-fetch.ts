@@ -108,10 +108,26 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborted") ||
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
+  const looksLikeConnectivityError =
+    msgLower.includes("econnrefused") ||
+    msgLower.includes("econnreset") ||
+    msgLower.includes("enotfound") ||
+    msgLower.includes("socket hang up") ||
+    msgLower.includes("networkerror") ||
+    msgLower.includes("failed to fetch") ||
+    msgLower.includes("fetch failed") ||
+    msgLower.includes("connection refused") ||
+    /\bconnect\s+(?:econn|etimed|ehostunreach|enetunreach)/.test(msgLower);
   if (looksLikeTimeout) {
     return new Error(
       `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
     );
+  }
+  // Preserve application-level browser errors (for example, validation failures like
+  // "fields are required") so callers get actionable messages instead of a misleading
+  // connectivity wrapper.
+  if (!looksLikeConnectivityError) {
+    return err instanceof Error ? err : new Error(msg);
   }
   return new Error(
     `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,

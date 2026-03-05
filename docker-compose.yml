@@ -1,46 +1,119 @@
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    image: openclaw-browser:latest
+    restart: unless-stopped
+    user: "root"
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      PLAYWRIGHT_BROWSERS_PATH: /home/node/.cache/ms-playwright
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TYPEFULLY_API_KEY: ${TYPEFULLY_API_KEY}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      TWITTER_API_KEY: ${TWITTER_API_KEY}
+      TWITTER_API_SECRET: ${TWITTER_API_SECRET}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - openclaw_config:/home/node/.openclaw
+      - openclaw_workspace:/home/node/.openclaw/workspace
+      - openclaw_data:/home/node/.openclaw/workspace/data
+      - ./config/openclaw.json:/tmp/openclaw-seed.json:ro
+      - ./workspace:/tmp/workspace-seed:ro
     init: true
-    restart: unless-stopped
+    shm_size: "2gb"
+    expose:
+      - "18789"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:18789/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - dokploy-network
     command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+      - sh
+      - -lc
+      - |
+        mkdir -p /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.openclaw/workspace/data /home/node/.cache/ms-playwright
+        chown node:node /home/node /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.openclaw/workspace/data /home/node/.cache /home/node/.cache/ms-playwright
+        chmod 755 /home/node
+
+        cp /tmp/openclaw-seed.json /home/node/.openclaw/openclaw.json
+        chmod 600 /home/node/.openclaw/openclaw.json
+        if [ -d /tmp/workspace-seed ]; then
+          cp -rn /tmp/workspace-seed/. /home/node/.openclaw/workspace/ 2>/dev/null || true
+          # Always sync managed files (they may have been updated in the repo)
+          for f in /tmp/workspace-seed/*.md /tmp/workspace-seed/*.json; do
+            [ -f "$$f" ] && cp "$$f" /home/node/.openclaw/workspace/ 2>/dev/null || true
+          done
+          if [ -d /tmp/workspace-seed/skills ]; then
+            cp -r /tmp/workspace-seed/skills/. /home/node/.openclaw/workspace/skills/ 2>/dev/null || true
+          fi
+          if [ -d /tmp/workspace-seed/scripts ]; then
+            cp -r /tmp/workspace-seed/scripts/. /home/node/.openclaw/workspace/scripts/ 2>/dev/null || true
+          fi
+        fi
+        chown -R node:node /home/node/.openclaw/workspace/skills /home/node/.openclaw/workspace/scripts 2>/dev/null || true
+
+        exec su -s /bin/sh node -c '
+          daily_date=$$(TZ=America/New_York date +%F)
+          daily_dir=/home/node/.openclaw/workspace/data/daily/$$daily_date
+          mkdir -p "$$daily_dir" /home/node/.openclaw/workspace/data/audits
+          touch "$$daily_dir"/engagement_search.md "$$daily_dir"/engagement_actions.md "$$daily_dir"/mentions.md "$$daily_dir"/data_drop_draft.md
+
+          mkdir -p /home/node/.openclaw/browser/openclaw/user-data
+          clawhub install typefully --workdir /home/node/.openclaw/workspace 2>/dev/null || true
+          (while true; do
+            rm -f /home/node/.openclaw/browser/openclaw/user-data/SingletonLock
+            chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-setuid-sandbox --remote-debugging-address=127.0.0.1 --remote-debugging-port=18800 --user-data-dir=/home/node/.openclaw/browser/openclaw/user-data about:blank >>/tmp/chromium.log 2>&1
+            echo "[watchdog] Chromium exited, restarting in 3s..." >>/tmp/chromium.log
+            # Rotate log to prevent unbounded growth
+            if [ "$(wc -c < /tmp/chromium.log 2>/dev/null)" -gt 1048576 ]; then
+              tail -c 524288 /tmp/chromium.log > /tmp/chromium.log.tmp && mv /tmp/chromium.log.tmp /tmp/chromium.log
+            fi
+            sleep 3
+          done) &
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+            if wget -q --spider http://127.0.0.1:18800/json/version 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          exec node dist/index.js gateway --bind loopback --port 18789 --allow-unconfigured
+        '
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ghcr.io/openclaw/openclaw:latest
+    user: "root"
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - openclaw_config:/home/node/.openclaw
+      - openclaw_workspace:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
+    networks:
+      - dokploy-network
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  openclaw_config:
+  openclaw_workspace:
+  openclaw_data:
+
+networks:
+  dokploy-network:
+    external: true

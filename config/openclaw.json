@@ -1,0 +1,80 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token"
+    },
+    "controlUi": {
+      "enabled": false
+    }
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "minimal"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google/gemini-2.5-pro"
+      },
+      "userTimezone": "America/Santiago",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "identity": {
+          "name": "trust8004",
+          "theme": "ERC-8004 Community Manager",
+          "emoji": "🔍"
+        }
+      }
+    ]
+  },
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "openclaw",
+    "attachOnly": true,
+    "profiles": {
+      "openclaw": {
+        "cdpUrl": "http://127.0.0.1:18800",
+        "color": "#FF4500"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["tg:1881821807"],
+      "groupPolicy": "disabled"
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "tools": {
+    "profile": "full",
+    "elevated": {
+      "enabled": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  }
+}

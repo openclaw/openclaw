@@ -1,0 +1,22 @@
+FROM ghcr.io/openclaw/openclaw:latest
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g clawhub
+
+RUN git clone --depth 1 https://github.com/typefully/agent-skills.git /opt/typefully && \
+    chmod +x /opt/typefully/skills/typefully/scripts/typefully.js && \
+    ln -s /opt/typefully/skills/typefully/scripts/typefully.js /usr/local/bin/typefully
+
+ENV CHROME_PATH=/usr/bin/chromium
+ENV CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
+
+USER node

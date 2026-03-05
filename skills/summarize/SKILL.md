@@ -71,7 +71,7 @@ Default model is `google/gemini-3-flash-preview` if none is set.
 - `--extract-only` (URLs only)
 - `--json` (machine readable)
 - `--firecrawl auto|off|always` (fallback extraction)
-- `--youtube auto` (Apify fallback if `APIFY_API_TOKEN` set)
+- `--youtube auto`
 
 ## Config
 
@@ -84,4 +84,3 @@ Optional config file: `~/.summarize/config.json`
 Optional services:
 
 - `FIRECRAWL_API_KEY` for blocked sites
-- `APIFY_API_TOKEN` for YouTube fallback
