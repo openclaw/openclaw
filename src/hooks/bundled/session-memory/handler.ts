@@ -249,7 +249,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
+    // Check early if upstream hook provided custom content — if so, skip
+    // transcript loading and LLM slug generation to avoid leaking raw
+    // session text to the model provider in redaction workflows.
+    const customContent = event.context.sessionSaveContent;
+    const hasCustomContent = typeof customContent === "string" && customContent.length > 0;
+
+    if (sessionFile && !hasCustomContent) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
@@ -291,21 +297,32 @@ const saveSessionToMemory: HookHandler = async (event) => {
       const abs = path.isAbsolute(redirectPath)
         ? redirectPath
         : path.resolve(workspaceDir, redirectPath);
-      // Ensure parent directory exists so realpath can resolve symlinks
-      const parentDir = path.dirname(abs);
-      await fs.mkdir(parentDir, { recursive: true });
-      // Resolve symlinks to get the true filesystem path, then check containment
-      const realParent = await fs.realpath(parentDir);
+      // First pass: textual containment check BEFORE touching the filesystem.
+      // This prevents mkdir from creating directories outside the workspace.
+      const normalized = path.normalize(abs);
       const realWorkspace = await fs.realpath(workspaceDir);
-      const realFull = path.join(realParent, path.basename(abs));
-      if (!realFull.startsWith(realWorkspace + path.sep) && realFull !== realWorkspace) {
-        log.warn("sessionSaveRedirectPath escapes workspace (after symlink resolution), ignoring", {
+      if (!normalized.startsWith(realWorkspace + path.sep) && normalized !== realWorkspace) {
+        log.warn("sessionSaveRedirectPath escapes workspace, ignoring", {
           redirectPath,
-          resolved: realFull,
+          normalized,
           workspaceDir: realWorkspace,
         });
       } else {
-        resolvedRedirect = realFull;
+        // Path passes textual check — safe to create parent directory
+        const parentDir = path.dirname(abs);
+        await fs.mkdir(parentDir, { recursive: true });
+        // Second pass: resolve symlinks for the definitive containment check
+        const realParent = await fs.realpath(parentDir);
+        const realFull = path.join(realParent, path.basename(abs));
+        if (!realFull.startsWith(realWorkspace + path.sep) && realFull !== realWorkspace) {
+          log.warn("sessionSaveRedirectPath escapes workspace (symlink resolution), ignoring", {
+            redirectPath,
+            resolved: realFull,
+            workspaceDir: realWorkspace,
+          });
+        } else {
+          resolvedRedirect = realFull;
+        }
       }
     }
     const memoryFilePath = resolvedRedirect ?? path.join(memoryDir, filename);
@@ -323,11 +340,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Check if another hook provided custom content
-    const customContent = event.context.sessionSaveContent;
+    // Use custom content from upstream hook if available (checked earlier)
     let entry: string;
 
-    if (typeof customContent === "string" && customContent.length > 0) {
+    if (hasCustomContent) {
       // Use custom content provided by upstream hook
       entry = customContent;
       log.debug("Using custom session content from upstream hook");
