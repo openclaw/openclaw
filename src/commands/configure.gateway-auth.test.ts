@@ -10,7 +10,10 @@ function expectGeneratedTokenFromInput(token: string | undefined, literalToAvoid
   expect(result?.token).toBeDefined();
   expect(result?.token).not.toBe(literalToAvoid);
   expect(typeof result?.token).toBe("string");
-  expect(result?.token?.length).toBeGreaterThan(0);
+  if (typeof result?.token !== "string") {
+    throw new Error("Expected generated token to be a string.");
+  }
+  expect(result.token.length).toBeGreaterThan(0);
 }
 
 describe("buildGatewayAuthConfig", () => {
@@ -71,6 +74,23 @@ describe("buildGatewayAuthConfig", () => {
     expectGeneratedTokenFromInput("   ");
     expectGeneratedTokenFromInput("undefined");
     expectGeneratedTokenFromInput("null", "null");
+  });
+
+  it("preserves SecretRef tokens when token mode is selected", () => {
+    const tokenRef = {
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_GATEWAY_TOKEN",
+    } as const;
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: tokenRef,
+    });
+
+    expect(result).toEqual({
+      mode: "token",
+      token: tokenRef,
+    });
   });
 
   it("builds trusted-proxy config with all options", () => {

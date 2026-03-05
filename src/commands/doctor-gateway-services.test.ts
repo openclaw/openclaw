@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
+  resolveGatewayInstallToken: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
@@ -55,6 +56,10 @@ vi.mock("../terminal/note.js", () => ({
 
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
+}));
+
+vi.mock("./gateway-install-token.js", () => ({
+  resolveGatewayInstallToken: mocks.resolveGatewayInstallToken,
 }));
 
 import {
@@ -114,6 +119,11 @@ function setupGatewayTokenRepairScenario(expectedToken: string) {
       OPENCLAW_GATEWAY_TOKEN: expectedToken,
     },
   });
+  mocks.resolveGatewayInstallToken.mockResolvedValue({
+    token: expectedToken,
+    tokenRefConfigured: false,
+    warnings: [],
+  });
   mocks.install.mockResolvedValue(undefined);
 }
 
@@ -171,6 +181,57 @@ describe("maybeRepairGatewayServiceConfig", () => {
       );
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("treats SecretRef-managed gateway token as non-persisted service state", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-token",
+      },
+    });
+    mocks.resolveGatewayInstallToken.mockResolvedValue({
+      token: undefined,
+      tokenRefConfigured: true,
+      warnings: [],
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.install.mockResolvedValue(undefined);
+
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        },
+      },
+    };
+
+    await runRepair(cfg);
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedGatewayToken: undefined,
+      }),
+    );
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+      }),
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 });
 

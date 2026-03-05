@@ -9,7 +9,11 @@ import type {
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
-import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
+import {
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+  resolveSecretInputRef,
+} from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
@@ -114,6 +118,61 @@ function readGatewayTokenEnv(env: Record<string, string | undefined>): string | 
   return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
 }
 
+function readGatewayPasswordEnv(env: Record<string, string | undefined>): string | undefined {
+  return (
+    trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD)
+  );
+}
+
+async function resolveDaemonProbeToken(params: {
+  daemonCfg: OpenClawConfig;
+  mergedDaemonEnv: Record<string, string | undefined>;
+  explicitToken?: string;
+  explicitPassword?: string;
+}): Promise<string | undefined> {
+  const explicitToken = trimToUndefined(params.explicitToken);
+  if (explicitToken) {
+    return explicitToken;
+  }
+  const envToken = readGatewayTokenEnv(params.mergedDaemonEnv);
+  if (envToken) {
+    return envToken;
+  }
+  const defaults = params.daemonCfg.secrets?.defaults;
+  const configured = params.daemonCfg.gateway?.auth?.token;
+  const { ref } = resolveSecretInputRef({
+    value: configured,
+    defaults,
+  });
+  if (!ref) {
+    return normalizeSecretInputString(configured);
+  }
+  const authMode = params.daemonCfg.gateway?.auth?.mode;
+  if (authMode === "password" || authMode === "none" || authMode === "trusted-proxy") {
+    return undefined;
+  }
+  if (authMode !== "token") {
+    const passwordCandidate =
+      trimToUndefined(params.explicitPassword) ||
+      readGatewayPasswordEnv(params.mergedDaemonEnv) ||
+      (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.password, defaults)
+        ? "__configured__"
+        : undefined);
+    if (passwordCandidate) {
+      return undefined;
+    }
+  }
+  const resolved = await resolveSecretRefValues([ref], {
+    config: params.daemonCfg,
+    env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+  });
+  const token = trimToUndefined(resolved.get(secretRefKey(ref)));
+  if (!token) {
+    throw new Error("gateway.auth.token resolved to an empty or non-string value.");
+  }
+  return token;
+}
+
 async function resolveDaemonProbePassword(params: {
   daemonCfg: OpenClawConfig;
   mergedDaemonEnv: Record<string, string | undefined>;
@@ -124,7 +183,7 @@ async function resolveDaemonProbePassword(params: {
   if (explicitPassword) {
     return explicitPassword;
   }
-  const envPassword = trimToUndefined(params.mergedDaemonEnv.OPENCLAW_GATEWAY_PASSWORD);
+  const envPassword = readGatewayPasswordEnv(params.mergedDaemonEnv);
   if (envPassword) {
     return envPassword;
   }
@@ -145,7 +204,9 @@ async function resolveDaemonProbePassword(params: {
     const tokenCandidate =
       trimToUndefined(params.explicitToken) ||
       readGatewayTokenEnv(params.mergedDaemonEnv) ||
-      trimToUndefined(params.daemonCfg.gateway?.auth?.token);
+      (hasConfiguredSecretInput(params.daemonCfg.gateway?.auth?.token, defaults)
+        ? "__configured__"
+        : undefined);
     if (tokenCandidate) {
       return undefined;
     }
@@ -290,14 +351,19 @@ export async function gatherDaemonStatus(
         explicitPassword: opts.rpc.password,
       })
     : undefined;
+  const daemonProbeToken = opts.probe
+    ? await resolveDaemonProbeToken({
+        daemonCfg,
+        mergedDaemonEnv,
+        explicitToken: opts.rpc.token,
+        explicitPassword: opts.rpc.password,
+      })
+    : undefined;
 
   const rpc = opts.probe
     ? await probeGatewayStatus({
         url: probeUrl,
-        token:
-          opts.rpc.token ||
-          mergedDaemonEnv.OPENCLAW_GATEWAY_TOKEN ||
-          daemonCfg.gateway?.auth?.token,
+        token: daemonProbeToken,
         password: daemonProbePassword,
         tlsFingerprint:
           shouldUseLocalTlsRuntime && tlsRuntime?.enabled

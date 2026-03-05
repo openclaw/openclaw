@@ -152,10 +152,14 @@ export async function gatewayStatusCommand(
       try {
         const probed = await Promise.all(
           targets.map(async (target) => {
-            const auth = resolveAuthForTarget(cfg, target, {
+            const authResolution = await resolveAuthForTarget(cfg, target, {
               token: typeof opts.token === "string" ? opts.token : undefined,
               password: typeof opts.password === "string" ? opts.password : undefined,
             });
+            const auth = {
+              token: authResolution.token,
+              password: authResolution.password,
+            };
             const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
             const probe = await probeGateway({
               url: target.url,
@@ -166,7 +170,13 @@ export async function gatewayStatusCommand(
               ? extractConfigSummary(probe.configSnapshot)
               : null;
             const self = pickGatewaySelfPresence(probe.presence);
-            return { target, probe, configSummary, self };
+            return {
+              target,
+              probe,
+              configSummary,
+              self,
+              authDiagnostics: authResolution.diagnostics ?? [],
+            };
           }),
         );
 
@@ -213,6 +223,18 @@ export async function gatewayStatusCommand(
         "Unconventional setup: multiple reachable gateways detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
       targetIds: reachable.map((p) => p.target.id),
     });
+  }
+  for (const result of probed) {
+    if (result.authDiagnostics.length === 0) {
+      continue;
+    }
+    for (const diagnostic of result.authDiagnostics) {
+      warnings.push({
+        code: "auth_secretref_unresolved",
+        message: diagnostic,
+        targetIds: [result.target.id],
+      });
+    }
   }
 
   if (opts.json) {

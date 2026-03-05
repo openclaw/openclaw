@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -81,11 +81,11 @@ function shouldResolveLocalGatewayPasswordSecret(
     return false;
   }
   const envToken = readGatewayTokenEnv(env);
-  const configToken =
-    typeof cfg.gateway?.auth?.token === "string" && cfg.gateway.auth.token.trim().length > 0
-      ? cfg.gateway.auth.token.trim()
-      : undefined;
-  return !envToken && !configToken;
+  const configTokenConfigured = hasConfiguredSecretInput(
+    cfg.gateway?.auth?.token,
+    cfg.secrets?.defaults,
+  );
+  return !envToken && !configTokenConfigured;
 }
 
 async function resolveLocalGatewayPasswordSecretIfNeeded(
