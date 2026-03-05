@@ -47,6 +47,29 @@ export function resolveAgentDeliveryPlan(params: {
   /** Turn-source `threadId` — paired with `turnSourceChannel`. */
   turnSourceThreadId?: string | number;
 }): AgentDeliveryPlan {
+  // Bug fix for #35300: Detect webchat heartbeat messages BEFORE channel normalization.
+  // When heartbeat messages from webchat trigger agent responses, the incoming requestedChannel
+  // may be "webchat", but downstream processing converts it to "last". At that point, detection
+  // based on the normalized channel fails. We must intercept here at the entry point.
+  //
+  // Context: resolveAgentDeliveryPlan normalizes "webchat" → "last" because INTERNAL_MESSAGE_CHANNEL
+  // is not deliverable. By the time we reach resolveSessionDeliveryTarget, the original "webchat"
+  // signal is lost, and heartbeat detection no longer works.
+  //
+  // Solution: Check the raw requestedChannel/explicitTo BEFORE normalization, and if we detect
+  // a heartbeat scenario, force turnSourceChannel to override any stale session deliveryContext.
+  const rawRequestedChannel =
+    typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
+  const rawExplicitTo =
+    typeof params.explicitTo === "string" ? params.explicitTo.trim() : undefined;
+  const rawTurnSourceChannel =
+    typeof params.turnSourceChannel === "string" ? params.turnSourceChannel.trim() : undefined;
+
+  // Heartbeat detection: webchat + "heartbeat" target
+  const isWebchatHeartbeat =
+    (rawRequestedChannel === "webchat" && rawExplicitTo === "heartbeat") ||
+    (rawTurnSourceChannel === "webchat" && rawExplicitTo === "heartbeat");
+
   const requestedRaw =
     typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
   const normalizedRequested = requestedRaw ? normalizeMessageChannel(requestedRaw) : undefined;
@@ -75,8 +98,14 @@ export function resolveAgentDeliveryPlan(params: {
       ? params.turnSourceThreadId
       : undefined;
 
+  // When webchat heartbeat is detected, DO NOT pass sessionEntry to resolveSessionDeliveryTarget.
+  // This prevents the stale deliveryContext (which may have a different channel like "feishu") from
+  // overriding the actual turnSourceChannel ("webchat"). By clearing the entry, we force the system
+  // to rely solely on turnSourceChannel for routing, which is the correct behavior for heartbeat.
+  const effectiveEntry = isWebchatHeartbeat ? undefined : params.sessionEntry;
+
   const baseDelivery = resolveSessionDeliveryTarget({
-    entry: params.sessionEntry,
+    entry: effectiveEntry,
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
