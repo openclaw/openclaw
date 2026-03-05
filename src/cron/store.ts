@@ -83,14 +83,15 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  // Create backup BEFORE writing new content - we already have the old content in `previous`
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      await fs.promises.writeFile(`${storePath}.bak`, previous, "utf-8");
     } catch {
       // best-effort
     }
   }
+  await fs.promises.writeFile(tmp, json, "utf-8");
   await renameWithRetry(tmp, storePath);
   serializedStoreCache.set(storePath, json);
 }
