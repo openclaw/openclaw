@@ -176,6 +176,7 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+- `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:
 
@@ -234,6 +235,14 @@ Resolution priority:
 1. Job payload override (highest)
 2. Hook-specific defaults (e.g., `hooks.gmail.model`)
 3. Agent config default
+
+### Lightweight bootstrap context
+
+Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight bootstrap context.
+
+- Use this for scheduled chores that do not need workspace bootstrap file injection.
+- In practice, the embedded runtime runs with `bootstrapContextMode: "lightweight"`, which keeps cron bootstrap context empty on purpose.
+- CLI equivalents: `openclaw cron add --light-context ...` and `openclaw cron edit --light-context`.
 
 ### Delivery (channel + target)
 
@@ -298,7 +307,8 @@ Recurring, isolated job with delivery:
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates."
+    "message": "Summarize overnight updates.",
+    "lightContext": true
   },
   "delivery": {
     "mode": "announce",
