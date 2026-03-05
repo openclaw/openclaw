@@ -4,6 +4,15 @@ import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
+const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+
+function resolveDefaultHttpTimeoutMs(): number {
+  const raw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  if (!raw) return FEISHU_HTTP_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return FEISHU_HTTP_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
 
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
@@ -43,7 +52,7 @@ function createTimeoutHttpInstance(): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: FEISHU_HTTP_TIMEOUT_MS, ...opts } as Lark.HttpRequestOptions<D>;
+    return { timeout: resolveDefaultHttpTimeoutMs(), ...opts } as Lark.HttpRequestOptions<D>;
   }
 
   return {

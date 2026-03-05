@@ -476,10 +476,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
-      params: { type: "file" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
+        params: { type: "file" },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 
@@ -493,10 +496,13 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith({
-      path: { message_id: "om_img_msg", file_key: "img_key_1" },
-      params: { type: "image" },
-    });
+    expect(messageResourceGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_img_msg", file_key: "img_key_1" },
+        params: { type: "image" },
+        timeout: 120_000,
+      }),
+    );
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });

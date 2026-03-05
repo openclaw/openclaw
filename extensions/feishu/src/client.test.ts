@@ -47,8 +47,10 @@ import {
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
+const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
+let priorFeishuHttpTimeoutEnv: string | undefined;
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
@@ -68,6 +70,8 @@ function firstWsClientOptions(): { agent?: unknown } {
 
 beforeEach(() => {
   priorProxyEnv = {};
+  priorFeishuHttpTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
   for (const key of proxyEnvKeys) {
     priorProxyEnv[key] = process.env[key];
     delete process.env[key];
@@ -83,6 +87,11 @@ afterEach(() => {
     } else {
       process.env[key] = value;
     }
+  }
+  if (priorFeishuHttpTimeoutEnv === undefined) {
+    delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  } else {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuHttpTimeoutEnv;
   }
 });
 
@@ -135,6 +144,44 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
       "https://example.com/api",
       expect.objectContaining({ timeout: 5_000 }),
+    );
+  });
+
+  it("uses env-configured default timeout when provided", async () => {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "45000";
+
+    createFeishuClient({ appId: "app_4", appSecret: "secret_4", accountId: "timeout-env" });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+
+    await httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 45_000 }),
+    );
+  });
+
+  it("falls back to default timeout when env value is invalid", async () => {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "invalid";
+
+    createFeishuClient({ appId: "app_5", appSecret: "secret_5", accountId: "timeout-env-invalid" });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    const httpInstance = lastCall.httpInstance;
+
+    await httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS }),
     );
   });
 });
