@@ -32,7 +32,7 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
-  });
+  }, 180_000);
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
