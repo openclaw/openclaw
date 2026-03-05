@@ -289,21 +289,29 @@ async function resolveImagesForRequest(
     throw new Error(`Too many image_url parts (${urls.length}; limit ${limits.maxImageParts})`);
   }
 
-  const images = await Promise.all(
-    urls.map(async (url) => {
-      const source = parseImageUrlToSource(url);
-      return await extractImageContentFromSource(source, limits.images);
-    }),
-  );
-
+  const images: ImageContent[] = [];
   let totalBytes = 0;
-  for (const image of images) {
-    totalBytes += estimateBase64DecodedBytes(image.data);
+  for (const url of urls) {
+    const source = parseImageUrlToSource(url);
+    if (source.type === "base64") {
+      totalBytes += estimateBase64DecodedBytes(source.data);
+      if (totalBytes > limits.maxTotalImageBytes) {
+        throw new Error(
+          `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
+        );
+      }
+    }
+
+    const image = await extractImageContentFromSource(source, limits.images);
+    if (source.type !== "base64") {
+      totalBytes += estimateBase64DecodedBytes(image.data);
+    }
     if (totalBytes > limits.maxTotalImageBytes) {
       throw new Error(
         `Total image payload too large (${totalBytes}; limit ${limits.maxTotalImageBytes})`,
       );
     }
+    images.push(image);
   }
   return images;
 }
