@@ -408,6 +408,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Allow fetches to private/internal IP addresses (default: false). */
+      allowPrivateNetwork?: boolean;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
         /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
@@ -454,6 +456,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** Allow fetches to private/internal IP addresses (default: false). */
+      allowPrivateNetwork?: boolean;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {

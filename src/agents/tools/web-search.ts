@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -683,6 +684,7 @@ async function runSearXNGSearch(params: {
   apiKey?: string;
   timeoutSeconds: number;
   count: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<SearXNGSearchResponse> {
   const url = new URL(`${params.baseUrl}/search`);
   url.searchParams.set("q", params.query);
@@ -695,19 +697,31 @@ async function runSearXNGSearch(params: {
     headers["Authorization"] = `Bearer ${params.apiKey}`;
   }
 
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    headers,
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.toString(),
+    maxRedirects: 3,
+    timeoutMs: params.timeoutSeconds * 1000,
+    policy: {
+      allowPrivateNetwork: params.allowPrivateNetwork ?? false,
+    },
+    init: {
+      method: "GET",
+      headers,
+    },
+    auditContext: "web_search.searxng",
   });
 
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`SearXNG API error (${res.status}): ${detail || res.statusText}`);
-  }
+  try {
+    if (!response.ok) {
+      const detailResult = await readResponseText(response, { maxBytes: 64_000 });
+      const detail = detailResult.text;
+      throw new Error(`SearXNG API error (${response.status}): ${detail || response.statusText}`);
+    }
 
-  return (await res.json()) as SearXNGSearchResponse;
+    return (await response.json()) as SearXNGSearchResponse;
+  } finally {
+    await release();
+  }
 }
 
 async function runWebSearch(params: {
@@ -726,6 +740,7 @@ async function runWebSearch(params: {
   grokModel?: string;
   grokInlineCitations?: boolean;
   searxngBaseUrl?: string;
+  allowPrivateNetwork?: boolean;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -851,6 +866,7 @@ async function runWebSearch(params: {
       apiKey: params.apiKey,
       timeoutSeconds: params.timeoutSeconds,
       count: params.count,
+      allowPrivateNetwork: params.allowPrivateNetwork,
     });
 
     const results = Array.isArray(data.results) ? data.results : [];
@@ -1031,6 +1047,7 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      const allowPrivateNetwork = Boolean(search?.allowPrivateNetwork);
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -1051,6 +1068,7 @@ export function createWebSearchTool(options?: {
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
         searxngBaseUrl,
+        allowPrivateNetwork,
       });
       return jsonResult(result);
     },

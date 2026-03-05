@@ -445,6 +445,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
+  allowPrivateNetwork: boolean;
   readabilityEnabled: boolean;
 };
 
@@ -527,6 +528,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutMs: params.timeoutSeconds * 1000,
+      policy: {
+        allowPrivateNetwork: params.allowPrivateNetwork,
+      },
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -731,6 +735,7 @@ export function createWebFetchTool(options?: {
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
+  const allowPrivateNetwork = Boolean(fetch?.allowPrivateNetwork);
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   return {
     label: "Web Fetch",
@@ -757,6 +762,7 @@ export function createWebFetchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
+        allowPrivateNetwork,
         readabilityEnabled,
         firecrawlEnabled,
         firecrawlApiKey,
