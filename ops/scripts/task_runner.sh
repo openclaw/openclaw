@@ -21,6 +21,7 @@ TEAM_FILE="ops/strike_teams/alpha.json"
 
 IMPLEMENTER_MODEL=$(jq -r '.roles[] | select(.id=="implementer") | .model' $TEAM_FILE)
 REVIEWER_MODEL=$(jq -r '.roles[] | select(.id=="reviewer") | .model' $TEAM_FILE)
+TASK_COUNT=0
 
 log "implementer model: $IMPLEMENTER_MODEL"
 log "reviewer model: $REVIEWER_MODEL"
@@ -28,6 +29,7 @@ log "scanning for tasks..."
 
 for task in ${TASK_DIR}/task-*.json; do
   CURRENT_TASK="$task"
+  [ -e "$task" ] && TASK_COUNT=$((TASK_COUNT + 1))
   [ -e "$task" ] || continue
 
   status=$(jq -r '.status' "$task")
@@ -117,5 +119,9 @@ fi
     log "task complete $task"
   fi
 done
+
+if [[ "$TASK_COUNT" -eq 0 ]]; then
+  log "no tasks found in $TASK_DIR"
+fi
 
 log "runner done pid=$$"

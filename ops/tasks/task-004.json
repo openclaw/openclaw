@@ -5,5 +5,5 @@
   "owner": "strike-team-alpha",
   "goal": "Add better error handling to task_runner.sh",
   "acceptance_criteria": ["task executed successfully", "gate_archive PASS"],
-  "status": "running"
+  "status": "complete"
 }

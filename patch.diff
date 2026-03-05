@@ -1,84 +1,30 @@
 diff --git a/ops/scripts/task_runner.sh b/ops/scripts/task_runner.sh
-index b4a2f1e..7c8d1f2 100755
+index b4a2f1e..69c2f8f 100755
 --- a/ops/scripts/task_runner.sh
 +++ b/ops/scripts/task_runner.sh
-@@ -8,9 +8,15 @@ log() {
-   printf '%s [task_runner] %s\n' "$(timestamp)" "$*"
- }
+@@ -19,6 +19,7 @@ TEAM_FILE="ops/strike_teams/alpha.json"
  
- CURRENT_STEP=""
--trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown}"' ERR
-+CURRENT_TASK=""
-+trap 'log "ERROR exit=$? step=${CURRENT_STEP:-unknown} task=${CURRENT_TASK:-none}"' ERR
-+
-+log "runner start pid=$$"
+ IMPLEMENTER_MODEL=$(jq -r '.roles[] | select(.id=="implementer") | .model' $TEAM_FILE)
+ REVIEWER_MODEL=$(jq -r '.roles[] | select(.id=="reviewer") | .model' $TEAM_FILE)
++TASK_COUNT=0
  
- TASK_DIR="ops/tasks"
-@@ -24,6 +30,7 @@ log "reviewer model: $REVIEWER_MODEL"
- log "scanning for tasks..."
+ log "implementer model: $IMPLEMENTER_MODEL"
+ log "reviewer model: $REVIEWER_MODEL"
+@@ -27,6 +28,7 @@ log "scanning for tasks..."
  
  for task in ${TASK_DIR}/task-*.json; do
-+  CURRENT_TASK="$task"
+   CURRENT_TASK="$task"
++  [ -e "$task" ] && TASK_COUNT=$((TASK_COUNT + 1))
    [ -e "$task" ] || continue
  
    status=$(jq -r '.status' "$task")
-@@ -38,7 +45,7 @@ for task in ${TASK_DIR}/task-*.json; do
-   fi
- 
-   if [[ "$status" == "pending" ]]; then
--    log "executing $task"
-+    log "executing $task status=$status"
- 
-     # mark task running
-     CURRENT_STEP="mark_running"
-@@ -46,6 +53,7 @@ for task in ${TASK_DIR}/task-*.json; do
-     tmp=$(mktemp)
-     jq '.status="running"' "$task" > "$tmp" && mv "$tmp" "$task"
-     CURRENT_STEP=""
-+    log "marked running $task"
- 
-     MAX_ATTEMPTS=3
- attempt=1
-@@ -56,6 +64,7 @@ while (( attempt <= MAX_ATTEMPTS )); do
-   CURRENT_STEP="generate_patch"
-   bash ops/scripts/generate_patch.sh "$task"
-   CURRENT_STEP=""
-+  log "generate_patch exit=$?"
- 
- if [[ ! -f patch.diff ]]; then
-   log "patch generation failed"
-@@ -94,6 +103,7 @@ if (( attempt > MAX_ATTEMPTS )); then
-   CURRENT_STEP="mark_failed"
-   tmp=$(mktemp)
-   jq '.status="failed"' "$task" > "$tmp" && mv "$tmp" "$task"
-   CURRENT_STEP=""
-+  log "marked failed $task"
- 
-   continue
- fi
-@@ -103,6 +113,7 @@ if (( attempt > MAX_ATTEMPTS )); then
-     CURRENT_STEP="apply_patch"
-     bash ops/scripts/apply_patch_commit.sh patch.diff
-     CURRENT_STEP=""
-+    log "apply_patch_commit exit=$?"
- 
-     rm -f patch.diff
- 
-@@ -111,6 +122,7 @@ if (( attempt > MAX_ATTEMPTS )); then
-     CURRENT_STEP="run_gates"
-     KEEP_TMP=1 bash ops/scripts/gate_archive.sh
-     CURRENT_STEP=""
-+    log "gate_archive exit=$?"
- 
-     # mark task complete
-     CURRENT_STEP="mark_complete"
-@@ -118,5 +130,7 @@ if (( attempt > MAX_ATTEMPTS )); then
-     jq '.status="complete"' "$task" > "$tmp" && mv "$tmp" "$task"
-     CURRENT_STEP=""
- 
--    log "task complete"
-+    log "task complete $task"
+@@ -104,4 +106,8 @@ if (( attempt > MAX_ATTEMPTS )); then
+     log "task complete $task"
    fi
  done
 +
-+log "runner done pid=$$"
++if [[ "$TASK_COUNT" -eq 0 ]]; then
++  log "no tasks found in $TASK_DIR"
++fi
+ 
+ log "runner done pid=$$"

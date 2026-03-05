@@ -1,0 +1,1 @@
+REJECT: TASK_COUNT increments before confirming the task file exists, so when the glob doesn’t match any files it still counts a non-existent literal and suppresses the “no tasks found” log.

@@ -5,5 +5,5 @@
   "owner": "strike-team-alpha",
   "goal": "Scan repository and resolve TODO comments found in the codebase.",
   "acceptance_criteria": ["task executed successfully", "gate_archive PASS"],
-  "status": "pending"
+  "status": "running"
 }
