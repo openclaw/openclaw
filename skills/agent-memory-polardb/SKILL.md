@@ -10,7 +10,7 @@ metadata:
     emoji: "易"
     tags: ["memory", "vector-db", "polardb", "mem0"]
     requires:
-      - `MEM0_HOST`  #The endpoint URL (e.g., http://118.136.94.73:8080)，obtained from the Alibaba Cloud PolarDB Console.
+      - `MEM0_HOST`  # The endpoint URL (e.g., http://118.136.94.73:8080)，obtained from the Alibaba Cloud PolarDB Console.
       - `MEM0_API_KEY` # API Key obtained from the Alibaba Cloud PolarDB Console.
 ---
 
