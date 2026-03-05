@@ -507,10 +507,10 @@ export class AcpSessionManager {
 
       const advertisedKeys = new Set(
         (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeText(entry))
+          .map((entry) => normalizeText(entry)?.toLowerCase())
           .filter(Boolean) as string[],
       );
-      if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+      if (advertisedKeys.size > 0 && !advertisedKeys.has(key.toLowerCase())) {
         throw new AcpRuntimeError(
           "ACP_BACKEND_UNSUPPORTED_CONTROL",
           `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,

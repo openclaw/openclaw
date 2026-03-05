@@ -64,7 +64,7 @@ export async function applyManagerRuntimeControls(params: {
   const configOptions = buildRuntimeConfigOptionPairs(options);
   const advertisedKeys = new Set(
     (capabilities.configOptionKeys ?? [])
-      .map((entry) => normalizeText(entry))
+      .map((entry) => normalizeText(entry)?.toLowerCase())
       .filter(Boolean) as string[],
   );
 
@@ -94,7 +94,7 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, value] of configOptions) {
-          if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+          if (advertisedKeys.size > 0 && !advertisedKeys.has(key.toLowerCase())) {
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
               `ACP backend "${backend}" does not accept config key "${key}".`,

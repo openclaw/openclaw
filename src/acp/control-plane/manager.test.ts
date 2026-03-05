@@ -1247,4 +1247,43 @@ describe("AcpSessionManager", () => {
       }),
     ).rejects.toThrow("disk locked");
   });
+
+  it("accepts config keys that match advertised keys case-insensitively (#28339)", async () => {
+    const runtimeState = createRuntime();
+    // Backend advertises "Model" (capitalised) but caller submits lowercase "model".
+    // Before the fix, advertisedKeys.has("model") returns false because the Set
+    // was built with the raw advertised value "Model", causing an incorrect
+    // ACP_BACKEND_UNSUPPORTED_CONTROL error for a perfectly valid key.
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["Model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    // Must resolve without throwing — "model" matches advertised "Model"
+    await expect(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        key: "model",
+        value: "gpt-4",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "model",
+        value: "gpt-4",
+      }),
+    );
+  });
 });
