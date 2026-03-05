@@ -642,7 +642,8 @@ Default slash command settings:
     - `/focus <target>` bind current/new thread to a subagent/session target
     - `/unfocus` remove current thread binding
     - `/agents` show active runs and binding state
-    - `/session ttl <duration|off>` inspect/update auto-unfocus TTL for focused bindings
+    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
+    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
 
     Config:
 
@@ -651,14 +652,16 @@ Default slash command settings:
   session: {
     threadBindings: {
       enabled: true,
-      ttlHours: 24,
+      idleHours: 24,
+      maxAgeHours: 0,
     },
   },
   channels: {
     discord: {
       threadBindings: {
         enabled: true,
-        ttlHours: 24,
+        idleHours: 24,
+        maxAgeHours: 0,
         spawnSubagentSessions: false, // opt-in
       },
     },
@@ -941,6 +944,7 @@ Auto-join example:
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
+- Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
@@ -1000,6 +1004,40 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="Long-running handlers time out or duplicate replies">
+
+    Typical logs:
+
+    - `Listener DiscordMessageListener timed out after 30000ms for event MESSAGE_CREATE`
+    - `Slow listener detected ...`
+
+    Canonical knob:
+
+    - single-account: `channels.discord.eventQueue.listenerTimeout`
+    - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
+
+    Recommended baseline:
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        default: {
+          eventQueue: {
+            listenerTimeout: 120000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    Tune this first before adding alternate timeout controls elsewhere.
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -1046,6 +1084,7 @@ High-signal Discord fields:
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
+- event queue: `eventQueue.listenerTimeout` (canonical), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`

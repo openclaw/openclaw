@@ -14,8 +14,15 @@ export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
 
+export type FeishuDefaultAccountSelectionSource =
+  | "explicit-default"
+  | "mapped-default"
+  | "fallback";
+export type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
+
 export type ResolvedFeishuAccount = {
   accountId: string;
+  selectionSource: FeishuAccountSelectionSource;
   enabled: boolean;
   configured: boolean;
   name?: string;
@@ -36,10 +43,11 @@ export type FeishuMessageContext = {
   senderId: string;
   senderOpenId: string;
   senderName?: string;
-  chatType: "p2p" | "group";
+  chatType: "p2p" | "group" | "private";
   mentionedBot: boolean;
   rootId?: string;
   parentId?: string;
+  threadId?: string;
   content: string;
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */
@@ -67,6 +75,7 @@ export type FeishuMediaInfo = {
 
 export type FeishuToolsConfig = {
   doc?: boolean;
+  chat?: boolean;
   wiki?: boolean;
   drive?: boolean;
   perm?: boolean;
