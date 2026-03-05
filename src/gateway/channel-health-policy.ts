@@ -92,12 +92,16 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
+  // Stale-socket detection: only evaluate channels that actively track event
+  // liveness via lastEventAt (e.g. Slack, Discord).  Channels that never set
+  // lastEventAt (Telegram, Signal, etc.) would always appear stale after the
+  // threshold because `lastEventAt ?? 0` produces epoch-zero — triggering
+  // false-positive restarts every 30 minutes.
+  if (snapshot.lastEventAt != null) {
     const upSince = snapshot.lastStartAt ?? 0;
     const upDuration = policy.now - upSince;
     if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
+      const eventAge = policy.now - snapshot.lastEventAt;
       if (eventAge > policy.staleEventThresholdMs) {
         return { healthy: false, reason: "stale-socket" };
       }
