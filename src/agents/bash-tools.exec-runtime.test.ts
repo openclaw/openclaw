@@ -105,6 +105,13 @@ describe("checkExecBlockedPath", () => {
     checkExecBlockedPath("test2");
     expect(readFileSyncSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("ignores empty and whitespace-only patterns", () => {
+    readFileSyncSpy.mockReturnValue(JSON.stringify([".ssh/", "", "  ", "CLAUDE.md"]));
+    _resetExecBlockedPaths();
+    expect(checkExecBlockedPath("ls /tmp")).toBeNull();
+    expect(checkExecBlockedPath("cat ~/.ssh/id_rsa")).toBe(".ssh/");
+  });
 });
 
 describe("emitExecSystemEvent", () => {

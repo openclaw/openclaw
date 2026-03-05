@@ -285,7 +285,7 @@ function getExecBlockedPaths(): string[] {
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.every((p) => typeof p === "string")) {
-      _execBlockedPaths = parsed;
+      _execBlockedPaths = parsed.filter((p) => p.trim().length > 0);
     } else {
       // Fail closed: invalid config should not silently disable all blocking
       throw new Error(`exec-blocked-paths: invalid format in ${configPath}, expected string[]`);
@@ -392,6 +392,7 @@ export async function runExecProcess(opts: {
       backgrounded: false,
     };
     addSession(session);
+    markExited(session, 1, null, "failed");
     return {
       session,
       startedAt,
