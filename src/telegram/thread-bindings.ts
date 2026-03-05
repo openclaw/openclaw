@@ -711,7 +711,6 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
     const next: TelegramThreadBindingRecord = {
       ...entry,
       maxAgeMs,
-      boundAt: now,
       lastActivityAt: now,
     };
     BINDINGS_BY_ACCOUNT_CONVERSATION.set(key, next);

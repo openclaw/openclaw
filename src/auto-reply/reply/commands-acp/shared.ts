@@ -313,7 +313,7 @@ export function parseSteerInput(
       continue;
     }
 
-    instructionTokens.push(normalizedTokens[i]);
+    instructionTokens.push(tokens[i] ?? "");
     i += 1;
   }
 
