@@ -10,6 +10,8 @@ export const SUPERVISOR_HINT_ENV_VARS = [
   "INVOCATION_ID",
   "SYSTEMD_EXEC_PID",
   "JOURNAL_STREAM",
+  // Windows scheduled task
+  "OPENCLAW_WINDOWS_TASK_NAME",
 ] as const;
 
 export function hasSupervisorHint(env: NodeJS.ProcessEnv = process.env): boolean {
