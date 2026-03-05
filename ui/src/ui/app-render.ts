@@ -271,13 +271,23 @@ export function renderApp(state: AppViewState) {
         if (!createResult?.ok) {
           throw new Error("Failed to create agent");
         }
+        // Auth is a best-effort post-create step. Failure leaves the agent created
+        // but with no credentials configured; the user can set auth from the detail view.
+        // We intentionally do not re-raise auth errors as create errors, because the
+        // next retry would hit "agent already exists" and make recovery impossible.
         if (state.agentAddAuthMethod) {
-          await state.client.request("agents.auth.set", {
-            agentId: createResult.agentId,
-            authChoice: state.agentAddAuthMethod,
-            ...(state.agentAddApiKey ? { apiKey: state.agentAddApiKey } : {}),
-            ...(state.agentAddUseEnvVar ? { useEnvVar: true } : {}),
-          });
+          try {
+            await state.client.request("agents.auth.set", {
+              agentId: createResult.agentId,
+              authChoice: state.agentAddAuthMethod,
+              ...(state.agentAddApiKey ? { apiKey: state.agentAddApiKey } : {}),
+              ...(state.agentAddUseEnvVar ? { useEnvVar: true } : {}),
+            });
+          } catch {
+            // Auth failure leaves the agent created with no credentials. The agent
+            // detail view will reflect unconfigured auth; do not re-raise here because
+            // a subsequent retry would fail with "agent already exists".
+          }
         }
         state.agentAddOpen = false;
         state.agentAddError = null;

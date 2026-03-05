@@ -430,7 +430,7 @@ const AUTH_CHOICE_ENV_VARS: Partial<Record<string, string>> = {
   "zai-global": "ZAI_API_KEY",
   "zai-cn": "ZAI_API_KEY",
   "xiaomi-api-key": "XIAOMI_API_KEY",
-  "volcengine-api-key": "VOLCENGINE_API_KEY",
+  "volcengine-api-key": "VOLCANO_ENGINE_API_KEY",
   "byteplus-api-key": "BYTEPLUS_API_KEY",
   "opencode-zen": "OPENCODE_API_KEY",
   "minimax-api": "MINIMAX_API_KEY",
