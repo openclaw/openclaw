@@ -728,6 +728,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               skipCrossContextDecoration: true,
             }
           : undefined;
+      // Preserve agent-scoped outbound policies (for example media local roots)
+      // even when the tool runs without an explicit session key.
+      const resolvedAgentId = resolveSessionAgentId({
+        sessionKey: options?.agentSessionKey,
+        config: cfg,
+      });
 
       const result = await runMessageAction({
         cfg,
@@ -738,9 +744,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         gateway,
         toolContext,
         sessionKey: options?.agentSessionKey,
-        agentId: options?.agentSessionKey
-          ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
-          : undefined,
+        agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
