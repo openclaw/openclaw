@@ -509,15 +509,15 @@ export function resolveDiscordMessageText(
     (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
       null,
   );
+  const contentText = message.content?.trim() || "";
+  const mediaPlaceholderText = buildDiscordMediaPlaceholder({
+    attachments: message.attachments ?? undefined,
+    stickers: resolveDiscordMessageStickers(message),
+  });
   const rawText =
-    message.content?.trim() ||
-    buildDiscordMediaPlaceholder({
-      attachments: message.attachments ?? undefined,
-      stickers: resolveDiscordMessageStickers(message),
-    }) ||
-    embedText ||
-    options?.fallbackText?.trim() ||
-    "";
+    contentText && mediaPlaceholderText
+      ? `${contentText}\n${mediaPlaceholderText}`
+      : contentText || mediaPlaceholderText || embedText || options?.fallbackText?.trim() || "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;

@@ -707,3 +707,58 @@ describe("resolveDiscordChannelInfo", () => {
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("resolveDiscordMessageText — attachments alongside non-empty content (issue #28296)", () => {
+  it("appends document attachment placeholder when content is non-empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "check out this document",
+        attachments: [
+          {
+            id: "att-pdf",
+            url: "https://cdn.discordapp.com/attachments/1/file.pdf",
+            filename: "file.pdf",
+            content_type: "application/pdf",
+          },
+        ],
+      }),
+    );
+    expect(text).toContain("check out this document");
+    expect(text).toContain("<media:document>");
+  });
+
+  it("appends image attachment placeholder when content is non-empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "look at this photo",
+        attachments: [
+          {
+            id: "att-img",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png",
+            filename: "photo.png",
+            content_type: "image/png",
+          },
+        ],
+      }),
+    );
+    expect(text).toContain("look at this photo");
+    expect(text).toContain("<media:image>");
+  });
+
+  it("keeps existing placeholder-only behaviour when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        attachments: [
+          {
+            id: "att-doc2",
+            url: "https://cdn.discordapp.com/attachments/1/report.pdf",
+            filename: "report.pdf",
+            content_type: "application/pdf",
+          },
+        ],
+      }),
+    );
+    expect(text).toBe("<media:document> (1 file)");
+  });
+});
