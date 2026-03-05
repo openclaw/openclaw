@@ -11,6 +11,7 @@ type TelegramAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  suppressPrivacyModeWarning?: unknown;
   audit?: unknown;
 };
 
@@ -36,6 +37,7 @@ function readTelegramAccountStatus(value: ChannelAccountSnapshot): TelegramAccou
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    suppressPrivacyModeWarning: value.suppressPrivacyModeWarning,
     audit: value.audit,
   };
 }
