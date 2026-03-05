@@ -66,6 +66,18 @@ export type MemoryNeo4jConfig = {
   sleepCycle: {
     auto: boolean;
   };
+  conflictDetection: {
+    /** Enable LLM-based conflict detection on new memory store */
+    enabled: boolean;
+    /** Model to use for conflict classification (defaults to extraction model) */
+    model?: string;
+    /** Vector similarity threshold to identify conflict candidates (default: 0.82) */
+    similarityThreshold: number;
+    /** Maximum candidates to check per store operation (default: 5) */
+    maxCandidates: number;
+    /** Batch size for Phase 3c retroactive conflict scan (default: 50) */
+    sleepScanBatchSize: number;
+  };
 };
 
 /**
@@ -270,6 +282,7 @@ export const memoryNeo4jConfigSchema = {
         "graphSearchDepth",
         "decayCurves",
         "sleepCycle",
+        "conflictDetection",
       ],
       "memory-neo4j config",
     );
@@ -412,6 +425,24 @@ export const memoryNeo4jConfigSchema = {
     assertAllowedKeys(sleepCycleRaw ?? {}, ["auto", "autoIntervalMs"], "sleepCycle config");
     const sleepCycleAuto = sleepCycleRaw?.auto !== false; // enabled by default
 
+    // Parse conflictDetection section (optional with defaults)
+    const cdRaw = cfg.conflictDetection as Record<string, unknown> | undefined;
+    assertAllowedKeys(
+      cdRaw ?? {},
+      ["enabled", "model", "similarityThreshold", "maxCandidates", "sleepScanBatchSize"],
+      "conflictDetection config",
+    );
+    const cdEnabled = cdRaw?.enabled === true; // off by default
+    const cdModel = typeof cdRaw?.model === "string" && cdRaw.model ? cdRaw.model : undefined;
+    const cdThreshold =
+      typeof cdRaw?.similarityThreshold === "number" ? cdRaw.similarityThreshold : 0.82;
+    const cdMaxCandidates =
+      typeof cdRaw?.maxCandidates === "number" ? Math.max(1, Math.floor(cdRaw.maxCandidates)) : 5;
+    const cdBatchSize =
+      typeof cdRaw?.sleepScanBatchSize === "number"
+        ? Math.max(1, Math.floor(cdRaw.sleepScanBatchSize))
+        : 50;
+
     return {
       neo4j: {
         uri: neo4jUri,
@@ -445,6 +476,13 @@ export const memoryNeo4jConfigSchema = {
       decayCurves,
       sleepCycle: {
         auto: sleepCycleAuto,
+      },
+      conflictDetection: {
+        enabled: cdEnabled,
+        model: cdModel,
+        similarityThreshold: cdThreshold,
+        maxCandidates: cdMaxCandidates,
+        sleepScanBatchSize: cdBatchSize,
       },
     };
   },

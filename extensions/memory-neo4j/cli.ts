@@ -177,25 +177,52 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
         .argument("<query>", "Search query")
         .option("--limit <n>", "Max results", "5")
         .option("--agent <id>", "Agent id (default: default)")
-        .action(async (query: string, opts: { limit: string; agent?: string }) => {
+        .option("--include-expired", "Include superseded/expired memories in results")
+        .action(
+          async (
+            query: string,
+            opts: { limit: string; agent?: string; includeExpired?: boolean },
+          ) => {
+            try {
+              const results = await hybridSearch(
+                db,
+                embeddings,
+                query,
+                parseInt(opts.limit, 10),
+                opts.agent ?? "default",
+                extractionConfig.enabled,
+                {
+                  graphSearchDepth: cfg.graphSearchDepth,
+                  includeExpired: opts.includeExpired ?? false,
+                },
+              );
+              const output = results.map((r) => ({
+                id: r.id,
+                text: r.text,
+                category: r.category,
+                importance: r.importance,
+                score: r.score,
+              }));
+              console.log(JSON.stringify(output, null, 2));
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            } finally {
+              await db.close();
+            }
+          },
+        );
+
+      memory
+        .command("supersede")
+        .description("Mark an existing memory as superseded by a newer one")
+        .argument("<old-id>", "ID of the memory to supersede")
+        .argument("<new-id>", "ID of the memory that replaces it")
+        .action(async (oldId: string, newId: string) => {
           try {
-            const results = await hybridSearch(
-              db,
-              embeddings,
-              query,
-              parseInt(opts.limit, 10),
-              opts.agent ?? "default",
-              extractionConfig.enabled,
-              { graphSearchDepth: cfg.graphSearchDepth },
-            );
-            const output = results.map((r) => ({
-              id: r.id,
-              text: r.text,
-              category: r.category,
-              importance: r.importance,
-              score: r.score,
-            }));
-            console.log(JSON.stringify(output, null, 2));
+            await db.ensureInitialized();
+            await db.supersedeMemory(oldId, newId);
+            console.log(`✓ Memory ${oldId.slice(0, 8)} superseded by ${newId.slice(0, 8)}`);
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;

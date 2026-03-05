@@ -50,6 +50,10 @@ export type MemoryNode = {
   retrievalCount: number;
   lastRetrievedAt?: string;
   taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
+  // Temporal validity (bi-temporal)
+  validFrom: string; // ISO-8601 — when this fact became true (defaults to createdAt)
+  validUntil?: string; // ISO-8601 — when this fact stopped being true (null = still valid)
+  supersededBy?: string; // ID of the memory that replaced this one (null = not superseded)
 };
 
 export type EntityNode = {
@@ -149,6 +153,7 @@ export type StoreMemoryInput = {
   agentId: string;
   sessionKey?: string;
   taskId?: string; // Optional link to TASKS.md task (e.g., "TASK-001")
+  validFrom?: string; // Optional — defaults to now() at store time
 };
 
 export type MergeEntityInput = {

@@ -237,6 +237,8 @@ export async function hybridSearch(
     graphFiringThreshold?: number;
     graphSearchDepth?: number;
     logger?: Logger;
+    /** When true, include expired (superseded) memories in search results */
+    includeExpired?: boolean;
   } = {},
 ): Promise<HybridSearchResult[]> {
   // Guard against empty queries
@@ -250,6 +252,7 @@ export async function hybridSearch(
     graphFiringThreshold = 0.3,
     graphSearchDepth = 1,
     logger,
+    includeExpired = false,
   } = options;
 
   const candidateLimit = Math.floor(Math.min(200, Math.max(1, limit * candidateMultiplier)));
@@ -265,10 +268,17 @@ export async function hybridSearch(
 
   // 3. Run signals in parallel
   const [vectorResults, bm25Results, graphResults] = await Promise.all([
-    db.vectorSearch(queryEmbedding, candidateLimit, 0.1, agentId),
-    db.bm25Search(query, candidateLimit, agentId),
+    db.vectorSearch(queryEmbedding, candidateLimit, 0.1, agentId, includeExpired),
+    db.bm25Search(query, candidateLimit, agentId, includeExpired),
     graphEnabled
-      ? db.graphSearch(query, candidateLimit, graphFiringThreshold, agentId, graphSearchDepth)
+      ? db.graphSearch(
+          query,
+          candidateLimit,
+          graphFiringThreshold,
+          agentId,
+          graphSearchDepth,
+          includeExpired,
+        )
       : Promise.resolve([] as SearchSignalResult[]),
   ]);
   const tSignals = performance.now();

@@ -109,11 +109,19 @@ const memoryNeo4jPlugin = {
           parameters: Type.Object({
             query: Type.String({ description: "Search query" }),
             limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
+            includeExpired: Type.Optional(
+              Type.Boolean({ description: "Include superseded/expired memories (default: false)" }),
+            ),
           }),
           async execute(_toolCallId: string, params: unknown) {
-            const { query, limit: rawLimit = 5 } = params as {
+            const {
+              query,
+              limit: rawLimit = 5,
+              includeExpired = false,
+            } = params as {
               query: string;
               limit?: number;
+              includeExpired?: boolean;
             };
             const limit = Math.floor(Math.min(50, Math.max(1, rawLimit)));
 
@@ -124,7 +132,7 @@ const memoryNeo4jPlugin = {
               limit,
               agentId,
               extractionConfig.enabled,
-              { graphSearchDepth: cfg.graphSearchDepth, logger: api.logger },
+              { graphSearchDepth: cfg.graphSearchDepth, logger: api.logger, includeExpired },
             );
 
             if (results.length === 0) {
@@ -243,17 +251,38 @@ const memoryNeo4jPlugin = {
               ...(taskId ? { taskId } : {}),
             });
 
-            // 4. Extraction is deferred to sleep cycle (like human memory consolidation)
+            // 4. Conflict detection: check if this memory supersedes existing ones
+            let supersededCount = 0;
+            if (cfg.conflictDetection.enabled) {
+              try {
+                supersededCount = await db.detectConflicts(
+                  memoryId,
+                  text,
+                  vector,
+                  agentId,
+                  extractionConfig,
+                  {
+                    similarityThreshold: cfg.conflictDetection.similarityThreshold,
+                    maxCandidates: cfg.conflictDetection.maxCandidates,
+                  },
+                );
+              } catch (err) {
+                // Non-fatal — log but don't fail the store
+                api.logger.warn(`memory-neo4j: conflict detection failed: ${String(err)}`);
+              }
+            }
+
+            // 5. Extraction is deferred to sleep cycle (like human memory consolidation)
             // See: runSleepCycleExtraction() and `openclaw memory sleep` command
 
             return {
               content: [
                 {
                   type: "text",
-                  text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"`,
+                  text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"${supersededCount > 0 ? ` (superseded ${supersededCount} older ${supersededCount === 1 ? "memory" : "memories"})` : ""}`,
                 },
               ],
-              details: { action: "created", id: memoryId },
+              details: { action: "created", id: memoryId, supersededCount },
             };
           },
         };

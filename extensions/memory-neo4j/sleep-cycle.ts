@@ -91,6 +91,11 @@ export type SleepCycleResult = {
     memoriesChecked: number;
     memoriesRemoved: number;
   };
+  // Phase 3c: Retroactive Conflict Scan
+  retroactiveConflictScan: {
+    memoriesScanned: number;
+    memoriesSuperseded: number;
+  };
   // Phase 4: Orphan Cleanup
   cleanup: {
     entitiesRemoved: number;
@@ -156,6 +161,12 @@ export type SleepCycleOptions = {
   // Phase 3b: Temporal Staleness
   skipTemporalStaleness?: boolean; // Skip temporal staleness detection (default: false)
   temporalStalenessMinAgeDays?: number; // Only check memories older than this (default: 3)
+
+  // Phase 3c: Retroactive Conflict Scan
+  skipRetroactiveConflictScan?: boolean; // Skip Phase 3c (default: false)
+  retroactiveConflictBatchSize?: number; // Max memories to scan per run (default: 20)
+  conflictSimilarityThreshold?: number; // Cosine threshold for candidate selection (default: 0.82)
+  conflictMaxCandidates?: number; // Max candidates per memory (default: 5)
 
   // Phase 3: Decay
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
@@ -480,6 +491,10 @@ export async function runSleepCycle(
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
     skipTemporalStaleness = false,
+    skipRetroactiveConflictScan = false,
+    retroactiveConflictBatchSize = 20,
+    conflictSimilarityThreshold = 0.82,
+    conflictMaxCandidates = 5,
     skipRetroactiveTagging = false,
     retroactiveTagBatchSize = 50,
     singleUseTagMinAgeDays = 14,
@@ -498,6 +513,7 @@ export async function runSleepCycle(
     entityDedup: { pairsFound: 0, merged: 0 },
     decay: { memoriesPruned: 0 },
     temporalStaleness: { memoriesChecked: 0, memoriesRemoved: 0 },
+    retroactiveConflictScan: { memoriesScanned: 0, memoriesSuperseded: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
     retroactiveTagging: { total: 0, tagged: 0, failed: 0 },
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
@@ -1062,6 +1078,76 @@ export async function runSleepCycle(
     logger.info("memory-neo4j: [sleep] Phase 3b skipped — extraction not enabled");
   } else if (skipTemporalStaleness) {
     logger.info("memory-neo4j: [sleep] Phase 3b skipped — temporal staleness disabled");
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 3c: Retroactive Conflict Scan
+  // Finds older memories that conflict with newer ones (missed at store time).
+  // Runs on a small batch each sleep cycle to amortize cost.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && config.enabled && !skipRetroactiveConflictScan) {
+    onPhaseStart?.("retroactiveConflictScan" as Parameters<typeof onPhaseStart>[0]);
+    logger.info("memory-neo4j: [sleep] Phase 3c: Retroactive Conflict Scan");
+
+    try {
+      // Fetch a batch of recently-added memories that haven't been conflict-checked
+      // (i.e., they predate this feature or were stored with detection disabled)
+      const session = db["driver"]?.session();
+      if (session) {
+        try {
+          // Find memories with no supersededBy and no validUntil, ordered oldest first
+          const batchResult = await session.run(
+            `MATCH (m:Memory {agentId: $agentId})
+             WHERE m.validUntil IS NULL AND m.supersededBy IS NULL
+             AND m.validFrom IS NOT NULL
+             RETURN m.id AS id, m.text AS text, m.embedding AS embedding
+             ORDER BY m.validFrom ASC
+             LIMIT $limit`,
+            { agentId: agentId ?? "default", limit: retroactiveConflictBatchSize },
+          );
+
+          const candidates = batchResult.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            embedding: r.get("embedding") as number[],
+          }));
+
+          result.retroactiveConflictScan.memoriesScanned = candidates.length;
+
+          for (const mem of candidates) {
+            if (abortSignal?.aborted) break;
+            if (!mem.embedding?.length) continue;
+
+            try {
+              const superseded = await db.detectConflicts(
+                mem.id,
+                mem.text,
+                mem.embedding,
+                agentId ?? "default",
+                config,
+                {
+                  similarityThreshold: conflictSimilarityThreshold,
+                  maxCandidates: conflictMaxCandidates,
+                },
+              );
+              result.retroactiveConflictScan.memoriesSuperseded += superseded;
+            } catch {
+              // Non-fatal
+            }
+          }
+
+          logger.info(
+            `memory-neo4j: [sleep] Phase 3c complete — ${result.retroactiveConflictScan.memoriesScanned} scanned, ${result.retroactiveConflictScan.memoriesSuperseded} superseded`,
+          );
+        } finally {
+          await session.close();
+        }
+      }
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 3c error: ${String(err)}`);
+    }
+  } else if (skipRetroactiveConflictScan) {
+    logger.info("memory-neo4j: [sleep] Phase 3c skipped — retroactive conflict scan disabled");
   }
 
   // --------------------------------------------------------------------------

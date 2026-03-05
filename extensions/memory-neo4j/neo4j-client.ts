@@ -10,6 +10,8 @@
 
 import { randomUUID } from "node:crypto";
 import neo4j, { type Driver } from "neo4j-driver";
+import type { ExtractionConfig } from "./config.js";
+import { callOpenRouter } from "./llm-client.js";
 import type { ExtractionStatus, Logger, SearchSignalResult, StoreMemoryInput } from "./schema.js";
 import {
   ALLOWED_RELATIONSHIP_TYPES,
@@ -17,6 +19,13 @@ import {
   makePairKey,
   validateRelationshipType,
 } from "./schema.js";
+
+// Strip markdown code fences from LLM output (some providers wrap JSON in ```)
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+  return match ? match[1].trim() : trimmed;
+}
 
 // SAFETY: This pattern is built from the hardcoded ALLOWED_RELATIONSHIP_TYPES constant,
 // not from user input. It's used in Cypher variable-length path patterns like
@@ -158,6 +167,11 @@ export class Neo4jMemoryClient {
         session,
         "CREATE INDEX memory_extraction_status_index IF NOT EXISTS FOR (m:Memory) ON (m.extractionStatus)",
       );
+      // Temporal index for efficient filtering of active vs. expired memories
+      await this.runSafe(
+        session,
+        "CREATE INDEX memory_temporal_index IF NOT EXISTS FOR (m:Memory) ON (m.validUntil)",
+      );
 
       this.logger.info("memory-neo4j: indexes ensured");
     } finally {
@@ -239,6 +253,7 @@ export class Neo4jMemoryClient {
         const now = new Date().toISOString();
         // Layer 3: taskId is optional — only set on the node when provided
         const taskIdClause = input.taskId ? ", taskId: $taskId" : "";
+        const validFrom = input.validFrom ?? now;
         const result = await session.run(
           `CREATE (m:Memory {
             id: $id, text: $text, embedding: $embedding,
@@ -248,7 +263,8 @@ export class Neo4jMemoryClient {
             createdAt: $createdAt, updatedAt: $updatedAt,
             originalCreatedAt: $originalCreatedAt,
             retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
-            extractionRetries: $extractionRetries${taskIdClause}
+            extractionRetries: $extractionRetries,
+            validFrom: $validFrom, validUntil: null, supersededBy: null${taskIdClause}
           })
           RETURN m.id AS id`,
           {
@@ -261,6 +277,7 @@ export class Neo4jMemoryClient {
             retrievalCount: 0,
             lastRetrievedAt: null,
             extractionRetries: 0,
+            validFrom,
           },
         );
         return result.records[0].get("id") as string;
@@ -436,6 +453,7 @@ export class Neo4jMemoryClient {
     limit: number,
     minScore: number = 0.1,
     agentId?: string,
+    includeExpired?: boolean,
   ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
     try {
@@ -443,10 +461,11 @@ export class Neo4jMemoryClient {
         const session = this.driver!.session();
         try {
           const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const expiredFilter = includeExpired ? "" : "AND node.validUntil IS NULL";
           const result = await session.run(
             `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
              YIELD node, score
-             WHERE score >= $minScore ${agentFilter}
+             WHERE score >= $minScore ${agentFilter} ${expiredFilter}
              RETURN node.id AS id, node.text AS text, node.category AS category,
                     node.importance AS importance, node.createdAt AS createdAt,
                     node.taskId AS taskId,
@@ -484,7 +503,12 @@ export class Neo4jMemoryClient {
    * Signal 2: Lucene BM25 full-text keyword search.
    * Returns memories ranked by BM25 relevance score.
    */
-  async bm25Search(query: string, limit: number, agentId?: string): Promise<SearchSignalResult[]> {
+  async bm25Search(
+    query: string,
+    limit: number,
+    agentId?: string,
+    includeExpired?: boolean,
+  ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
     const escaped = escapeLucene(query);
     if (!escaped.trim()) {
@@ -496,10 +520,11 @@ export class Neo4jMemoryClient {
         const session = this.driver!.session();
         try {
           const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const expiredFilter = includeExpired ? "" : "AND node.validUntil IS NULL";
           const result = await session.run(
             `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
              YIELD node, score
-             WHERE true ${agentFilter}
+             WHERE true ${agentFilter} ${expiredFilter}
              RETURN node.id AS id, node.text AS text, node.category AS category,
                     node.importance AS importance, node.createdAt AS createdAt,
                     node.taskId AS taskId,
@@ -563,6 +588,7 @@ export class Neo4jMemoryClient {
     firingThreshold: number = 0.3,
     agentId?: string,
     maxHops: number = 1,
+    includeExpired?: boolean,
   ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
     const escaped = escapeLucene(query);
@@ -577,6 +603,8 @@ export class Neo4jMemoryClient {
           // Single query: entity fulltext lookup → direct mentions + N-hop spreading activation
           const agentFilterM = agentId ? "AND m.agentId = $agentId" : "";
           const agentFilterM2 = agentId ? "AND m2.agentId = $agentId" : "";
+          const expiredFilterM = includeExpired ? "" : "AND m.validUntil IS NULL";
+          const expiredFilterM2 = includeExpired ? "" : "AND m2.validUntil IS NULL";
           // Variable-length relationship pattern: 1..maxHops hops through entity relationships
           const hopRange = `1..${Math.max(1, Math.min(3, maxHops))}`;
           const result = await session.run(
@@ -590,7 +618,7 @@ export class Neo4jMemoryClient {
 
              // Collect direct mentions
              OPTIONAL MATCH (entity)<-[rm:MENTIONS]-(m:Memory)
-             WHERE m IS NOT NULL ${agentFilterM}
+             WHERE m IS NOT NULL ${agentFilterM} ${expiredFilterM}
              WITH entity, collect({
                id: m.id, text: m.text, category: m.category,
                importance: m.importance, createdAt: m.createdAt,
@@ -602,7 +630,7 @@ export class Neo4jMemoryClient {
              OPTIONAL MATCH (entity)-[rels:${RELATIONSHIP_TYPE_PATTERN}*${hopRange}]-(e2:Entity)
              WHERE ALL(r IN rels WHERE coalesce(r.confidence, 0.7) >= $firingThreshold)
              OPTIONAL MATCH (e2)<-[rm2:MENTIONS]-(m2:Memory)
-             WHERE m2 IS NOT NULL ${agentFilterM2}
+             WHERE m2 IS NOT NULL ${agentFilterM2} ${expiredFilterM2}
              WITH directResults, collect({
                id: m2.id, text: m2.text, category: m2.category,
                importance: m2.importance, createdAt: m2.createdAt,
@@ -1750,6 +1778,188 @@ export class Neo4jMemoryClient {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // Temporal Memory Operations
+  // --------------------------------------------------------------------------
+
+  /**
+   * Supersede a memory: set its validUntil to now and record which memory
+   * replaced it. Used by conflict detection when a newer memory updates/
+   * contradicts an existing one.
+   *
+   * @param oldId  ID of the memory being superseded
+   * @param newId  ID of the replacement memory
+   */
+  async supersedeMemory(oldId: string, newId: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const now = new Date().toISOString();
+      await session.run(
+        `MATCH (m:Memory {id: $oldId})
+         SET m.validUntil = $now, m.supersededBy = $newId, m.updatedAt = $now`,
+        { oldId, newId, now },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Migrate existing memories to include temporal fields.
+   * Sets validFrom = COALESCE(originalCreatedAt, createdAt) and
+   * validUntil = null, supersededBy = null for memories that lack these fields.
+   *
+   * @returns Number of memories updated
+   */
+  async migrateTemporalFields(): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.validFrom IS NULL
+         SET m.validFrom = COALESCE(m.originalCreatedAt, m.createdAt),
+             m.validUntil = null,
+             m.supersededBy = null
+         RETURN count(m) AS updated`,
+      );
+      const updated = result.records[0]?.get("updated");
+      return typeof updated === "number" ? updated : Number(updated ?? 0);
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Detect conflicts between a newly stored memory and existing memories.
+   * Uses vector similarity search to find candidates, then LLM to classify.
+   * Supersedes any existing memories that the new memory replaces.
+   *
+   * @param newMemoryId     ID of the newly stored memory
+   * @param newMemoryText   Text of the new memory
+   * @param newEmbedding    Embedding of the new memory
+   * @param agentId         Agent scope for the search
+   * @param config          Extraction config for LLM calls
+   * @param options         Conflict detection options (threshold, maxCandidates)
+   * @returns Number of memories superseded
+   */
+  async detectConflicts(
+    newMemoryId: string,
+    newMemoryText: string,
+    newEmbedding: number[],
+    agentId: string,
+    config: ExtractionConfig,
+    options?: {
+      similarityThreshold?: number;
+      maxCandidates?: number;
+    },
+  ): Promise<number> {
+    if (!config.enabled) {
+      return 0;
+    }
+
+    const threshold = options?.similarityThreshold ?? 0.82;
+    const maxCandidates = options?.maxCandidates ?? 5;
+
+    // Find existing non-expired memories similar to the new one (excluding itself)
+    let candidates: Array<{ id: string; text: string; score: number }>;
+    try {
+      candidates = await this.findSimilar(newEmbedding, threshold, maxCandidates + 1, agentId);
+    } catch {
+      return 0;
+    }
+
+    // Exclude the new memory itself from candidates
+    const filtered = candidates.filter((c) => c.id !== newMemoryId).slice(0, maxCandidates);
+    if (filtered.length === 0) {
+      return 0;
+    }
+
+    let supersededCount = 0;
+    for (const candidate of filtered) {
+      try {
+        const content = await callOpenRouter(config, [
+          {
+            role: "system",
+            content: `Given two memories about potentially the same topic, classify their relationship.
+
+- SUPERSEDES: the NEW memory replaces/updates/contradicts the EXISTING one (the existing is now outdated)
+- COMPLEMENTS: the new memory adds detail; both remain valid
+- UNRELATED: different topics despite textual similarity
+
+Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
+          },
+          {
+            role: "user",
+            content: `EXISTING: "${candidate.text}"\n\nNEW: "${newMemoryText}"`,
+          },
+        ]);
+
+        if (!content) continue;
+
+        const parsed = JSON.parse(stripCodeFences(content)) as { classification?: string };
+        if (parsed.classification === "SUPERSEDES") {
+          await this.supersedeMemory(candidate.id, newMemoryId);
+          supersededCount++;
+          this.logger.info(
+            `memory-neo4j: conflict detected — superseded ${candidate.id.slice(0, 8)} with ${newMemoryId.slice(0, 8)}`,
+          );
+        }
+      } catch (err) {
+        // Non-fatal: log and continue with remaining candidates
+        this.logger.debug?.(`memory-neo4j: conflict classification failed: ${String(err)}`);
+      }
+    }
+
+    return supersededCount;
+  }
+
+  /**
+   * Fetch non-superseded memories for the retroactive conflict scan (Phase 3c).
+   * Returns memories with their embeddings for batch conflict detection.
+   *
+   * @param minAgeDays Minimum age in days (skip brand-new memories)
+   * @param limit      Maximum number of memories to return per batch
+   * @param agentId    Optional agent filter
+   */
+  async fetchMemoriesForRetroactiveConflictScan(
+    minAgeDays: number = 7,
+    limit: number = 50,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string; embedding: number[] | null; category: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.validUntil IS NULL
+           AND m.category <> 'core'
+           AND m.createdAt IS NOT NULL
+           AND duration.between(datetime(m.createdAt), datetime()).days >= $minAgeDays
+           ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.embedding AS embedding, m.category AS category
+         ORDER BY m.createdAt ASC
+         LIMIT $limit`,
+        {
+          minAgeDays: neo4j.int(minAgeDays),
+          limit: neo4j.int(limit),
+          ...(agentId ? { agentId } : {}),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        embedding: r.get("embedding") as number[] | null,
+        category: r.get("category") as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
   /**
    * Get a single field value from a Memory node.
    * Returns undefined if the memory or field doesn't exist.
@@ -2209,6 +2419,7 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.category <> 'core'
+           AND m.validUntil IS NULL
            AND COALESCE(m.originalCreatedAt, m.createdAt) IS NOT NULL
            AND duration.between(datetime(COALESCE(m.originalCreatedAt, m.createdAt)), datetime()).days >= $minAgeDays
            AND (m.text =~ '(?i).*(\\d{1,2}[:/]\\d{2}|\\d{1,2}\\s*(am|pm)|tomorrow|today|tonight|this morning|this afternoon|this evening|yesterday|last night|next week|\\d{1,2}(st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\\s+\\d{1,2}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|at \\d+%|progress|downloading|in progress|pending|waiting for).*')
