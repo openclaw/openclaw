@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "agent_to_agent";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -37,6 +43,29 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   type: "gateway";
   action: "startup";
   context: GatewayStartupHookContext;
+};
+
+// ============================================================================
+// Agent-to-Agent Hook Events
+// ============================================================================
+
+export type AgentToAgentHookContext = {
+  /** Session key of the sending agent */
+  sourceSessionKey: string;
+  /** Agent ID extracted from source session key (e.g. "dev", "finance") */
+  sourceAgentId: string;
+  /** Session key of the target agent */
+  targetSessionKey: string;
+  /** Agent ID extracted from target session key */
+  targetAgentId: string;
+  /** The message content sent */
+  message: string;
+};
+
+export type AgentToAgentHookEvent = InternalHookEvent & {
+  type: "agent_to_agent";
+  action: "send";
+  context: AgentToAgentHookContext;
 };
 
 // ============================================================================
@@ -445,4 +474,18 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isAgentToAgentEvent(event: InternalHookEvent): event is AgentToAgentHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent_to_agent", "send")) {
+    return false;
+  }
+  const context = getHookContext<AgentToAgentHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "sourceAgentId") &&
+    hasStringContextField(context, "targetAgentId")
+  );
 }

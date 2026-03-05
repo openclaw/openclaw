@@ -4,6 +4,7 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isAgentToAgentEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
@@ -11,6 +12,7 @@ import {
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
+  type AgentToAgentHookContext,
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
@@ -442,6 +444,89 @@ describe("hooks", () => {
       // Both handlers were called
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe("agent-to-agent hooks", () => {
+    it("should trigger agent_to_agent:send handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("agent_to_agent:send", handler);
+
+      const context: AgentToAgentHookContext = {
+        sourceSessionKey: "agent:finance:main",
+        sourceAgentId: "finance",
+        targetSessionKey: "agent:dev:main",
+        targetAgentId: "dev",
+        message: "Please review the latest transactions",
+      };
+      const event = createInternalHookEvent(
+        "agent_to_agent",
+        "send",
+        "agent:finance:main",
+        context,
+      );
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should match with isAgentToAgentEvent type guard", () => {
+      const context: AgentToAgentHookContext = {
+        sourceSessionKey: "agent:finance:main",
+        sourceAgentId: "finance",
+        targetSessionKey: "agent:dev:main",
+        targetAgentId: "dev",
+        message: "test",
+      };
+      const event = createInternalHookEvent(
+        "agent_to_agent",
+        "send",
+        "agent:finance:main",
+        context,
+      );
+      expect(isAgentToAgentEvent(event)).toBe(true);
+    });
+
+    it("should not match non-agent_to_agent events with type guard", () => {
+      const event = createInternalHookEvent("message", "sent", "test", {
+        to: "someone",
+        content: "hello",
+        success: true,
+        channelId: "telegram",
+      });
+      expect(isAgentToAgentEvent(event)).toBe(false);
+    });
+
+    it("should not match agent_to_agent event with missing context fields", () => {
+      const event = createInternalHookEvent("agent_to_agent", "send", "test", {
+        sourceSessionKey: "agent:finance:main",
+      });
+      expect(isAgentToAgentEvent(event)).toBe(false);
+    });
+
+    it("should also trigger general agent_to_agent handlers", async () => {
+      const generalHandler = vi.fn();
+      const specificHandler = vi.fn();
+      registerInternalHook("agent_to_agent", generalHandler);
+      registerInternalHook("agent_to_agent:send", specificHandler);
+
+      const context: AgentToAgentHookContext = {
+        sourceSessionKey: "agent:finance:main",
+        sourceAgentId: "finance",
+        targetSessionKey: "agent:dev:main",
+        targetAgentId: "dev",
+        message: "test",
+      };
+      const event = createInternalHookEvent(
+        "agent_to_agent",
+        "send",
+        "agent:finance:main",
+        context,
+      );
+      await triggerInternalHook(event);
+
+      expect(generalHandler).toHaveBeenCalledWith(event);
+      expect(specificHandler).toHaveBeenCalledWith(event);
     });
   });
 

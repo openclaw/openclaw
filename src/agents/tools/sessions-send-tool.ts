@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -260,6 +261,7 @@ export function createSessionsSendTool(opts?: {
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
+          emitA2AHookEvent(opts?.agentSessionKey, resolvedKey, displayKey, message);
           startA2AFlow(undefined, runId);
           return jsonResult({
             runId,
@@ -288,6 +290,7 @@ export function createSessionsSendTool(opts?: {
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
         }
+        emitA2AHookEvent(opts?.agentSessionKey, resolvedKey, displayKey, message);
       } catch (err) {
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -358,4 +361,28 @@ export function createSessionsSendTool(opts?: {
       });
     },
   };
+}
+
+function emitA2AHookEvent(
+  sourceSessionKey: string | undefined,
+  resolvedTargetKey: string,
+  displayTargetKey: string,
+  message: string,
+): void {
+  if (!sourceSessionKey) {
+    return;
+  }
+  const sourceAgentId = resolveAgentIdFromSessionKey(sourceSessionKey);
+  const targetAgentId = resolveAgentIdFromSessionKey(resolvedTargetKey);
+  if (sourceAgentId && targetAgentId && sourceAgentId !== targetAgentId) {
+    void triggerInternalHook(
+      createInternalHookEvent("agent_to_agent", "send", sourceSessionKey ?? "", {
+        sourceSessionKey: sourceSessionKey ?? "",
+        sourceAgentId,
+        targetSessionKey: displayTargetKey,
+        targetAgentId,
+        message,
+      }),
+    );
+  }
 }
