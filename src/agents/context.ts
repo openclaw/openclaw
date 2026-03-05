@@ -9,7 +9,7 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -28,12 +28,37 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
+function setSmallerContextWindow(
+  cache: Map<string, number>,
+  key: string,
+  contextWindow: number,
+): void {
+  const existing = cache.get(key);
+  // Prefer the smaller window so token budgeting stays fail-safe.
+  if (existing === undefined || contextWindow < existing) {
+    cache.set(key, contextWindow);
+  }
+}
+
+function toProviderQualifiedModelKey(model: ModelEntry): string | undefined {
+  const provider = model.provider?.trim().toLowerCase();
+  const id = model.id?.trim();
+  if (!provider || !id || id.includes("/")) {
+    return undefined;
+  }
+  return `${provider}/${id}`;
+}
+
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
 }) {
   for (const model of params.models) {
     if (!model?.id) {
+      continue;
+    }
+    const modelId = model.id.trim();
+    if (!modelId) {
       continue;
     }
     const contextWindow =
