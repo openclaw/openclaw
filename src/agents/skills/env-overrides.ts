@@ -10,6 +10,15 @@ import type { SkillEntry, SkillSnapshot } from "./types.js";
 const log = createSubsystemLogger("env-overrides");
 
 type EnvUpdate = { key: string; prev: string | undefined };
+
+// Tracks env keys that are currently injected by skill env overrides so that
+// exec child processes can strip them and avoid leaking skill API keys to
+// unrelated tools (e.g. ACP harnesses that have their own auth). (#36280)
+const activeSkillInjectedKeys = new Set<string>();
+
+export function getActiveSkillInjectedEnvKeys(): ReadonlySet<string> {
+  return activeSkillInjectedKeys;
+}
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
 
 type SanitizedSkillEnvOverrides = {
@@ -135,6 +144,7 @@ function applySkillConfigEnvOverrides(params: {
     }
     updates.push({ key: envKey, prev: process.env[envKey] });
     process.env[envKey] = envValue;
+    activeSkillInjectedKeys.add(envKey);
   }
 }
 
@@ -146,6 +156,7 @@ function createEnvReverter(updates: EnvUpdate[]) {
       } else {
         process.env[update.key] = update.prev;
       }
+      activeSkillInjectedKeys.delete(update.key);
     }
   };
 }

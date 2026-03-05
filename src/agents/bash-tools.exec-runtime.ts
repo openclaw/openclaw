@@ -29,10 +29,14 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { getActiveSkillInjectedEnvKeys } from "./skills/env-overrides.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
-// are not propagated into non-sandboxed executions.
+// are not propagated into non-sandboxed executions. Also strips env vars that
+// were injected by skill env overrides so skill API keys (e.g. OPENAI_API_KEY
+// from openai-image-gen) do not leak into unrelated child processes. (#36280)
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
+  const skillInjectedKeys = getActiveSkillInjectedEnvKeys();
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     const upperKey = key.toUpperCase();
@@ -41,6 +45,11 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
       continue;
     }
     if (isDangerousHostEnvVarName(upperKey)) {
+      continue;
+    }
+    // Strip env vars that are currently injected by skill env overrides so they
+    // don't leak to unrelated exec child processes via inherited environment.
+    if (skillInjectedKeys.has(key)) {
       continue;
     }
     sanitized[key] = value;
