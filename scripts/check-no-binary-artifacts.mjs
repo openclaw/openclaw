@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from "node:child_process";
 
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(name);
@@ -7,15 +7,19 @@ function arg(name, fallback = undefined) {
   return fallback;
 }
 
-const base = arg('--base');
-const head = arg('--head', 'HEAD');
+const base = arg("--base");
+const head = arg("--head", "HEAD");
 if (!base) {
-  console.error('Missing --base <sha>');
+  console.error("Missing --base <sha>");
   process.exit(2);
 }
 
-const diff = execFileSync('git', ['diff', '--name-only', `${base}...${head}`], { encoding: 'utf8' })
-  .split('\n')
+const diff = execFileSync(
+  "git",
+  ["diff", "--name-only", "--diff-filter=ACMRT", `${base}...${head}`],
+  { encoding: "utf8" },
+)
+  .split("\n")
   .map((s) => s.trim())
   .filter(Boolean);
 
@@ -27,10 +31,10 @@ for (const p of diff) {
 }
 
 if (blocked.length > 0) {
-  console.error('Blocked release/binary artifacts detected in PR diff:');
+  console.error("Blocked release/binary artifacts detected in PR diff:");
   for (const p of [...new Set(blocked)]) console.error(` - ${p}`);
-  console.error('Remove these artifacts from the PR (or split into release pipeline PR).');
+  console.error("Remove these artifacts from the PR (or split into release pipeline PR).");
   process.exit(1);
 }
 
-console.log('OK: no blocked binary/release artifacts in diff.');
+console.log("OK: no blocked binary/release artifacts in diff.");
