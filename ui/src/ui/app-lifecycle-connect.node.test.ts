@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-const connectGatewayMock = vi.fn();
-const loadBootstrapMock = vi.fn();
+const { connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
+  connectGatewayMock: vi.fn(),
+  loadBootstrapMock: vi.fn(),
+}));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
@@ -35,6 +37,10 @@ vi.mock("./app-scroll.ts", () => ({
   scheduleLogsScroll: vi.fn(),
 }));
 
+vi.stubGlobal("window", {
+  addEventListener: vi.fn(),
+});
+
 import { handleConnected } from "./app-lifecycle.ts";
 
 function createHost() {
@@ -59,6 +65,7 @@ function createHost() {
     logsEntries: [],
     popStateHandler: vi.fn(),
     topbarObserver: null,
+    visualViewportCleanup: null,
   };
 }
 

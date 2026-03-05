@@ -1,5 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleDisconnected } from "./app-lifecycle.ts";
+
+const removeEventListenerMock = vi.fn();
+
+vi.stubGlobal("window", {
+  removeEventListener: removeEventListenerMock,
+});
+vi.stubGlobal("localStorage", {
+  getItem: vi.fn(() => null),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+});
+vi.stubGlobal("navigator", {
+  language: "en-US",
+});
+
+const { handleDisconnected } = await import("./app-lifecycle.ts");
 
 function createHost() {
   return {
@@ -22,12 +37,12 @@ function createHost() {
     logsEntries: [],
     popStateHandler: vi.fn(),
     topbarObserver: { disconnect: vi.fn() } as unknown as ResizeObserver,
+    visualViewportCleanup: null,
   };
 }
 
 describe("handleDisconnected", () => {
   it("stops and clears gateway client on teardown", () => {
-    const removeSpy = vi.spyOn(window, "removeEventListener").mockImplementation(() => undefined);
     const host = createHost();
     const disconnectSpy = (
       host.topbarObserver as unknown as { disconnect: ReturnType<typeof vi.fn> }
@@ -35,12 +50,11 @@ describe("handleDisconnected", () => {
 
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
-    expect(removeSpy).toHaveBeenCalledWith("popstate", host.popStateHandler);
+    expect(removeEventListenerMock).toHaveBeenCalledWith("popstate", host.popStateHandler);
     expect(host.connectGeneration).toBe(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(host.topbarObserver).toBeNull();
-    removeSpy.mockRestore();
   });
 });
