@@ -22,7 +22,8 @@ The server defaults to port `18792`.
 **Authentication**:
 - By default, it uses `default-token`.
 - You can set your own secret via the `MCP_WEB_ADAPTER_TOKEN` environment variable.
-- When the server starts, it will print the **Master Token** and the **Derived Extension Token**.
+- You can find the **Master Token** and **Derived Extension Token** in the [**.env**](.env) file in the root directory.
+- When the server starts, it will also print these tokens to the terminal.
 - Use the **Master Token** in your MCP server configuration.
 - Use the **Derived Extension Token** (or the Master Token) in the Chrome Extension options.
 
