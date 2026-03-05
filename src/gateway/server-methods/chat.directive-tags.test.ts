@@ -517,6 +517,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send does not inherit external delivery context when session origin is webchat", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-origin-no-cross-route-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      origin: {
+        provider: "webchat",
+        surface: "webchat",
+      },
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:6812765697",
+        accountId: "default",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:6812765697",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-origin-no-cross-route",
+      sessionKey: "agent:main:telegram:direct:6812765697",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
   it("chat.send does not inherit external delivery context for shared main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-main-no-cross-route-");
     mockState.finalText = "ok";

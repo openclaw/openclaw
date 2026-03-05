@@ -863,6 +863,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeAccountIdCandidate =
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const sessionOriginProvider = normalizeMessageChannel(entry?.origin?.provider);
+      const sessionOriginSurface = normalizeMessageChannel(entry?.origin?.surface);
+      const sessionOriginIsWebchat =
+        sessionOriginProvider === INTERNAL_MESSAGE_CHANNEL ||
+        sessionOriginSurface === INTERNAL_MESSAGE_CHANNEL;
       const parsedSessionKey = parseAgentSessionKey(sessionKey);
       const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
       const sessionScopeHead = sessionScopeParts[0];
@@ -884,6 +889,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
       const canInheritDeliverableRoute = Boolean(
+        !sessionOriginIsWebchat &&
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
         !isChannelAgnosticSessionScope &&
