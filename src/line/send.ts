@@ -24,6 +24,44 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const PROFILE_CACHE_MAX_ENTRIES = 2048;
+
+function pruneUserProfileCache(nowMs: number): void {
+  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  // Drop stale entries first to preserve fresh profiles under churn.
+  for (const [userId, entry] of userProfileCache) {
+    if (nowMs - entry.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      userProfileCache.delete(userId);
+    }
+    if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+      return;
+    }
+  }
+
+  // Still over cap: evict oldest entries in insertion order.
+  while (userProfileCache.size > PROFILE_CACHE_MAX_ENTRIES) {
+    const oldest = userProfileCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    userProfileCache.delete(oldest.value);
+  }
+}
+
+function setCachedUserProfile(
+  userId: string,
+  profile: { displayName: string; pictureUrl?: string },
+  nowMs: number,
+): void {
+  userProfileCache.set(userId, {
+    ...profile,
+    fetchedAt: nowMs,
+  });
+  pruneUserProfileCache(nowMs);
+}
 
 interface LineSendOpts {
   cfg?: OpenClawConfig;
@@ -431,12 +469,19 @@ export async function getUserProfile(
   opts: { channelAccessToken?: string; accountId?: string; useCache?: boolean } = {},
 ): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const useCache = opts.useCache ?? true;
+  const nowMs = Date.now();
 
   // Check cache first
   if (useCache) {
     const cached = userProfileCache.get(userId);
-    if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
+    if (cached && nowMs - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
+      // Move hot entries to the tail to keep eviction close to LRU.
+      userProfileCache.delete(userId);
+      userProfileCache.set(userId, cached);
       return { displayName: cached.displayName, pictureUrl: cached.pictureUrl };
+    }
+    if (cached) {
+      userProfileCache.delete(userId);
     }
   }
 
@@ -449,17 +494,19 @@ export async function getUserProfile(
       pictureUrl: profile.pictureUrl,
     };
 
-    // Cache the result
-    userProfileCache.set(userId, {
-      ...result,
-      fetchedAt: Date.now(),
-    });
+    if (useCache) {
+      setCachedUserProfile(userId, result, nowMs);
+    }
 
     return result;
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
     return null;
   }
+}
+
+export function clearUserProfileCacheForTest(): void {
+  userProfileCache.clear();
 }
 
 /**

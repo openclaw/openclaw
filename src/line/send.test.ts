@@ -92,6 +92,7 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
+    sendModule.clearUserProfileCacheForTest();
   });
 
   afterEach(() => {
@@ -200,6 +201,27 @@ describe("LINE send helpers", () => {
     });
     expect(second).toEqual(first);
     expect(getProfileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps profile cache size and evicts oldest entries under churn", async () => {
+    getProfileMock.mockImplementation(async (userId: string) => ({
+      displayName: `user-${userId}`,
+      pictureUrl: undefined,
+    }));
+
+    const totalUsers = 2200;
+    for (let i = 0; i < totalUsers; i += 1) {
+      await sendModule.getUserProfile(`U-${i}`);
+    }
+    const callsAfterWarmup = getProfileMock.mock.calls.length;
+
+    // Oldest entry should be evicted once cache cap is exceeded.
+    await sendModule.getUserProfile("U-0");
+    expect(getProfileMock.mock.calls.length).toBe(callsAfterWarmup + 1);
+
+    // A recently inserted entry should still be served from cache.
+    await sendModule.getUserProfile(`U-${totalUsers - 1}`);
+    expect(getProfileMock.mock.calls.length).toBe(callsAfterWarmup + 1);
   });
 
   it("continues when loading animation is unsupported", async () => {
