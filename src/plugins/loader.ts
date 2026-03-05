@@ -562,17 +562,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  let jitiLoader: ReturnType<typeof createJiti> | null = null;
-  const getJiti = () => {
-    if (jitiLoader) {
-      return jitiLoader;
+  // Cache jiti loaders by plugin root directory to ensure native bindings resolve correctly
+  // from the plugin's node_modules rather than OpenClaw's directory
+  const jitiLoaderCache = new Map<string, ReturnType<typeof createJiti>>();
+  const getJiti = (pluginRootDir?: string) => {
+    // Use plugin root dir if provided, otherwise fall back to OpenClaw's directory
+    const cacheKey = pluginRootDir ?? "__default__";
+    const cached = jitiLoaderCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };
-    jitiLoader = createJiti(import.meta.url, {
+    // Use plugin root dir for native binding resolution, otherwise fall back to OpenClaw
+    const jitiBase = pluginRootDir ? path.resolve(pluginRootDir) : import.meta.url;
+    const jitiLoader = createJiti(jitiBase, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       ...(Object.keys(aliasMap).length > 0
@@ -581,6 +588,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           }
         : {}),
     });
+    jitiLoaderCache.set(cacheKey, jitiLoader);
     return jitiLoader;
   };
 
@@ -701,7 +709,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(safeSource) as OpenClawPluginModule;
+      mod = getJiti(pluginRoot)(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
