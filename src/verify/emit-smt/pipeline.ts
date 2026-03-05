@@ -131,7 +131,7 @@ export function emitPipelineSmt2(data: ParsedAll): string {
     if (step.stripPluginOnlyAllowlist) {
       w(`; Step ${i} stripping constraint`);
       w(
-        `(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (and (is_core_tool t) (passes_owner_gate t))))))`,
+        `(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (and (is_core_tool t) (passes_owner_gate t)))))`,
       );
       w(`            step${i}_allow_empty))`);
     }

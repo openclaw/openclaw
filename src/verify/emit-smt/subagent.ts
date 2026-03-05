@@ -136,7 +136,8 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`(define-fun passes_subagent_gate ((t Tool)) Bool`);
   w(`  (and (not (subagent_effective_deny t))`);
   w(`       (or (not allowlist_active)`);
-  w(`           (allowlist_allows t))))`);
+  w(`           (allowlist_allows t)`);
+  w(`           (and (= t apply_patch_) (allowlist_allows exec_)))))`);
   w(``);
 
   // 6. Full policy

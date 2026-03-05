@@ -22,10 +22,10 @@ export function emitOwnerOnlySmt2(data: ParsedAll): string {
   const w = (s: string) => lines.push(s);
 
   w(`; ============================================================================`);
-  w(`; owner-only.smt2 — Owner-Only Post-Pipeline Gate`);
+  w(`; owner-only.smt2 — Owner-Only Pre-Pipeline Filter`);
   w(`; ============================================================================`);
   w(`; Models applyOwnerOnlyToolPolicy from tool-policy.ts.`);
-  w(`; This gate runs AFTER the 7-step pipeline and filters tools that are`);
+  w(`; This filter runs BEFORE the 7-step pipeline and removes tools that are`);
   w(`; restricted to the owner sender.`);
   w(`;`);
   w(`; Owner-only tools are determined by:`);
@@ -83,7 +83,7 @@ export function emitOwnerOnlySmt2(data: ParsedAll): string {
   w(`; --------------------------------------------------------------------------`);
   w(`; 3. Owner-Only Gate`);
   w(`; --------------------------------------------------------------------------`);
-  w(`; Post-pipeline filter: if not owner, remove owner-only tools.`);
+  w(`; Pre-pipeline filter: if not owner, remove owner-only tools.`);
   w(`; If owner, all tools pass (they get execution guards but aren't removed).`);
   w(``);
   w(`(define-fun passes_owner_gate ((t Tool)) Bool`);
