@@ -49,8 +49,11 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
+const emittedDuplicateWarnings = new Set<string>();
+
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
+  emittedDuplicateWarnings.clear();
 }
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
@@ -229,12 +232,16 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      const dupKey = `${manifest.id}::${candidate.source}`;
+      if (!emittedDuplicateWarnings.has(dupKey)) {
+        emittedDuplicateWarnings.add(dupKey);
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
