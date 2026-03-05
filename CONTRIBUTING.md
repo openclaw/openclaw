@@ -91,6 +91,7 @@ When opening a PR, use the [PR template](.github/pull_request_template.md) and e
 - [ ] **Human Verification** — What you personally verified
 - [ ] **Compatibility** — Backward compatible, migration needed?
 - [ ] **Failure Recovery** — How to revert if this breaks
+- [ ] **Risks and Mitigations** — Real risks and their mitigations (or `None`)
 
 Filling out the template helps reviewers understand your change faster.
 
