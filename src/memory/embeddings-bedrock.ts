@@ -35,6 +35,10 @@ function isCohereModel(model: string): boolean {
   return model.startsWith("cohere.");
 }
 
+function isTitanV2(model: string): boolean {
+  return model.includes("v2");
+}
+
 function parseRegionFromBaseUrl(baseUrl?: string): string | undefined {
   if (!baseUrl) {
     return undefined;
@@ -74,6 +78,22 @@ export async function createBedrockEmbeddingProvider(
 
   const bedrockClient = new BedrockRuntimeClient({ region });
 
+  // Eagerly resolve credentials to fail fast in "auto" mode when no AWS
+  // creds are configured.  The default chain succeeds with empty/expired
+  // tokens that only fail at InvokeModel time, which would break users
+  // who have a working Voyage/Mistral key but no AWS setup.
+  try {
+    const creds = await bedrockClient.config.credentials();
+    if (!creds?.accessKeyId) {
+      throw new Error("No AWS credentials resolved");
+    }
+  } catch {
+    throw new Error(
+      "Bedrock embedding provider could not resolve AWS credentials. " +
+        "Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, AWS_PROFILE, or run on an instance with an IAM role.",
+    );
+  }
+
   const invokeModel = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const command = new InvokeModelCommand({
       modelId: model,
@@ -99,11 +119,10 @@ export async function createBedrockEmbeddingProvider(
       const embeddings = result.embeddings as number[][];
       return embeddings?.[0] ?? [];
     }
-    // Titan models
+    // Titan models — v2 supports dimensions/normalize, v1 only accepts inputText
     const result = await invokeModel({
       inputText: text,
-      dimensions: 1024,
-      normalize: true,
+      ...(isTitanV2(model) ? { dimensions: 1024, normalize: true } : {}),
     });
     return (result.embedding as number[]) ?? [];
   };
@@ -129,8 +148,7 @@ export async function createBedrockEmbeddingProvider(
         }
         const result = await invokeModel({
           inputText: text,
-          dimensions: 1024,
-          normalize: true,
+          ...(isTitanV2(model) ? { dimensions: 1024, normalize: true } : {}),
         });
         return (result.embedding as number[]) ?? [];
       }),
