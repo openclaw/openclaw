@@ -549,11 +549,10 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
   });
-  it("does not classify bare 'service unavailable' as rate_limit (#32828)", () => {
-    // A generic "service unavailable" from a proxy/CDN should not trigger
-    // provider-overload failover — it may be a transient proxy error or an
-    // unrelated upstream failure.
-    expect(classifyFailoverReason("LLM error: service unavailable")).toBeNull();
+  it("classifies bare 'service unavailable' as timeout instead of rate_limit (#32828)", () => {
+    // A generic "service unavailable" from a proxy/CDN should stay retryable,
+    // but it should not be treated as provider overload / rate limit.
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("timeout");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");

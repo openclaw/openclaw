@@ -24,6 +24,7 @@ const ERROR_PATTERNS = {
   timeout: [
     "timeout",
     "timed out",
+    "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
     "connection error",
