@@ -61,6 +61,13 @@ export type BrowserConfig = {
   /** SSRF policy for browser navigation/open-tab operations. */
   ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**
+   * If true, pass --ignore-certificate-errors to Chrome.
+   * Useful for testing against self-signed certificates.
+   * Warning: This reduces security - only use in trusted environments.
+   * Default: false
+   */
+  ignoreCertificateErrors?: boolean;
+  /**
    * Additional Chrome launch arguments.
    * Useful for stealth flags, window size overrides, or custom user-agent strings.
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
