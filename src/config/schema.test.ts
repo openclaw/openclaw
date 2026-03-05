@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { buildConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 
@@ -160,6 +160,30 @@ describe("config schema", () => {
       channels: [{ ...cachedMergeInput.channels![0] }],
     });
     expect(second).toBe(first);
+  });
+
+  it("does not rely on JSON.stringify for merged schema cache keys", () => {
+    const originalStringify = JSON.stringify;
+    const stringifySpy = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value: unknown, replacer?: unknown, space?: unknown) => {
+        if (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          Object.hasOwn(value, "plugins") &&
+          Object.hasOwn(value, "channels")
+        ) {
+          throw new RangeError("Invalid string length");
+        }
+        return originalStringify(value, replacer, space);
+      });
+
+    try {
+      expect(() => buildConfigSchema(cachedMergeInput)).not.toThrow();
+    } finally {
+      stringifySpy.mockRestore();
+    }
   });
 
   it("derives security/auth tags for credential paths", () => {

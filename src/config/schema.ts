@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -300,6 +301,64 @@ let cachedBase: ConfigSchemaResponse | null = null;
 const mergedSchemaCache = new Map<string, ConfigSchemaResponse>();
 const MERGED_SCHEMA_CACHE_MAX = 64;
 
+function updateStableHash(hash: ReturnType<typeof createHash>, value: unknown): void {
+  if (value === null) {
+    hash.update("null;");
+    return;
+  }
+
+  switch (typeof value) {
+    case "string":
+      hash.update("str:");
+      hash.update(value);
+      hash.update(";");
+      return;
+    case "number":
+      hash.update("num:");
+      hash.update(String(value));
+      hash.update(";");
+      return;
+    case "boolean":
+      hash.update(value ? "bool:1;" : "bool:0;");
+      return;
+    case "bigint":
+      hash.update("bigint:");
+      hash.update(value.toString());
+      hash.update(";");
+      return;
+    case "undefined":
+      hash.update("undefined;");
+      return;
+    case "symbol":
+      hash.update("symbol:");
+      hash.update(value.description ?? "");
+      hash.update(";");
+      return;
+    case "function":
+      hash.update("function;");
+      return;
+    case "object":
+      if (Array.isArray(value)) {
+        hash.update("[");
+        for (const item of value) {
+          updateStableHash(hash, item);
+        }
+        hash.update("]");
+        return;
+      }
+      break;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).toSorted();
+  hash.update("{");
+  for (const key of keys) {
+    hash.update(`key:${key}=`);
+    updateStableHash(hash, obj[key]);
+  }
+  hash.update("}");
+}
+
 function buildMergedSchemaCacheKey(params: {
   plugins: PluginUiMetadata[];
   channels: ChannelUiMetadata[];
@@ -322,7 +381,9 @@ function buildMergedSchemaCacheKey(params: {
       configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+  const hash = createHash("sha256");
+  updateStableHash(hash, { plugins, channels });
+  return hash.digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
