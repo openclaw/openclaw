@@ -907,6 +907,8 @@ export const SignalAccountSchemaBase = z
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
+    injectLinkPreviews: z.boolean().optional(),
+    preserveTextStyles: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.string().optional(),

@@ -203,6 +203,94 @@ Groups:
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
 
+## Inbound Message Features
+
+Signal's enhanced inbound handling provides rich metadata for attachments, quotes, stickers, polls, and more. This metadata is available to hooks, auto-reply templates, and agent context.
+
+### Multi-attachment Support
+
+When a Signal message includes multiple attachments, OpenClaw populates:
+
+- **`MediaPaths`**: Array of file paths for all downloaded attachments.
+- **`MediaTypes`**: Array of content types (MIME types).
+- **`MediaCaptions`**: Array of captions (when present).
+- **`MediaDimensions`**: Array of objects with `width` and `height` (when available).
+
+Single-attachment messages still populate the legacy `MediaPath`, `MediaType`, and `MediaCaption` fields for backward compatibility.
+
+### Stickers
+
+Signal stickers are downloaded as attachments. Metadata is added to the `UntrustedContext` array:
+
+- `Signal sticker packId: <id>`
+- `Signal stickerId: <id>`
+
+The sticker attachment is included in `MediaPaths` along with any other attachments.
+
+### Link Previews
+
+When enabled (default), link preview metadata is extracted into the `UntrustedContext` array:
+
+- URL, title, and description
+- Format: `Link preview: <title> - <description> (<url>)`
+
+Toggle with `channels.signal.injectLinkPreviews` (default: `true`). Set to `false` to exclude link previews from context.
+
+### Text Formatting
+
+Signal supports rich text styles: **bold**, _italic_, `monospace`, ~~strikethrough~~, and spoiler. When enabled (default), OpenClaw applies these as markdown-style formatting to the message text.
+
+Toggle with `channels.signal.preserveTextStyles` (default: `true`). Set to `false` to receive plain text without formatting markers.
+
+### Quote/Reply Metadata
+
+Quoted messages populate reply metadata fields:
+
+- **`ReplyToId`**: Quoted message timestamp.
+- **`ReplyToBody`**: Quoted message text.
+- **`ReplyToSender`**: Quoted message author (phone number or UUID).
+- **`ReplyToIsQuote`**: `true` for Signal quotes.
+
+### Shared Contacts
+
+Contact cards are extracted into the `UntrustedContext` array with:
+
+- Display name (given name, family name, or display name)
+- Phone numbers
+- Email addresses
+- Organization
+
+Format: `Shared contact: <name> — phone: <numbers>, email: <addresses>, org: <organization>`
+
+### Polls
+
+Signal polls populate the `UntrustedContext` array with:
+
+- **Poll creation**: question, options, multi-select flag
+  - Format: `Poll: "<question>" — Options: <option1>, <option2>, ... (multiple selections allowed)`
+- **Poll votes**: option indexes, voter info
+  - Format: `Poll vote on #<timestamp>: option(s) <index> (by <voter>)`
+- **Poll termination**: closed poll indicator
+  - Format: `Poll #<timestamp> closed`
+
+### Edit Tracking
+
+Edited messages include:
+
+- **`EditTargetTimestamp`**: Original message timestamp being edited (provider-specific format).
+- Updated message text and attachments replace the original content.
+
+### UntrustedContext Field
+
+The `UntrustedContext` array contains provider-extracted metadata that may not be directly part of the user's message text:
+
+- Sticker metadata
+- Link preview details
+- Shared contact information
+- Poll data (create, vote, terminate)
+
+This field is available in hooks, auto-reply templates, and agent context. Use it to provide additional context without altering the primary message body.
+
 ## Media + limits
 
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
@@ -317,6 +405,8 @@ Provider options:
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
 - `channels.signal.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap (MB).
+- `channels.signal.injectLinkPreviews`: extract link preview metadata into UntrustedContext (default: true). Set `false` to exclude link previews from message context.
+- `channels.signal.preserveTextStyles`: apply Signal text styles (bold/italic/monospace/strikethrough/spoiler) to message text as markdown formatting (default: true). Set `false` to receive plain text.
 
 Related global options:
 

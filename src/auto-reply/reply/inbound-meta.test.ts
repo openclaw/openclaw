@@ -311,6 +311,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["history_count"]).toBe(1);
   });
 
+  it("includes edit_target_id when edit context is provided", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "1700000000999",
+      EditTargetTimestamp: 1700000000111,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["edit_target_id"]).toBe("1700000000111");
+    expect(conversationInfo["has_edit_context"]).toBe(true);
+  });
+
+  it("omits edit_target_id when edit context is absent", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "1700000000999",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["edit_target_id"]).toBeUndefined();
+    expect(conversationInfo["has_edit_context"]).toBeUndefined();
+  });
+
   it("trims sender_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

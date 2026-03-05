@@ -470,6 +470,8 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
       reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       historyLimit: 50,
+      injectLinkPreviews: true, // Extract link preview metadata into UntrustedContext (default: true)
+      preserveTextStyles: true, // Apply Signal text styles to message text (default: true)
     },
   },
 }
@@ -480,6 +482,13 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
 - `channels.signal.account`: pin channel startup to a specific Signal account identity.
 - `channels.signal.configWrites`: allow or deny Signal-initiated config writes.
 - Optional `channels.signal.defaultAccount` overrides default account selection when it matches a configured account id.
+
+**Inbound message processing:**
+
+- `injectLinkPreviews` (default: `true`): When enabled, link preview metadata (title, description, URL) is extracted from Signal messages and added to the `UntrustedContext` array. Set to `false` to exclude link previews from message context.
+- `preserveTextStyles` (default: `true`): When enabled, Signal rich text styles (bold, italic, monospace, strikethrough, spoiler) are applied to message text as markdown-style formatting. Set to `false` to receive plain text without formatting markers.
+
+See [Signal channel docs](/channels/signal#inbound-message-features) for full inbound message feature details (multi-attachments, stickers, polls, quotes, contacts, edits).
 
 ### BlueBubbles
 
