@@ -10,8 +10,9 @@ import { createWebSendApi } from "./send-api.js";
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
   const sendPresenceUpdate = vi.fn(async () => {});
+  const presenceSubscribe = vi.fn(async () => {});
   const api = createWebSendApi({
-    sock: { sendMessage, sendPresenceUpdate },
+    sock: { sendMessage, sendPresenceUpdate, presenceSubscribe },
     defaultAccountId: "main",
   });
 
