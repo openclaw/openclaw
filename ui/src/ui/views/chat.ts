@@ -358,7 +358,7 @@ export function renderChat(props: ChatProps) {
             })()
               ? html`
                 <div class="callout info" style="margin-bottom: 10px;">
-                  <strong>Deliverables hint:</strong> tool output is hidden. That’s usually where file paths and artifacts show up.
+                  <strong>Tool output hidden.</strong> Deliverables and file paths often show up there.
                   ${
                     props.onToggleThinking
                       ? html`
