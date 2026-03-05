@@ -409,7 +409,7 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
+  it("keeps UI-originated main-session turns on webchat unless routing is explicit", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
       lastChannel: "telegram",
@@ -452,7 +452,7 @@ describe("gateway agent handler", () => {
       messageChannel?: string;
       runContext?: { messageChannel?: string };
     };
-    expect(callArgs.channel).toBe("telegram");
+    expect(callArgs.channel).toBe("webchat");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });

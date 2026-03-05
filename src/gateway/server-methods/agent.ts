@@ -518,9 +518,18 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.accountId === "string" && request.accountId.trim()
         ? request.accountId.trim()
         : undefined;
+    const uiClientWithoutExplicitRoute =
+      client?.connect &&
+      isWebchatConnect(client.connect) &&
+      !request.replyChannel &&
+      !request.channel &&
+      !explicitTo;
+
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
-      requestedChannel: request.replyChannel ?? request.channel,
+      requestedChannel: uiClientWithoutExplicitRoute
+        ? INTERNAL_MESSAGE_CHANNEL
+        : (request.replyChannel ?? request.channel),
       explicitTo,
       explicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
