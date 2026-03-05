@@ -345,9 +345,19 @@ export function renderChat(props: ChatProps) {
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
           ${
-            !props.showThinking && (props.toolMessages?.length ?? 0) > 0
+            (() => {
+              if (props.showThinking) {
+                return false;
+              }
+              const toolStreamHasEntries = (props.toolMessages?.length ?? 0) > 0;
+              const historyHasHiddenToolResults = (props.messages ?? []).some((msg) => {
+                const role = normalizeMessage(msg).role.toLowerCase();
+                return role === "toolresult";
+              });
+              return toolStreamHasEntries || historyHasHiddenToolResults;
+            })()
               ? html`
-                <div class="callout warn" style="margin-bottom: 10px;">
+                <div class="callout info" style="margin-bottom: 10px;">
                   <strong>Deliverables hint:</strong> tool output is hidden. That’s usually where file paths and artifacts show up.
                   ${
                     props.onToggleThinking
