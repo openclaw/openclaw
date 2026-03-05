@@ -113,6 +113,17 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(false);
   });
 
+  it("returns false when systemctl reports transient unit state", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("transient") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "transient", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
