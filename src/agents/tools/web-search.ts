@@ -642,7 +642,14 @@ function resolveArkConfig(search?: WebSearchConfig): ArkConfig {
 }
 
 function resolveArkApiKey(ark?: ArkConfig, fullConfig?: OpenClawConfig): string | undefined {
-  const fromConfig = normalizeApiKey(ark?.apiKey);
+  const fromConfigRaw =
+    ark && "apiKey" in ark
+      ? normalizeResolvedSecretInputString({
+          value: ark.apiKey,
+          path: "tools.web.search.ark.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   if (fromConfig) {
     return fromConfig;
   }
@@ -661,7 +668,11 @@ function resolveArkApiKey(ark?: ArkConfig, fullConfig?: OpenClawConfig): string 
   // Fallback: try to get from models.providers.volcengine.apiKey in main config
   const volcengineProvider = fullConfig?.models?.providers?.volcengine;
   if (volcengineProvider && "apiKey" in volcengineProvider) {
-    const fromModelsConfig = normalizeApiKey(volcengineProvider.apiKey);
+    const fromModelsConfigRaw = normalizeResolvedSecretInputString({
+      value: volcengineProvider.apiKey,
+      path: "models.providers.volcengine.apiKey",
+    });
+    const fromModelsConfig = normalizeSecretInput(fromModelsConfigRaw);
     if (fromModelsConfig) {
       return fromModelsConfig;
     }
