@@ -310,7 +310,7 @@ describe("context-dedup", () => {
     const preRewrite = String(deduped.messages[2].content);
     expect(preRewrite).toContain("Same as context message #1");
 
-    const rewritten = rewriteReadLineageSourcePointers(deduped.messages as any[]);
+    const rewritten = rewriteReadLineageSourcePointers(deduped.messages);
     const postRewrite = String(rewritten[2].content);
     expect(postRewrite).toContain("Same as context message #0");
     expect(postRewrite).not.toContain("Same as context message #1");
@@ -401,7 +401,7 @@ describe("context-dedup", () => {
 
     const lineage = applyReadLineageCompaction(messages as any[]);
 
-    const deduped = deduplicateMessages(lineage.messages as any[], DEDUP_ON);
+    const deduped = deduplicateMessages(lineage.messages, DEDUP_ON);
     const sourceMessageText = String(deduped.messages[5].content);
     expect(sourceMessageText).toContain("Same as context message #1");
 
@@ -409,7 +409,7 @@ describe("context-dedup", () => {
     expect(preRewriteDeltaText).toContain("[Read delta from earlier chunk]");
     expect(preRewriteDeltaText).toContain("context message #5");
 
-    const rewritten = rewriteReadLineageSourcePointers(deduped.messages as any[]);
+    const rewritten = rewriteReadLineageSourcePointers(deduped.messages);
     const postRewriteDeltaText = String(rewritten[7].content);
     expect(postRewriteDeltaText).toContain("context message #1");
     expect(postRewriteDeltaText).not.toContain("context message #5");

@@ -455,7 +455,7 @@ function collapseReadChunkAgainstSeen(params: {
   }
 
   const firstNovel = repeated.findIndex((value) => !value);
-  const lastNovel = repeated.length - 1 - [...repeated].reverse().findIndex((value) => !value);
+  const lastNovel = repeated.length - 1 - [...repeated].toReversed().findIndex((value) => !value);
   if (firstNovel < 0 || lastNovel < firstNovel) {
     return {
       nextText: params.text,
