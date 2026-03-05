@@ -11,6 +11,8 @@ const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
+const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
@@ -107,23 +109,35 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
+const CODEX_GPT54_ELIGIBLE_PROVIDERS = new Set(["openai-codex"]);
 const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 
-function resolveOpenAICodexGpt53FallbackModel(
+function resolveOpenAICodexForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
-    return undefined;
-  }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+  const lower = trimmedModelId.toLowerCase();
+
+  let templateIds: readonly string[];
+  let eligibleProviders: Set<string>;
+  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
+    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
+  } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
+    templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
+    eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
+  } else {
     return undefined;
   }
 
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+  if (!eligibleProviders.has(normalizedProvider)) {
+    return undefined;
+  }
+
+  for (const templateId of templateIds) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
       continue;
@@ -308,7 +322,7 @@ export function resolveForwardCompatModel(
 ): Model<Api> | undefined {
   return (
     resolveOpenAIGpt54ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
+    resolveOpenAICodexForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??

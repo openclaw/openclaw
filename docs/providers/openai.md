@@ -56,13 +56,12 @@ openclaw models auth login --provider openai-codex
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
 
-OpenAI's current Codex docs still list `gpt-5.3-codex` as the latest documented
-Codex OAuth model. `gpt-5.4` support here refers to direct `openai/*` API
-models, not `openai-codex/*`.
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
 ### Transport default
 
@@ -88,9 +87,9 @@ Related OpenAI docs:
 {
   agents: {
     defaults: {
-      model: { primary: "openai-codex/gpt-5.3-codex" },
+      model: { primary: "openai-codex/gpt-5.4" },
       models: {
-        "openai-codex/gpt-5.3-codex": {
+        "openai-codex/gpt-5.4": {
           params: {
             transport: "auto",
           },

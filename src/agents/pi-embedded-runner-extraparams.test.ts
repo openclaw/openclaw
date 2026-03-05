@@ -755,6 +755,36 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("websocket");
   });
 
+  it("passes configured websocket transport through stream options for openai-codex gpt-5.4", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: {
+                transport: "websocket",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("websocket");
+  });
+
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
