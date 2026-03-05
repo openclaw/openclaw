@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/local file upload allowlist parity: propagate `mediaLocalRoots` through the Slack send action pipeline so workspace-rooted attachments pass `assertLocalMediaAllowed` checks while non-allowlisted paths remain blocked. (synthesis: #36656; overlap considered from #36516, #36496, #36493, #36484, #32648, #30888) Thanks @2233admin.
 - Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
 - Config/schema cache key stability: build merged schema cache keys with incremental hashing to avoid large single-string serialization and prevent `RangeError: Invalid string length` on high-cardinality plugin/channel metadata. (#36603) Thanks @powermaster888.
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
