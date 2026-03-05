@@ -10,7 +10,7 @@ export const describeStickerImageSpy: StickerSpy = vi.fn();
 
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
-let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
+let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
 
 export const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
@@ -97,8 +97,7 @@ beforeEach(() => {
 
 afterEach(() => {
   lookupMock.mockClear();
-  resolvePinnedHostnameSpy?.mockRestore();
-  resolvePinnedHostnameSpy = null;
+  resolvePinnedHostnameSpy.mockRestore();
 });
 
 beforeAll(async () => {

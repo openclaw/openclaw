@@ -1,0 +1,8 @@
+{
+  "video_result": [
+    {
+      "url": "https://example.com/generated-video.mp4"
+    }
+  ],
+  "cover_image_url": "https://example.com/cover.jpg"
+}
