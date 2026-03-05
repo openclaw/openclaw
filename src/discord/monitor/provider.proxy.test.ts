@@ -32,6 +32,7 @@ const {
   } as const;
 
   class GatewayPlugin {
+    emitter = { emit: vi.fn() };
     options: unknown;
     gatewayInfo: unknown;
     constructor(options?: unknown, gatewayInfo?: unknown) {
@@ -40,6 +41,9 @@ const {
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
+    }
+    handleReconnectionAttempt() {
+      throw new Error("max reconnect attempts reached");
     }
   }
 
@@ -193,5 +197,23 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles reconnect attempt failures without throwing", async () => {
+    const runtime = createRuntime();
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const pluginWithReconnector = plugin as unknown as {
+      handleReconnectionAttempt: () => Promise<void>;
+      emitter: { emit: ReturnType<typeof vi.fn> };
+    };
+
+    await expect(pluginWithReconnector.handleReconnectionAttempt()).resolves.toBeUndefined();
+    expect(runtime.error).toHaveBeenCalled();
+    expect(pluginWithReconnector.emitter.emit).toHaveBeenCalledWith("error", expect.any(Error));
   });
 });
