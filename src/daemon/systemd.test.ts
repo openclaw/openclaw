@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -11,6 +14,7 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
@@ -197,6 +201,64 @@ describe("resolveSystemdUserUnitPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
+  });
+});
+
+describe("readSystemdServiceExecStart", () => {
+  it("loads OPENCLAW_GATEWAY_TOKEN from EnvironmentFile entries", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-envfile-"));
+    const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
+    const envFilePath = path.join(home, ".openclaw/.env");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+    await fs.writeFile(envFilePath, "OPENCLAW_GATEWAY_TOKEN=envfile-token\n", "utf8");
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/node /usr/local/bin/openclaw gateway",
+        "EnvironmentFile=-%h/.openclaw/missing.env %h/.openclaw/.env",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const command = await readSystemdServiceExecStart({ HOME: home });
+      expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("envfile-token");
+      expect(command?.programArguments).toEqual([
+        "/usr/bin/node",
+        "/usr/local/bin/openclaw",
+        "gateway",
+      ]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers inline Environment over EnvironmentFile values", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-inline-"));
+    const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
+    const envFilePath = path.join(home, ".openclaw/.env");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+    await fs.writeFile(envFilePath, "OPENCLAW_GATEWAY_TOKEN=envfile-token\n", "utf8");
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/node /usr/local/bin/openclaw gateway",
+        "EnvironmentFile=%h/.openclaw/.env",
+        "Environment=OPENCLAW_GATEWAY_TOKEN=inline-token",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const command = await readSystemdServiceExecStart({ HOME: home });
+      expect(command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("inline-token");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });
 

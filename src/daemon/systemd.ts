@@ -56,6 +56,84 @@ export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
+function unquoteSystemdValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed;
+  }
+  let out = "";
+  let escapeNext = false;
+  for (const ch of trimmed.slice(1, -1)) {
+    if (escapeNext) {
+      out += ch;
+      escapeNext = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function parseSystemdEnvironmentFileEntries(
+  rawValue: string,
+  env: GatewayServiceEnv,
+): Array<{ path: string; optional: boolean }> {
+  const tokens = rawValue.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+  if (tokens.length === 0) {
+    return [];
+  }
+  const home = toPosixPath(resolveHomeDir(env));
+  const entries: Array<{ path: string; optional: boolean }> = [];
+  for (const token of tokens) {
+    const trimmedToken = token.trim();
+    if (!trimmedToken) {
+      continue;
+    }
+    const optional = trimmedToken.startsWith("-");
+    const rawPath = optional ? trimmedToken.slice(1).trim() : trimmedToken;
+    if (!rawPath) {
+      continue;
+    }
+    const expanded = unquoteSystemdValue(rawPath).replaceAll("%h", home);
+    if (!expanded) {
+      continue;
+    }
+    entries.push({ path: expanded, optional });
+  }
+  return entries;
+}
+
+async function readSystemdEnvironmentFiles(
+  entries: Array<{ path: string; optional: boolean }>,
+): Promise<Record<string, string>> {
+  const environment: Record<string, string> = {};
+  for (const entry of entries) {
+    let content = "";
+    try {
+      content = await fs.readFile(entry.path, "utf8");
+    } catch {
+      // EnvironmentFile entries may be optional and should not block command inspection.
+      continue;
+    }
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#") || line.startsWith(";")) {
+        continue;
+      }
+      const exportPrefix = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
+      const parsed = parseSystemdEnvAssignment(exportPrefix);
+      if (parsed) {
+        environment[parsed.key] = parsed.value;
+      }
+    }
+  }
+  return environment;
+}
+
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -65,6 +143,7 @@ export async function readSystemdServiceExecStart(
     let execStart = "";
     let workingDirectory = "";
     const environment: Record<string, string> = {};
+    const environmentFileEntries: Array<{ path: string; optional: boolean }> = [];
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) {
@@ -80,10 +159,23 @@ export async function readSystemdServiceExecStart(
         if (parsed) {
           environment[parsed.key] = parsed.value;
         }
+      } else if (line.startsWith("EnvironmentFile=")) {
+        const raw = line.slice("EnvironmentFile=".length).trim();
+        const parsedEntries = parseSystemdEnvironmentFileEntries(raw, env);
+        environmentFileEntries.push(...parsedEntries);
       }
     }
     if (!execStart) {
       return null;
+    }
+    if (environmentFileEntries.length > 0) {
+      const fileEnvironment = await readSystemdEnvironmentFiles(environmentFileEntries);
+      for (const [key, value] of Object.entries(fileEnvironment)) {
+        // Inline Environment= assignments should remain the source of truth when present.
+        if (!(key in environment)) {
+          environment[key] = value;
+        }
+      }
     }
     const programArguments = parseSystemdExecStart(execStart);
     return {
