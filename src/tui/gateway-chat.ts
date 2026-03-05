@@ -128,7 +128,7 @@ export class GatewayChatClient {
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.UI,
+      mode: GATEWAY_CLIENT_MODES.TUI,
       caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,

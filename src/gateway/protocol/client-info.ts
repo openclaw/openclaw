@@ -21,6 +21,7 @@ export type GatewayClientName = GatewayClientId;
 
 export const GATEWAY_CLIENT_MODES = {
   WEBCHAT: "webchat",
+  TUI: "tui",
   CLI: "cli",
   UI: "ui",
   BACKEND: "backend",

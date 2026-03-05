@@ -52,6 +52,10 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
+export function isTuiClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.TUI;
+}
+
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) {

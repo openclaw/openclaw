@@ -19,6 +19,7 @@ import {
 } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  isTuiClient,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -891,6 +892,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
       const clientMode = client?.connect?.client?.mode;
+      const isFromTuiClient = isTuiClient(client?.connect?.client);
       const isFromWebchatClient =
         isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
@@ -904,7 +906,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
         ((!isChannelAgnosticSessionScope &&
           (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-          (isConfiguredMainSessionScope && client?.connect !== undefined && !isFromWebchatClient)),
+          (isConfiguredMainSessionScope && client?.connect !== undefined && !isFromWebchatClient && !isFromTuiClient)),
       );
       const hasDeliverableRoute =
         shouldDeliverExternally &&
@@ -913,9 +915,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
         routeToCandidate.trim().length > 0;
+      const internalSurface = isFromTuiClient ? "tui" : INTERNAL_MESSAGE_CHANNEL;
       const originatingChannel = hasDeliverableRoute
         ? routeChannelCandidate
-        : INTERNAL_MESSAGE_CHANNEL;
+        : internalSurface;
       const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
       const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
       const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
@@ -931,8 +934,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         RawBody: parsedMessage,
         CommandBody: commandBody,
         SessionKey: sessionKey,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
+        Provider: internalSurface,
+        Surface: internalSurface,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         AccountId: accountId,
@@ -953,7 +956,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId,
-        channel: INTERNAL_MESSAGE_CHANNEL,
+        channel: internalSurface,
       });
       const finalReplyParts: string[] = [];
       const dispatcher = createReplyDispatcher({

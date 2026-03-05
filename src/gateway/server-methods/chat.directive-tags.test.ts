@@ -612,6 +612,81 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send routes TUI client messages with surface=tui instead of webchat", async () => {
+    createTranscriptFixture("openclaw-chat-send-tui-surface-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {};
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-tui-surface",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.TUI,
+            id: "gateway-client",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        Provider: "tui",
+        Surface: "tui",
+        OriginatingChannel: "tui",
+      }),
+    );
+  });
+
+  it("chat.send does not inherit external delivery context for TUI clients on main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-tui-routes-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-tui-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.TUI,
+            id: "gateway-client",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        Provider: "tui",
+        Surface: "tui",
+        OriginatingChannel: "tui",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
   it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-cli-routes-");
     mockState.mainSessionKey = "work";
