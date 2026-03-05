@@ -126,16 +126,12 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   const { randomBytes } = await import("node:crypto");
   const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   // On Windows, mode 0o600 can mark the tmp file read-only and cause rename to
-  // fail with ENOENT. Skip mode on Windows; apply chmod post-rename elsewhere.
+  // fail. Skip mode on Windows; on POSIX, rename preserves the mode set here
+  // so no post-rename chmod is needed.
   const pruneWriteOpts: Parameters<typeof fs.writeFile>[2] =
     process.platform === "win32" ? { encoding: "utf-8" } : { encoding: "utf-8", mode: 0o600 };
   await fs.writeFile(tmp, `${kept.join("\n")}\n`, pruneWriteOpts);
   await fs.rename(tmp, filePath);
-  if (process.platform !== "win32") {
-    await fs.chmod(filePath, 0o600).catch(() => {
-      // best-effort: chmod failure is non-fatal
-    });
-  }
 }
 
 export async function appendCronRunLog(

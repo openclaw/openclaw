@@ -83,9 +83,9 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  // On Windows, setting mode 0o600 on the tmp file can mark it read-only,
-  // causing the subsequent rename to fail with ENOENT. Skip mode on Windows;
-  // apply chmod post-rename on other platforms instead.
+  // On Windows, mode 0o600 on the tmp file can mark it read-only and cause the
+  // subsequent rename to fail. Skip mode on Windows; on POSIX, rename preserves
+  // the mode set here so no post-rename chmod is needed.
   const writeOpts: Parameters<typeof fs.promises.writeFile>[2] =
     process.platform === "win32" ? { encoding: "utf-8" } : { encoding: "utf-8", mode: 0o600 };
   await fs.promises.writeFile(tmp, json, writeOpts);
@@ -93,19 +93,14 @@ export async function saveCronStore(
     try {
       const bakPath = `${storePath}.bak`;
       await fs.promises.copyFile(storePath, bakPath);
-      await fs.promises.chmod(bakPath, 0o600).catch(() => {
-        // best-effort: chmod failure is non-fatal
-      });
+      // best-effort: fire-and-forget so the I/O callback doesn't block the
+      // rename chain (especially in test environments with fake timers).
+      fs.promises.chmod(bakPath, 0o600).catch(() => {});
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
-  if (process.platform !== "win32") {
-    await fs.promises.chmod(storePath, 0o600).catch(() => {
-      // best-effort: chmod failure is non-fatal
-    });
-  }
   serializedStoreCache.set(storePath, json);
 }
 
