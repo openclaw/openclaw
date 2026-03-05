@@ -159,9 +159,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const answers = readStringArrayParam(params, "pollOption", { required: true });
       const durationHours = readNumberParam(params, "pollDurationHours", {
         integer: true,
+        strict: true,
       });
       const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
         integer: true,
+        strict: true,
       });
       const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
       const messageThreadId = readNumberParam(params, "threadId", { integer: true });

@@ -584,9 +584,11 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
   const durationHours = readNumberParam(params, "pollDurationHours", {
     integer: true,
+    strict: true,
   });
   const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
     integer: true,
+    strict: true,
   });
   const maxSelections = resolvePollMaxSelections(options.length, allowMultiselect);
 
