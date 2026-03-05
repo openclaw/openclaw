@@ -255,7 +255,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Check early if upstream hook provided custom content — if so, skip
     // transcript loading and LLM slug generation to avoid leaking raw
     // session text to the model provider in redaction workflows.
-    const customContent = event.context.sessionSaveContent;
+    const customContent = context.sessionSaveContent;
     // Treat any string value (including empty) as a custom content override.
     // An empty string is a valid redaction signal — hooks may intentionally
     // set it to persist a blank marker while avoiding transcript retention.
@@ -297,7 +297,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Determine write target. Redirect paths are validated by writeFileWithinRoot
     // which handles path traversal, symlink resolution, and containment checks.
-    const redirectPath = event.context.sessionSaveRedirectPath;
+    const redirectPath = context.sessionSaveRedirectPath;
     const isRedirected = typeof redirectPath === "string" && redirectPath.length > 0;
     // For redirects, compute a workspace-relative path so writeFileWithinRoot
     // can validate containment. Absolute paths are made relative to workspace.
