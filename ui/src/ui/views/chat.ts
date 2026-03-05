@@ -71,6 +71,7 @@ export type ChatProps = {
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
+  onToggleThinking?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
@@ -343,6 +344,26 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
+          ${
+            !props.showThinking && (props.toolMessages?.length ?? 0) > 0
+              ? html`
+                <div class="callout warn" style="margin-bottom: 10px;">
+                  <strong>Deliverables hint:</strong> tool output is hidden. That’s usually where file paths and artifacts show up.
+                  ${
+                    props.onToggleThinking
+                      ? html`
+                        <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                          <button class="btn btn--sm primary" type="button" @click=${props.onToggleThinking}>
+                            Show tool output
+                          </button>
+                        </div>
+                      `
+                      : nothing
+                  }
+                </div>
+              `
+              : nothing
+          }
           ${thread}
         </div>
 
