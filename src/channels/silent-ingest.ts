@@ -11,12 +11,14 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_INFLIGHT = 64;
 const DEFAULT_MAX_GLOBAL_INFLIGHT = 256;
 const DEFAULT_CONTENT_MAX_LENGTH = 8192;
+const DISALLOWED_CONTROL_CHARS_REGEX = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
-function truncateContent(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
+function sanitizeIngestContent(value: string, maxLength: number): string {
+  const stripped = value.replace(DISALLOWED_CONTROL_CHARS_REGEX, "");
+  if (stripped.length <= maxLength) {
+    return stripped;
   }
-  return value.substring(0, maxLength);
+  return stripped.substring(0, maxLength);
 }
 
 function makeInflightKey(ctx: PluginHookMessageContext): InflightKey {
@@ -55,10 +57,10 @@ export async function runSilentMessageIngest(params: {
     return false;
   }
   const rawContent = params.event.content;
-  if (!rawContent.trim()) {
+  const content = sanitizeIngestContent(rawContent, DEFAULT_CONTENT_MAX_LENGTH);
+  if (!content.trim()) {
     return false;
   }
-  const content = truncateContent(rawContent, DEFAULT_CONTENT_MAX_LENGTH);
 
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("message_ingest")) {

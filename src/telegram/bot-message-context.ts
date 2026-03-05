@@ -564,7 +564,7 @@ export const buildTelegramMessageContext = async ({
       const senderLabelForHook = buildSenderLabel(msg, senderId || chatId);
       const messageIdForHook =
         typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-      const ingestConversationId = `telegram:${chatId}`;
+      const ingestConversationId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
       void runSilentMessageIngest({
         enabled: ingestEnabled,
         event: {

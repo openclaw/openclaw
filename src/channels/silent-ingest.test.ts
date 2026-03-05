@@ -18,7 +18,7 @@ describe("runSilentMessageIngest", () => {
       enabled: true,
       event: {
         from: "evil\nname",
-        content: "line1\n\tline2",
+        content: "line1\n\tline2\u0000",
       },
       ctx: {
         channelId: "telegram",
