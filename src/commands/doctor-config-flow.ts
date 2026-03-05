@@ -1799,8 +1799,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   let snapshot = await readConfigFileSnapshot();
   const baseCfg = snapshot.config ?? {};
+  const persistedBaseCfg = snapshot.resolved ?? baseCfg;
   let cfg: OpenClawConfig = baseCfg;
-  let candidate = structuredClone(baseCfg);
+  // Use the pre-defaults resolved config as the write baseline so doctor
+  // repairs do not persist schema defaults into account-only channel roots.
+  let candidate = structuredClone(persistedBaseCfg);
   let pendingChanges = false;
   let shouldWriteConfig = false;
   const fixHints: string[] = [];
