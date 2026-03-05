@@ -139,6 +139,12 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth unavailable"),
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("missing env var"));
   });
 
   it("resolves env-template gateway.auth.token before building dashboard URL", async () => {
@@ -152,9 +158,10 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#token=resolved-secret-token",
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=resolved-secret-token");
   });
 });

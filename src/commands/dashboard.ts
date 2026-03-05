@@ -29,7 +29,11 @@ function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
 async function resolveDashboardToken(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{ token?: string; unresolvedRefReason?: string }> {
+): Promise<{
+  token?: string;
+  source?: "config" | "env" | "secretRef";
+  unresolvedRefReason?: string;
+}> {
   const { ref } = resolveSecretInputRef({
     value: cfg.gateway?.auth?.token,
     defaults: cfg.secrets?.defaults,
@@ -39,11 +43,13 @@ async function resolveDashboardToken(
       ? undefined
       : cfg.gateway.auth.token.trim() || undefined;
   if (configToken) {
-    return { token: configToken };
+    return { token: configToken, source: "config" };
   }
   if (!ref) {
-    return { token: readGatewayTokenEnv(env) };
+    const envToken = readGatewayTokenEnv(env);
+    return envToken ? { token: envToken, source: "env" } : {};
   }
+  const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
   try {
     const resolved = await resolveSecretRefValues([ref], {
       config: cfg,
@@ -51,17 +57,17 @@ async function resolveDashboardToken(
     });
     const value = resolved.get(secretRefKey(ref));
     if (typeof value === "string" && value.trim().length > 0) {
-      return { token: value.trim() };
+      return { token: value.trim(), source: "secretRef" };
     }
     const envToken = readGatewayTokenEnv(env);
     return envToken
-      ? { token: envToken }
-      : { unresolvedRefReason: "gateway.auth.token SecretRef resolved to an empty value." };
-  } catch (err) {
+      ? { token: envToken, source: "env" }
+      : { unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).` };
+  } catch {
     const envToken = readGatewayTokenEnv(env);
     return envToken
-      ? { token: envToken }
-      : { unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${String(err)}).` };
+      ? { token: envToken, source: "env" }
+      : { unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${refLabel}).` };
   }
 }
 
@@ -86,12 +92,19 @@ export async function dashboardCommand(
     customBindHost,
     basePath,
   });
+  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
+  const includeTokenInUrl = token.length > 0 && resolvedToken.source !== "secretRef";
   // Prefer URL fragment to avoid leaking auth tokens via query params.
-  const dashboardUrl = token
+  const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  if (resolvedToken.source === "secretRef" && token) {
+    runtime.log(
+      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+    );
+  }
   if (resolvedToken.unresolvedRefReason) {
     runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
     runtime.log(
@@ -113,7 +126,7 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: token || undefined,
+        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {
