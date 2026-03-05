@@ -34,6 +34,44 @@ export function stripMinimaxToolCallXml(text: string): string {
 }
 
 /**
+ * Strip Anthropic-style tool call/result XML that leaks into text content.
+ *
+ * When Anthropic models are accessed via OpenAI-compatible proxies (e.g. LiteLLM),
+ * the proxy may serialize tool_use/tool_result content blocks as XML within the
+ * text content field instead of (or in addition to) structured tool_calls.
+ * This removes:
+ * - <antml_function_calls>...</antml_function_calls> blocks
+ * - <antml_invoke ...>...</antml_invoke> blocks
+ * - <tool_call>...</tool_call> blocks
+ * - <tool_result>...</tool_result> blocks
+ */
+export function stripAnthropicToolCallXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Fast path: skip regex if no tool-like XML is present.
+  if (!/<(?:antml_function_calls|antml_invoke|tool_call|tool_result)\b/i.test(text)) {
+    return text;
+  }
+
+  let cleaned = text;
+
+  // Remove <antml_function_calls>...</antml_function_calls> blocks (may span multiple lines).
+  cleaned = cleaned.replace(/<antml_function_calls>[\s\S]*?<\/antml_function_calls>/gi, "");
+
+  // Remove any stray <antml_invoke ...>...</antml_invoke> blocks not inside function_calls.
+  cleaned = cleaned.replace(/<antml_invoke\b[^>]*>[\s\S]*?<\/antml_invoke>/gi, "");
+
+  // Remove <tool_call>...</tool_call> blocks.
+  cleaned = cleaned.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+
+  // Remove <tool_result>...</tool_result> blocks.
+  cleaned = cleaned.replace(/<tool_result>[\s\S]*?<\/tool_result>/gi, "");
+
+  return cleaned;
+}
+
+/**
  * Strip downgraded tool call text representations that leak into text content.
  * When replaying history to Gemini, tool calls without `thought_signature` are
  * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
@@ -212,7 +250,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripDowngradedToolCallText(stripAnthropicToolCallXml(stripMinimaxToolCallXml(text))),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
