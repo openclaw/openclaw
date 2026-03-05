@@ -180,6 +180,8 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
+  const shouldSplitPreviewMessages = streamMode !== "partial";
+  const useDmMessageTransport = threadSpec?.scope === "dm";
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
@@ -190,15 +192,16 @@ export const dispatchTelegramMessage = async ({
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    const useMessagePreviewTransportForDmReasoning =
-      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
+    const useMessagePreviewTransportForDm =
+      useDmMessageTransport ||
+      (laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft);
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
@@ -325,10 +328,15 @@ export const dispatchTelegramMessage = async ({
     const split = splitTextIntoLaneSegments(text);
     const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
     if (hasAnswerSegment && finalizedPreviewByLane.answer) {
-      // Some providers can emit the first partial of a new assistant message before
-      // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
-      // the previously finalized preview message with the next message's text.
-      skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
+      if (shouldSplitPreviewMessages) {
+        // Some providers can emit the first partial of a new assistant message before
+        // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
+        // the previously finalized preview message with the next message's text.
+        skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();
+      } else {
+        // In partial (coalesced) mode, allow continued editing of the same message.
+        finalizedPreviewByLane.answer = false;
+      }
     }
     for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
@@ -515,6 +523,7 @@ export const dispatchTelegramMessage = async ({
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
+            // In partial mode, if a message-start boundary has been seen
           }
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
@@ -562,6 +571,10 @@ export const dispatchTelegramMessage = async ({
               infoKind: info.kind,
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+              // In partial mode, allow re-editing a finalized preview when the
+              // stream has been revived. This lets subsequent finals in a batch
+              // (from buffered block dispatcher) coalesce into the same message.
+              allowRefinalize: !shouldSplitPreviewMessages && segment.lane === "answer",
             });
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
@@ -575,6 +588,12 @@ export const dispatchTelegramMessage = async ({
                 finalizedPreviewByLane.reasoning = true;
               }
               reasoningStepState.resetForNextStep();
+              // In partial (coalesced) mode, keep the stream alive after
+              // finalization so the next tool-call turn can continue editing
+              // the same message. The finally block will stop it for good.
+              if (!shouldSplitPreviewMessages && result === "preview-finalized") {
+                answerLane.stream?.revive?.();
+              }
             }
           }
           if (segments.length > 0) {
@@ -649,8 +668,17 @@ export const dispatchTelegramMessage = async ({
               enqueueDraftLaneEvent(async () => {
                 reasoningStepState.resetForNextStep();
                 if (skipNextAnswerMessageStartRotation) {
+                  // Block-mode pre-rotation already handled this boundary — do not
+                  // reset lane state here as that would clear hasStreamedMessage
+                  // set by the partial that triggered the pre-rotation.
                   skipNextAnswerMessageStartRotation = false;
                   finalizedPreviewByLane.answer = false;
+                  return;
+                }
+                if (!shouldSplitPreviewMessages) {
+                  // In partial (coalesced) mode, reset lane tracking state but keep
+                  // the same stream message — allowing continued editing in place.
+                  resetDraftLaneState(answerLane);
                   return;
                 }
                 await rotateAnswerLaneForNewAssistantMessage();

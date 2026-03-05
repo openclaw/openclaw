@@ -24,6 +24,7 @@ function makeBrowserState(): BrowserServerState {
       color: "#FF4500",
       headless: true,
       noSandbox: false,
+      gpuEnabled: false,
       attachOnly: false,
       defaultProfile: "chrome",
       profiles: {

@@ -66,6 +66,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** Re-open the stream lifecycle without clearing messageId or incrementing generation. */
+  revive?: () => void;
 };
 
 type TelegramDraftPreview = {
@@ -337,6 +339,7 @@ export function createTelegramDraftStream(params: {
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
     // Re-open the stream lifecycle for the next assistant segment.
+    streamState.stopped = false;
     streamState.final = false;
     generation += 1;
     streamMessageId = undefined;
@@ -401,5 +404,11 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    /** Re-open the stream lifecycle without clearing messageId or incrementing generation.
+     *  Used after a flush-stop to keep editing the same message. */
+    revive: () => {
+      streamState.stopped = false;
+      streamState.final = false;
+    },
   };
 }
