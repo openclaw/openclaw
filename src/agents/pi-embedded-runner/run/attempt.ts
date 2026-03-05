@@ -583,6 +583,9 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    truncateBefore:
+      Math.max(promptBuildResult?.truncateBefore ?? 0, legacyResult?.truncateBefore ?? 0) ||
+      undefined,
   };
 }
 
@@ -1664,6 +1667,21 @@ export async function runEmbeddedAttempt(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
+        }
+        const truncateBefore = hookResult?.truncateBefore;
+        if (truncateBefore) {
+          const originalMessageCount = activeSession.messages.length;
+          const truncatedMessages = activeSession.messages.filter((msg) => {
+            const timestamp = (msg as { timestamp?: unknown }).timestamp;
+            return typeof timestamp !== "number" || timestamp >= truncateBefore;
+          });
+          const removedCount = originalMessageCount - truncatedMessages.length;
+          // Repair orphaned tool_result blocks left by the truncation cut.
+          const repaired = sanitizeToolUseResultPairing(truncatedMessages);
+          activeSession.messages.splice(0, activeSession.messages.length, ...repaired);
+          log.debug(
+            `hooks: truncated prompt history before ${truncateBefore} (removed ${removedCount} messages, repaired tool pairing)`,
+          );
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
