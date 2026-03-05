@@ -59,18 +59,25 @@ export async function downloadMessageFile(params: {
   const { account, downloadCode, robotCode } = params;
   const accessToken = await getAccessToken(account);
 
-  const res = await axios.post(
-    `https://api.dingtalk.com/v1.0/robot/messageFiles/download`,
-    { downloadCode, robotCode },
-    {
-      headers: {
-        "x-acs-dingtalk-access-token": accessToken,
-        "Content-Type": "application/json",
+  try {
+    const res = await axios.post(
+      `https://api.dingtalk.com/v1.0/robot/messageFiles/download`,
+      { downloadCode, robotCode },
+      {
+        headers: {
+          "x-acs-dingtalk-access-token": accessToken,
+          "Content-Type": "application/json",
+        },
       },
-    },
-  );
-
-  return { downloadUrl: res.data?.downloadUrl ?? "" };
+    );
+    return { downloadUrl: res.data?.downloadUrl ?? "" };
+  } catch (err: unknown) {
+    const axErr = err as { response?: { status?: number; data?: unknown } };
+    const detail = axErr.response
+      ? `status=${axErr.response.status} body=${JSON.stringify(axErr.response.data)}`
+      : String(err);
+    throw new Error(`downloadMessageFile failed: ${detail} (robotCode=${robotCode})`);
+  }
 }
 
 /**

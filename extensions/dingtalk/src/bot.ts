@@ -449,6 +449,11 @@ async function resolveDingtalkMedia(params: {
   const codes = ctx.downloadCodes;
   if (!codes || codes.length === 0) return buildAgentMediaPayload([]);
 
+  log(
+    `dingtalk[${account.accountId}]: resolving ${codes.length} media download code(s), ` +
+      `msgtype=${ctx.contentType}, robotCode=${ctx.robotCode}`,
+  );
+
   const core = getDingtalkRuntime();
   const mediaMaxBytes = 30 * 1024 * 1024;
   const savedMedia: Array<{ path: string; contentType?: string | null }> = [];
