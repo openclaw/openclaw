@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
 describe("pairing setup code", () => {
+  function createTailnetDnsRunner() {
+    return vi.fn(async () => ({
+      code: 0,
+      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
+      stderr: "",
+    }));
+  }
+
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
@@ -44,6 +52,101 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("resolves gateway.auth.password SecretRef for pairing payload", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          GW_PASSWORD: "resolved-password",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload.password).toBe("resolved-password");
+    expect(resolved.authLabel).toBe("password");
+  });
+
+  it("uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload.password).toBe("password-from-env");
+    expect(resolved.authLabel).toBe("password");
+  });
+
+  it("does not resolve gateway.auth.password SecretRef in token mode", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "token",
+            token: "tok_123",
+            password: { source: "env", provider: "missing", id: "GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {},
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.authLabel).toBe("token");
+    expect(resolved.payload.token).toBe("tok_123");
+  });
+
   it("honors env token override", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {
@@ -83,11 +186,7 @@ describe("pairing setup code", () => {
   });
 
   it("uses tailscale serve DNS when available", async () => {
-    const runCommandWithTimeout = vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
-      stderr: "",
-    }));
+    const runCommandWithTimeout = createTailnetDnsRunner();
 
     const resolved = await resolvePairingSetupFromConfig(
       {
@@ -114,11 +213,7 @@ describe("pairing setup code", () => {
   });
 
   it("prefers gateway.remote.url over tailscale when requested", async () => {
-    const runCommandWithTimeout = vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
-      stderr: "",
-    }));
+    const runCommandWithTimeout = createTailnetDnsRunner();
 
     const resolved = await resolvePairingSetupFromConfig(
       {

@@ -25,13 +25,14 @@ describe("resolveModelAuthLabel", () => {
     resolveAuthProfileDisplayLabelMock.mockReset();
   });
 
-  it("does not throw when token profile only has tokenRef", () => {
+  it("does not include token value in label for token profiles", () => {
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
         "github-copilot:default": {
           type: "token",
           provider: "github-copilot",
+          token: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
           tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
         },
       },
@@ -45,10 +46,12 @@ describe("resolveModelAuthLabel", () => {
       sessionEntry: { authProfileOverride: "github-copilot:default" } as never,
     });
 
-    expect(label).toContain("token ref(env:GITHUB_TOKEN)");
+    expect(label).toBe("token (github-copilot:default)");
+    expect(label).not.toContain("ghp_");
+    expect(label).not.toContain("ref(");
   });
 
-  it("masks short api-key profile values", () => {
+  it("does not include api-key value in label for api-key profiles", () => {
     const shortSecret = "abc123";
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
@@ -69,8 +72,30 @@ describe("resolveModelAuthLabel", () => {
       sessionEntry: { authProfileOverride: "openai:default" } as never,
     });
 
-    expect(label).toContain("api-key");
-    expect(label).toContain("...");
+    expect(label).toBe("api-key (openai:default)");
     expect(label).not.toContain(shortSecret);
+    expect(label).not.toContain("...");
+  });
+
+  it("shows oauth type with profile label", () => {
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+        },
+      },
+    } as never);
+    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:oauth"]);
+    resolveAuthProfileDisplayLabelMock.mockReturnValue("anthropic:oauth");
+
+    const label = resolveModelAuthLabel({
+      provider: "anthropic",
+      cfg: {},
+      sessionEntry: { authProfileOverride: "anthropic:oauth" } as never,
+    });
+
+    expect(label).toBe("oauth (anthropic:oauth)");
   });
 });

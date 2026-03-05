@@ -22,6 +22,16 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
     ({ agentSessionId }) =>
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],
+  [
+    "kimi",
+    ({ agentSessionId }) =>
+      `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,
+  ],
+  [
+    "moonshot-kimi",
+    ({ agentSessionId }) =>
+      `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,
+  ],
 ]);
 
 function normalizeText(value: unknown): string | undefined {

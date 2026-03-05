@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
+import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -208,6 +208,24 @@ export async function uploadImageFeishu(params: {
 }
 
 /**
+ * Encode a filename for safe use in Feishu multipart/form-data uploads.
+ * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
+ * the upload to silently fail when passed raw through the SDK's form-data
+ * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
+ * Feishu's server decodes and preserves the original display name.
+ */
+export function sanitizeFileNameForUpload(fileName: string): string {
+  const ASCII_ONLY = /^[\x20-\x7E]+$/;
+  if (ASCII_ONLY.test(fileName)) {
+    return fileName;
+  }
+  return encodeURIComponent(fileName)
+    .replace(/'/g, "%27")
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29");
+}
+
+/**
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
  */
@@ -232,10 +250,12 @@ export async function uploadFileFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
+  const safeFileName = sanitizeFileNameForUpload(fileName);
+
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: fileName,
+      file_name: safeFileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),
@@ -308,8 +328,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for video, "audio" for audio, "file" for documents */
-  msgType?: "file" | "media" | "audio";
+  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -447,7 +467,7 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", mp4 -> "media", everything else -> "file"
+    // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
     const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,

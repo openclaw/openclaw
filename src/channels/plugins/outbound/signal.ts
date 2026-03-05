@@ -13,11 +13,13 @@ export const signalOutbound = createDirectTextMediaOutbound({
   channel: "signal",
   resolveSender: resolveSignalSender,
   resolveMaxBytes: createScopedChannelMediaMaxBytesResolver("signal"),
-  buildTextOptions: ({ maxBytes, accountId }) => ({
+  buildTextOptions: ({ cfg, maxBytes, accountId }) => ({
+    cfg,
     maxBytes,
     accountId: accountId ?? undefined,
   }),
-  buildMediaOptions: ({ mediaUrl, maxBytes, accountId, mediaLocalRoots }) => ({
+  buildMediaOptions: ({ cfg, mediaUrl, maxBytes, accountId, mediaLocalRoots }) => ({
+    cfg,
     mediaUrl,
     maxBytes,
     accountId: accountId ?? undefined,
