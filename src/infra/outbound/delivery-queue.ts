@@ -124,25 +124,33 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   }
 }
 
-/** Update a queue entry after a failed delivery attempt. */
-
-export async function markDeliveryAttempt(id: string, stateDir: string): Promise<void> {
-  const file = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const raw = await fs.readFile(file, "utf-8");
-  const entry = JSON.parse(raw) as DeliveryEntry;
-  const updated: DeliveryEntry = {
-    ...entry,
-    retryCount: opts.incrementRetry === false ? (entry.retryCount || 0) : (entry.retryCount || 0) + 1,
-    lastAttemptAt: Date.now(),
-  };
-  await fs.writeFile(file, JSON.stringify(updated, null, 2), "utf-8");
-}
-
-export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
+/** Mark a delivery attempt before running actual delivery logic. */
+export async function markDeliveryAttempt(id: string, stateDir?: string): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
   entry.retryCount += 1;
+  entry.lastAttemptAt = Date.now();
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
+export async function failDelivery(
+  id: string,
+  error: string,
+  stateDir?: string,
+  opts?: { incrementRetry?: boolean },
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const entry: QueuedDelivery = JSON.parse(raw);
+  if (opts?.incrementRetry !== false) {
+    entry.retryCount += 1;
+  }
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   const tmp = `${filePath}.${process.pid}.tmp`;
@@ -343,6 +351,11 @@ export async function recoverPendingDeliveries(opts: {
     }
 
     try {
+      try {
+        await markDeliveryAttempt(entry.id, opts.stateDir);
+      } catch {
+        // Best-effort pre-attempt persistence.
+      }
       await opts.deliver({
         cfg: opts.cfg,
         channel: entry.channel,
