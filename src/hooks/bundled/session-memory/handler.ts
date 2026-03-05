@@ -330,28 +330,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entry = entryParts.join("\n");
     }
 
-    // Write session memory — use redirect path directly when set,
-    // otherwise write under memory root with alias-safe file validation.
-    if (typeof redirectPath === "string" && redirectPath.length > 0) {
-      const dir = path.dirname(memoryFilePath);
-      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      // Use 0o600 (owner-only) to match writeFileWithinRoot's confidentiality
-      // guarantees — especially important for quarantine/redirect paths on
-      // shared hosts where default umask (0o644) would expose session data.
-      const handle = await fs.open(memoryFilePath, "a", 0o600);
-      try {
-        await handle.appendFile(entry, "utf-8");
-      } finally {
-        await handle.close();
-      }
-    } else {
-      await writeFileWithinRoot({
-        rootDir: memoryDir,
-        relativePath: filename,
-        data: entry,
-        encoding: "utf-8",
-      });
-    }
+    // Write session memory — always use writeFileWithinRoot for path
+    // traversal protection. When redirected, shift the root directory
+    // to the redirect target's parent.
+    const targetDir =
+      typeof redirectPath === "string" && redirectPath.length > 0
+        ? path.dirname(memoryFilePath)
+        : memoryDir;
+    const targetFilename =
+      typeof redirectPath === "string" && redirectPath.length > 0
+        ? path.basename(memoryFilePath)
+        : filename;
+    await writeFileWithinRoot({
+      rootDir: targetDir,
+      relativePath: targetFilename,
+      data: entry,
+      encoding: "utf-8",
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
