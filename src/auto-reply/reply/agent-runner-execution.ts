@@ -9,6 +9,8 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isRateLimitErrorMessage,
+  isOverloadedErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -609,20 +611,44 @@ export async function runAgentTurnWithFallback(params: {
     }
   }
 
-  // If the run completed but with an embedded context overflow error that
-  // wasn't recovered from (e.g. compaction reset already attempted), surface
-  // the error to the user instead of silently returning an empty response.
+  // If the run completed but with an embedded error that wasn't recovered
+  // from, surface the error to the user instead of silently returning an
+  // empty response.
   // See #26905: Slack DM sessions silently swallowed messages when context
   // overflow errors were returned as embedded error payloads.
+  // See #35039: Rate limit errors mid-turn (after tool calls) produced
+  // empty assistant responses with no user-facing error message.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
-    return {
-      kind: "final",
-      payload: {
-        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-      },
-    };
+  if (finalEmbeddedError && !hasPayloadText) {
+    const errorMsg = finalEmbeddedError.message ?? "";
+    if (isContextOverflowError(errorMsg)) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+        },
+      };
+    }
+    if (isRateLimitErrorMessage(errorMsg) || isOverloadedErrorMessage(errorMsg)) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ API rate limit reached mid-turn — the model couldn't generate a response after tool calls completed. Please try again in a moment.",
+        },
+      };
+    }
+    // Generic fallback: any embedded error with no payload text should be
+    // surfaced rather than swallowed silently.
+    if (errorMsg) {
+      const safeMsg = sanitizeUserFacingText(errorMsg, { errorContext: true });
+      return {
+        kind: "final",
+        payload: {
+          text: `⚠️ Agent error mid-turn: ${safeMsg.replace(/\.\s*$/, "")}.\nThe model ran tools but couldn't complete its response. Please try again.`,
+        },
+      };
+    }
   }
 
   return {
