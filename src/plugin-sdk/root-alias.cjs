@@ -184,7 +184,10 @@ const rootProxy = new Proxy(fastExports, {
         writable: true,
       };
     }
-    const monolithic = loadMonolithicSdk();
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return undefined;
+    }
     const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
     if (descriptor) {
       return { ...descriptor, configurable: true };

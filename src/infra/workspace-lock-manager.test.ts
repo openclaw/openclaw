@@ -17,7 +17,8 @@ async function makeCaseDir(): Promise<string> {
 function expectedLockPath(targetPath: string, kind: "file" | "dir"): string {
   const normalized = path.resolve(targetPath);
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
-  return path.join(path.dirname(normalized), ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
+  const lockBaseDir = kind === "dir" ? normalized : path.dirname(normalized);
+  return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
 }
 
 describe("workspace lock manager", () => {
@@ -165,5 +166,23 @@ describe("workspace lock manager", () => {
 
     await lock.release();
     await expect(fs.readFile(adjacentDataPath, "utf8")).resolves.toBe("important-data");
+  });
+
+  it("stores dir lock artifacts inside the locked directory", async () => {
+    const dir = await makeCaseDir();
+    const workspaceDir = path.join(dir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    const lock = await acquireWorkspaceLock(workspaceDir, {
+      kind: "dir",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    expect(lock.lockPath).toBe(expectedLockPath(workspaceDir, "dir"));
+    expect(lock.lockPath.startsWith(path.join(workspaceDir, path.sep))).toBe(true);
+
+    await lock.release();
   });
 });
