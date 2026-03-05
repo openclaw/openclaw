@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseNonNegativeByteSize,
-  isValidNonNegativeByteSizeString,
-} from "./byte-size.js";
+import { parseNonNegativeByteSize, isValidNonNegativeByteSizeString } from "./byte-size.js";
 
 describe("byte-size", () => {
   describe("parseNonNegativeByteSize", () => {
