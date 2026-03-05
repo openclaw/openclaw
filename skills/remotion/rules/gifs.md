@@ -131,5 +131,3 @@ export const MyComposition = () => {
   return <Gif src={staticFile("animation.gif")} width={500} height={500} />;
 };
 ```
-
-The `<Gif>` component has the same props as `<AnimatedImage>` but only supports GIF files.
