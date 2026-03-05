@@ -5,7 +5,7 @@ import type {
   ChannelOnboardingDmPolicy,
   OpenClawConfig,
   WizardPrompter,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -15,7 +15,7 @@ import {
   promptAccountId,
   promptChannelAccessConfig,
   resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,

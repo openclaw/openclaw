@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/tlon";
 import {
   formatDocsLink,
   promptAccountId,
@@ -6,7 +6,7 @@ import {
   normalizeAccountId,
   type ChannelOnboardingAdapter,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/tlon";
 import { buildTlonAccountFields } from "./account-fields.js";
 import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";

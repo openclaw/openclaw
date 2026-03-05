@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/compat";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/zalouser";
 
 type ZalouserAccountStatus = {
   accountId?: unknown;

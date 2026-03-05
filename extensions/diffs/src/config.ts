@@ -1,4 +1,4 @@
-import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/compat";
+import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/diffs";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_INDICATORS,

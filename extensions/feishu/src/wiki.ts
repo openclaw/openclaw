@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";

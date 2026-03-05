@@ -4,7 +4,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/compat";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/irc";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);

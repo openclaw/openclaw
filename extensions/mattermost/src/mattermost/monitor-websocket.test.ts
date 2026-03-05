@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/compat";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostConnectOnce,

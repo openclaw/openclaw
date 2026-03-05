@@ -1,4 +1,4 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 
 type ToolContextLike = {
   agentAccountId?: string;

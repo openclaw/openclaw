@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/compat";
-import { listDevicePairing } from "openclaw/plugin-sdk/compat";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/device-pair";
+import { listDevicePairing } from "openclaw/plugin-sdk/device-pair";
 
 const NOTIFY_STATE_FILE = "device-pair-notify.json";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;

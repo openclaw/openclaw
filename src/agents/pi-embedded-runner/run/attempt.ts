@@ -1150,7 +1150,7 @@ export async function runEmbeddedAttempt(
           modelBaseUrl,
           providerBaseUrl,
         });
-        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+        activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl, params.model.headers);
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {

@@ -11,7 +11,7 @@ import {
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/matrix";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {

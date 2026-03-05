@@ -7,7 +7,7 @@ import {
 import {
   listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
   resolveAccountWithDefaultFallback,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 

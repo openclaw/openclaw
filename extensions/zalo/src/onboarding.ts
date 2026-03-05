@@ -4,7 +4,7 @@ import type {
   OpenClawConfig,
   SecretInput,
   WizardPrompter,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalo";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -13,7 +13,7 @@ import {
   normalizeAccountId,
   promptAccountId,
   promptSingleChannelSecretInput,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/zalo";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
 const channel = "zalo" as const;

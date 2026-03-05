@@ -15,7 +15,7 @@ import {
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/msteams";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
