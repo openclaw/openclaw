@@ -118,7 +118,7 @@ function contentToText(content: unknown): string {
     return "";
   }
   return (content as Array<{ type?: string; text?: string }>)
-    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .filter((p) => p != null && typeof p === "object" && p.type === "text" && typeof p.text === "string")
     .map((p) => p.text as string)
     .join("");
 }
