@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Configuration
-REGISTRY_NAME="${REGISTRY_NAME:-asireonclaw}"
+REGISTRY_NAME="${REGISTRY_NAME:-asireonclawacr}"
 IMAGE_NAME="${IMAGE_NAME:-openclaw}"
 
 # Get the current full commit SHA to match what GitHub Actions uses

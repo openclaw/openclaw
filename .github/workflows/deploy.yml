@@ -7,7 +7,7 @@ on:
     workflow_dispatch: # Allows you to run the workflow manually from the GitHub UI
 
 env:
-    REGISTRY_NAME: asireonclaw
+    REGISTRY_NAME: asireonclawacr
     IMAGE_NAME: openclaw
     RESOURCE_GROUP: asireon-claw
     APP_NAME: openclaw-gateway
