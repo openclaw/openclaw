@@ -109,7 +109,10 @@ function createTextEvent(params: {
   };
 }
 
-async function setupDebounceMonitor(): Promise<(data: unknown) => Promise<void>> {
+async function setupDebounceMonitor(params?: {
+  botOpenId?: string;
+  botName?: string;
+}): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
   });
@@ -123,7 +126,11 @@ async function setupDebounceMonitor(): Promise<(data: unknown) => Promise<void>>
       error: vi.fn(),
       exit: vi.fn(),
     } as RuntimeEnv,
-    botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+    botOpenIdSource: {
+      kind: "prefetched",
+      botOpenId: params?.botOpenId ?? "ou_bot",
+      botName: params?.botName,
+    },
   });
 
   const onMessage = handlers["im.message.receive_v1"];
@@ -432,6 +439,37 @@ describe("Feishu inbound debounce regressions", () => {
     const mergedMentions = dispatched.message.mentions ?? [];
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(false);
+  });
+
+  it("passes prefetched botName through to handleFeishuMessage", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
+    const onMessage = await setupDebounceMonitor({ botName: "OpenClaw Bot" });
+
+    await onMessage(
+      createTextEvent({
+        messageId: "om_name_passthrough",
+        text: "@bot hello",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_bot" },
+            name: "OpenClaw Bot",
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const firstParams = handleFeishuMessageMock.mock.calls[0]?.[0] as
+      | { botName?: string }
+      | undefined;
+    expect(firstParams?.botName).toBe("OpenClaw Bot");
   });
 
   it("does not synthesize mention-forward intent across separate messages", async () => {
