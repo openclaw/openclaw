@@ -300,13 +300,13 @@ export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(next, XIAOMI_DEFAULT_MODEL_REF);
 }
 
-export function applyQiniuProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyQiniuProviderConfig(cfg: OpenClawConfig, modelId?: string): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[QINIU_DEFAULT_MODEL_REF] = {
     ...models[QINIU_DEFAULT_MODEL_REF],
     alias: models[QINIU_DEFAULT_MODEL_REF]?.alias ?? "Qiniu",
   };
-  const defaultProvider = buildQiniuProvider();
+  const defaultProvider = buildQiniuProvider(modelId);
   const resolvedApi = defaultProvider.api ?? "openai-completions";
   return applyProviderConfigWithDefaultModels(cfg, {
     agentModels: models,
@@ -314,12 +314,12 @@ export function applyQiniuProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     api: resolvedApi,
     baseUrl: defaultProvider.baseUrl,
     defaultModels: defaultProvider.models ?? [],
-    defaultModelId: QINIU_DEFAULT_MODEL_ID,
+    defaultModelId: modelId || QINIU_DEFAULT_MODEL_ID,
   });
 }
 
-export function applyQiniuConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyQiniuProviderConfig(cfg);
+export function applyQiniuConfig(cfg: OpenClawConfig, modelId?: string): OpenClawConfig {
+  const next = applyQiniuProviderConfig(cfg, modelId);
   return applyAgentDefaultModelPrimary(next, QINIU_DEFAULT_MODEL_REF);
 }
 

@@ -387,7 +387,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "qiniu",
       mode: "api_key",
     });
-    return applyQiniuConfig(nextConfig);
+    return applyQiniuConfig(nextConfig, opts.qiniuModelId);
   }
 
   if (authChoice === "xai-api-key") {
