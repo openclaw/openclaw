@@ -80,7 +80,11 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        if (!result.delivered) {
+        // When deliver is explicitly false the caller opted out of all
+        // delivery *and* main-session notification.  Only inject a system
+        // event when delivery was requested but did not succeed (e.g. the
+        // target channel could not be resolved).
+        if (!result.delivered && value.deliver !== false) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: mainSessionKey,
           });
