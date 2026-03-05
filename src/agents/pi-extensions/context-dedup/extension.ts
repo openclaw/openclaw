@@ -77,6 +77,12 @@ type ReadLineageStats = {
   omittedChars: number;
 };
 
+type SeenLine = {
+  text: string;
+  firstSeenMessageIndex: number;
+  firstSeenToolCallId?: string;
+};
+
 function normalizeFilePath(input: string): string {
   return input.trim().replace(/\\/g, "/");
 }
@@ -199,7 +205,9 @@ function collapseReadChunkAgainstSeen(params: {
   text: string;
   path: string;
   startLine: number;
-  seenLines: Map<number, string>;
+  seenLines: Map<number, SeenLine>;
+  currentMessageIndex: number;
+  currentToolCallId?: string;
 }): {
   nextText: string;
   changed: boolean;
@@ -213,18 +221,36 @@ function collapseReadChunkAgainstSeen(params: {
 
   const repeated = new Array<boolean>(lines.length).fill(false);
   let repeatedCount = 0;
+  let sourceMessageIndex: number | undefined;
+  let sourceToolCallId: string | undefined;
 
   for (let i = 0; i < lines.length; i++) {
     const absoluteLine = start + i;
-    if (params.seenLines.get(absoluteLine) === lines[i]) {
+    const seen = params.seenLines.get(absoluteLine);
+    if (seen && seen.text === lines[i]) {
       repeated[i] = true;
       repeatedCount++;
+      if (
+        sourceMessageIndex === undefined ||
+        seen.firstSeenMessageIndex < sourceMessageIndex
+      ) {
+        sourceMessageIndex = seen.firstSeenMessageIndex;
+        sourceToolCallId = seen.firstSeenToolCallId;
+      }
     }
   }
 
   for (let i = 0; i < lines.length; i++) {
     const absoluteLine = start + i;
-    params.seenLines.set(absoluteLine, lines[i]);
+    const seen = params.seenLines.get(absoluteLine);
+    if (seen && seen.text === lines[i]) {
+      continue;
+    }
+    params.seenLines.set(absoluteLine, {
+      text: lines[i],
+      firstSeenMessageIndex: params.currentMessageIndex,
+      firstSeenToolCallId: params.currentToolCallId,
+    });
   }
 
   if (repeatedCount === 0) {
@@ -238,7 +264,18 @@ function collapseReadChunkAgainstSeen(params: {
   }
 
   if (repeatedCount === lines.length && lines.length >= 8) {
-    const note = `[Same file chunk already shown earlier]\nPath: ${params.path}\nLines: ${formatRange(start, end)}`;
+    const sourceHint =
+      typeof sourceMessageIndex === "number"
+        ? `Earlier chunk: context message #${sourceMessageIndex}${sourceToolCallId ? ` (toolCallId ${sourceToolCallId})` : ""}`
+        : sourceToolCallId
+          ? `Earlier chunk toolCallId: ${sourceToolCallId}`
+          : "Earlier chunk: prior read output";
+
+    const note =
+      `[Same file chunk already shown earlier]\nPath: ${params.path}\n` +
+      `${sourceHint}\n` +
+      `Lines: ${formatRange(start, end)}`;
+
     if (note.length < params.text.length) {
       return {
         nextText: note,
@@ -295,8 +332,16 @@ function collapseReadChunkAgainstSeen(params: {
     omittedRanges.push(formatRange(keptEnd + 1, end));
   }
 
+  const sourceHint =
+    typeof sourceMessageIndex === "number"
+      ? `Earlier chunk: context message #${sourceMessageIndex}${sourceToolCallId ? ` (toolCallId ${sourceToolCallId})` : ""}`
+      : sourceToolCallId
+        ? `Earlier chunk toolCallId: ${sourceToolCallId}`
+        : "Earlier chunk: prior read output";
+
   const note =
     `[Read overlap trimmed]\nPath: ${params.path}\n` +
+    `${sourceHint}\n` +
     `Earlier lines omitted: ${omittedRanges.join(", ")}\n` +
     `New/changed lines ${formatRange(keptStart, keptEnd)}:\n${kept}`;
 
@@ -332,7 +377,7 @@ function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: 
     };
   }
 
-  const seenLinesByPath = new Map<string, Map<number, string>>();
+  const seenLinesByPath = new Map<string, Map<number, SeenLine>>();
   let nextMessages: any[] | null = null;
 
   const stats: ReadLineageStats = {
@@ -362,9 +407,10 @@ function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: 
 
     let seenLines = seenLinesByPath.get(meta.path);
     if (!seenLines) {
-      seenLines = new Map<number, string>();
+      seenLines = new Map<number, SeenLine>();
       seenLinesByPath.set(meta.path, seenLines);
     }
+    const seenLinesForPath = seenLines;
 
     const content = msg.content;
 
@@ -373,7 +419,9 @@ function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: 
         text: content,
         path: meta.path,
         startLine: meta.offset,
-        seenLines,
+        seenLines: seenLinesForPath,
+        currentMessageIndex: msgIndex,
+        currentToolCallId: toolCallId,
       });
 
       if (collapsed.changed) {
@@ -409,7 +457,9 @@ function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: 
         text,
         path: meta.path,
         startLine: lineCursor,
-        seenLines,
+        seenLines: seenLinesForPath,
+        currentMessageIndex: msgIndex,
+        currentToolCallId: toolCallId,
       });
 
       lineCursor += countLines(text);
