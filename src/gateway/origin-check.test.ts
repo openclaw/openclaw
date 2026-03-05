@@ -101,7 +101,7 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
   describe("Tailscale Serve (x-forwarded-host)", () => {
-    it("accepts forwarded-host when origin matches and is in allowlist", () => {
+    it("regression: allowlist still fires first when forwarded-host is present", () => {
       const result = checkBrowserOrigin({
         requestHost: "127.0.0.1:18789",
         requestForwardedHost: "gateway.tailnet.ts.net",
