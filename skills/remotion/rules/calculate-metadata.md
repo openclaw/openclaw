@@ -84,5 +84,3 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({ props, fps 
   };
 };
 ```
-
-See [calculate-metadata Remotion docs](https://www.remotion.dev/docs/calculate-metadata) for more information.
