@@ -48,7 +48,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    const text = typeof entry.message.text === "string" ? entry.message.text.trim() : "";
     if (!text) {
       continue;
     }
