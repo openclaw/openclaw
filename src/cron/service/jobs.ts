@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import {
   normalizeCronStaggerMs,
   resolveCronStaggerMs,
@@ -76,6 +76,34 @@ function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {
       return shifted;
     }
     cursorMs = Math.max(cursorMs + 1, baseNext + 1_000);
+  }
+  return undefined;
+}
+
+function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
+  if (job.schedule.kind !== "cron") {
+    return undefined;
+  }
+
+  const staggerMs = resolveCronStaggerMs(job.schedule);
+  const offsetMs = resolveStableCronOffsetMs(job.id, staggerMs);
+  if (offsetMs <= 0) {
+    return computePreviousRunAtMs(job.schedule, nowMs);
+  }
+
+  // Shift the cursor backwards by the same per-job offset used for next-run
+  // math so previous-run lookup matches the effective staggered schedule.
+  let cursorMs = Math.max(0, nowMs - offsetMs);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const basePrevious = computePreviousRunAtMs(job.schedule, cursorMs);
+    if (basePrevious === undefined) {
+      return undefined;
+    }
+    const shifted = basePrevious + offsetMs;
+    if (shifted <= nowMs) {
+      return shifted;
+    }
+    cursorMs = Math.max(0, basePrevious - 1_000);
   }
   return undefined;
 }
@@ -246,6 +274,14 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
   }
   return isFiniteTimestamp(next) ? next : undefined;
+}
+
+export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
+  if (!job.enabled || job.schedule.kind !== "cron") {
+    return undefined;
+  }
+  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
+  return isFiniteTimestamp(previous) ? previous : undefined;
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
