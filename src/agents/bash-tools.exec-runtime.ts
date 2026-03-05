@@ -387,7 +387,7 @@ export async function runExecProcess(opts: {
       tail: msg,
       exited: true,
       exitCode: 1,
-      exitSignal: undefined as NodeJS.Signals | number | null | undefined,
+      exitSignal: null,
       truncated: false,
       backgrounded: false,
     };
