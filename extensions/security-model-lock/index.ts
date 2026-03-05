@@ -288,8 +288,8 @@ export default function register(api: OpenClawPluginApi) {
     // 检查会话是否已锁定
     const locked = isSessionLocked(sessionKey);
     if (locked) {
-      api.logger.debug(
-        `security-model-lock: read ${filePath} called in locked session ${sessionKey}`,
+      api.logger.info(
+        `security-model-lock: allowing read ${filePath} in locked session ${sessionKey} (using secure model)`,
       );
       return;
     }
@@ -305,10 +305,14 @@ export default function register(api: OpenClawPluginApi) {
       triggeredBySkill: matchedSkill,
     });
 
-    // 阻断工具调用，提示用户重新发送消息
+    api.logger.info(
+      `security-model-lock: session ${sessionKey} locked, blocking tool call`,
+    );
+
+    // 阻断工具调用，以对话形式发送锁定通知
     return {
       block: true,
-      blockReason: config.lockNotice ?? "检测到敏感 skill 调用，已切换到安全模型。请重新发送消息。",
+      blockReason: `检测到敏感 skill "${matchedSkill}" 初次被读写，已切换到安全模型，需要暂停本次任务并告知用户，引导用户重新提问。`,
     };
   });
 
@@ -336,72 +340,29 @@ export default function register(api: OpenClawPluginApi) {
   });
 
   // ============================================================================
-  // 解锁命令
+  // session_start / before_reset hook - 清理会话的锁定状态
   // ============================================================================
-  api.registerCommand({
-    name: "security-unlock",
-    description: "Unlock the current session to allow switching models again",
-    acceptsArgs: false,
-    handler: async (ctx) => {
-      const sessionKey = ctx.sessionKey;
-      if (!sessionKey) {
-        return { text: "Error: No active session found." };
-      }
-
+  api.on("session_start", (event, ctx) => {
+    const { sessionKey } = ctx;
+    if (sessionKey) {
+      // 新会话开始时，清除该会话的锁定状态
       const wasLocked = isSessionLocked(sessionKey);
-      if (!wasLocked) {
-        return { text: "Session is not locked." };
+      if (wasLocked) {
+        unlockSession(sessionKey);
+        api.logger.info(`security-model-lock: session ${sessionKey} lock cleared on new session start`);
       }
-
-      unlockSession(sessionKey);
-      api.logger.info(`security-model-lock: session ${sessionKey} unlocked by user command`);
-
-      return {
-        text: "Session unlocked. You can now switch models again using /model <provider/model>.",
-      };
-    },
+    }
   });
 
-  // ============================================================================
-  // 状态查询命令
-  // ============================================================================
-  api.registerCommand({
-    name: "security-status",
-    description: "Check if the current session is locked to secure model",
-    acceptsArgs: false,
-    handler: async (ctx) => {
-      const sessionKey = ctx.sessionKey;
-      const lockState = getLockState(sessionKey);
-
-      if (!lockState) {
-        const sensitiveSkillsList = config.sensitiveSkills?.join(", ") || "none";
-        return {
-          text: [
-            "Security Model Lock Status: Not locked",
-            "",
-            `Monitored skills: ${sensitiveSkillsList}`,
-            `Secure model: ${config.secureModel?.provider || "not configured"}/${config.secureModel?.model || "not configured"}`,
-            "",
-            "Lock will be triggered when a sensitive skill file is read.",
-          ].join("\n"),
-        };
+  api.on("before_reset", (event, ctx) => {
+    const { sessionKey } = ctx;
+    if (sessionKey) {
+      // 会话重置时，清除该会话的锁定状态
+      const wasLocked = isSessionLocked(sessionKey);
+      if (wasLocked) {
+        unlockSession(sessionKey);
+        api.logger.info(`security-model-lock: session ${sessionKey} lock cleared on before_reset`);
       }
-
-      const triggeredBy = lockState.triggeredBySkill ? ` (triggered by: ${lockState.triggeredBySkill})` : "";
-      const duration = Math.floor((Date.now() - lockState.lockedAt) / 1000);
-
-      return {
-        text: [
-          "Security Model Lock Status: LOCKED",
-          "",
-          `Locked at: ${new Date(lockState.lockedAt).toLocaleString()}${triggeredBy}`,
-          `Duration: ${duration}s`,
-          `Reason: ${lockState.reason}`,
-          "",
-          "All model calls will use the configured secure model.",
-          "Use /security-unlock to unlock this session.",
-        ].join("\n"),
-      };
-    },
+    }
   });
 }
