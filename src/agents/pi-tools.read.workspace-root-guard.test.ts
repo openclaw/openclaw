@@ -119,4 +119,17 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root: sandboxWorkspaceRoot,
     });
   });
+
+  it("infers /workspace mapping for file:// inbound paths", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, sandboxWorkspaceRoot);
+
+    await wrapped.execute("tc5", { path: "file:///workspace/media/inbound/upload.csv" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(sandboxWorkspaceRoot, "media", "inbound", "upload.csv"),
+      cwd: sandboxWorkspaceRoot,
+      root: sandboxWorkspaceRoot,
+    });
+  });
 });
