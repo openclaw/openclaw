@@ -892,6 +892,18 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
+    const activeBeforeStart = context.chatAbortControllers.get(clientRunId);
+    if (!activeBeforeStart || activeBeforeStart.controller.signal.aborted) {
+      context.chatAbortControllers.delete(clientRunId);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "chat run aborted before start"),
+        { runId: clientRunId },
+      );
+      return;
+    }
+
     try {
       const ackPayload = {
         runId: clientRunId,

@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { extensionForMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { getMediaDir } from "../media/store.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -101,7 +101,7 @@ async function persistImageAttachment(params: {
 }): Promise<string> {
   const uploadDir = params.uploadDir
     ? path.resolve(params.uploadDir)
-    : path.join(getMediaDir(), "webchat");
+    : path.join(resolvePreferredOpenClawTmpDir(), "uploads", "webchat");
   await fs.mkdir(uploadDir, { recursive: true, mode: 0o700 });
   const ext = extensionForMime(params.mimeType) ?? ".bin";
   const fileName = `${sanitizeAttachmentLabel(params.label)}-${crypto.randomUUID()}${ext}`;
