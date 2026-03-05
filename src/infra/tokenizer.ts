@@ -133,11 +133,18 @@ interface TiktokenEncoding {
 
 let tiktokenEncoding: TiktokenEncoding | null = null;
 let tiktokenLoadPromise: Promise<TiktokenEncoding> | null = null;
+/** tiktoken 加载是否已永久失败（避免反复重试） */
+let tiktokenLoadFailed = false;
 
 async function loadTiktokenTokenizer(): Promise<TiktokenEncoding> {
   // 如果已经加载，直接返回
   if (tiktokenEncoding) {
     return tiktokenEncoding;
+  }
+
+  // 已永久失败，不再重试
+  if (tiktokenLoadFailed) {
+    throw new Error("[tokenizer] tiktoken previously failed to load");
   }
 
   // 如果正在加载，等待加载完成
@@ -168,6 +175,7 @@ async function loadTiktokenTokenizer(): Promise<TiktokenEncoding> {
       return tiktokenEncoding;
     } catch (error) {
       console.error("[tokenizer] Failed to load tiktoken:", error);
+      tiktokenLoadFailed = true;
       tiktokenLoadPromise = null;
       throw error;
     }
@@ -362,9 +370,14 @@ export function estimateTokensWithTokenizer(message: Message): number {
         if (tiktokenResult !== null) {
           // tiktoken 已就绪，使用精确值
           tokenCount = tiktokenResult;
+        } else if (tiktokenLoadFailed) {
+          // 已永久失败，直接 fallback（写入缓存，避免反复尝试）
+          tokenCount = estimateTokensByChars(content);
         } else {
           // tiktoken 还在加载，触发异步加载，本次不缓存 fallback
-          loadTiktokenTokenizer().catch(() => {});
+          if (!tiktokenLoadPromise) {
+            loadTiktokenTokenizer().catch(() => {});
+          }
           return estimateTokensByChars(content);
         }
       } else {
@@ -443,6 +456,8 @@ export async function warmupTokenizer(): Promise<void> {
 
   try {
     if (config.provider === "tiktoken") {
+      // warmup 时允许重置失败状态重试
+      tiktokenLoadFailed = false;
       await loadTiktokenTokenizer();
     } else {
       // warmup 时允许重置失败状态重试
