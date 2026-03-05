@@ -314,6 +314,57 @@ function createOpenAIResponsesContextManagementWrapper(
   };
 }
 
+/**
+ * Ensure `tool_choice` defaults to `"auto"` for OpenAI Responses API providers
+ * when tools are present but no explicit tool_choice is set.
+ *
+ * Custom providers using `api: openai-responses` route through the streamSimple
+ * HTTP path instead of the dedicated OpenAI WebSocket transport.  On this path
+ * `tool_choice` is not injected by the transport layer, so requests can arrive
+ * at the provider with `tools` present but `tool_choice` absent.  Many models
+ * interpret this as "text only" and never emit tool calls, silently breaking
+ * tool workflows.
+ *
+ * The wrapper only touches payloads where:
+ *   1. The model uses an `openai-responses` API variant.
+ *   2. `tools` is a non-empty array.
+ *   3. `tool_choice` is `null` or `undefined`.
+ *
+ * Explicit `tool_choice` values (including `"none"` or `"required"`) set by
+ * the caller or other wrappers are never overwritten.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/36057
+ */
+function createOpenAIResponsesToolChoiceWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
+            log.debug(
+              `injected tool_choice="auto" for openai-responses provider (${model.provider}/${model.id})`,
+            );
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
@@ -964,4 +1015,11 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Ensure tool_choice defaults to "auto" for OpenAI Responses API providers
+  // when tools are present but tool_choice is missing/null.  Custom providers
+  // using `api: openai-responses` route through streamSimple which does not
+  // inject a default tool_choice, causing text-only completions.
+  // See: openclaw/openclaw#36057
+  agent.streamFn = createOpenAIResponsesToolChoiceWrapper(agent.streamFn);
 }

@@ -76,8 +76,24 @@ export async function sendMessageMatrix(
         : buildReplyRelation(opts.replyToId);
       const sendContent = async (content: MatrixOutboundContent) => {
         // @vector-im/matrix-bot-sdk uses sendMessage differently
-        const eventId = await client.sendMessage(roomId, content);
-        return eventId;
+        try {
+          const eventId = await client.sendMessage(roomId, content);
+          return eventId;
+        } catch (err: unknown) {
+          const errObj = err as { body?: { errcode?: string; retry_after_ms?: number } };
+          if (errObj.body?.errcode !== "M_LIMIT_EXCEEDED") {
+            throw err;
+          }
+          // Respect the homeserver's retry_after_ms hint (capped at 30 s,
+          // defaulting to 2 s when absent) and retry once.  A single retry is
+          // sufficient for the typical 1-2 s rate-limit windows returned by
+          // Synapse; further retries are left to the caller / queue layer.
+          // See: https://github.com/openclaw/openclaw/issues/36027
+          const retryMs = Math.min(errObj.body?.retry_after_ms ?? 2_000, 30_000);
+          await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
+          const eventId = await client.sendMessage(roomId, content);
+          return eventId;
+        }
       };
 
       let lastMessageId = "";

@@ -324,3 +324,121 @@ describe("resolveMediaMaxBytes cfg threading", () => {
     expect(runtimeLoadConfigMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("sendMessageMatrix M_LIMIT_EXCEEDED retry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({});
+    setMatrixRuntime(runtimeStub);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries once after M_LIMIT_EXCEEDED with retry_after_ms", async () => {
+    const rateLimitError = Object.assign(new Error("rate limited"), {
+      body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 500 },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("evt-retry");
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const promise = sendMessageMatrix("room:!room:example", "hello retry", { client });
+    await vi.advanceTimersByTimeAsync(600);
+    const result = await promise;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("evt-retry");
+  });
+
+  it("defaults to 2 s delay when retry_after_ms is absent", async () => {
+    const rateLimitError = Object.assign(new Error("rate limited"), {
+      body: { errcode: "M_LIMIT_EXCEEDED" },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("evt-default");
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const promise = sendMessageMatrix("room:!room:example", "hello default", { client });
+    await vi.advanceTimersByTimeAsync(2100);
+    const result = await promise;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("evt-default");
+  });
+
+  it("caps retry delay at 30 s", async () => {
+    const rateLimitError = Object.assign(new Error("rate limited"), {
+      body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 120_000 },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("evt-capped");
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const promise = sendMessageMatrix("room:!room:example", "hello capped", { client });
+    // Should resolve after 30 s cap, not 120 s
+    await vi.advanceTimersByTimeAsync(30_100);
+    const result = await promise;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("evt-capped");
+  });
+
+  it("re-throws non-rate-limit errors immediately", async () => {
+    const otherError = Object.assign(new Error("forbidden"), {
+      body: { errcode: "M_FORBIDDEN" },
+    });
+    const sendMessage = vi.fn().mockRejectedValueOnce(otherError);
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "hello forbidden", { client }),
+    ).rejects.toThrow("forbidden");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates error when retry also fails", async () => {
+    const rateLimitError = Object.assign(new Error("rate limited"), {
+      body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 500 },
+    });
+    const secondError = Object.assign(new Error("still rate limited"), {
+      body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 1000 },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockRejectedValueOnce(secondError);
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const promise = sendMessageMatrix("room:!room:example", "hello double", { client });
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(promise).rejects.toThrow("still rate limited");
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+});
