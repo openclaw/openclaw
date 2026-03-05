@@ -283,7 +283,13 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    // Inject tool_choice: "auto" for any openai-responses model that has tools
+    // in the payload but no explicit tool_choice. Custom providers using
+    // api: "openai-responses" don't always get a default from the upstream
+    // library and may silently produce text-only output when tool_choice is
+    // absent. (#36057)
+    const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+    if (!forceStore && !useServerCompaction && !isResponsesApi) {
       return underlying(model, context, options);
     }
 
@@ -306,6 +312,16 @@ function createOpenAIResponsesContextManagementWrapper(
                 compact_threshold: compactThreshold,
               },
             ];
+          }
+          // Ensure tool_choice is set when tools are present so custom
+          // openai-responses providers don't silently fall back to text-only.
+          if (
+            isResponsesApi &&
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
           }
         }
         originalOnPayload?.(payload);
