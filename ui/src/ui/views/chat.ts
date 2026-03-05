@@ -259,7 +259,12 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 function handleFileInput(e: Event, props: ChatProps) {
   const input = e.target as HTMLInputElement;
   const fileList = input.files;
-  if (!fileList || !props.onAttachmentsChange) {
+  // Guard against disconnected state: the picker can open while connected but
+  // the gateway may disconnect before the change event fires. Mirror the same
+  // check applied to handleDrop/handleDragOver so that disabled compose state
+  // is consistently enforced across all attachment input paths.
+  if (!fileList || !props.onAttachmentsChange || !props.connected) {
+    input.value = "";
     return;
   }
   // Filter to image/* even though the input has accept="image/*",
