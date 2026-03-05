@@ -42,6 +42,7 @@ type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };

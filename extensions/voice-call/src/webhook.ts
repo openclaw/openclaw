@@ -444,9 +444,9 @@ export class VoiceCallWebhookServer {
     }
 
     try {
-      const { generateVoiceResponse } = await import("./response-generator.js");
+      const { generateVoiceResponseStream } = await import("./response-generator.js");
 
-      const result = await generateVoiceResponse({
+      const { sentences, result } = generateVoiceResponseStream({
         voiceConfig: this.config,
         coreConfig: this.coreConfig,
         callId,
@@ -455,14 +455,22 @@ export class VoiceCallWebhookServer {
         userMessage,
       });
 
-      if (result.error) {
-        console.error(`[voice-call] Response generation error: ${result.error}`);
-        return;
+      // Start speaking sentences as they arrive from the LLM
+      const speakResult = await this.manager.speakStream(callId, sentences, null);
+
+      // Await the final result for error reporting and transcript
+      const voiceResult = await result;
+
+      if (voiceResult.error) {
+        console.error(`[voice-call] Response generation error: ${voiceResult.error}`);
       }
 
-      if (result.text) {
-        console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+      if (voiceResult.text) {
+        console.log(`[voice-call] AI response: "${voiceResult.text}"`);
+      }
+
+      if (!speakResult.success) {
+        console.error(`[voice-call] Speak stream failed: ${speakResult.error}`);
       }
     } catch (err) {
       console.error(`[voice-call] Auto-response error:`, err);

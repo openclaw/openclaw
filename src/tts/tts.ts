@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -37,6 +38,7 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
+  openaiTTSStream,
   parseTtsDirectives,
   scheduleCleanup,
   summarizeText,
@@ -797,6 +799,90 @@ export async function textToSpeechTelephony(params: {
   }
 
   return buildTtsFailureResult(errors);
+}
+
+export type TtsTelephonyStreamResult = {
+  success: boolean;
+  stream?: Readable;
+  sampleRate?: number;
+  provider?: string;
+  error?: string;
+  cleanup?: () => void;
+};
+
+/**
+ * Streaming variant of textToSpeechTelephony.
+ * Returns a Readable stream of raw PCM audio instead of a buffered Buffer.
+ * Only supports OpenAI providers (ElevenLabs/Edge TTS skip for now).
+ */
+export async function textToSpeechTelephonyStream(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+}): Promise<TtsTelephonyStreamResult> {
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+
+  if (params.text.length > config.maxTextLength) {
+    return {
+      success: false,
+      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+    };
+  }
+
+  const userProvider = getTtsProvider(config, prefsPath);
+  const providers = resolveTtsProviderOrder(userProvider);
+
+  const errors: string[] = [];
+
+  // Streaming only supported for OpenAI — if user's primary provider isn't OpenAI,
+  // return failure immediately so the caller falls back to the buffered path
+  // with the correct voice/provider rather than silently switching to OpenAI.
+  if (providers[0] !== "openai") {
+    return {
+      success: false,
+      error: `Primary provider ${providers[0]} does not support streaming`,
+    };
+  }
+
+  for (const provider of providers) {
+    try {
+      if (provider !== "openai") {
+        continue;
+      }
+
+      const apiKey = resolveTtsApiKey(config, provider);
+      if (!apiKey) {
+        errors.push(`${provider}: no API key`);
+        continue;
+      }
+
+      const output = TELEPHONY_OUTPUT.openai;
+      const result = await openaiTTSStream({
+        text: params.text,
+        apiKey,
+        model: config.openai.model,
+        voice: config.openai.voice,
+        responseFormat: output.format,
+        timeoutMs: config.timeoutMs,
+      });
+
+      return {
+        success: true,
+        stream: result.stream,
+        sampleRate: output.sampleRate,
+        provider,
+        cleanup: result.cleanup,
+      };
+    } catch (err) {
+      errors.push(formatTtsProviderError(provider, err));
+    }
+  }
+
+  return {
+    success: false,
+    error: `TTS streaming failed: ${errors.join("; ") || "no providers available"}`,
+  };
 }
 
 export async function maybeApplyTtsToPayload(params: {

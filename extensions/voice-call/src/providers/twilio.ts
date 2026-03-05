@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
-import { chunkAudio } from "../telephony-audio.js";
+import {
+  chunkAudio,
+  convertPcmChunkToMulaw8k,
+  createPcmToMulawStreamState,
+  flushPcmToMulawStream,
+} from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
@@ -597,7 +602,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /**
    * Play TTS via core TTS and Twilio Media Streams.
-   * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
+   * Tries streaming first (lower latency), falls back to buffered synthesis.
    * Uses a queue to serialize playback and prevent overlapping audio.
    */
   private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
@@ -611,8 +616,74 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
+
+    // Try streaming path first (lower latency)
+    if (ttsProvider.synthesizeForTelephonyStream) {
+      let framesEmitted = false;
+      try {
+        await handler.queueTts(streamSid, async (signal) => {
+          // Start synthesis inside the queue callback so OpenAI timeout
+          // doesn't count queue-wait time behind earlier playback
+          const streamResult = await ttsProvider.synthesizeForTelephonyStream!(text);
+          const state = createPcmToMulawStreamState();
+          const onAbort = () => streamResult.stream.destroy();
+          signal.addEventListener("abort", onAbort, { once: true });
+
+          // Buffer mu-law bytes across network chunks so short tail frames
+          // from non-aligned chunks don't each incur a full 20ms delay
+          let mulawCarry = Buffer.alloc(0);
+
+          try {
+            for await (const chunk of streamResult.stream) {
+              if (signal.aborted) break;
+              const pcmChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              const mulaw = convertPcmChunkToMulaw8k(pcmChunk, streamResult.sampleRate, state);
+              if (mulaw.length === 0) continue;
+
+              const combined = mulawCarry.length > 0 ? Buffer.concat([mulawCarry, mulaw]) : mulaw;
+              const fullFrameBytes = Math.floor(combined.length / CHUNK_SIZE) * CHUNK_SIZE;
+              mulawCarry =
+                fullFrameBytes < combined.length
+                  ? Buffer.from(combined.subarray(fullFrameBytes))
+                  : Buffer.alloc(0);
+
+              for (let offset = 0; offset < fullFrameBytes; offset += CHUNK_SIZE) {
+                if (signal.aborted) break;
+                handler.sendAudio(streamSid, combined.subarray(offset, offset + CHUNK_SIZE));
+                framesEmitted = true;
+                await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+                if (signal.aborted) break;
+              }
+            }
+
+            if (!signal.aborted) {
+              // Send any remaining buffered mu-law bytes as a final short frame
+              if (mulawCarry.length > 0) {
+                handler.sendAudio(streamSid, mulawCarry);
+                framesEmitted = true;
+              }
+              flushPcmToMulawStream(state);
+              handler.sendMark(streamSid, `tts-${Date.now()}`);
+            }
+          } finally {
+            signal.removeEventListener("abort", onAbort);
+            streamResult.cleanup();
+          }
+        });
+        return;
+      } catch (err) {
+        // Only fall back to buffered if no frames were sent yet —
+        // replaying after partial playback causes garbled/duplicated speech
+        if (framesEmitted) {
+          console.error("[voice-call] TTS streaming failed after partial playback:", String(err));
+          return;
+        }
+        console.warn("[voice-call] TTS streaming failed, falling back to buffered:", String(err));
+      }
+    }
+
+    // Buffered fallback
     await handler.queueTts(streamSid, async (signal) => {
-      // Generate audio with core TTS (returns mu-law at 8kHz)
       const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
         if (signal.aborted) {
@@ -620,7 +691,6 @@ export class TwilioProvider implements VoiceCallProvider {
         }
         handler.sendAudio(streamSid, chunk);
 
-        // Pace the audio to match real-time playback
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
         if (signal.aborted) {
           break;
@@ -628,7 +698,6 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       if (!signal.aborted) {
-        // Send a mark to track when audio finishes
         handler.sendMark(streamSid, `tts-${Date.now()}`);
       }
     });
