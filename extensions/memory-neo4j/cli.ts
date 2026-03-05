@@ -234,10 +234,11 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
       memory
         .command("stats")
         .description("Show memory statistics and configuration")
-        .action(async () => {
+        .option("--agent <id>", "Filter statistics to a specific agent")
+        .action(async (opts: { agent?: string }) => {
           try {
             await db.ensureInitialized();
-            const stats = await db.getMemoryStats();
+            const stats = await db.getMemoryStats(opts.agent);
             const total = stats.reduce((sum, s) => sum + s.count, 0);
 
             console.log("\nMemory (Neo4j) Statistics");
@@ -695,7 +696,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               orphanTags,
               singleUseTags,
             ] = await Promise.all([
-              db.getMemoryStats(),
+              db.getMemoryStats(agentId),
               db.countMemories(agentId),
               db.countByExtractionStatus(agentId),
               db.getEntityGraphStats(agentId),
@@ -705,10 +706,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               db.findSingleUseTags(14, 500),
             ]);
 
-            // Filter stats by agent if specified
-            const filteredStats = agentId
-              ? memoryStats.filter((s) => s.agentId === agentId)
-              : memoryStats;
+            const filteredStats = memoryStats;
 
             if (opts.json) {
               const totalExtraction =

@@ -674,7 +674,7 @@ export async function runSleepCycle(
               const keepText = keepId === pair.idA ? pair.textA : pair.textB;
               const removeText = removeId === pair.idA ? pair.textA : pair.textB;
 
-              await db.invalidateMemory(removeId);
+              await db.invalidateMemories([removeId]);
               invalidatedIds.add(removeId);
               result.semanticDedup.duplicatesMerged++;
 
@@ -723,7 +723,7 @@ export async function runSleepCycle(
 
           const decision = outcome.value;
           if (decision === "a") {
-            await db.invalidateMemory(pair.memoryB.id);
+            await db.invalidateMemories([pair.memoryB.id]);
             result.conflict.invalidated++;
             result.conflict.resolved++;
             onProgress?.(
@@ -731,7 +731,7 @@ export async function runSleepCycle(
               `Kept A, invalidated B: "${pair.memoryB.text.slice(0, 40)}..."`,
             );
           } else if (decision === "b") {
-            await db.invalidateMemory(pair.memoryA.id);
+            await db.invalidateMemories([pair.memoryA.id]);
             result.conflict.invalidated++;
             result.conflict.resolved++;
             onProgress?.(
@@ -1058,12 +1058,7 @@ export async function runSleepCycle(
 
       // Remove stale memories
       if (toRemove.length > 0 && !abortSignal?.aborted) {
-        for (const id of toRemove) {
-          if (abortSignal?.aborted) {
-            break;
-          }
-          await db.invalidateMemory(id);
-        }
+        await db.invalidateMemories(toRemove);
         result.temporalStaleness.memoriesRemoved = toRemove.length;
         onProgress?.("temporalStaleness", `Removed ${toRemove.length} temporally stale memories`);
       }
@@ -1440,10 +1435,7 @@ export async function runSleepCycle(
 
           // Remove noise memories
           if (toRemove.length > 0 && !abortSignal?.aborted) {
-            for (const id of toRemove) {
-              if (abortSignal?.aborted) break;
-              await db.invalidateMemory(id);
-            }
+            await db.invalidateMemories(toRemove);
             result.taskMemoryCleanup.memoriesRemoved = toRemove.length;
             onProgress?.("taskMemoryCleanup", `Invalidated ${toRemove.length} task-noise memories`);
           }

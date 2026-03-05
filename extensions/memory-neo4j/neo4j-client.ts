@@ -82,7 +82,16 @@ export class Neo4jMemoryClient {
     const session = this.driver.session();
     try {
       await session.run("RETURN 1");
-      this.logger.info(`memory-neo4j: connected to ${this.uri}`);
+      const redactedUri = (() => {
+        try {
+          const u = new URL(this.uri);
+          if (u.password) u.password = "***";
+          return u.toString();
+        } catch {
+          return this.uri.replace(/:\/\/[^:]+:[^@]+@/, "://<redacted>@");
+        }
+      })();
+      this.logger.info(`memory-neo4j: connected to ${redactedUri}`);
     } finally {
       await session.close();
     }
@@ -345,18 +354,20 @@ export class Neo4jMemoryClient {
    * Get memory counts grouped by agentId and category.
    * Returns stats for building a summary table.
    */
-  async getMemoryStats(): Promise<
-    Array<{ agentId: string; category: string; count: number; avgImportance: number }>
-  > {
+  async getMemoryStats(
+    agentId?: string,
+  ): Promise<Array<{ agentId: string; category: string; count: number; avgImportance: number }>> {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      const result = await session.run(`
-        MATCH (m:Memory)
+      const result = await session.run(
+        `MATCH (m:Memory)
+        WHERE ($agentId IS NULL OR m.agentId = $agentId)
         RETURN m.agentId AS agentId, m.category AS category,
                count(m) AS count, avg(m.importance) AS avgImportance
-        ORDER BY agentId, category
-      `);
+        ORDER BY agentId, category`,
+        { agentId: agentId ?? null },
+      );
       return result.records.map((r) => {
         const countVal = r.get("count");
         const avgVal = r.get("avgImportance");
@@ -1781,6 +1792,26 @@ export class Neo4jMemoryClient {
     }
   }
 
+  /**
+   * Batch-invalidate multiple memories in a single Cypher query.
+   * Prefer this over sequential invalidateMemory calls when retiring a list of IDs.
+   */
+  async invalidateMemories(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `UNWIND $ids AS id
+         MATCH (m:Memory {id: id})
+         SET m.importance = 0.01, m.updatedAt = $now`,
+        { ids, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Temporal Memory Operations
   // --------------------------------------------------------------------------
@@ -2006,10 +2037,12 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
     options?: {
       batchSize?: number;
       onProgress?: (phase: string, done: number, total: number) => void;
+      agentId?: string;
     },
   ): Promise<{ memories: number }> {
     const batchSize = options?.batchSize ?? 50;
     const progress = options?.onProgress ?? (() => {});
+    const agentId = options?.agentId;
 
     await this.ensureInitialized();
 
@@ -2028,7 +2061,10 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
     let memories: Array<{ id: string; text: string }>;
     try {
       const result = await fetchSession.run(
-        "MATCH (m:Memory) RETURN m.id AS id, m.text AS text ORDER BY m.createdAt ASC",
+        `MATCH (m:Memory)
+         WHERE ($agentId IS NULL OR m.agentId = $agentId)
+         RETURN m.id AS id, m.text AS text ORDER BY m.createdAt ASC`,
+        { agentId: agentId ?? null },
       );
       memories = result.records.map((r) => ({
         id: r.get("id") as string,

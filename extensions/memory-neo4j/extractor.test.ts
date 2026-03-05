@@ -1757,6 +1757,7 @@ describe("runSleepCycle", () => {
       mergeMemoryCluster: vi.fn().mockResolvedValue({ survivorId: "s1", deletedCount: 0 }),
       findConflictingMemories: vi.fn().mockResolvedValue([]),
       invalidateMemory: vi.fn().mockResolvedValue(undefined),
+      invalidateMemories: vi.fn().mockResolvedValue(undefined),
       findDecayedMemories: vi.fn().mockResolvedValue([]),
       pruneMemories: vi.fn().mockResolvedValue(0),
       countByExtractionStatus: vi
@@ -1927,7 +1928,7 @@ describe("runSleepCycle", () => {
 
       await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
 
-      expect(mockDb.invalidateMemory).toHaveBeenCalledWith("m2");
+      expect(mockDb.invalidateMemories).toHaveBeenCalledWith(["m2"]);
     });
 
     it("should not count 'skip' decisions as resolved", async () => {
@@ -1970,7 +1971,7 @@ describe("runSleepCycle", () => {
 
       expect(result.conflict.resolved).toBe(1);
       expect(result.conflict.invalidated).toBe(0);
-      expect(mockDb.invalidateMemory).not.toHaveBeenCalled();
+      expect(mockDb.invalidateMemories).not.toHaveBeenCalled();
     });
   });
 
@@ -2029,7 +2030,7 @@ describe("runSleepCycle", () => {
       await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
 
       // Should invalidate "low" (lower importance)
-      expect(mockDb.invalidateMemory).toHaveBeenCalledWith("low");
+      expect(mockDb.invalidateMemories).toHaveBeenCalledWith(["low"]);
     });
 
     it("should report correct pair counts", async () => {
