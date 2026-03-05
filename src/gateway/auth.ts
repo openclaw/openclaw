@@ -7,6 +7,7 @@ import type {
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { validateIamToken } from "./auth-iam.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
@@ -40,7 +41,7 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy" | "iam";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -486,6 +487,29 @@ export async function authorizeGatewayConnect(
     }
     limiter?.reset(ip, rateLimitScope);
     return { ok: true, method: "password" };
+  }
+
+  if (auth.mode === "iam") {
+    if (!auth.iam) {
+      return { ok: false, reason: "iam_config_missing" };
+    }
+    const rawToken = connectAuth?.token;
+    if (!rawToken) {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "iam_token_missing" };
+    }
+    try {
+      const iamResult = await validateIamToken(rawToken, auth.iam);
+      if (iamResult.ok) {
+        limiter?.reset(ip, rateLimitScope);
+        return { ok: true, method: "iam", user: iamResult.email ?? iamResult.userId };
+      }
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: `iam_${iamResult.reason}` };
+    } catch {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "iam_discovery_failed" };
+    }
   }
 
   limiter?.recordFailure(ip, rateLimitScope);
