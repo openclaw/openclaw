@@ -413,6 +413,114 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.send --deliver from TUI UI client inherits main-session external route", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const tuiWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(tuiWs);
+    try {
+      await new Promise<void>((resolve) => tuiWs.once("open", resolve));
+      await connectOk(tuiWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          displayName: "openclaw-tui",
+          version: "dev",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.UI,
+        },
+      });
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "group:12345",
+            lastAccountId: "acct-main",
+            deliveryContext: {
+              channel: "telegram",
+              to: "group:12345",
+              accountId: "acct-main",
+            },
+          },
+        },
+      });
+      const spy = vi.mocked(getReplyFromConfig);
+      const callsBefore = spy.mock.calls.length;
+      const sendRes = await rpcReq(tuiWs, "chat.send", {
+        sessionKey: "main",
+        message: "hello from tui",
+        deliver: true,
+        idempotencyKey: "idem-tui-deliver-route-1",
+      });
+      expect(sendRes.ok).toBe(true);
+      await waitFor(() => spy.mock.calls.length > callsBefore);
+      const ctx = spy.mock.calls.at(-1)?.[0] as
+        | { OriginatingChannel?: string; OriginatingTo?: string; AccountId?: string }
+        | undefined;
+      expect(ctx?.OriginatingChannel).toBe("telegram");
+      expect(ctx?.OriginatingTo).toBe("group:12345");
+      expect(ctx?.AccountId).toBe("acct-main");
+    } finally {
+      testState.sessionStorePath = undefined;
+      tuiWs.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send --deliver from non-TUI UI client remains internal-webchat routed", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const uiWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    trackConnectChallengeNonce(uiWs);
+    try {
+      await new Promise<void>((resolve) => uiWs.once("open", resolve));
+      await connectOk(uiWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          version: "dev",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.UI,
+        },
+      });
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "group:999",
+            deliveryContext: {
+              channel: "telegram",
+              to: "group:999",
+            },
+          },
+        },
+      });
+      const spy = vi.mocked(getReplyFromConfig);
+      const callsBefore = spy.mock.calls.length;
+      const sendRes = await rpcReq(uiWs, "chat.send", {
+        sessionKey: "main",
+        message: "hello from ui",
+        deliver: true,
+        idempotencyKey: "idem-ui-deliver-route-1",
+      });
+      expect(sendRes.ok).toBe(true);
+      await waitFor(() => spy.mock.calls.length > callsBefore);
+      const ctx = spy.mock.calls.at(-1)?.[0] as
+        | { OriginatingChannel?: string; OriginatingTo?: string }
+        | undefined;
+      expect(ctx?.OriginatingChannel).toBe("webchat");
+      expect(ctx?.OriginatingTo).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+      uiWs.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);

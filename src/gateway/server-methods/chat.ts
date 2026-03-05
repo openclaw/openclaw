@@ -34,6 +34,7 @@ import { type ChatImageContent, parseMessageWithAttachments } from "../chat-atta
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_NAMES,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
 } from "../protocol/client-info.js";
@@ -75,6 +76,20 @@ type AbortedPartialSnapshot = {
   text: string;
   abortOrigin: AbortOrigin;
 };
+
+function isTuiUiClient(client?: {
+  id?: string | null;
+  displayName?: string | null;
+  mode?: string | null;
+}): boolean {
+  if ((client?.mode ?? "").trim().toLowerCase() !== GATEWAY_CLIENT_MODES.UI) {
+    return false;
+  }
+  if ((client?.id ?? "").trim().toLowerCase() !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
+    return false;
+  }
+  return (client?.displayName ?? "").trim().toLowerCase() === "openclaw-tui";
+}
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -892,7 +907,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionChannelHint === routeChannelCandidate;
       const clientMode = client?.connect?.client?.mode;
       const isFromWebchatClient =
-        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+        isWebchatClient(client?.connect?.client) ||
+        (clientMode === GATEWAY_CLIENT_MODES.UI && !isTuiUiClient(client?.connect?.client));
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
       const isConfiguredMainSessionScope =
         normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
