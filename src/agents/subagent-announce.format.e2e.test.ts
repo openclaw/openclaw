@@ -1884,11 +1884,11 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(call?.params?.deliver).toBe(true);
-    expect(call?.params?.channel).toBe("whatsapp");
-    expect(call?.params?.to).toBe("+1555");
-    expect(call?.params?.accountId).toBe("acct-main");
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+    expect(call?.params?.accountId).toBeUndefined();
   });
 
   it("keeps announce retryable when ended requester subagent has no fallback requester", async () => {
@@ -1904,12 +1904,12 @@ describe("subagent announce formatting", () => {
       cleanup: "delete",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe(true);
     expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
       "agent:main:subagent:orchestrator",
     );
-    expect(agentSpy).not.toHaveBeenCalled();
-    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
   it("defers announce when child run stays active after settle timeout", async () => {
@@ -2021,9 +2021,9 @@ describe("subagent announce formatting", () => {
             outputTokens: 10,
           },
         },
-        expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
-        expectedChannel: "discord",
+        expectedSessionKey: "agent:main:subagent:newton",
+        expectedDeliver: false,
+        expectedChannel: undefined,
       },
       {
         name: "falls back when parent sessionId is blank",
@@ -2043,9 +2043,9 @@ describe("subagent announce formatting", () => {
             outputTokens: 10,
           },
         },
-        expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
-        expectedChannel: "discord",
+        expectedSessionKey: "agent:main:subagent:newton",
+        expectedDeliver: false,
+        expectedChannel: undefined,
       },
     ] as const;
 
@@ -2075,5 +2075,82 @@ describe("subagent announce formatting", () => {
       expect(call?.params?.deliver, testCase.name).toBe(testCase.expectedDeliver);
       expect(call?.params?.channel, testCase.name).toBe(testCase.expectedChannel);
     }
+  });
+
+  it("targets ended parent subagent session even if parent store entry is missing (#36081)", async () => {
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord", to: "channel:main", accountId: "acct-main" },
+    });
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:leaf",
+      childRunId: "run-birdie-missing-parent-entry",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(subagentRegistryMock.isSubagentSessionRunActive).toHaveBeenCalledWith(
+      "agent:main:subagent:newton",
+    );
+    expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
+      "agent:main:subagent:newton",
+    );
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:newton");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+  });
+
+  it("falls back to the grandparent only if parent injection fails (#36081)", async () => {
+    let attempt = 0;
+    agentSpy.mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("parent injection unavailable");
+      }
+      return { runId: "run-main", status: "ok" };
+    });
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord", to: "channel:main", accountId: "acct-main" },
+    });
+    sessionStore = {
+      "agent:main:subagent:newton": {
+        sessionId: "newton-session-id",
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      "agent:main:main": {
+        sessionId: "main-session-id",
+        lastChannel: "discord",
+        lastTo: "channel:main",
+        lastAccountId: "acct-main",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:leaf",
+      childRunId: "run-birdie-parent-fails",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+    const firstCall = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const secondCall = agentSpy.mock.calls[1]?.[0] as { params?: Record<string, unknown> };
+    expect(firstCall?.params?.sessionKey).toBe("agent:main:subagent:newton");
+    expect(firstCall?.params?.deliver).toBe(false);
+    expect(secondCall?.params?.sessionKey).toBe("agent:main:main");
+    expect(secondCall?.params?.deliver).toBe(true);
+    expect(secondCall?.params?.channel).toBe("discord");
+    expect(secondCall?.params?.to).toBe("channel:main");
   });
 });

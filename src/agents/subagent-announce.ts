@@ -1136,6 +1136,10 @@ export async function runSubagentAnnounceFlow(params: {
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+    let fallbackRequester: {
+      requesterSessionKey: string;
+      requesterOrigin?: DeliveryContext;
+    } | null = null;
     const childSessionId = (() => {
       const entry = loadSessionEntryByKey(params.childSessionKey);
       return typeof entry?.sessionId === "string" && entry.sessionId.trim()
@@ -1286,32 +1290,13 @@ export async function runSubagentAnnounceFlow(params: {
       const { isSubagentSessionRunActive, resolveRequesterForChildSession } =
         await loadSubagentRegistryRuntime();
       if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
-        // Parent run has ended. Check if parent SESSION still exists.
-        // If it does, the parent may be waiting for child results — inject there.
-        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
-        const parentSessionAlive =
-          parentSessionEntry &&
-          typeof parentSessionEntry.sessionId === "string" &&
-          parentSessionEntry.sessionId.trim();
-
-        if (!parentSessionAlive) {
-          // Parent session is truly gone — fallback to grandparent
-          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
-          if (!fallback?.requesterSessionKey) {
-            // Without a requester fallback we cannot safely deliver this nested
-            // completion. Keep cleanup retryable so a later registry restore can
-            // recover and re-announce instead of silently dropping the result.
-            shouldDeleteChildSession = false;
-            return false;
-          }
-          targetRequesterSessionKey = fallback.requesterSessionKey;
-          targetRequesterOrigin =
-            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterDepth >= 1;
+        const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
+        if (fallback?.requesterSessionKey) {
+          fallbackRequester = {
+            requesterSessionKey: fallback.requesterSessionKey,
+            requesterOrigin: normalizeDeliveryContext(fallback.requesterOrigin),
+          };
         }
-        // If parent session is alive (just has no active run), continue with parent
-        // as target. Injecting the announce will start a new agent turn for processing.
       }
     }
 
@@ -1365,57 +1350,78 @@ export async function runSubagentAnnounceFlow(params: {
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
     });
-    // Send to the requester session. For nested subagents this is an internal
-    // follow-up injection (deliver=false) so the orchestrator receives it.
-    let directOrigin = targetRequesterOrigin;
-    if (!requesterIsSubagent) {
-      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
-    }
-    const completionResolution =
-      expectsCompletionMessage && !requesterIsSubagent
-        ? await resolveSubagentCompletionOrigin({
-            childSessionKey: params.childSessionKey,
-            requesterSessionKey: targetRequesterSessionKey,
-            requesterOrigin: directOrigin,
-            childRunId: params.childRunId,
-            spawnMode: params.spawnMode,
-            expectsCompletionMessage,
-          })
-        : {
-            origin: targetRequesterOrigin,
-            routeMode: "fallback" as const,
-          };
-    const completionDirectOrigin = completionResolution.origin;
     // Use a deterministic idempotency key so the gateway dedup cache
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-    const delivery = await deliverSubagentAnnouncement({
-      requesterSessionKey: targetRequesterSessionKey,
-      announceId,
-      triggerMessage,
-      steerMessage,
-      completionMessage,
-      internalEvents,
-      summaryLine: taskLabel,
-      requesterOrigin:
-        expectsCompletionMessage && !requesterIsSubagent
-          ? completionDirectOrigin
-          : targetRequesterOrigin,
-      completionDirectOrigin,
-      directOrigin,
-      targetRequesterSessionKey,
-      requesterIsSubagent,
-      expectsCompletionMessage: expectsCompletionMessage,
-      bestEffortDeliver: params.bestEffortDeliver,
-      completionRouteMode: completionResolution.routeMode,
-      spawnMode: params.spawnMode,
-      announceType,
-      directIdempotencyKey,
-      currentRunId: params.childRunId,
-      signal: params.signal,
+
+    const deliverWithTarget = async (options: { sessionKey: string; origin?: DeliveryContext }) => {
+      const targetDepth = getSubagentDepthFromSessionStore(options.sessionKey);
+      const targetIsSubagent = targetDepth >= 1;
+      const targetTriggerMessage = buildAnnounceSteerMessage(internalEvents);
+      let targetDirectOrigin = options.origin;
+      if (!targetIsSubagent) {
+        const { entry } = loadRequesterSessionEntry(options.sessionKey);
+        targetDirectOrigin = resolveAnnounceOrigin(entry, options.origin);
+      }
+      const completionResolution =
+        expectsCompletionMessage && !targetIsSubagent
+          ? await resolveSubagentCompletionOrigin({
+              childSessionKey: params.childSessionKey,
+              requesterSessionKey: options.sessionKey,
+              requesterOrigin: targetDirectOrigin,
+              childRunId: params.childRunId,
+              spawnMode: params.spawnMode,
+              expectsCompletionMessage,
+            })
+          : {
+              origin: options.origin,
+              routeMode: "fallback" as const,
+            };
+      const completionDirectOrigin = completionResolution.origin;
+
+      return deliverSubagentAnnouncement({
+        requesterSessionKey: options.sessionKey,
+        announceId,
+        triggerMessage: targetTriggerMessage,
+        steerMessage,
+        completionMessage,
+        internalEvents,
+        summaryLine: taskLabel,
+        requesterOrigin:
+          expectsCompletionMessage && !targetIsSubagent ? completionDirectOrigin : options.origin,
+        completionDirectOrigin,
+        directOrigin: targetDirectOrigin,
+        targetRequesterSessionKey: options.sessionKey,
+        requesterIsSubagent: targetIsSubagent,
+        expectsCompletionMessage: expectsCompletionMessage,
+        bestEffortDeliver: params.bestEffortDeliver,
+        completionRouteMode: completionResolution.routeMode,
+        spawnMode: params.spawnMode,
+        announceType,
+        directIdempotencyKey,
+        currentRunId: params.childRunId,
+        signal: params.signal,
+      });
+    };
+
+    let delivery = await deliverWithTarget({
+      sessionKey: targetRequesterSessionKey,
+      origin: targetRequesterOrigin,
     });
+
+    if (!delivery.delivered && fallbackRequester && fallbackRequester.requesterSessionKey) {
+      if (fallbackRequester.requesterSessionKey !== targetRequesterSessionKey) {
+        const fallbackTargetSessionKey = fallbackRequester.requesterSessionKey;
+        const fallbackTargetOrigin = fallbackRequester.requesterOrigin ?? targetRequesterOrigin;
+        targetRequesterSessionKey = fallbackTargetSessionKey;
+        targetRequesterOrigin = fallbackTargetOrigin;
+        delivery = await deliverWithTarget({
+          sessionKey: fallbackTargetSessionKey,
+          origin: fallbackTargetOrigin,
+        });
+      }
+    }
     // Cron delivery state should only be marked as delivered when we have a
     // direct path result. Queue/steer means "accepted for later processing",
     // not a confirmed channel send, and can otherwise produce false positives.
