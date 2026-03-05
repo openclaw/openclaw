@@ -576,7 +576,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // don't replay on subsequent mentions ("since last reply" semantics).
   if (isGroup && context.groupHistories) {
     const historyKey = groupId ?? roomId;
-    if (historyKey) {
+    if (historyKey && context.groupHistories.has(historyKey)) {
       clearHistoryEntriesIfEnabled({
         historyMap: context.groupHistories,
         historyKey,

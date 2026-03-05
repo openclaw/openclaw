@@ -61,7 +61,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       processMessage,
       replayCache,
       groupHistories,
-      historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
+      historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
     });
   };
 
