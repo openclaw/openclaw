@@ -108,6 +108,30 @@ describe("tool image sanitizing", () => {
     expect(image.mimeType).toBe("image/jpeg");
   });
 
+  it("converts GIF images to JPEG for vision model compatibility", async () => {
+    // Create a minimal 1x1 GIF87a image
+    const gifBuffer = await sharp(Buffer.alloc(1 * 1 * 3, 0x7f), {
+      raw: { width: 1, height: 1, channels: 3 },
+    })
+      .gif()
+      .toBuffer();
+
+    const blocks = [
+      {
+        type: "image" as const,
+        data: gifBuffer.toString("base64"),
+        mimeType: "image/gif",
+      },
+    ];
+
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    const img = getImageBlock(out);
+
+    // GIF should be converted away from image/gif
+    expect(img.mimeType).not.toBe("image/gif");
+    expect(img.mimeType).toBe("image/jpeg");
+  });
+
   it("drops malformed image base64 payloads", async () => {
     const blocks = [
       {

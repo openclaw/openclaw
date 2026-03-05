@@ -167,7 +167,10 @@ async function resizeImageBase64IfNeeded(params: {
   const hasDimensions = typeof width === "number" && typeof height === "number";
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
+  // GIF is not supported by most vision models — always convert to JPEG.
+  const needsFormatConversion = params.mimeType === "image/gif";
   if (
+    !needsFormatConversion &&
     hasDimensions &&
     !overBytes &&
     width <= params.maxDimensionPx &&
