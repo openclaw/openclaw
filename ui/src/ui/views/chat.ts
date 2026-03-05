@@ -234,11 +234,33 @@ function addFilesAsAttachments(files: File[]) {
 const ACCEPTED_MIME_PREFIXES = ["image/"];
 const ACCEPTED_MIME_EXACT = new Set(["application/pdf"]);
 
-function isAcceptedMime(mime: string): boolean {
-  return (
+/** File extensions accepted as a fallback when the MIME type is empty or non-standard. */
+const ACCEPTED_EXTENSIONS = new Set([".pdf"]);
+
+/**
+ * Returns true if the file should be accepted based on its MIME type or,
+ * as a fallback, its filename extension. The extension fallback covers cases
+ * where browsers report an empty or non-standard MIME string for valid PDFs
+ * (common with drag/drop and certain OS file pickers).
+ */
+function isAcceptedFile(mime: string, filename?: string): boolean {
+  if (
     ACCEPTED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix)) ||
     ACCEPTED_MIME_EXACT.has(mime)
-  );
+  ) {
+    return true;
+  }
+  // Extension fallback: only used when MIME is absent/unrecognised
+  if (filename) {
+    const dot = filename.lastIndexOf(".");
+    if (dot !== -1) {
+      const ext = filename.slice(dot).toLowerCase();
+      if (ACCEPTED_EXTENSIONS.has(ext)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
@@ -250,11 +272,9 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const files: File[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (isAcceptedMime(item.type)) {
-      const file = item.getAsFile();
-      if (file) {
-        files.push(file);
-      }
+    const file = item.getAsFile();
+    if (file && isAcceptedFile(item.type, file.name)) {
+      files.push(file);
     }
   }
 
@@ -278,7 +298,7 @@ function handleFileInput(e: Event, props: ChatProps) {
   const files: File[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
-    if (file && isAcceptedMime(file.type)) {
+    if (file && isAcceptedFile(file.type, file.name)) {
       files.push(file);
     }
   }
@@ -308,7 +328,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const files: File[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
-    if (file && isAcceptedMime(file.type)) {
+    if (file && isAcceptedFile(file.type, file.name)) {
       files.push(file);
     }
   }
