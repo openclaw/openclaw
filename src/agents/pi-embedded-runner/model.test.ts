@@ -6,6 +6,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { discoverModels } from "../pi-model-discovery.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
@@ -58,7 +59,7 @@ function expectResolvedForwardCompatFallback(params: {
 function expectUnknownModelError(provider: string, id: string) {
   const result = resolveModel(provider, id, "/tmp/agent");
   expect(result.model).toBeUndefined();
-  expect(result.error).toBe(`Unknown model: ${provider}/${id}`);
+  expect(result.error).toBe(`Unknown model: ${provider}/${id}.`);
 }
 
 describe("buildInlineProviderModels", () => {
@@ -429,7 +430,55 @@ describe("resolveModel", () => {
     const result = resolveModel("google-antigravity", "some-model", "/tmp/agent");
 
     expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+    expect(result.error).toBe("Unknown model: google-antigravity/some-model.");
+  });
+
+  it('suggests a same-provider model via "Did you mean?" when registry has a close match', () => {
+    vi.mocked(discoverModels).mockReturnValueOnce({
+      find: vi.fn(() => null),
+      getAll: vi.fn(() => [
+        { provider: "anthropic", id: "claude-sonnet-4-6" },
+        { provider: "anthropic", id: "claude-opus-4-6" },
+      ]),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("anthropic", "claude-sonet-4-6", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain('Did you mean "anthropic/claude-sonnet-4-6"?');
+    // Auth hint must not appear: registry has same-provider entries, proving
+    // the provider is already configured.
+    expect(result.error).not.toContain("ANTHROPIC");
+  });
+
+  it("suppresses LOCAL_PROVIDER_HINTS auth hint when same-provider fuzzy match is found", () => {
+    vi.mocked(discoverModels).mockReturnValueOnce({
+      find: vi.fn(() => null),
+      getAll: vi.fn(() => [{ provider: "ollama", id: "gemma3:4b" }]),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("ollama", "gemma3:4", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain('Did you mean "ollama/gemma3:4b"?');
+    // Provider is configured (gemma3:4b is in the registry) → the auth setup
+    // hint would be contradictory and must be omitted.
+    expect(result.error).not.toContain("OLLAMA_API_KEY");
+  });
+
+  it("does not suggest cross-provider models even when model-ID similarity would be high", () => {
+    vi.mocked(discoverModels).mockReturnValueOnce({
+      find: vi.fn(() => null),
+      getAll: vi.fn(() => [
+        // Same model id, but a different provider — must never be suggested.
+        { provider: "openai", id: "claude-sonnet-4-6" },
+      ]),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("anthropic", "claude-sonet-4-6", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).not.toContain("Did you mean");
   });
 
   it("applies provider baseUrl override to registry-found models", () => {

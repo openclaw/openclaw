@@ -128,7 +128,7 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     return {
-      error: buildUnknownModelError(provider, modelId),
+      error: buildUnknownModelError(provider, modelId, modelRegistry),
       authStorage,
       modelRegistry,
     };
@@ -151,13 +151,91 @@ export function resolveModel(
 }
 
 /**
+ * Returns the normalized Levenshtein similarity between two strings (0–1).
+ * A value of 1.0 means identical; 0.0 means completely different.
+ */
+function modelNameSimilarity(a: string, b: string): number {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+  const maxLen = Math.max(aLower.length, bLower.length);
+  if (maxLen === 0) {
+    return 1;
+  }
+  const dist = levenshteinDistance(aLower, bLower);
+  return 1 - dist / maxLen;
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) {
+    return b.length;
+  }
+  if (b.length === 0) {
+    return a.length;
+  }
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      matrix[i][j] =
+        b[i - 1] === a[j - 1]
+          ? matrix[i - 1][j - 1]
+          : Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Scans the model registry for the closest matching model name within the
+ * same provider.  Restricting the scan to same-provider entries ensures that
+ * a high-scoring cross-provider coincidence can never shadow a lower-scoring
+ * same-provider candidate and silently drop the suggestion.
+ *
+ * Returns a suggestion string (e.g. "anthropic/claude-sonnet-4-6") when
+ * similarity exceeds the threshold, or null when nothing is close enough.
+ */
+function findSimilarModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+  threshold = 0.6,
+): string | null {
+  // Compare only the model-ID segments, not the full "provider/modelId"
+  // strings.  Because we already filter to same-provider entries, both sides
+  // always share the identical provider prefix; including it in the comparison
+  // inflates max-length without adding information and causes short,
+  // semantically unrelated model IDs (e.g. "abc" vs "xyz" under the same
+  // provider) to cross the similarity threshold purely because the shared
+  // prefix dominates the score.
+  const providerLower = provider.toLowerCase();
+  const allModels = modelRegistry.getAll();
+  let bestModel: string | null = null;
+  let bestScore = 0;
+  for (const entry of allModels) {
+    if (entry.provider.toLowerCase() !== providerLower) {
+      continue;
+    }
+    const score = modelNameSimilarity(modelId, entry.id);
+    if (score > bestScore && score >= threshold) {
+      bestScore = score;
+      bestModel = `${entry.provider}/${entry.id}`;
+    }
+  }
+  return bestModel;
+}
+
+/**
  * Build a more helpful error when the model is not found.
  *
- * Local providers (ollama, vllm) need a dummy API key to be registered.
- * Users often configure `agents.defaults.model.primary: "ollama/…"` but
- * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
- * error.  This detects known providers that require opt-in auth and adds
- * a hint.
+ * 1. Fuzzy suggestion — scans the registry for the closest model name and
+ *    adds a "Did you mean?" hint when similarity is high enough (≥ 60%).
+ * 2. Local provider hints — ollama/vllm require an API key to be registered;
+ *    users often forget this, resulting in a confusing "Unknown model" error.
  *
  * See: https://github.com/openclaw/openclaw/issues/17328
  */
@@ -172,8 +250,39 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
     "See: https://docs.openclaw.ai/providers/vllm",
 };
 
-function buildUnknownModelError(provider: string, modelId: string): string {
-  const base = `Unknown model: ${provider}/${modelId}`;
-  const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
-  return hint ? `${base}. ${hint}` : base;
+function buildUnknownModelError(
+  provider: string,
+  modelId: string,
+  modelRegistry?: ModelRegistry,
+): string {
+  const base = `Unknown model: ${provider}/${modelId}.`;
+  const parts: string[] = [base];
+
+  // Resolve a same-provider fuzzy suggestion first so we can decide whether
+  // the auth-configuration hint is appropriate.
+  //
+  // A same-provider match proves that the provider is already configured (its
+  // models are visible in the registry), so showing the auth-setup hint
+  // alongside it would be contradictory and confusing.
+  //
+  // Conversely, when no same-provider match exists the registry may be empty
+  // for that provider because it is not configured at all — that is exactly
+  // when the auth hint is actionable.
+  // findSimilarModel already restricts its scan to same-provider entries, so
+  // the returned value is guaranteed to be same-provider (or null).
+  const sameproviderSuggestion: string | null =
+    modelRegistry !== undefined ? findSimilarModel(provider, modelId, modelRegistry) : null;
+
+  if (sameproviderSuggestion !== null) {
+    parts.push(`Did you mean "${sameproviderSuggestion}"?`);
+  } else {
+    // No same-provider match: the provider may not be configured.
+    // Surface the auth-configuration hint when one is available.
+    const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
+    if (hint) {
+      parts.push(hint);
+    }
+  }
+
+  return parts.join(" ");
 }

@@ -92,6 +92,7 @@ export function mockGoogleGeminiCliFlashTemplateModel(): void {
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
+    getAll: vi.fn(() => []),
   } as unknown as ReturnType<typeof discoverModels>);
 }
 
@@ -107,5 +108,6 @@ export function mockDiscoveredModel(params: {
       }
       return null;
     }),
+    getAll: vi.fn(() => []),
   } as unknown as ReturnType<typeof discoverModels>);
 }
