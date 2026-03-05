@@ -90,6 +90,11 @@ rm -f ~/Library/LaunchAgents/ai.openclaw.gateway.plist
 
 If you used a profile, replace the label and plist name with `ai.openclaw.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
 
+Canonical namespace note:
+
+- Use `ai.openclaw.*` for all active service operations (`bootout`, `kickstart`, plist checks).
+- Treat non-`ai.openclaw.*` labels as legacy migration targets and remove them during cleanup.
+
 ### Linux (systemd user unit)
 
 Default unit name is `openclaw-gateway.service` (or `openclaw-gateway-<profile>.service`):

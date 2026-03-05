@@ -30,6 +30,11 @@ Label:
 
 - `ai.openclaw.gateway` (or `ai.openclaw.<profile>`; legacy `com.openclaw.*` may remain)
 
+Canonical label policy:
+
+- Current releases use `ai.openclaw.*` as the canonical launchd namespace.
+- Treat non-`ai.openclaw.*` labels as legacy migration leftovers only; remove them during cleanup.
+
 Plist location (per‑user):
 
 - `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
