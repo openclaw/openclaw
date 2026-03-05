@@ -10,7 +10,11 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("./agent.js", () => ({
   agentCommand: vi.fn(),
 }));
+vi.mock("../browser/control-service.js", () => ({
+  stopBrowserControlService: vi.fn(async () => {}),
+}));
 
+import { stopBrowserControlService } from "../browser/control-service.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
@@ -135,6 +139,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(stopBrowserControlService).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });

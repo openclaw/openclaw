@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { stopBrowserControlService } from "../browser/control-service.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
@@ -184,7 +185,11 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     replyAccountId: opts.replyAccount,
   };
   if (opts.local === true) {
-    return await agentCommand(localOpts, runtime, deps);
+    try {
+      return await agentCommand(localOpts, runtime, deps);
+    } finally {
+      await stopBrowserControlService().catch(() => {});
+    }
   }
 
   try {
