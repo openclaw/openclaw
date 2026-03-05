@@ -621,7 +621,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
 
         if (usage.toolUsage) {
-          for (const tool of usage.toolUsage.tools) {
+          for (const tool of usage.toolUsage.tools ?? []) {
             toolAggregateMap.set(tool.name, (toolAggregateMap.get(tool.name) ?? 0) + tool.count);
           }
         }
