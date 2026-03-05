@@ -122,4 +122,41 @@ describe("restart resume", () => {
     expect(result.resumed).toBe(0);
     expect(runAgentMock).toHaveBeenCalledTimes(0);
   });
+
+  it("clears inflight records when enabled but no restart sentinel is present", async () => {
+    const dir = await makeTempStateDir("openclaw-restart-resume-clear-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+
+    const runId = "run-clear-1";
+    const opts: AgentCommandIngressOpts = {
+      message: "original",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      deliver: false,
+      senderIsOwner: true,
+      runId,
+    };
+    await addInflightAgentRun({ runId, acceptedAt: Date.now(), opts }, env);
+
+    const runAgentMock = vi.fn(async (_o: AgentCommandIngressOpts) => undefined);
+    const cfg: OpenClawConfig = {
+      gateway: { restartRecovery: { resumeInflightAgentRuns: true } },
+    };
+
+    const result = await maybeResumeInflightAgentRunsAfterRestart({
+      cfg,
+      deps: {} as unknown as CliDeps,
+      runtime: defaultRuntime,
+      env,
+      getActiveRunCount: () => 0,
+      runAgent: runAgentMock as unknown as AgentCommandFromIngress,
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(result.resumed).toBe(0);
+    expect(runAgentMock).toHaveBeenCalledTimes(0);
+
+    const store = await __test.readStore(env);
+    expect(Object.keys(store.runs)).toHaveLength(0);
+  });
 });
