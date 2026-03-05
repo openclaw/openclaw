@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
+import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -328,8 +328,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio files, "file" for documents and video */
-  msgType?: "file" | "audio";
+  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -467,8 +467,8 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
+    // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,

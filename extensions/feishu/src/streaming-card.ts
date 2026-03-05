@@ -3,7 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/feishu";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
@@ -14,6 +14,13 @@ export type StreamingCardHeader = {
   title: string;
   /** Color template: blue, green, red, orange, purple, indigo, wathet, turquoise, yellow, grey, carmine, violet, lime */
   template?: string;
+};
+
+type StreamingStartOptions = {
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  rootId?: string;
+  header?: StreamingCardHeader;
 };
 
 // Token cache (keyed by domain + appId)
@@ -94,14 +101,41 @@ export function mergeStreamingText(
   if (!next) {
     return previous;
   }
-  if (!previous || next === previous || next.includes(previous)) {
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next)) {
+    return previous;
+  }
+  if (next.includes(previous)) {
     return next;
   }
   if (previous.includes(next)) {
     return previous;
   }
+
+  // Merge partial overlaps, e.g. "这" + "这是" => "这是".
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+      return `${previous}${next.slice(overlap)}`;
+    }
+  }
   // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
   return `${previous}${next}`;
+}
+
+export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
+  if (options?.replyToMessageId) {
+    return "reply";
+  }
+  if (options?.rootId) {
+    return "root_create";
+  }
+  return "create";
 }
 
 /** Streaming card session manager */
@@ -125,12 +159,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: {
-      replyToMessageId?: string;
-      replyInThread?: boolean;
-      rootId?: string;
-      header?: StreamingCardHeader;
-    },
+    options?: StreamingStartOptions,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -142,7 +171,7 @@ export class FeishuStreamingSession {
       config: {
         streaming_mode: true,
         summary: { content: "[Generating...]" },
-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
+        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
       },
       body: {
         elements: [{ tag: "markdown", content: "⏳ Thinking...", element_id: "content" }],
@@ -181,27 +210,30 @@ export class FeishuStreamingSession {
     const cardId = createData.data.card_id;
     const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
 
-    // Topic-group replies require root_id routing. Prefer create+root_id when available.
+    // Prefer message.reply when we have a reply target — reply_in_thread
+    // reliably routes streaming cards into Feishu topics, whereas
+    // message.create with root_id may silently ignore root_id for card
+    // references (card_id format).
     let sendRes;
-    if (options?.rootId) {
-      const createData = {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: cardContent,
-        root_id: options.rootId,
-      };
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: createData,
-      });
-    } else if (options?.replyToMessageId) {
+    const sendOptions = options ?? {};
+    const sendMode = resolveStreamingCardSendMode(sendOptions);
+    if (sendMode === "reply") {
       sendRes = await this.client.im.message.reply({
-        path: { message_id: options.replyToMessageId },
+        path: { message_id: sendOptions.replyToMessageId! },
         data: {
           msg_type: "interactive",
           content: cardContent,
-          ...(options.replyInThread ? { reply_in_thread: true } : {}),
+          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
         },
+      });
+    } else if (sendMode === "root_create") {
+      // root_id is undeclared in the SDK types but accepted at runtime
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: Object.assign(
+          { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+          { root_id: sendOptions.rootId },
+        ),
       });
     } else {
       sendRes = await this.client.im.message.create({
