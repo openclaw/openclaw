@@ -95,6 +95,9 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".txt",
 ]);
 
+const CONTROL_UI_ROOT_REALPATH_CACHE_MAX = 32;
+const controlUiRootRealpathCache = new Map<string, string>();
+
 export type ControlUiAvatarResolution =
   | { kind: "none"; reason: string }
   | { kind: "local"; filePath: string }
@@ -240,6 +243,29 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
+function resolveControlUiRootRealpath(root: string): string | null {
+  const cached = controlUiRootRealpathCache.get(root);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const resolved = fs.realpathSync(root);
+    controlUiRootRealpathCache.set(root, resolved);
+    if (controlUiRootRealpathCache.size > CONTROL_UI_ROOT_REALPATH_CACHE_MAX) {
+      const oldest = controlUiRootRealpathCache.keys().next();
+      if (!oldest.done) {
+        controlUiRootRealpathCache.delete(oldest.value);
+      }
+    }
+    return resolved;
+  } catch (error) {
+    if (isExpectedSafePathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } | null {
   const opened = openVerifiedFileSync({
     filePath,
@@ -377,16 +403,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const rootReal = (() => {
-    try {
-      return fs.realpathSync(root);
-    } catch (error) {
-      if (isExpectedSafePathError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  })();
+  const rootReal = resolveControlUiRootRealpath(root);
   if (!rootReal) {
     respondControlUiAssetsUnavailable(res);
     return true;

@@ -1,8 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -100,6 +101,25 @@ describe("handleControlUiHttpRequest", () => {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   }
+
+  it("reuses cached control-ui root realpath across requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const realpathSpy = vi.spyOn(fsSync, "realpathSync");
+        try {
+          const first = runControlUiRequest({ url: "/", method: "GET", rootPath: tmp });
+          const second = runControlUiRequest({ url: "/", method: "GET", rootPath: tmp });
+
+          expect(first.handled).toBe(true);
+          expect(second.handled).toBe(true);
+          const rootLookups = realpathSpy.mock.calls.filter((call) => call[0] === tmp);
+          expect(rootLookups).toHaveLength(1);
+        } finally {
+          realpathSpy.mockRestore();
+        }
+      },
+    });
+  });
 
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
