@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -304,25 +305,31 @@ function buildMergedSchemaCacheKey(params: {
   plugins: PluginUiMetadata[];
   channels: ChannelUiMetadata[];
 }): string {
-  const plugins = params.plugins
-    .map((plugin) => ({
-      id: plugin.id,
-      name: plugin.name,
-      description: plugin.description,
-      configSchema: plugin.configSchema ?? null,
-      configUiHints: plugin.configUiHints ?? null,
-    }))
-    .toSorted((a, b) => a.id.localeCompare(b.id));
-  const channels = params.channels
-    .map((channel) => ({
-      id: channel.id,
-      label: channel.label,
-      description: channel.description,
-      configSchema: channel.configSchema ?? null,
-      configUiHints: channel.configUiHints ?? null,
-    }))
-    .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+  const hash = createHash("sha256");
+
+  const plugins = params.plugins.toSorted((a, b) => a.id.localeCompare(b.id));
+  for (const plugin of plugins) {
+    hash.update(`plugin:${plugin.id}\n`);
+    hash.update(`name:${plugin.name ?? ""}\n`);
+    hash.update(`description:${plugin.description ?? ""}\n`);
+    hash.update(JSON.stringify(plugin.configSchema ?? null));
+    hash.update("\n");
+    hash.update(JSON.stringify(plugin.configUiHints ?? null));
+    hash.update("\n");
+  }
+
+  const channels = params.channels.toSorted((a, b) => a.id.localeCompare(b.id));
+  for (const channel of channels) {
+    hash.update(`channel:${channel.id}\n`);
+    hash.update(`label:${channel.label ?? ""}\n`);
+    hash.update(`description:${channel.description ?? ""}\n`);
+    hash.update(JSON.stringify(channel.configSchema ?? null));
+    hash.update("\n");
+    hash.update(JSON.stringify(channel.configUiHints ?? null));
+    hash.update("\n");
+  }
+
+  return hash.digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
