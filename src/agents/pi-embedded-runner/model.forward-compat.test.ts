@@ -86,4 +86,28 @@ describe("pi embedded model e2e smoke", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
   });
+
+  it("builds a forward-compat fallback for google/gemini-3.1-flash-lite-preview", () => {
+    mockGoogleGeminiCliFlashTemplateModel();
+    const result = resolveModel("google", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toBeDefined();
+    expect(result.model).toMatchObject({
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a forward-compat fallback for google/gemini-3.1-pro-preview", () => {
+    mockGoogleGeminiCliProTemplateModel();
+    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toBeDefined();
+    expect(result.model).toMatchObject({
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
 });

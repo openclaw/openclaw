@@ -176,9 +176,13 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalized = normalizeProviderId(provider);
+  if (normalized !== "google-gemini-cli" && normalized !== "google") {
     return undefined;
   }
+  // Templates are registered under "google-gemini-cli" in the model registry,
+  // so always search there regardless of which alias the user specified.
+  const templateProvider = "google-gemini-cli";
   const trimmed = modelId.trim();
   const lower = trimmed.toLowerCase();
 
@@ -192,7 +196,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   }
 
   return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
+    normalizedProvider: templateProvider,
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
