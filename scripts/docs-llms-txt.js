@@ -4,11 +4,12 @@
  * Usage: node scripts/docs-llms-txt.js
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const DOCS = join(process.cwd(), "docs");
 const OUT = join(DOCS, ".llm");
+rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const listResult = spawnSync("node", ["scripts/docs-list.js"], { encoding: "utf8" });
@@ -55,7 +56,7 @@ for (const [cat, docs] of [...cats].toSorted(([a], [b]) => a.localeCompare(b))) 
       "",
     );
     text = text.replace(/<\/?[A-Z][a-zA-Z]*[^>]*>/g, "");
-    text = text.replace(/<p[^>]*>[\s\S]*?<\/p>/gi, "");
+    text = text.replace(/<\/?p\b[^>]*>/gi, "");
     text = text.replace(/<img[^>]*\/?>/gi, "");
     text = text.replace(/\n{3,}/g, "\n\n");
     writeFileSync(dest, text);
