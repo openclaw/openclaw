@@ -86,11 +86,13 @@ export function handleMessageUpdate(
 
   ctx.noteLastAssistant(msg);
 
-  // If a cross-turn separator is pending, prepend it to deltaBuffer before processing
-  // the first chunk of the new turn. This ensures proper separation between
-  // tool-call cycles when block streaming is enabled (issue #35308).
+  // If a cross-turn separator is pending, mark it for later use.
+  // We can't prepend it to deltaBuffer here because .trim() would remove it.
+  // Instead, we'll add it when calculating the cleaned text for emission.
+  // This ensures proper separation between tool-call cycles when block
+  // streaming is enabled (issue #35308).
+  const needsCrossTurnSeparator = ctx.state.pendingCrossTurnSeparator;
   if (ctx.state.pendingCrossTurnSeparator) {
-    ctx.state.deltaBuffer = "\n\n" + ctx.state.deltaBuffer;
     ctx.state.pendingCrossTurnSeparator = false;
   }
 
@@ -200,11 +202,18 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    let cleanedText = parsedFull.text;
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+
+    // If this is the first chunk after a cross-turn boundary, prepend the separator.
+    // We add it to cleanedText before slicing to ensure the delta includes the separator.
+    // This must be done before the startsWith check to maintain correct diff logic.
+    if (needsCrossTurnSeparator && !previousCleaned) {
+      cleanedText = "\n\n" + cleanedText;
+    }
 
     let shouldEmit = false;
     let deltaText = "";
@@ -420,6 +429,14 @@ export function handleMessageEnd(
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
+  // When block streaming is active and we have existing delta content,
+  // mark that a cross-turn separator should be prepended to the next chunk.
+  // This prevents text from separate tool-call cycles from being concatenated
+  // together in the streaming UI (issue #35308).
+  // We set this flag here (before clearing deltaBuffer) because this is the
+  // last point where we can detect if there was content in the previous turn.
+  const shouldInsertCrossTurnSeparator = !!ctx.blockChunking && ctx.state.deltaBuffer.length > 0;
+
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
@@ -429,4 +446,5 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
+  ctx.state.pendingCrossTurnSeparator = shouldInsertCrossTurnSeparator;
 }

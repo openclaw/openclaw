@@ -103,11 +103,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
-    // When block streaming is active and we have existing delta content,
-    // mark that a cross-turn separator should be prepended to the next chunk.
-    // This prevents text from separate tool-call cycles from being concatenated
-    // together in the streaming UI (issue #35308).
-    const shouldInsertCrossTurnSeparator = Boolean(blockChunking && state.deltaBuffer.length > 0);
     state.deltaBuffer = "";
     state.blockBuffer = "";
     blockChunker?.reset();
@@ -132,7 +127,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
-    state.pendingCrossTurnSeparator = shouldInsertCrossTurnSeparator;
   };
 
   const rememberAssistantText = (text: string) => {
