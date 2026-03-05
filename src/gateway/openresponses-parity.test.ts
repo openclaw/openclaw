@@ -132,6 +132,9 @@ describe("OpenResponses Feature Parity", () => {
 
       const result = ToolDefinitionSchema.safeParse(legacyTool);
       expect(result.success).toBe(true);
+      if (!result.success) {
+        throw new Error("Expected legacy tool definition to parse successfully");
+      }
       expect(result.data).toMatchObject({
         type: "function",
         function: {
@@ -245,6 +248,9 @@ describe("OpenResponses Feature Parity", () => {
 
       const result = CreateResponseBodySchema.safeParse(validRequest);
       expect(result.success).toBe(true);
+      if (!result.success) {
+        throw new Error("Expected CreateResponseBody legacy tool request to parse successfully");
+      }
       expect(result.data.tools?.[0]?.function.parameters).toEqual(
         validRequest.tools[0]?.input_schema,
       );

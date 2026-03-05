@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
-import { sessionsClearCommand, sessionsRmCommand } from "../../commands/sessions-delete.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsClearCommand, sessionsRmCommand } from "../../commands/sessions-delete.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -226,7 +226,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw sessions rm agent:main:main", "Delete one session by full key."],
-          ["openclaw sessions rm --agent work \"agent:work:main\"", "Delete one session from work store."],
+          [
+            'openclaw sessions rm --agent work "agent:work:main"',
+            "Delete one session from work store.",
+          ],
           ["openclaw sessions rm --all-agents main", "Delete a key across agent stores."],
           ["openclaw sessions rm --json main", "Delete with JSON output."],
           ["openclaw sessions rm --dry-run main", "Show which keys would be removed."],
@@ -271,14 +274,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions clear --all --dry-run", "Preview full-store deletion."],
           ["openclaw sessions clear --older-than 7d", "Delete entries older than 7 days."],
           ["openclaw sessions clear --older-than 12h", "Delete entries older than 12h."],
-          [
-            "openclaw sessions clear --all --agent work",
-            "Clear all sessions for the work agent.",
-          ],
-          [
-            "openclaw sessions clear --older-than 1h --json",
-            "Clear by age and get JSON output.",
-          ],
+          ["openclaw sessions clear --all --agent work", "Clear all sessions for the work agent."],
+          ["openclaw sessions clear --older-than 1h --json", "Clear by age and get JSON output."],
         ])}`,
     )
     .action(async (opts, command) => {

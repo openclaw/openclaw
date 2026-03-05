@@ -212,14 +212,7 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("runs sessions rm subcommand with parent-level store/agent forwarding", async () => {
-    await runCli([
-      "sessions",
-      "--store",
-      "/tmp/sessions.json",
-      "rm",
-      "--json",
-      "agent:main:main",
-    ]);
+    await runCli(["sessions", "--store", "/tmp/sessions.json", "rm", "--json", "agent:main:main"]);
 
     expect(sessionsRmCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -234,13 +227,7 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("runs sessions clear subcommand with parent-level all-agents forwarding", async () => {
-    await runCli([
-      "sessions",
-      "--all-agents",
-      "clear",
-      "--all",
-      "--dry-run",
-    ]);
+    await runCli(["sessions", "--all-agents", "clear", "--all", "--dry-run"]);
 
     expect(sessionsClearCommand).toHaveBeenCalledWith(
       expect.objectContaining({

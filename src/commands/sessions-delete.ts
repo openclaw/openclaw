@@ -1,13 +1,9 @@
-import { archiveSessionTranscripts } from "../gateway/session-utils.fs.js";
-import {
-  loadConfig,
-  loadSessionStore,
-  updateSessionStore,
-  type SessionEntry,
-} from "../config/sessions.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import { archiveSessionTranscripts } from "../gateway/session-utils.fs.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 
 type SessionsDeleteCriteria =
   | { mode: "rm"; key: string }
@@ -83,8 +79,7 @@ function buildDeletionPlan(params: {
   const deletedKeys = new Set<string>();
   const deletedSessionIds = new Set<string>();
   const sessionFileBySessionId = new Map<string, string | undefined>();
-  const nowMs =
-    params.criteria.mode === "clear-older-than" ? params.criteria.nowMs : Date.now();
+  const nowMs = params.criteria.mode === "clear-older-than" ? params.criteria.nowMs : Date.now();
 
   const targetSessionIds = new Set<string>();
   if (params.criteria.mode === "rm") {
@@ -296,10 +291,7 @@ async function executeDeleteAcrossTargets(params: {
   return summaries;
 }
 
-function renderDeleteSummaries(
-  summaries: SessionsDeleteSummary[],
-  runtime: RuntimeEnv,
-): void {
+function renderDeleteSummaries(summaries: SessionsDeleteSummary[], runtime: RuntimeEnv): void {
   for (const summary of summaries) {
     runtime.log(`Session store: ${summary.storePath}`);
     runtime.log(`${summary.dryRun ? "[dry-run] " : ""}Deleted sessions: ${summary.deletedCount}`);
@@ -313,10 +305,7 @@ function renderDeleteSummaries(
   }
 }
 
-function resolveCriteria(opts: {
-  all?: boolean;
-  olderThan?: string;
-}): SessionsDeleteCriteria {
+function resolveCriteria(opts: { all?: boolean; olderThan?: string }): SessionsDeleteCriteria {
   if (opts.all === true && opts.olderThan != null) {
     throw new Error("Use either --all or --older-than, not both.");
   }
@@ -342,7 +331,10 @@ export type SessionsRmOptions = BaseSessionDeleteOptions & {
   key?: string;
 };
 
-export async function sessionsRmCommand(opts: SessionsRmOptions, runtime: RuntimeEnv): Promise<void> {
+export async function sessionsRmCommand(
+  opts: SessionsRmOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
   const cfg = loadConfig();
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,

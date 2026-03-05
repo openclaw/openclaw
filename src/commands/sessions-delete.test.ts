@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { makeRuntime } from "./sessions.test-helpers.js";
 import { sessionsClearCommand, sessionsRmCommand } from "./sessions-delete.js";
+import { makeRuntime } from "./sessions.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   archiveSessionTranscripts: vi.fn(),
@@ -62,7 +62,7 @@ describe("sessions delete commands", () => {
       },
     );
     mocks.updateSessionStore.mockImplementation(
-      async (_storePath, mutator: (store: Record<string, SessionEntry>) => Promise<unknown> | unknown) => {
+      async (_storePath, mutator: (store: Record<string, SessionEntry>) => unknown) => {
         const next = structuredClone(mocks.loadSessionStore());
         return mutator(next);
       },
@@ -194,7 +194,11 @@ describe("sessions delete commands", () => {
     const now = Date.now();
     const store = {
       recent: { sessionId: "sid-recent", updatedAt: now - 1000, sessionFile: "recent.jsonl" },
-      stale: { sessionId: "sid-stale", updatedAt: now - 20 * 60 * 1000, sessionFile: "stale.jsonl" },
+      stale: {
+        sessionId: "sid-stale",
+        updatedAt: now - 20 * 60 * 1000,
+        sessionFile: "stale.jsonl",
+      },
     };
     mocks.loadSessionStore.mockReturnValue(structuredClone(store));
 

@@ -70,6 +70,7 @@ openclaw sessions rm --json "agent:main:main"
 ```
 
 `openclaw sessions rm` is case-insensitive for key match and removes:
+
 - the requested key
 - any key sharing the same `sessionId` as the requested key
 
@@ -105,6 +106,7 @@ openclaw sessions clear --older-than 1h --all-agents
 ```
 
 Notes:
+
 - `--all` and `--older-than` are mutually exclusive.
 - `--all`: remove all entries in the selected store(s).
 - `--older-than <duration>`: remove entries whose `updatedAt` is older than the duration.

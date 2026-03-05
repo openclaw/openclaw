@@ -70,7 +70,9 @@ beforeEach(() => {
   ensureProfileCleanExitMock.mockReturnValue(undefined);
   fetchCdpCheckedMock.mockImplementation(() =>
     Promise.resolve(
-      new Response(JSON.stringify({ Browser: "OpenClaw", "User-Agent": "chrome" }), { status: 200 }),
+      new Response(JSON.stringify({ Browser: "OpenClaw", "User-Agent": "chrome" }), {
+        status: 200,
+      }),
     ),
   );
   spawnMock.mockReturnValue({
@@ -100,7 +102,10 @@ describe("launchOpenClawChrome", () => {
       headless: false,
     } as const;
 
-    await launchOpenClawChrome(resolved, profile as unknown as Parameters<typeof launchOpenClawChrome>[1]);
+    await launchOpenClawChrome(
+      resolved as unknown as Parameters<typeof launchOpenClawChrome>[0],
+      profile as unknown as Parameters<typeof launchOpenClawChrome>[1],
+    );
 
     const args = spawnMock.mock.calls[0]?.[1];
     expect(args).toBeDefined();
