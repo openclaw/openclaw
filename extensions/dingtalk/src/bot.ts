@@ -180,6 +180,24 @@ export async function handleDingtalkMessage(params: {
     }
   }
 
+  // --- Resolve command authorization ---
+  const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
+    ctx.content,
+    cfg,
+  );
+  const commandAllowFrom = dingtalkCfg?.allowFrom ?? [];
+  const senderAllowedForCommands = commandAllowFrom.some(
+    (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",
+  );
+  const commandAuthorized = shouldComputeCommandAuthorized
+    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: false,
+        authorizers: [
+          { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        ],
+      })
+    : undefined;
+
   // --- 构建消息体并分发给 agent / Build message body and dispatch to agent ---
   const messageBody = buildMessageBody(ctx);
 
@@ -215,6 +233,7 @@ export async function handleDingtalkMessage(params: {
     MessageSid: ctx.messageId,
     Timestamp: Date.now(),
     WasMentioned: ctx.mentionedBot,
+    CommandAuthorized: commandAuthorized,
     OriginatingChannel: "dingtalk" as const,
     OriginatingTo: dingtalkTo,
   });

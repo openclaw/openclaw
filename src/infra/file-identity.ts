@@ -3,10 +3,6 @@ export type FileIdentityStat = {
   ino: number | bigint;
 };
 
-function isZero(value: number | bigint): boolean {
-  return value === 0 || value === 0n;
-}
-
 export function sameFileIdentity(
   left: FileIdentityStat,
   right: FileIdentityStat,
