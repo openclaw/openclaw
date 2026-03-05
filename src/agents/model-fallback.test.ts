@@ -179,6 +179,10 @@ const OPENAI_RATE_LIMIT_MESSAGE =
 // Anthropic overloaded_error example shape: https://docs.anthropic.com/en/api/errors
 const ANTHROPIC_OVERLOADED_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
+// Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
+// https://github.com/openclaw/openclaw/issues/23440
+const INSUFFICIENT_QUOTA_PAYLOAD =
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 // Internal OpenClaw compatibility marker, not a provider API contract.
 const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 are cooling down";
 // SDK/transport compatibility marker, not a provider API contract.
@@ -397,6 +401,25 @@ describe("runWithModelFallback", () => {
         "LLM request rejected: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
       ),
     });
+  });
+
+  it("records 400 insufficient_quota payloads as billing during fallback", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error(INSUFFICIENT_QUOTA_PAYLOAD), { status: 400 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("billing");
   });
 
   it("falls back to configured primary for override credential validation errors", async () => {

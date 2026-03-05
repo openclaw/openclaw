@@ -18,6 +18,10 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
+// https://github.com/openclaw/openclaw/issues/23440
+const INSUFFICIENT_QUOTA_PAYLOAD =
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 // AWS Bedrock 429 ThrottlingException / 503 ServiceUnavailable:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
 const BEDROCK_THROTTLING_EXCEPTION_MESSAGE =
@@ -98,6 +102,15 @@ describe("failover-error", () => {
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
     ).toBe("timeout");
+  });
+
+  it("treats 400 insufficient_quota payloads as billing instead of format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
   });
 
   it("infers format errors from error messages", () => {
