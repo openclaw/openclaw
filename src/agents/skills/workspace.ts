@@ -234,6 +234,16 @@ function loadSkillEntries(
     });
     const baseDir = resolved.baseDir;
 
+    /**
+     * Defensive coercion: ensure skill name is a string.
+     * YAML frontmatter may parse `name: 12306` as a number, causing
+     * name.startsWith() to throw TypeError later. Always coerce to string.
+     */
+    const normalizeSkillName = (skill: Skill): Skill => ({
+      ...skill,
+      name: String(skill.name),
+    });
+
     // If the root itself is a skill directory, just load it directly (but enforce size cap).
     const rootSkillMd = path.join(baseDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
@@ -253,7 +263,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      return unwrapLoadedSkills(loaded).map(normalizeSkillName);
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -304,7 +314,7 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      loadedSkills.push(...unwrapLoadedSkills(loaded).map(normalizeSkillName));
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
