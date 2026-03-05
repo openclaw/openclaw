@@ -113,6 +113,13 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("returns a scope remediation hint for missing OAuth scopes", () => {
+    const msg = makeAssistantError("401 Unauthorized - Missing scopes: api.responses.write");
+    const text = formatAssistantErrorText(msg);
+    expect(text).toContain("missing required API scopes");
+    expect(text).toContain("Re-authenticate");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
