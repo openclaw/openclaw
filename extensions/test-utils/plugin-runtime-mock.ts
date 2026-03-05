@@ -56,6 +56,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getImageMetadata: vi.fn() as unknown as PluginRuntime["media"]["getImageMetadata"],
       resizeToJpeg: vi.fn() as unknown as PluginRuntime["media"]["resizeToJpeg"],
     },
+    agents: {
+      runEmbeddedPiAgent: vi.fn() as unknown as PluginRuntime["agents"]["runEmbeddedPiAgent"],
+    },
     tts: {
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
     },
