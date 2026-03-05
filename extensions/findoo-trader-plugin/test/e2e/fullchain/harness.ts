@@ -34,14 +34,16 @@ import { registerSseRoutes } from "../../../src/core/sse-handlers.js";
 import { registerTelegramApprovalRoute } from "../../../src/core/telegram-approval.js";
 import { loadDashboardTemplates } from "../../../src/core/template-renderer.js";
 import { LiveExecutor } from "../../../src/execution/live-executor.js";
+import { LiveHealthMonitor } from "../../../src/execution/live-health-monitor.js";
+import { LiveReconciler } from "../../../src/execution/live-reconciler.js";
 import { CapitalFlowStore } from "../../../src/fund/capital-flow-store.js";
 import { FundManager } from "../../../src/fund/fund-manager.js";
 import { PerformanceSnapshotStore } from "../../../src/fund/performance-snapshot-store.js";
 import { registerFundRoutes } from "../../../src/fund/routes.js";
 import { PaperEngine } from "../../../src/paper/paper-engine.js";
 import { PaperStore } from "../../../src/paper/paper-store.js";
-import { BacktestEngine } from "../../../src/strategy/backtest-engine.js";
 import { BacktestProgressStore } from "../../../src/strategy/backtest-progress-store.js";
+import { RemoteBacktestBridge } from "../../../src/strategy/remote-backtest-bridge.js";
 import { StrategyRegistry } from "../../../src/strategy/strategy-registry.js";
 import type { HttpReq, HttpRes, RuntimeServices } from "../../../src/types-http.js";
 
@@ -91,7 +93,7 @@ export type FullChainServices = {
   liveExecutor: LiveExecutor;
   paperEngine: PaperEngine;
   strategyRegistry: StrategyRegistry;
-  backtestEngine: BacktestEngine;
+  backtestBridge: RemoteBacktestBridge;
   progressStore: BacktestProgressStore;
   fundManager: FundManager;
   perfStore: PerformanceSnapshotStore;
@@ -99,12 +101,16 @@ export type FullChainServices = {
   briefScheduler: DailyBriefScheduler;
   activityLog: ActivityLogStore;
   lifecycleEngine: LifecycleEngine;
+  wakeBridge: AgentWakeBridge;
+  liveHealthMonitor: LiveHealthMonitor;
+  liveReconciler: LiveReconciler;
 };
 
 export type FullChainContext = {
   baseUrl: string;
   server: http.Server;
   services: FullChainServices;
+  runtime: RuntimeServices;
   tmpDir: string;
   cleanup: () => void;
 };
@@ -167,7 +173,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
   const paperStore = new PaperStore(join(tmpDir, "paper.sqlite"));
   const paperEngine = new PaperEngine({ store: paperStore, slippageBps: 5, market: "crypto" });
   const strategyRegistry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-  const backtestEngine = new BacktestEngine();
+  const backtestBridge = new RemoteBacktestBridge(() => undefined);
   const progressStore = new BacktestProgressStore();
   const fundManager = new FundManager(join(tmpDir, "fund-state.json"), DEFAULT_FUND_CONFIG);
   const perfStore = new PerformanceSnapshotStore(join(tmpDir, "perf.sqlite"));
@@ -187,6 +193,23 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     activityLog,
   });
 
+  const liveHealthMonitor = new LiveHealthMonitor({
+    liveExecutor,
+    strategyRegistry: strategyRegistry as never,
+    eventStore,
+    activityLog,
+    wakeBridge,
+  });
+
+  const liveReconciler = new LiveReconciler({
+    liveExecutor,
+    paperEngine: paperEngine as never,
+    strategyRegistry: strategyRegistry as never,
+    eventStore,
+    activityLog,
+    wakeBridge,
+  });
+
   const lifecycleEngine = new LifecycleEngine(
     {
       strategyRegistry: strategyRegistry as never,
@@ -195,6 +218,8 @@ export async function createFullChainServer(): Promise<FullChainContext> {
       eventStore,
       activityLog,
       wakeBridge,
+      liveHealthMonitor,
+      liveReconciler,
     },
     300_000, // 5 min — won't fire during tests
   );
@@ -214,7 +239,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
   serviceMap.set("fin-live-executor", liveExecutor);
   serviceMap.set("fin-paper-engine", paperEngine);
   serviceMap.set("fin-strategy-registry", strategyRegistry);
-  serviceMap.set("fin-backtest-engine", backtestEngine);
+
   serviceMap.set("fin-fund-manager", fundManager);
 
   const runtime: RuntimeServices = { services: serviceMap };
@@ -324,7 +349,7 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     liveExecutor,
     paperEngine,
     strategyRegistry,
-    backtestEngine,
+    backtestBridge,
     progressStore,
     fundManager,
     perfStore,
@@ -332,12 +357,16 @@ export async function createFullChainServer(): Promise<FullChainContext> {
     briefScheduler,
     activityLog,
     lifecycleEngine,
+    wakeBridge,
+    liveHealthMonitor,
+    liveReconciler,
   };
 
   return {
     baseUrl,
     server,
     services,
+    runtime,
     tmpDir,
     cleanup() {
       try {

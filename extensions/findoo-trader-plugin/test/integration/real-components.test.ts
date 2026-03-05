@@ -14,28 +14,12 @@ import { DailyBriefScheduler } from "../../src/core/daily-brief-scheduler.js";
 import * as marketCalendar from "../../src/paper/market-rules/market-calendar.js";
 import { PaperEngine } from "../../src/paper/paper-engine.js";
 import { PaperStore } from "../../src/paper/paper-store.js";
-import type { OHLCV, MarketRegime, BacktestConfig } from "../../src/shared/types.js";
-import { BacktestEngine } from "../../src/strategy/backtest-engine.js";
+import type { BacktestConfig } from "../../src/shared/types.js";
 import { createSmaCrossover } from "../../src/strategy/builtin-strategies/sma-crossover.js";
+import { RemoteBacktestBridge } from "../../src/strategy/remote-backtest-bridge.js";
 import { StrategyRegistry } from "../../src/strategy/strategy-registry.js";
 
 // --- helpers ---
-
-function makeOHLCV(count: number, basePrice = 100, startTs = 1_700_000_000_000): OHLCV[] {
-  const bars: OHLCV[] = [];
-  for (let i = 0; i < count; i++) {
-    const close = basePrice + Math.sin(i / 5) * 10;
-    bars.push({
-      timestamp: startTs + i * 86_400_000,
-      open: close - 1,
-      high: close + 2,
-      low: close - 2,
-      close,
-      volume: 1000 + i * 10,
-    });
-  }
-  return bars;
-}
 
 let tmpDir: string;
 
@@ -76,15 +60,56 @@ describe("A: StrategyRegistry persistence", () => {
     def.id = "sma-bt-1";
     const reg1 = reg.create(def);
 
-    const engine = new BacktestEngine();
-    const data = makeOHLCV(60);
+    const mockService = {
+      async submit() {
+        return {
+          task: { task_id: "t1", status: "completed" },
+          report: {
+            task_id: "t1",
+            performance: {
+              totalReturn: 10,
+              sharpe: 1.5,
+              sortino: 1.0,
+              maxDrawdown: -5,
+              winRate: 60,
+              profitFactor: 2,
+              totalTrades: 10,
+              finalEquity: 11000,
+            },
+            equity_curve: [],
+            trade_journal: [],
+          },
+        };
+      },
+      toBacktestResult(_report: any, meta: any) {
+        return {
+          strategyId: meta.strategyId,
+          startDate: 0,
+          endDate: 0,
+          initialCapital: meta.initialCapital,
+          finalEquity: 11000,
+          totalReturn: 0.1,
+          sharpe: 1.5,
+          sortino: 1.0,
+          maxDrawdown: -0.05,
+          calmar: 0,
+          winRate: 0.6,
+          profitFactor: 2,
+          totalTrades: 10,
+          trades: [],
+          equityCurve: [10000, 11000],
+          dailyReturns: [0.1],
+        };
+      },
+    };
+    const bridge = new RemoteBacktestBridge(() => mockService as any);
     const config: BacktestConfig = {
       capital: 10000,
       commissionRate: 0.001,
       slippageBps: 5,
       market: "crypto",
     };
-    const result = await engine.run(def, data, config);
+    const result = await bridge.runBacktest(def, config);
     reg.updateBacktest("sma-bt-1", result);
 
     const fetched = reg.get("sma-bt-1")!;
@@ -276,14 +301,56 @@ describe("B: PaperEngine market rules", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// C: BacktestEngine data flow
+// C: RemoteBacktestBridge (mock)
 // ═══════════════════════════════════════════════════════════════
 
-describe("C: BacktestEngine data flow", () => {
-  it("simple strategy → all numeric fields", async () => {
-    const engine = new BacktestEngine();
+describe("C: RemoteBacktestBridge (mock)", () => {
+  const mockService = {
+    async submit() {
+      return {
+        task: { task_id: "t1", status: "completed" },
+        report: {
+          task_id: "t1",
+          performance: {
+            totalReturn: 10,
+            sharpe: 1.5,
+            sortino: 1.0,
+            maxDrawdown: -5,
+            winRate: 60,
+            profitFactor: 2,
+            totalTrades: 10,
+            finalEquity: 11000,
+          },
+          equity_curve: [],
+          trade_journal: [],
+        },
+      };
+    },
+    toBacktestResult(_report: any, meta: any) {
+      return {
+        strategyId: meta.strategyId,
+        startDate: 0,
+        endDate: 0,
+        initialCapital: meta.initialCapital,
+        finalEquity: 11000,
+        totalReturn: 0.1,
+        sharpe: 1.5,
+        sortino: 1.0,
+        maxDrawdown: -0.05,
+        calmar: 0,
+        winRate: 0.6,
+        profitFactor: 2,
+        totalTrades: 10,
+        trades: [],
+        equityCurve: [10000, 11000],
+        dailyReturns: [0.1],
+      };
+    },
+  };
+
+  it("runBacktest → all numeric fields", async () => {
+    const bridge = new RemoteBacktestBridge(() => mockService as any);
     const def = createSmaCrossover({ fastPeriod: 3, slowPeriod: 10 });
-    const data = makeOHLCV(40);
     const config: BacktestConfig = {
       capital: 10000,
       commissionRate: 0.001,
@@ -291,7 +358,7 @@ describe("C: BacktestEngine data flow", () => {
       market: "crypto",
     };
 
-    const result = await engine.run(def, data, config);
+    const result = await bridge.runBacktest(def, config);
 
     expect(typeof result.totalReturn).toBe("number");
     expect(typeof result.sharpe).toBe("number");
@@ -304,8 +371,8 @@ describe("C: BacktestEngine data flow", () => {
     expect(typeof result.initialCapital).toBe("number");
   });
 
-  it("empty data → emptyResult", async () => {
-    const engine = new BacktestEngine();
+  it("no service → throws", async () => {
+    const bridge = new RemoteBacktestBridge(() => undefined);
     const def = createSmaCrossover({});
     const config: BacktestConfig = {
       capital: 5000,
@@ -314,51 +381,44 @@ describe("C: BacktestEngine data flow", () => {
       market: "crypto",
     };
 
-    const result = await engine.run(def, [], config);
-
-    expect(result.totalReturn).toBe(0);
-    expect(result.totalTrades).toBe(0);
-    expect(result.finalEquity).toBe(5000);
-    expect(result.initialCapital).toBe(5000);
+    await expect(bridge.runBacktest(def, config)).rejects.toThrow(/not available/);
   });
 
-  it("regimeDetector injected → detect() called", async () => {
-    const engine = new BacktestEngine();
+  it("runWalkForward → returns WalkForwardResult shape", async () => {
+    const bridge = new RemoteBacktestBridge(() => mockService as any);
     const def = createSmaCrossover({ fastPeriod: 3, slowPeriod: 10 });
-    const data = makeOHLCV(30);
-    const detectFn = vi.fn().mockReturnValue("bull" as MarketRegime);
-
     const config: BacktestConfig = {
       capital: 10000,
       commissionRate: 0.001,
       slippageBps: 5,
       market: "crypto",
-      regimeDetector: { detect: detectFn },
     };
 
-    await engine.run(def, data, config);
+    const result = await bridge.runWalkForward(def, config, { windows: 2 });
 
-    expect(detectFn).toHaveBeenCalled();
-    // detect is called per bar in buildContext
-    expect(detectFn.mock.calls.length).toBeGreaterThanOrEqual(data.length);
+    expect(typeof result.passed).toBe("boolean");
+    expect(Array.isArray(result.windows)).toBe(true);
+    expect(typeof result.combinedTestSharpe).toBe("number");
+    expect(typeof result.avgTrainSharpe).toBe("number");
+    expect(typeof result.ratio).toBe("number");
+    expect(typeof result.threshold).toBe("number");
   });
 
-  it("registry → engine → updateBacktest → get → round-trip consistent", async () => {
+  it("registry → bridge → updateBacktest → get → round-trip consistent", async () => {
+    const bridge = new RemoteBacktestBridge(() => mockService as any);
     const reg = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const eng = new BacktestEngine();
 
     const def = createSmaCrossover({ fastPeriod: 3, slowPeriod: 10 });
     def.id = "roundtrip-1";
     reg.create(def);
 
-    const data = makeOHLCV(50);
     const config: BacktestConfig = {
       capital: 10000,
       commissionRate: 0.001,
       slippageBps: 5,
       market: "crypto",
     };
-    const result = await eng.run(def, data, config);
+    const result = await bridge.runBacktest(def, config);
     reg.updateBacktest("roundtrip-1", result);
 
     const fetched = reg.get("roundtrip-1")!;
@@ -476,9 +536,50 @@ describe("E: Cross-component chains", () => {
     reg.create(def);
 
     // Run a backtest so topStrategy is non-null
-    const btEngine = new BacktestEngine();
-    const data = makeOHLCV(30);
-    const result = await btEngine.run(def, data, {
+    const mockService = {
+      async submit() {
+        return {
+          task: { task_id: "t1", status: "completed" },
+          report: {
+            task_id: "t1",
+            performance: {
+              totalReturn: 10,
+              sharpe: 1.5,
+              sortino: 1.0,
+              maxDrawdown: -5,
+              winRate: 60,
+              profitFactor: 2,
+              totalTrades: 10,
+              finalEquity: 11000,
+            },
+            equity_curve: [],
+            trade_journal: [],
+          },
+        };
+      },
+      toBacktestResult(_report: any, meta: any) {
+        return {
+          strategyId: meta.strategyId,
+          startDate: 0,
+          endDate: 0,
+          initialCapital: meta.initialCapital,
+          finalEquity: 11000,
+          totalReturn: 0.1,
+          sharpe: 1.5,
+          sortino: 1.0,
+          maxDrawdown: -0.05,
+          calmar: 0,
+          winRate: 0.6,
+          profitFactor: 2,
+          totalTrades: 10,
+          trades: [],
+          equityCurve: [10000, 11000],
+          dailyReturns: [0.1],
+        };
+      },
+    };
+    const btBridge = new RemoteBacktestBridge(() => mockService as any);
+    const result = await btBridge.runBacktest(def, {
       capital: 10000,
       commissionRate: 0.001,
       slippageBps: 5,

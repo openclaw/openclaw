@@ -1,14 +1,13 @@
 import type { AgentEventSqliteStore } from "../core/agent-event-sqlite-store.js";
 import type { AgentWakeBridge } from "../core/agent-wake-bridge.js";
 import type { StrategyDefinition } from "../shared/types.js";
-import type { BacktestEngine } from "../strategy/backtest-engine.js";
 import { createBollingerBands } from "../strategy/builtin-strategies/bollinger-bands.js";
 import { createMacdDivergence } from "../strategy/builtin-strategies/macd-divergence.js";
 import { createRsiMeanReversion } from "../strategy/builtin-strategies/rsi-mean-reversion.js";
 import { createSmaCrossover } from "../strategy/builtin-strategies/sma-crossover.js";
 import { createTrendFollowingMomentum } from "../strategy/builtin-strategies/trend-following-momentum.js";
+import type { RemoteBacktestBridge } from "../strategy/remote-backtest-bridge.js";
 import type { StrategyRegistry } from "../strategy/strategy-registry.js";
-import type { DataProviderLike } from "../types-http.js";
 
 /** 5 classic seed strategies covering Trend / Mean-Rev / Momentum */
 const SEED_STRATEGIES: StrategyDefinition[] = [
@@ -21,9 +20,8 @@ const SEED_STRATEGIES: StrategyDefinition[] = [
 
 export interface ColdStartDeps {
   strategyRegistry: StrategyRegistry;
-  backtestEngine: BacktestEngine;
+  bridge: RemoteBacktestBridge;
   eventStore: AgentEventSqliteStore;
-  dataProviderResolver: () => DataProviderLike | undefined;
   wakeBridge?: AgentWakeBridge;
 }
 
@@ -72,41 +70,16 @@ export class ColdStartSeeder {
     return { seeded: SEED_STRATEGIES.length, skipped: false };
   }
 
-  /** Run backtests for all seed strategies. Failures are logged as events. */
+  /** Run backtests for all seed strategies via remote service. Failures are logged as events. */
   private async runSeedBacktests(): Promise<void> {
-    const { strategyRegistry, backtestEngine, eventStore, dataProviderResolver, wakeBridge } =
-      this.deps;
-
-    const dataProvider = dataProviderResolver();
-    if (!dataProvider) {
-      eventStore.addEvent({
-        type: "system",
-        title: "Cold Start: Data provider not ready",
-        detail:
-          "Skipping seed backtests — data provider unavailable. Lifecycle scheduler will retry.",
-        status: "completed",
-      });
-      return;
-    }
+    const { strategyRegistry, bridge, eventStore, wakeBridge } = this.deps;
 
     let completed = 0;
     let qualified = 0;
 
     for (const def of SEED_STRATEGIES) {
       try {
-        const symbol = def.symbols[0] ?? "BTC/USDT";
-        const timeframe = def.timeframes[0] ?? "1d";
-        const market = def.markets[0] ?? "crypto";
-        // Runtime provider (datahub) uses object-style params
-        const ohlcv = await (dataProvider as any).getOHLCV({
-          symbol,
-          market,
-          timeframe,
-          limit: 365,
-        });
-        if (ohlcv.length < 50) continue; // not enough data
-
-        const result = await backtestEngine.run(def, ohlcv, {
+        const result = await bridge.runBacktest(def, {
           capital: 10_000,
           commissionRate: 0.001,
           slippageBps: 5,

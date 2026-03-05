@@ -10,7 +10,6 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { LiveExecutor } from "../execution/live-executor.js";
 import type { PaperEngine } from "../paper/paper-engine.js";
-import { BacktestEngine, buildIndicatorLib } from "./backtest-engine.js";
 import type { BacktestProgressStore } from "./backtest-progress-store.js";
 import { createBollingerBands } from "./builtin-strategies/bollinger-bands.js";
 import { buildCustomStrategy } from "./builtin-strategies/custom-rule-engine.js";
@@ -22,9 +21,10 @@ import { createRsiMeanReversion } from "./builtin-strategies/rsi-mean-reversion.
 import { createSmaCrossover } from "./builtin-strategies/sma-crossover.js";
 import { createTrendFollowingMomentum } from "./builtin-strategies/trend-following-momentum.js";
 import { createVolatilityMeanReversion } from "./builtin-strategies/volatility-mean-reversion.js";
+import { buildIndicatorLib } from "./indicator-lib.js";
+import type { RemoteBacktestBridge } from "./remote-backtest-bridge.js";
 import type { StrategyRegistry } from "./strategy-registry.js";
 import type { BacktestConfig, StrategyContext, StrategyDefinition } from "./types.js";
-import { WalkForward } from "./walk-forward.js";
 
 type OhlcvBar = {
   timestamp: number;
@@ -47,14 +47,13 @@ const json = (payload: unknown) => ({
 export function registerStrategyTools(
   api: OpenClawPluginApi,
   registry: StrategyRegistry,
-  engine: BacktestEngine,
+  bridge: RemoteBacktestBridge,
   liveExecutor: LiveExecutor | null,
   paperEngine: PaperEngine | null,
   progressStore?: BacktestProgressStore,
 ): void {
   // Per-strategy tick memory, persisted across ticks
   const tickMemory = new Map<string, Map<string, unknown>>();
-  const walkForward = new WalkForward(engine);
 
   // --- fin_strategy_create ---
   api.registerTool(
@@ -281,46 +280,7 @@ export function registerStrategyTools(
             market: record.definition.markets[0] ?? "crypto",
           };
 
-          // Get data from the data provider service
-          const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
-          const dataProvider = runtime.services?.get?.("fin-data-provider") as
-            | {
-                getOHLCV?: (
-                  paramsOrSymbol:
-                    | {
-                        symbol: string;
-                        market: "crypto" | "equity" | "commodity";
-                        timeframe: string;
-                        limit?: number;
-                        since?: number;
-                      }
-                    | string,
-                  timeframe?: string,
-                  limit?: number,
-                ) => Promise<OhlcvBar[]>;
-              }
-            | undefined;
-
-          if (!dataProvider?.getOHLCV) {
-            return json({
-              error: "Data provider not available. Load findoo-datahub-plugin first.",
-            });
-          }
-
-          const symbol = record.definition.symbols[0] ?? "BTC/USDT";
-          const timeframe = record.definition.timeframes[0] ?? "1d";
-          const getOHLCV = dataProvider.getOHLCV;
-          const ohlcvData =
-            getOHLCV.length <= 1
-              ? await getOHLCV({
-                  symbol,
-                  market: config.market,
-                  timeframe,
-                  limit: 365,
-                })
-              : await getOHLCV(symbol, timeframe, 365);
-
-          const result = await engine.run(record.definition, ohlcvData, config, (p) => {
+          const result = await bridge.runBacktest(record.definition, config, (p) => {
             progressStore?.report(p);
           });
           registry.updateBacktest(strategyId, result);
@@ -337,11 +297,11 @@ export function registerStrategyTools(
             initialCapital: config.capital,
             finalEquity: result.finalEquity,
             formatted: {
-              totalReturn: `${result.totalReturn.toFixed(2)}%`,
+              totalReturn: `${(result.totalReturn * 100).toFixed(2)}%`,
               sharpe: result.sharpe.toFixed(3),
               sortino: result.sortino.toFixed(3),
-              maxDrawdown: `${result.maxDrawdown.toFixed(2)}%`,
-              winRate: `${result.winRate.toFixed(1)}%`,
+              maxDrawdown: `${(result.maxDrawdown * 100).toFixed(2)}%`,
+              winRate: `${(result.winRate * 100).toFixed(1)}%`,
               profitFactor: result.profitFactor.toFixed(2),
               finalEquity: result.finalEquity.toFixed(2),
             },
@@ -425,53 +385,17 @@ export function registerStrategyTools(
             });
           }
 
-          // Get data provider (same pattern as fin_backtest_run)
-          const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
-          const dataProvider = runtime.services?.get?.("fin-data-provider") as
-            | {
-                getOHLCV?: (
-                  paramsOrSymbol:
-                    | { symbol: string; market: string; timeframe: string; limit?: number }
-                    | string,
-                  timeframe?: string,
-                  limit?: number,
-                ) => Promise<OhlcvBar[]>;
-              }
-            | undefined;
-
-          if (!dataProvider?.getOHLCV) {
-            return json({
-              error: "Data provider not available. Load findoo-datahub-plugin first.",
-            });
-          }
-
-          const symbol = record.definition.symbols[0] ?? "BTC/USDT";
-          const timeframe = record.definition.timeframes[0] ?? "1d";
-          const market = record.definition.markets[0] ?? "crypto";
-
-          const getOHLCV = dataProvider.getOHLCV;
-          const ohlcv =
-            getOHLCV.length <= 1
-              ? await getOHLCV({ symbol, market, timeframe, limit: 1000 })
-              : await getOHLCV(symbol, timeframe, 1000);
-
-          if (!ohlcv || ohlcv.length < 100) {
-            return json({
-              error: `Insufficient data for walk-forward: got ${ohlcv?.length ?? 0} bars, need ≥100`,
-            });
-          }
-
           const config: BacktestConfig = {
             capital: (params.capital as number) ?? 10000,
             commissionRate: (params.commission as number) ?? 0.001,
             slippageBps: (params.slippage as number) ?? 5,
-            market,
+            market: record.definition.markets[0] ?? "crypto",
           };
 
           const windows = (params.windows as number) ?? 5;
           const threshold = (params.threshold as number) ?? 0.6;
 
-          const result = await walkForward.validate(record.definition, ohlcv, config, {
+          const result = await bridge.runWalkForward(record.definition, config, {
             windows,
             threshold,
           });

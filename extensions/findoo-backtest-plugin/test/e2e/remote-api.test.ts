@@ -148,8 +148,9 @@ describe.skipIf(!process.env.E2E_BACKTEST)("Remote Backtest API E2E (v1.1)", () 
       // Get full report
       const report: RemoteReport = await client.getReport(submitResp.task_id);
       expect(report.task_id).toBe(submitResp.task_id);
-      expect(Array.isArray(report.equity_curve)).toBe(true);
-      expect(Array.isArray(report.trade_journal)).toBe(true);
+      // equity_curve/trade_journal may be null if strategy produced no trades
+      expect(report.equity_curve === null || Array.isArray(report.equity_curve)).toBe(true);
+      expect(report.trade_journal === null || Array.isArray(report.trade_journal)).toBe(true);
 
       if (report.performance) {
         expect(typeof report.performance.totalReturn).toBe("number");

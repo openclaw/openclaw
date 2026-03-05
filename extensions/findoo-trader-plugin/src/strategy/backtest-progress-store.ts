@@ -1,4 +1,4 @@
-import type { BacktestProgress } from "./backtest-engine.js";
+import type { BacktestProgress } from "./indicator-lib.js";
 
 export type ProgressSubscriber = (p: BacktestProgress) => void;
 

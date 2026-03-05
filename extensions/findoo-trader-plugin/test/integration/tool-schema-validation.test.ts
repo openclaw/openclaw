@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { OHLCV } from "../../src/shared/types.js";
-import { BacktestEngine } from "../../src/strategy/backtest-engine.js";
+import { RemoteBacktestBridge } from "../../src/strategy/remote-backtest-bridge.js";
 import { StrategyRegistry } from "../../src/strategy/strategy-registry.js";
 import { registerStrategyTools } from "../../src/strategy/tools.js";
 
@@ -60,6 +60,60 @@ function parseDetails(result: { details: unknown }): Record<string, unknown> {
   return result.details as Record<string, unknown>;
 }
 
+/** Mock remote backtest service that returns deterministic results. */
+function makeMockBacktestService() {
+  return {
+    async submit() {
+      return {
+        task: { task_id: "mock-t1", status: "completed" },
+        report: {
+          task_id: "mock-t1",
+          performance: {
+            totalReturn: 12.5,
+            sharpe: 1.2,
+            sortino: 1.5,
+            maxDrawdown: -8.3,
+            calmar: 0.9,
+            winRate: 55.0,
+            profitFactor: 1.8,
+            totalTrades: 25,
+            finalEquity: 11250,
+          },
+          equity_curve: [
+            { date: "2024-01-01", equity: 10000 },
+            { date: "2024-06-01", equity: 11250 },
+          ],
+          trade_journal: [],
+        },
+      };
+    },
+    toBacktestResult(
+      report: Record<string, unknown>,
+      meta: { strategyId: string; initialCapital: number },
+    ) {
+      const p = (report as { performance: Record<string, number> }).performance;
+      return {
+        strategyId: meta.strategyId,
+        startDate: 0,
+        endDate: 0,
+        initialCapital: meta.initialCapital,
+        finalEquity: p.finalEquity ?? meta.initialCapital,
+        totalReturn: (p.totalReturn ?? 0) / 100,
+        sharpe: p.sharpe ?? 0,
+        sortino: p.sortino ?? 0,
+        maxDrawdown: (p.maxDrawdown ?? 0) / 100,
+        calmar: p.calmar ?? 0,
+        winRate: (p.winRate ?? 0) / 100,
+        profitFactor: p.profitFactor ?? 0,
+        totalTrades: p.totalTrades ?? 0,
+        trades: [],
+        equityCurve: [10000, 11250],
+        dailyReturns: [0.125],
+      };
+    },
+  };
+}
+
 let tmpDir: string;
 
 beforeEach(() => {
@@ -73,7 +127,7 @@ afterEach(() => {
 describe("Tool schema validation", () => {
   it("fin_strategy_create: returns { created, id, level }", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
@@ -93,7 +147,7 @@ describe("Tool schema validation", () => {
 
   it("fin_strategy_list: returns { total: number, strategies: Array }", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
@@ -113,14 +167,10 @@ describe("Tool schema validation", () => {
 
   it("fin_backtest_run: top-level fields are numbers (not strings)", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
-    const ohlcvData = makeOHLCV(60);
+    const mockService = makeMockBacktestService();
+    const engine = new RemoteBacktestBridge(() => mockService as never);
 
-    const services = new Map<string, unknown>();
-    services.set("fin-data-provider", {
-      getOHLCV: async () => ohlcvData,
-    });
-    const { api, tools } = captureTools(services);
+    const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
 
@@ -152,12 +202,10 @@ describe("Tool schema validation", () => {
 
   it("fin_backtest_run: formatted sub-object has strings", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
-    const ohlcvData = makeOHLCV(60);
+    const mockService = makeMockBacktestService();
+    const engine = new RemoteBacktestBridge(() => mockService as never);
 
-    const services = new Map<string, unknown>();
-    services.set("fin-data-provider", { getOHLCV: async () => ohlcvData });
-    const { api, tools } = captureTools(services);
+    const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
 
@@ -184,12 +232,10 @@ describe("Tool schema validation", () => {
 
   it("fin_backtest_result consistency: run and result return equal values", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
-    const ohlcvData = makeOHLCV(60);
+    const mockService = makeMockBacktestService();
+    const engine = new RemoteBacktestBridge(() => mockService as never);
 
-    const services = new Map<string, unknown>();
-    services.set("fin-data-provider", { getOHLCV: async () => ohlcvData });
-    const { api, tools } = captureTools(services);
+    const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
 
@@ -217,7 +263,7 @@ describe("Tool schema validation", () => {
 
   it("fin_strategy_tick regime (no detector): regimeSource=default, regime=sideways", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const ohlcvData = makeOHLCV(60);
 
     const services = new Map<string, unknown>();
@@ -246,7 +292,7 @@ describe("Tool schema validation", () => {
 
   it("fin_strategy_tick regime (with detector): regimeSource=detector, regime=bull", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const ohlcvData = makeOHLCV(60);
 
     const services = new Map<string, unknown>();
@@ -274,7 +320,7 @@ describe("Tool schema validation", () => {
 
   it("fin_strategy_create error: type=custom without rules → error", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
@@ -291,9 +337,9 @@ describe("Tool schema validation", () => {
     expect(typeof payload.error).toBe("string");
   });
 
-  it("fin_backtest_run error: no data provider → error", async () => {
+  it("fin_backtest_run error: no remote backtest service → error", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const { api, tools } = captureTools(); // no services
 
     registerStrategyTools(api as never, registry, engine, null, null);
@@ -312,12 +358,12 @@ describe("Tool schema validation", () => {
 
     expect(payload.error).toBeDefined();
     expect(typeof payload.error).toBe("string");
-    expect((payload.error as string).toLowerCase()).toContain("provider");
+    expect((payload.error as string).toLowerCase()).toContain("backtest");
   });
 
   it("fin_strategy_tick error: strategy not found → error", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new BacktestEngine();
+    const engine = new RemoteBacktestBridge(() => undefined);
     const { api, tools } = captureTools();
 
     registerStrategyTools(api as never, registry, engine, null, null);
