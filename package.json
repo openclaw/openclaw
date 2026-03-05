@@ -48,6 +48,10 @@
       "types": "./dist/plugin-sdk/compat.d.ts",
       "default": "./dist/plugin-sdk/compat.js"
     },
+    "./plugin-sdk/campfire": {
+      "types": "./dist/plugin-sdk/campfire.d.ts",
+      "default": "./dist/plugin-sdk/campfire.js"
+    },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
