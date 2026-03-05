@@ -328,20 +328,32 @@ function resolveToolPolicies(params: {
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey ||
-    search?.perplexity?.apiKey ||
-    search?.grok?.apiKey ||
-    search?.gemini?.apiKey ||
-    search?.kimi?.apiKey ||
-    env.BRAVE_API_KEY ||
-    env.PERPLEXITY_API_KEY ||
-    env.OPENROUTER_API_KEY ||
-    env.XAI_API_KEY ||
-    env.GEMINI_API_KEY ||
-    env.KIMI_API_KEY ||
-    env.MOONSHOT_API_KEY,
-  );
+  const provider = search?.provider?.trim().toLowerCase();
+
+  const hasBrave = Boolean(search?.apiKey || env.BRAVE_API_KEY);
+  const hasPerplexity = Boolean(search?.perplexity?.apiKey || env.PERPLEXITY_API_KEY);
+  const hasGrok = Boolean(search?.grok?.apiKey || env.XAI_API_KEY);
+  const hasGemini = Boolean(search?.gemini?.apiKey || env.GEMINI_API_KEY);
+  const hasKimi = Boolean(search?.kimi?.apiKey || env.KIMI_API_KEY || env.MOONSHOT_API_KEY);
+
+  if (provider === "brave") {
+    return hasBrave;
+  }
+  if (provider === "perplexity") {
+    return hasPerplexity;
+  }
+  if (provider === "grok") {
+    return hasGrok;
+  }
+  if (provider === "gemini") {
+    return hasGemini;
+  }
+  if (provider === "kimi") {
+    return hasKimi;
+  }
+
+  // Auto-provider mode: any supported provider key can enable web_search.
+  return hasBrave || hasPerplexity || hasGrok || hasGemini || hasKimi;
 }
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

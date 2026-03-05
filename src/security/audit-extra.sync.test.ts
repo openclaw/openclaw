@@ -90,12 +90,12 @@ describe("collectSmallModelRiskFindings web search key detection", () => {
     expect(findings[0]?.detail).toContain("web_search");
   });
 
-  it("treats OPENROUTER_API_KEY as enabling web_search exposure", () => {
+  it("does not treat OPENROUTER_API_KEY alone as enabling web_search exposure", () => {
     const findings = collectSmallModelRiskFindings({
       cfg: baseCfg,
       env: { OPENROUTER_API_KEY: "openrouter-key" } as NodeJS.ProcessEnv,
     });
-    expect(findings[0]?.detail).toContain("web_search");
+    expect(findings[0]?.detail ?? "").not.toContain("web_search");
   });
 
   it("treats MOONSHOT_API_KEY as enabling web_search exposure", () => {
@@ -104,5 +104,22 @@ describe("collectSmallModelRiskFindings web search key detection", () => {
       env: { MOONSHOT_API_KEY: "moonshot-key" } as NodeJS.ProcessEnv,
     });
     expect(findings[0]?.detail).toContain("web_search");
+  });
+
+  it("respects explicit provider pin when evaluating key exposure", () => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: {
+        ...baseCfg,
+        tools: {
+          web: {
+            search: {
+              provider: "perplexity",
+            },
+          },
+        },
+      },
+      env: { GEMINI_API_KEY: "gemini-key" } as NodeJS.ProcessEnv,
+    });
+    expect(findings[0]?.detail ?? "").not.toContain("web_search");
   });
 });
