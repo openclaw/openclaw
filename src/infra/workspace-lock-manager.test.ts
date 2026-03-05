@@ -14,8 +14,9 @@ async function makeCaseDir(): Promise<string> {
   return dir;
 }
 
-function expectedLockPath(targetPath: string, kind: "file" | "dir"): string {
-  const normalized = path.resolve(targetPath);
+async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const normalized = kind === "dir" ? await fs.realpath(resolved).catch(() => resolved) : resolved;
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
   const lockBaseDir = kind === "dir" ? normalized : path.dirname(normalized);
   return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
@@ -33,7 +34,7 @@ describe("workspace lock manager", () => {
   it("enforces contention for file locks", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "state.json");
-    const lockPath = expectedLockPath(target, "file");
+    const lockPath = await expectedLockPath(target, "file");
 
     const livePayload = {
       token: "live-token",
@@ -60,7 +61,7 @@ describe("workspace lock manager", () => {
     const dir = await makeCaseDir();
     const workspaceDir = path.join(dir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    const lockPath = expectedLockPath(workspaceDir, "dir");
+    const lockPath = await expectedLockPath(workspaceDir, "dir");
 
     const stalePayload = {
       token: "stale-token",
@@ -114,7 +115,7 @@ describe("workspace lock manager", () => {
       pollIntervalMs: 5,
       ttlMs: 5_000,
     });
-    expect(lock.lockPath).toBe(expectedLockPath(target, "file"));
+    expect(lock.lockPath).toBe(await expectedLockPath(target, "file"));
     await lock.release();
   });
 
@@ -162,7 +163,7 @@ describe("workspace lock manager", () => {
     });
 
     expect(lock.lockPath).not.toBe(adjacentDataPath);
-    expect(lock.lockPath).toBe(expectedLockPath(target, "file"));
+    expect(lock.lockPath).toBe(await expectedLockPath(target, "file"));
 
     await lock.release();
     await expect(fs.readFile(adjacentDataPath, "utf8")).resolves.toBe("important-data");
@@ -180,7 +181,7 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
-    expect(lock.lockPath).toBe(expectedLockPath(workspaceDir, "dir"));
+    expect(lock.lockPath).toBe(await expectedLockPath(workspaceDir, "dir"));
     expect(lock.lockPath.startsWith(path.join(workspaceDir, path.sep))).toBe(true);
 
     await lock.release();
