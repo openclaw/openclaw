@@ -547,6 +547,97 @@ describe("runAutoCapture", () => {
     }
   });
 
+  it("should return immediately when signal is already aborted", async () => {
+    const db = createMockDb();
+    const embedBatchMock = vi.fn().mockResolvedValue([[0.1, 0.2]]);
+    const embeddings = createMockEmbeddings({ embedBatch: embedBatchMock });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const messages = [
+      {
+        role: "user",
+        content: "A long enough message to pass the attention gate for testing purposes",
+      },
+    ];
+
+    await runAutoCapture(
+      messages,
+      "test-agent",
+      "session-1",
+      db,
+      embeddings,
+      enabledConfig,
+      mockLogger,
+      undefined,
+      false,
+      controller.signal,
+    );
+
+    // Signal was already aborted — no embed or DB calls should happen
+    expect(embedBatchMock).not.toHaveBeenCalled();
+    expect(db.storeMemory).not.toHaveBeenCalled();
+  });
+
+  it("should stop processing remaining messages when signal is aborted mid-loop", async () => {
+    const storeMemoryMock = vi.fn().mockResolvedValue(undefined);
+    const db = createMockDb({ storeMemory: storeMemoryMock });
+    const controller = new AbortController();
+
+    // embedBatch returns two vectors; abort after first captureMessage processes
+    const embedBatchMock = vi.fn().mockResolvedValue([
+      [0.1, 0.2],
+      [0.3, 0.4],
+    ]);
+    const embeddings = createMockEmbeddings({ embedBatch: embedBatchMock });
+
+    let findSimilarCallCount = 0;
+    (db.findSimilar as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      findSimilarCallCount++;
+      // Abort after the first message is processed
+      if (findSimilarCallCount === 1) {
+        controller.abort();
+      }
+      return Promise.resolve([]);
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: JSON.stringify({ score: 7 }) } }],
+        }),
+    });
+
+    const messages = [
+      {
+        role: "user",
+        content: "First message that is long enough to pass the attention gate filter",
+      },
+      {
+        role: "user",
+        content: "Second message that is also long enough to pass the attention gate",
+      },
+    ];
+
+    await runAutoCapture(
+      messages,
+      "test-agent",
+      "session-1",
+      db,
+      embeddings,
+      enabledConfig,
+      mockLogger,
+      undefined,
+      false,
+      controller.signal,
+    );
+
+    // Only the first message should have been processed; second was skipped due to abort
+    expect(findSimilarCallCount).toBe(1);
+  });
+
   it("should log capture errors without throwing", async () => {
     const embedBatchMock = vi.fn().mockRejectedValue(new Error("embedding service down"));
     const embeddings = createMockEmbeddings({ embedBatch: embedBatchMock });

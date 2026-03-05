@@ -807,6 +807,7 @@ const memoryNeo4jPlugin = {
           api.logger,
           ctx.workspaceDir, // Layer 3: pass workspace dir for task auto-tagging
           cfg.autoCaptureAssistant,
+          sleepAbortController.signal,
         );
       });
     }
@@ -987,7 +988,9 @@ async function runAutoCapture(
   logger: Logger,
   workspaceDir?: string, // Layer 3: workspace dir for task auto-tagging
   captureAssistant: boolean = false,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) return;
   try {
     const t0 = performance.now();
     let stored = 0;
@@ -1023,6 +1026,7 @@ async function runAutoCapture(
     }
 
     // Batch embed all at once
+    if (signal?.aborted) return;
     const vectors = allTexts.length > 0 ? await embeddings.embedBatch(allTexts) : [];
     const tEmbed = performance.now();
 
@@ -1031,6 +1035,7 @@ async function runAutoCapture(
 
     // Process each with pre-computed vector
     for (let i = 0; i < allMeta.length; i++) {
+      if (signal?.aborted) break;
       try {
         const meta = allMeta[i];
         const result = await captureMessage(
