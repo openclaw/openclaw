@@ -547,4 +547,28 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies OpenAI/Codex server_error as timeout (retryable)", () => {
+    // OpenAI server_error with both type and code fields
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"Internal error","type":"server_error","code":"server_error"}}',
+      ),
+    ).toBe("timeout");
+    // Only type field
+    expect(
+      classifyFailoverReason('{"error":{"message":"Something went wrong","type":"server_error"}}'),
+    ).toBe("timeout");
+    // Only code field
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"The server had an error","code":"server_error"}}',
+      ),
+    ).toBe("timeout");
+    // With HTTP status prefix (common in gateway error wrapping)
+    expect(
+      classifyFailoverReason(
+        '500 {"error":{"message":"Internal error","type":"server_error","code":"server_error"}}',
+      ),
+    ).toBe("timeout");
+  });
 });
