@@ -5,6 +5,7 @@ Tests for model_usage helpers.
 
 import argparse
 import json
+import shutil
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,8 +19,6 @@ class TestModelUsage(TestCase):
         self.temp_dir = Path(tempfile.mkdtemp(prefix="model_usage_tests_"))
 
     def tearDown(self):
-        import shutil
-
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
 
