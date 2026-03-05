@@ -52,6 +52,52 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
+function stripMatchingQuotes(token: string): string {
+  if (token.length < 2) {
+    return token;
+  }
+  const first = token[0];
+  const last = token[token.length - 1];
+  if ((first === '"' || first === "'") && first === last) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+function isEnvAssignmentToken(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function isSimpleCommandWithoutShellOperators(command: string): boolean {
+  return !/[|&;<>`]/.test(command);
+}
+
+export function isGatewayRestartCliCommand(command: string): boolean {
+  const raw = command.trim();
+  if (!raw || !isSimpleCommandWithoutShellOperators(raw)) {
+    return false;
+  }
+  const tokens = raw.split(/\s+/).map(stripMatchingQuotes);
+  let index = 0;
+  while (index < tokens.length && isEnvAssignmentToken(tokens[index])) {
+    index += 1;
+  }
+  if (index + 2 >= tokens.length) {
+    return false;
+  }
+  const binaryToken = tokens[index];
+  if (!binaryToken) {
+    return false;
+  }
+  const binary = path.basename(binaryToken).toLowerCase();
+  if (binary !== "openclaw" && binary !== "openclaw.exe" && binary !== "openclaw.cmd") {
+    return false;
+  }
+  return (
+    tokens[index + 1]?.toLowerCase() === "gateway" && tokens[index + 2]?.toLowerCase() === "restart"
+  );
+}
+
 function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
@@ -235,7 +281,7 @@ export function createExecTool(
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
         warnings.push("Warning: background execution is disabled; running synchronously.");
       }
-      const yieldWindow = allowBackground
+      let yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
           : clampWithDefault(
@@ -316,6 +362,18 @@ export function createExecTool(
       }
       if (elevatedRequested) {
         host = "gateway";
+      }
+      const autoBackgroundGatewayRestart =
+        host === "gateway" &&
+        allowBackground &&
+        !backgroundRequested &&
+        !yieldRequested &&
+        isGatewayRestartCliCommand(params.command);
+      if (autoBackgroundGatewayRestart) {
+        yieldWindow = 0;
+        warnings.push(
+          "Notice: auto-backgrounded gateway restart command to keep tool results stable during service restart.",
+        );
       }
 
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
