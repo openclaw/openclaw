@@ -74,11 +74,11 @@ export async function ensureConfigReady(params: {
   const snapshot = await getConfigSnapshot();
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const allowInvalidGatewayCommand =
+    commandName === "gateway" &&
+    (subcommandName === undefined || ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName));
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
-      (commandName === "gateway" &&
-        subcommandName &&
-        ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
+    ? ALLOWED_INVALID_COMMANDS.has(commandName) || allowInvalidGatewayCommand
     : false;
   const issues =
     snapshot.exists && !snapshot.valid
