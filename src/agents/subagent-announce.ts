@@ -86,7 +86,7 @@ function buildCompletionDeliveryMessage(params: {
   const findingsText = parseInlineDirectives(params.findings, {
     stripAudioTag: false,
     stripReplyTags: true,
-  }).text.trim();
+  }).text;
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
