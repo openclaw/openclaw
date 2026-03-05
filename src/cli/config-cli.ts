@@ -1,11 +1,24 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { addConfigAtomicCommands } from "../commands/config-atomic.js";
+import {
+  getAtomicConfigManager,
+  type ConfigValidationResult,
+} from "../config/atomic-config.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info, success } from "../globals.js";
+import {
+  createSafeModeConfig,
+  createSafeModeSentinel,
+  isSafeModeEnabled,
+  shouldStartInSafeMode,
+} from "../config/safe-mode.js";
+import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.js";
+import { danger, info, success, warn } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -356,7 +369,67 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+/**
+ * Shared validation logic used by both `config validate` CLI and `applyConfigAtomic()`.
+ * Returns schema issues from the snapshot plus optional 12-factor checks.
+ */
+export async function validateConfigForApply(
+  snapshot: ConfigFileSnapshot,
+  opts: { twelveFactorCheck?: boolean } = {},
+): Promise<{
+  schemaValid: boolean;
+  issues: ReadonlyArray<ConfigIssue>;
+  atomicValidation?: ConfigValidationResult;
+}> {
+  const issues = snapshot.valid ? [] : normalizeConfigIssues(snapshot.issues);
+  let atomicValidation: ConfigValidationResult | undefined;
+
+  if (snapshot.exists && snapshot.valid && opts.twelveFactorCheck) {
+    try {
+      const manager = getAtomicConfigManager();
+      atomicValidation = await manager.validateConfig(snapshot.config);
+    } catch {
+      // Atomic validation is best-effort
+    }
+  }
+
+  return {
+    schemaValid: snapshot.valid,
+    issues,
+    atomicValidation,
+  };
+}
+
+function detectStaleTempFiles(configPath: string): string[] {
+  const stateDir = path.dirname(configPath);
+  const tempDir = path.join(stateDir, "config-temp");
+  try {
+    if (!fs.existsSync(tempDir)) return [];
+    return fs.readdirSync(tempDir).filter((f) => f.endsWith(".tmp"));
+  } catch {
+    return [];
+  }
+}
+
+function getBackupSummary(): { count: number; lastHealthy?: string } | null {
+  try {
+    const manager = getAtomicConfigManager();
+    // listBackups is async but we use a sync summary check
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runConfigValidate(
+  opts: {
+    json?: boolean;
+    checkBackups?: boolean;
+    twelveFactorCheck?: boolean;
+    fix?: boolean;
+    runtime?: RuntimeEnv;
+  } = {},
+) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 
@@ -364,6 +437,14 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     const snapshot = await readConfigFileSnapshot();
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
+
+    // Safe-mode banner
+    if (!opts.json) {
+      if (isSafeModeEnabled() || shouldStartInSafeMode()) {
+        runtime.log(warn("Safe mode is active. Config changes are restricted."));
+        runtime.log("");
+      }
+    }
 
     if (!snapshot.exists) {
       if (opts.json) {
@@ -375,11 +456,32 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       return;
     }
 
-    if (!snapshot.valid) {
-      const issues = normalizeConfigIssues(snapshot.issues);
+    // Stale .tmp file check
+    const staleTmps = detectStaleTempFiles(outputPath);
+    if (staleTmps.length > 0 && !opts.json) {
+      runtime.log(
+        warn(
+          `Found ${staleTmps.length} stale .tmp file(s) in config-temp/. A previous atomic apply may have been interrupted.`,
+        ),
+      );
+      runtime.log(
+        theme.muted(
+          `  Clean up with: rm ${path.join(path.dirname(outputPath), "config-temp", "*.tmp")}`,
+        ),
+      );
+      runtime.log("");
+    }
 
+    // Schema validation
+    const { schemaValid, issues, atomicValidation } = await validateConfigForApply(snapshot, {
+      twelveFactorCheck: opts.twelveFactorCheck,
+    });
+
+    if (!schemaValid) {
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
+        runtime.log(
+          JSON.stringify({ valid: false, path: outputPath, issues, staleTmps: staleTmps.length }, null, 2),
+        );
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
         for (const line of formatConfigIssueLines(issues, danger("×"))) {
@@ -387,15 +489,97 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
         }
         runtime.error("");
         runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+
+        if (opts.fix) {
+          runtime.log("");
+          runtime.log(warn("--fix: entering safe mode to allow recovery..."));
+          const safeConfig = createSafeModeConfig();
+          await createSafeModeSentinel("config validate --fix: critical schema errors");
+          runtime.log(success("Safe mode sentinel created. Restart the gateway to enter safe mode."));
+          runtime.log(
+            theme.muted(
+              `  To disable later: ${formatCliCommand("openclaw config safe-mode disable")}`,
+            ),
+          );
+        }
       }
       runtime.exit(1);
       return;
     }
 
+    // Backup status (when --check-backups)
+    let backupInfo: { count: number; lastHealthy?: string } | undefined;
+    if (opts.checkBackups) {
+      try {
+        const manager = getAtomicConfigManager();
+        const backups = await manager.listBackups();
+        const lastHealthy = backups.find((b) => b.healthy);
+        backupInfo = {
+          count: backups.length,
+          lastHealthy: lastHealthy?.id,
+        };
+        if (!opts.json) {
+          if (backups.length === 0) {
+            runtime.log(warn("No config backups found. Run `openclaw config backup` to create one."));
+          } else {
+            runtime.log(
+              info(
+                `${backups.length} backup(s) available${lastHealthy ? `, last healthy: ${lastHealthy.id}` : ""}`,
+              ),
+            );
+          }
+        }
+      } catch {
+        if (!opts.json) {
+          runtime.log(theme.muted("Could not read backup status."));
+        }
+      }
+    }
+
+    // 12-factor results
+    if (atomicValidation && !opts.json) {
+      if (!atomicValidation.valid) {
+        runtime.log("");
+        runtime.log(danger("Atomic validation errors:"));
+        for (const err of atomicValidation.errors) {
+          runtime.log(danger(`  - ${err}`));
+        }
+      }
+      if (atomicValidation.warnings.length > 0) {
+        runtime.log("");
+        runtime.log(warn("Warnings:"));
+        for (const w of atomicValidation.warnings) {
+          runtime.log(warn(`  - ${w}`));
+        }
+      }
+      if (atomicValidation.twelveFactorIssues.length > 0) {
+        runtime.log("");
+        runtime.log(theme.muted("12-Factor App Issues:"));
+        for (const issue of atomicValidation.twelveFactorIssues) {
+          runtime.log(theme.muted(`  - ${issue}`));
+        }
+      }
+    }
+
+    // JSON output
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: true, path: outputPath }));
+      const result: Record<string, unknown> = { valid: true, path: outputPath };
+      if (staleTmps.length > 0) result.staleTmps = staleTmps.length;
+      if (backupInfo) result.backups = backupInfo;
+      if (atomicValidation) {
+        result.atomicValidation = {
+          valid: atomicValidation.valid,
+          warnings: atomicValidation.warnings,
+          twelveFactorIssues: atomicValidation.twelveFactorIssues,
+        };
+      }
+      runtime.log(JSON.stringify(result, null, 2));
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
+    }
+
+    if (atomicValidation && !atomicValidation.valid) {
+      runtime.exit(1);
     }
   } catch (err) {
     if (opts.json) {
@@ -505,8 +689,16 @@ export function registerConfigCli(program: Command) {
     .command("validate")
     .description("Validate the current config against the schema without starting the gateway")
     .option("--json", "Output validation result as JSON", false)
+    .option("--check-backups", "Show backup status", false)
+    .option("--12-factor", "Include 12-factor app validation", false)
+    .option("--fix", "Enter safe mode on critical errors", false)
     .action(async (opts) => {
-      await runConfigValidate({ json: Boolean(opts.json) });
+      await runConfigValidate({
+        json: Boolean(opts.json),
+        checkBackups: Boolean(opts.checkBackups),
+        twelveFactorCheck: Boolean(opts["12Factor"]),
+        fix: Boolean(opts.fix),
+      });
     });
 
   // Add atomic configuration management commands

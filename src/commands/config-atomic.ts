@@ -143,52 +143,7 @@ export function addConfigAtomicCommands(program: Command): void {
       }
     });
 
-  // Validate current config
-  configCmd
-    .command("validate")
-    .description("Validate the current configuration")
-    .option("--12-factor", "Include 12-factor app validation")
-    .option("--json", "Output as JSON")
-    .action(async (options) => {
-      try {
-        const manager = getAtomicConfigManager();
-        const snapshot = await readConfigFileSnapshot();
-        const validation = await manager.validateConfig(snapshot.config);
-
-        if (options.json) {
-          console.log(JSON.stringify(validation, null, 2));
-          return;
-        }
-
-        if (validation.valid) {
-          console.log(success("✓ Configuration is valid"));
-        } else {
-          console.log(danger("✗ Configuration validation failed"));
-          console.log("");
-          console.log(danger("Errors:"));
-          validation.errors.forEach((error) => console.log(danger(`  - ${String(error)}`)));
-        }
-
-        if (validation.warnings.length > 0) {
-          console.log("");
-          console.log(warn("Warnings:"));
-          validation.warnings.forEach((warning) => console.log(warn(`  - ${warning}`)));
-        }
-
-        if (options["12Factor"] && validation.twelveFactorIssues.length > 0) {
-          console.log("");
-          console.log(theme.info("12-Factor App Issues:"));
-          validation.twelveFactorIssues.forEach((issue) => console.log(theme.info(`  - ${issue}`)));
-        }
-
-        if (!validation.valid) {
-          process.exit(1);
-        }
-      } catch (error) {
-        console.error(danger(`✗ Validation failed: ${String(error)}`));
-        process.exit(1);
-      }
-    });
+  // Note: validate command is registered in config-cli.ts (unified with schema validation)
 
   // Apply config atomically
   configCmd
