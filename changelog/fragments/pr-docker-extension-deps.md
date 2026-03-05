@@ -1,0 +1,1 @@
+- Docker/extensions: copy `extensions/` before `pnpm install` so bundled extension dependencies (memory-lancedb, matrix, etc.) are installed in the Docker image. (#33389) Thanks @Hua688.
