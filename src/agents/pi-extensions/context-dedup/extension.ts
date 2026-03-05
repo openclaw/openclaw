@@ -95,6 +95,11 @@ type SeenLine = {
   firstSeenToolCallId?: string;
 };
 
+type SeenChunkSource = {
+  firstSeenMessageIndex: number;
+  firstSeenToolCallId?: string;
+};
+
 function normalizeFilePath(input: string): string {
   return input.trim().replace(/\\/g, "/");
 }
@@ -391,6 +396,7 @@ function collapseReadChunkAgainstSeen(params: {
   path: string;
   startLine: number;
   seenLines: Map<number, SeenLine>;
+  seenChunks: Map<string, SeenChunkSource>;
   currentMessageIndex: number;
   currentToolCallId?: string;
 }): {
@@ -405,6 +411,15 @@ function collapseReadChunkAgainstSeen(params: {
   const start = Math.max(1, Math.floor(params.startLine));
   const end = start + lines.length - 1;
 
+  const chunkKey = `${start}\n${params.text}`;
+  const exactChunkSource = params.seenChunks.get(chunkKey);
+  if (!exactChunkSource) {
+    params.seenChunks.set(chunkKey, {
+      firstSeenMessageIndex: params.currentMessageIndex,
+      firstSeenToolCallId: params.currentToolCallId,
+    });
+  }
+
   const repeated = Array.from({ length: lines.length }, () => false);
   let repeatedCount = 0;
   let sourceMessageIndex: number | undefined;
@@ -416,7 +431,7 @@ function collapseReadChunkAgainstSeen(params: {
     if (seen && seen.text === lines[i]) {
       repeated[i] = true;
       repeatedCount++;
-      if (sourceMessageIndex === undefined || seen.firstSeenMessageIndex < sourceMessageIndex) {
+      if (sourceMessageIndex === undefined || seen.firstSeenMessageIndex > sourceMessageIndex) {
         sourceMessageIndex = seen.firstSeenMessageIndex;
         sourceToolCallId = seen.firstSeenToolCallId;
       }
@@ -447,7 +462,9 @@ function collapseReadChunkAgainstSeen(params: {
   }
 
   if (repeatedCount === lines.length && lines.length >= 8) {
-    const sourceHint = buildSourceHint(sourceMessageIndex, sourceToolCallId);
+    const fullSourceMessageIndex = exactChunkSource?.firstSeenMessageIndex ?? sourceMessageIndex;
+    const fullSourceToolCallId = exactChunkSource?.firstSeenToolCallId ?? sourceToolCallId;
+    const sourceHint = buildSourceHint(fullSourceMessageIndex, fullSourceToolCallId);
 
     const note =
       `[Same file chunk already shown earlier]\nPath: ${params.path}\n` +
@@ -461,7 +478,7 @@ function collapseReadChunkAgainstSeen(params: {
         omittedChars: params.text.length - note.length,
         fullOmit: true,
         partialTrim: false,
-        sourceMessageIndex,
+        sourceMessageIndex: fullSourceMessageIndex,
       };
     }
     return {
@@ -576,6 +593,7 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
   }
 
   const seenLinesByPath = new Map<string, Map<number, SeenLine>>();
+  const seenChunksByPath = new Map<string, Map<string, SeenChunkSource>>();
   let nextMessages: any[] | null = null;
 
   const stats: ReadLineageStats = {
@@ -619,6 +637,13 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
     }
     const seenLinesForPath = seenLines;
 
+    let seenChunks = seenChunksByPath.get(meta.path);
+    if (!seenChunks) {
+      seenChunks = new Map<string, SeenChunkSource>();
+      seenChunksByPath.set(meta.path, seenChunks);
+    }
+    const seenChunksForPath = seenChunks;
+
     const content = msg.content;
 
     if (typeof content === "string") {
@@ -627,6 +652,7 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
         path: meta.path,
         startLine: meta.offset,
         seenLines: seenLinesForPath,
+        seenChunks: seenChunksForPath,
         currentMessageIndex: msgIndex,
         currentToolCallId: toolCallId,
       });
@@ -671,6 +697,7 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
         path: meta.path,
         startLine: lineCursor,
         seenLines: seenLinesForPath,
+        seenChunks: seenChunksForPath,
         currentMessageIndex: msgIndex,
         currentToolCallId: toolCallId,
       });
@@ -717,18 +744,34 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
   };
 }
 
-function parseDedupPointerTargetMessageIndex(text: string): number | undefined {
+type ParsedDedupPointerTarget = {
+  messageIndex: number;
+  blockIndex: number;
+  toolHint: string;
+};
+
+function parseDedupPointerTarget(text: string): ParsedDedupPointerTarget | undefined {
   const match = text.match(
-    /Same as context message #(\d+), block #\d+(?: \(toolCallId [^)]+\))?\./,
+    /Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\./,
   );
   if (!match) {
     return undefined;
   }
-  const value = Number.parseInt(match[1] ?? "", 10);
-  if (!Number.isFinite(value) || value < 0) {
+
+  const messageIndex = Number.parseInt(match[1] ?? "", 10);
+  const blockIndex = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(messageIndex) || messageIndex < 0) {
     return undefined;
   }
-  return value;
+  if (!Number.isFinite(blockIndex) || blockIndex < 0) {
+    return undefined;
+  }
+
+  return {
+    messageIndex,
+    blockIndex,
+    toolHint: typeof match[3] === "string" ? match[3] : "",
+  };
 }
 
 function parseLineageSourceMessageIndex(text: string): number | undefined {
@@ -756,6 +799,24 @@ function isSyntheticPointerOrLineageNote(text: string): boolean {
   );
 }
 
+function extractMessageBlockText(message: any, blockIndex: number): string | undefined {
+  const content = message?.content;
+
+  if (typeof content === "string") {
+    return blockIndex === 0 ? content : undefined;
+  }
+
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  if (blockIndex < 0 || blockIndex >= content.length) {
+    return undefined;
+  }
+
+  return extractBlockText(content[blockIndex]);
+}
+
 function resolveRootSourceMessageIndex(messages: any[], startIndex: number): number {
   let current = startIndex;
   const visited = new Set<number>();
@@ -771,12 +832,12 @@ function resolveRootSourceMessageIndex(messages: any[], startIndex: number): num
       return current;
     }
 
-    const dedupTarget = parseDedupPointerTargetMessageIndex(text);
-    if (typeof dedupTarget === "number") {
-      if (dedupTarget < 0 || dedupTarget >= messages.length) {
+    const dedupTarget = parseDedupPointerTarget(text);
+    if (dedupTarget) {
+      if (dedupTarget.messageIndex < 0 || dedupTarget.messageIndex >= messages.length) {
         return current;
       }
-      current = dedupTarget;
+      current = dedupTarget.messageIndex;
       continue;
     }
 
@@ -793,6 +854,64 @@ function resolveRootSourceMessageIndex(messages: any[], startIndex: number): num
   }
 
   return startIndex;
+}
+
+function resolveRootDedupPointerTarget(params: {
+  messages: any[];
+  sourceMessageIndex: number;
+  sourceBlockIndex: number;
+  sourceToolHint: string;
+}): ParsedDedupPointerTarget {
+  let currentMessageIndex = params.sourceMessageIndex;
+  let currentBlockIndex = params.sourceBlockIndex;
+  let currentToolHint = params.sourceToolHint;
+
+  const visited = new Set<string>();
+
+  while (currentMessageIndex >= 0 && currentMessageIndex < params.messages.length) {
+    const visitedKey = `${currentMessageIndex}:${currentBlockIndex}`;
+    if (visited.has(visitedKey)) {
+      break;
+    }
+    visited.add(visitedKey);
+
+    const text = extractMessageBlockText(params.messages[currentMessageIndex], currentBlockIndex);
+    if (typeof text !== "string" || text.length === 0) {
+      break;
+    }
+    if (!isSyntheticPointerOrLineageNote(text)) {
+      break;
+    }
+
+    const dedupTarget = parseDedupPointerTarget(text);
+    if (dedupTarget) {
+      if (dedupTarget.messageIndex < 0 || dedupTarget.messageIndex >= params.messages.length) {
+        break;
+      }
+      currentMessageIndex = dedupTarget.messageIndex;
+      currentBlockIndex = dedupTarget.blockIndex;
+      currentToolHint = dedupTarget.toolHint || currentToolHint;
+      continue;
+    }
+
+    const lineageTarget = parseLineageSourceMessageIndex(text);
+    if (typeof lineageTarget === "number") {
+      if (lineageTarget < 0 || lineageTarget >= params.messages.length) {
+        break;
+      }
+      currentMessageIndex = lineageTarget;
+      currentBlockIndex = 0;
+      continue;
+    }
+
+    break;
+  }
+
+  return {
+    messageIndex: currentMessageIndex,
+    blockIndex: currentBlockIndex,
+    toolHint: currentToolHint,
+  };
 }
 
 function rewriteLineageSourceHint(text: string, messages: any[]): string {
@@ -825,17 +944,30 @@ function rewriteDedupPointerSourceHint(text: string, messages: any[]): string {
     /Same as context message #(\d+), block #(\d+)((?: \(toolCallId [^)]+\))?)\./g,
     (full, sourceIndexRaw: string, blockIndexRaw: string, toolHintRaw: string) => {
       const sourceIndex = Number.parseInt(sourceIndexRaw, 10);
+      const blockIndex = Number.parseInt(blockIndexRaw, 10);
       if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
         return full;
       }
-
-      const resolved = resolveRootSourceMessageIndex(messages, sourceIndex);
-      if (resolved === sourceIndex) {
+      if (!Number.isFinite(blockIndex) || blockIndex < 0) {
         return full;
       }
 
       const toolHint = typeof toolHintRaw === "string" ? toolHintRaw : "";
-      return `Same as context message #${resolved}, block #${blockIndexRaw}${toolHint}.`;
+      const resolved = resolveRootDedupPointerTarget({
+        messages,
+        sourceMessageIndex: sourceIndex,
+        sourceBlockIndex: blockIndex,
+        sourceToolHint: toolHint,
+      });
+      if (
+        resolved.messageIndex === sourceIndex &&
+        resolved.blockIndex === blockIndex &&
+        resolved.toolHint === toolHint
+      ) {
+        return full;
+      }
+
+      return `Same as context message #${resolved.messageIndex}, block #${resolved.blockIndex}${resolved.toolHint}.`;
     },
   );
 }

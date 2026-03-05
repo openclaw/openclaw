@@ -346,6 +346,76 @@ describe("context-dedup", () => {
     expect(result.stats.partiallyTrimmedChunks).toBe(1);
   });
 
+  it("anchors full repeated chunks to a source with matching full chunk text", () => {
+    const baseLines = Array.from(
+      { length: 10 },
+      (_, idx) => `line ${idx + 1} :: ${"m".repeat(40)}`,
+    );
+    const updatedLines = [...baseLines];
+    updatedLines[0] = `line 1 :: ${"n".repeat(40)}`;
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_match_1",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/matching-chunk.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_match_1",
+        content: baseLines.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_match_2",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/matching-chunk.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_match_2",
+        content: updatedLines.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_match_3",
+            name: "read",
+            arguments: JSON.stringify({ path: "/tmp/matching-chunk.txt", offset: 1 }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "call_match_3",
+        content: updatedLines.join("\n"),
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const repeatedChunkNote = String(result.messages[5].content);
+
+    expect(repeatedChunkNote).toContain("[Same file chunk already shown earlier]");
+    expect(repeatedChunkNote).toContain("Earlier chunk: context message #3");
+    expect(repeatedChunkNote).not.toContain("Earlier chunk: context message #1");
+  });
+
   it("rewrites dedup pointers that target lineage notes back to root source", () => {
     const fullChunk = "Heartbeat content line ".repeat(20);
     const lineageNote =
@@ -370,6 +440,37 @@ describe("context-dedup", () => {
     const postRewrite = String(rewritten[2].content);
     expect(postRewrite).toContain("Same as context message #0");
     expect(postRewrite).not.toContain("Same as context message #1");
+  });
+
+  it("rewrites chained dedup pointers with the root block index", () => {
+    const rootContent = "root chunk ".repeat(30);
+    const intermediatePointer =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #0, block #1 (toolCallId call_root).";
+    const nestedPointer =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #1, block #0 (toolCallId call_mid).";
+
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "call_root",
+        content: [
+          { type: "text", text: "header" },
+          { type: "text", text: rootContent },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call_mid", content: intermediatePointer },
+      { role: "toolResult", toolCallId: "call_leaf", content: nestedPointer },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+
+    expect(postRewrite).toContain("Same as context message #0, block #1");
+    expect(postRewrite).not.toContain("Same as context message #0, block #0");
+    expect(postRewrite).toContain("toolCallId call_root");
+    expect(postRewrite).not.toContain("toolCallId call_mid");
   });
 
   it("rewrites nested lineage source pointers to original dedup source", () => {
