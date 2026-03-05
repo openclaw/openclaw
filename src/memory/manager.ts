@@ -42,6 +42,30 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
+async function validateMemoryWorkspacePath(params: {
+  workspaceDir: string;
+  settings: ResolvedMemorySearchConfig;
+}): Promise<void> {
+  if (!params.settings.sources.includes("memory")) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(params.workspaceDir);
+    if (!stat.isDirectory()) {
+      throw new Error(`memory workspace path is not a directory: ${params.workspaceDir}`);
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      throw new Error(`memory workspace path does not exist: ${params.workspaceDir}`);
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      throw new Error(`memory workspace path is not accessible (${code}): ${params.workspaceDir}`);
+    }
+    throw err;
+  }
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
@@ -125,6 +149,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    await validateMemoryWorkspacePath({ workspaceDir, settings });
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) {
