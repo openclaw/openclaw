@@ -7,7 +7,6 @@ export type { CronEvent, CronServiceDeps } from "./service/state.js";
 export type CallerContext = {
   agentId?: string;
   sessionKey?: string;
-  ownerOverride?: boolean;
 };
 
 export class CronService {

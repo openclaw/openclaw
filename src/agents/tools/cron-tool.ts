@@ -284,25 +284,28 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       switch (action) {
         case "status":
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "list": {
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
               agentId: opts?.agentSessionKey
                 ? resolveSessionAgentId({
                     sessionKey: opts.agentSessionKey,
-                    config: loadConfig(),
+                    config: cfg,
                   })
                 : undefined,
               sessionKey: opts?.agentSessionKey
                 ? resolveInternalSessionKey({
                     key: opts.agentSessionKey,
-                    alias: resolveMainSessionAlias(loadConfig()).alias,
-                    mainKey: resolveMainSessionAlias(loadConfig()).mainKey,
+                    alias,
+                    mainKey,
                   })
                 : undefined,
             }),
           );
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting

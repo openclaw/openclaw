@@ -29,7 +29,6 @@ type CronSortDir = "asc" | "desc";
 export type CallerContext = {
   agentId?: string;
   sessionKey?: string;
-  ownerOverride?: boolean;
 };
 
 export type CronListPageOptions = {
@@ -42,7 +41,6 @@ export type CronListPageOptions = {
   sortDir?: CronSortDir;
   agentId?: string;
   sessionKey?: string;
-  ownerOverride?: boolean;
 };
 
 export type CronListPageResult = {
@@ -160,21 +158,17 @@ export async function list(
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const { agentId, sessionKey, ownerOverride } = callerContext ?? {};
+    const { agentId, sessionKey } = callerContext ?? {};
     let jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
 
-    if (!ownerOverride && (agentId || sessionKey)) {
+    if (agentId || sessionKey) {
       jobs = jobs.filter((job) => {
         if (!job.agentId && !job.sessionKey) {
           return true;
         }
-        if (agentId && job.agentId === agentId) {
-          return true;
-        }
-        if (sessionKey && job.sessionKey === sessionKey) {
-          return true;
-        }
-        return false;
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        return agentMatch || sessionMatch;
       });
     }
 
@@ -232,7 +226,7 @@ export async function listPage(
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
-    const { agentId, sessionKey, ownerOverride } = callerContext ?? {};
+    const { agentId, sessionKey } = callerContext ?? {};
     const source = state.store?.jobs ?? [];
 
     let filtered = source.filter((job) => {
@@ -249,18 +243,14 @@ export async function listPage(
       return haystack.includes(query);
     });
 
-    if (!ownerOverride && (agentId || sessionKey)) {
+    if (agentId || sessionKey) {
       filtered = filtered.filter((job) => {
         if (!job.agentId && !job.sessionKey) {
           return true;
         }
-        if (agentId && job.agentId === agentId) {
-          return true;
-        }
-        if (sessionKey && job.sessionKey === sessionKey) {
-          return true;
-        }
-        return false;
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        return agentMatch || sessionMatch;
       });
     }
 
@@ -325,14 +315,18 @@ export async function update(
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
-    const { agentId, sessionKey, ownerOverride } = callerContext ?? {};
+    const { agentId, sessionKey } = callerContext ?? {};
     const job = findJobOrThrow(state, id);
 
-    if (!ownerOverride && (agentId || sessionKey)) {
+    if (agentId || sessionKey) {
       if (!job.agentId && !job.sessionKey) {
         // legacy job - allow
-      } else if (job.agentId !== agentId && job.sessionKey !== sessionKey) {
-        throw new Error("Authorization denied: job belongs to different agent/session");
+      } else {
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        if (!agentMatch && !sessionMatch) {
+          throw new Error("Authorization denied: job belongs to different agent/session");
+        }
       }
     }
 
@@ -389,14 +383,18 @@ export async function remove(state: CronServiceState, id: string, callerContext?
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
-    const { agentId, sessionKey, ownerOverride } = callerContext ?? {};
+    const { agentId, sessionKey } = callerContext ?? {};
     const job = state.store?.jobs.find((j) => j.id === id);
     if (job) {
-      if (!ownerOverride && (agentId || sessionKey)) {
+      if (agentId || sessionKey) {
         if (!job.agentId && !job.sessionKey) {
           // legacy job - allow
-        } else if (job.agentId !== agentId && job.sessionKey !== sessionKey) {
-          throw new Error("Authorization denied: job belongs to different agent/session");
+        } else {
+          const agentMatch = agentId != null && job.agentId === agentId;
+          const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+          if (!agentMatch && !sessionMatch) {
+            throw new Error("Authorization denied: job belongs to different agent/session");
+          }
         }
       }
     }
@@ -424,14 +422,18 @@ export async function run(
   const prepared = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
-    const { agentId, sessionKey, ownerOverride } = callerContext ?? {};
+    const { agentId, sessionKey } = callerContext ?? {};
     const job = findJobOrThrow(state, id);
 
-    if (!ownerOverride && (agentId || sessionKey)) {
+    if (agentId || sessionKey) {
       if (!job.agentId && !job.sessionKey) {
         // legacy job - allow
-      } else if (job.agentId !== agentId && job.sessionKey !== sessionKey) {
-        throw new Error("Authorization denied: job belongs to different agent/session");
+      } else {
+        const agentMatch = agentId != null && job.agentId === agentId;
+        const sessionMatch = sessionKey != null && job.sessionKey === sessionKey;
+        if (!agentMatch && !sessionMatch) {
+          throw new Error("Authorization denied: job belongs to different agent/session");
+        }
       }
     }
 
