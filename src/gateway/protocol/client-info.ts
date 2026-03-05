@@ -48,6 +48,10 @@ export const GATEWAY_CLIENT_CAPS = {
 
 export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];
 
+export const GATEWAY_CLIENT_DISPLAY_NAMES = {
+  TUI: "openclaw-tui",
+} as const;
+
 const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLIENT_IDS));
 const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
 

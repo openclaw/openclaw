@@ -34,6 +34,7 @@ import { type ChatImageContent, parseMessageWithAttachments } from "../chat-atta
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_DISPLAY_NAMES,
   GATEWAY_CLIENT_NAMES,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
@@ -88,7 +89,7 @@ function isTuiUiClient(client?: {
   if ((client?.id ?? "").trim().toLowerCase() !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
     return false;
   }
-  return (client?.displayName ?? "").trim().toLowerCase() === "openclaw-tui";
+  return (client?.displayName ?? "").trim().toLowerCase() === GATEWAY_CLIENT_DISPLAY_NAMES.TUI;
 }
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
