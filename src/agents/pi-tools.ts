@@ -55,6 +55,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { applyLevelBasedToolPolicy } from "./tool-policy-levels.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -238,6 +239,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** RBAC system access level (0-4). 0=Chat, 1=Reader, 2=Editor, 3=Dev, 4=Admin */
+  systemAccessLevel?: number;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -501,7 +504,16 @@ export function createOpenClawCodingTools(options?: {
   const toolsForMessageProvider = applyMessageProviderToolPolicy(tools, options?.messageProvider);
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForMessageProvider, senderIsOwner);
+  const systemAccessLevel = options?.systemAccessLevel;
+  
+  // If systemAccessLevel is provided, use level-based policy; otherwise fall back to owner-only
+  const toolsByAuthorization = systemAccessLevel !== undefined
+    ? applyLevelBasedToolPolicy(toolsForMessageProvider, systemAccessLevel, {
+        userId: options?.senderId ?? undefined,
+        guildId: undefined,  // TODO: Pass guild context if available
+      })
+    : applyOwnerOnlyToolPolicy(toolsForMessageProvider, senderIsOwner);
+  
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

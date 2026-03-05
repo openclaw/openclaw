@@ -11,6 +11,8 @@ export type CommandAuthorization = {
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
+  systemAccessLevel: number;  // RBAC level (0-4)
+  systemAccessIsOwner: boolean;  // Whether sender is owner
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
@@ -372,6 +374,8 @@ export function resolveCommandAuthorization(params: {
     ownerList,
     senderId: senderId || undefined,
     senderIsOwner,
+    systemAccessLevel: (ctx as { SystemAccessLevel?: number }).SystemAccessLevel ?? 0,
+    systemAccessIsOwner: (ctx as { SystemAccessIsOwner?: boolean }).SystemAccessIsOwner ?? false,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,

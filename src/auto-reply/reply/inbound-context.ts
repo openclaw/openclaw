@@ -94,6 +94,12 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
 
+  // RBAC system access - default to level 0 (chat only) if not set
+  normalized.SystemAccessLevel = typeof normalized.SystemAccessLevel === "number" 
+    ? normalized.SystemAccessLevel 
+    : 0;
+  normalized.SystemAccessIsOwner = normalized.SystemAccessIsOwner === true;
+
   // MediaType/MediaTypes alignment:
   // - No media: do not inject defaults.
   // - Media present: ensure MediaType is always set, and MediaTypes is padded to match

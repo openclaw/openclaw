@@ -13,6 +13,8 @@ export type CommandContext = {
   channelId?: ChannelId;
   ownerList: string[];
   senderIsOwner: boolean;
+  systemAccessLevel: number;  // RBAC level (0-4)
+  systemAccessIsOwner: boolean;  // Whether sender is owner
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;

@@ -491,6 +491,7 @@ export async function runPreparedReply(
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
+      systemAccessLevel: command.systemAccessLevel,
       sessionFile,
       workspaceDir,
       config: cfg,

@@ -29,6 +29,7 @@ import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
+import { resolveDiscordSystemAccess } from "../system-access-resolver.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -547,6 +548,16 @@ export async function preflightDiscordMessage(
     allowNameMatching,
   });
 
+  // Resolve RBAC system access level
+  const systemAccessConfig = isGuildMessage && guildInfo
+    ? params.discordConfig?.guilds?.[params.data.guild_id ?? ""]?.systemAccess
+    : undefined;
+  const systemAccess = resolveDiscordSystemAccess({
+    userId: sender.id,
+    userRoles: memberRoleIds,
+    systemAccessConfig,
+  });
+
   if (!isDirectMessage) {
     const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
       allowFrom: params.allowFrom,
@@ -674,6 +685,7 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
+    systemAccess,
     baseText,
     messageText,
     wasMentioned,
