@@ -91,4 +91,36 @@ describe("attachVisualViewportKeyboardInset", () => {
     expect(viewport.removeEventListener).toHaveBeenCalledTimes(2);
     expect(win.removeEventListener).toHaveBeenCalledTimes(1);
   });
+
+  it("defaults the CSS variable to document.documentElement", () => {
+    const viewportListeners = createListenerStore();
+    const viewport = {
+      height: 844,
+      offsetTop: 0,
+      addEventListener: vi.fn((type: "resize" | "scroll", listener: () => void) => {
+        const set = viewportListeners.get(type) ?? new Set<() => void>();
+        set.add(listener);
+        viewportListeners.set(type, set);
+      }),
+      removeEventListener: vi.fn((type: "resize" | "scroll", listener: () => void) => {
+        viewportListeners.get(type)?.delete(listener);
+      }),
+    };
+    const win = {
+      innerHeight: 844,
+      visualViewport: viewport,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+
+    const cleanup = attachVisualViewportKeyboardInset({ win });
+
+    viewport.height = 500;
+    fireListener(viewportListeners, "resize");
+    expect(document.documentElement.style.getPropertyValue(CHAT_KEYBOARD_INSET_CSS_VAR)).toBe(
+      "344px",
+    );
+
+    cleanup();
+  });
 });
