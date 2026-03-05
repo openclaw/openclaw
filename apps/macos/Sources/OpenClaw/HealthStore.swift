@@ -119,7 +119,11 @@ final class HealthStore {
         let previousError = self.lastError
 
         do {
-            let data = try await ControlChannel.shared.health(timeout: 15)
+            // Defensive wall-clock timeout so UI never stays stuck in
+            // "Health check running…" if the underlying request path wedges.
+            let data = try await Self.withWallClockTimeout(seconds: 20) {
+                try await ControlChannel.shared.health(timeout: 15)
+            }
             if let decoded = decodeHealthSnapshot(from: data) {
                 self.snapshot = decoded
                 self.lastSuccess = Date()
@@ -272,6 +276,33 @@ final class HealthStore {
             return self.describeFailure(from: snap, fallback: reason)
         }
         return reason
+    }
+
+    private static func withWallClockTimeout<T: Sendable>(
+        seconds: Double,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
+        let clamped = max(0, seconds)
+        if clamped == 0 { return try await operation() }
+
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(clamped * 1_000_000_000))
+                throw NSError(
+                    domain: "Health",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "health check timed out"])
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                throw NSError(
+                    domain: "Health",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "health check timed out"])
+            }
+            return value
+        }
     }
 }
 

@@ -544,7 +544,10 @@ public actor GatewayChannelActor {
         guard let task = self.task else { throw ConnectChallengeError.timeout }
         return try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
-            onTimeout: { ConnectChallengeError.timeout },
+            onTimeout: {
+                task.cancel(with: .goingAway, reason: nil)
+                return ConnectChallengeError.timeout
+            },
             operation: { [weak self] in
                 guard let self else { throw ConnectChallengeError.timeout }
                 while true {
@@ -568,19 +571,36 @@ public actor GatewayChannelActor {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "connect failed (no response)"])
         }
-        while true {
-            let msg = try await task.receive()
-            guard let data = self.decodeMessageData(msg) else { continue }
-            guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
-                throw NSError(
+        return try await AsyncTimeout.withTimeout(
+            seconds: self.connectTimeoutSeconds,
+            onTimeout: {
+                task.cancel(with: .goingAway, reason: nil)
+                return NSError(
                     domain: "Gateway",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "connect failed (invalid response)"])
-            }
-            if case let .res(res) = frame, res.id == reqId {
-                return res
-            }
-        }
+                    userInfo: [NSLocalizedDescriptionKey: "connect failed (response timeout)"])
+            },
+            operation: { [weak self] in
+                guard let self else {
+                    throw NSError(
+                        domain: "Gateway",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "connect failed (actor unavailable)"])
+                }
+                while true {
+                    let msg = try await task.receive()
+                    guard let data = self.decodeMessageData(msg) else { continue }
+                    guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
+                        throw NSError(
+                            domain: "Gateway",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "connect failed (invalid response)"])
+                    }
+                    if case let .res(res) = frame, res.id == reqId {
+                        return res
+                    }
+                }
+            })
     }
 
     private nonisolated func decodeMessageData(_ msg: URLSessionWebSocketTask.Message) -> Data? {

@@ -68,13 +68,20 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
-                do {
-                    try await GatewayConnection.shared.refresh()
-                } catch {
-                    webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
-                }
-
+                // Subscribe immediately so Chat UI can receive cached snapshot/events
+                // even if refresh() is slow or temporarily wedged.
                 let stream = await GatewayConnection.shared.subscribe()
+
+                // Best-effort refresh in parallel; do not block event stream startup.
+                let refreshTask = Task {
+                    do {
+                        try await GatewayConnection.shared.refresh()
+                    } catch {
+                        webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+                defer { refreshTask.cancel() }
+
                 for await push in stream {
                     if Task.isCancelled { return }
                     if let evt = Self.mapPushToTransportEvent(push) {

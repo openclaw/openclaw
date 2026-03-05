@@ -237,6 +237,14 @@ final class ControlChannel {
                 return "Gateway request timed out; check gateway on localhost:\(port)."
             case .notConnectedToInternet:
                 return "No network connectivity; cannot reach gateway."
+            case .secureConnectionFailed:
+                return "TLS handshake failed. If the gateway uses a self-signed cert, verify the trusted fingerprint/pin and certificate settings."
+            case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot:
+                return "Gateway TLS certificate is not trusted. For self-signed TLS, trust the gateway fingerprint/certificate before retrying."
+            case .serverCertificateHasBadDate, .serverCertificateNotYetValid:
+                return "Gateway TLS certificate is expired or not yet valid. Check certificate validity dates and device clock/timezone."
+            case .clientCertificateRejected, .clientCertificateRequired:
+                return "Gateway requires/rejected a client TLS certificate. Verify mutual TLS settings (or disable mTLS if not intended)."
             default:
                 break
             }
@@ -245,6 +253,17 @@ final class ControlChannel {
         if nsError.domain == "Gateway", nsError.code == 5 {
             let port = GatewayEnvironment.gatewayPort()
             return "Gateway request timed out; check the gateway process on localhost:\(port)."
+        }
+
+        let lower = nsError.localizedDescription.lowercased()
+        if lower.contains("hostname") && lower.contains("mismatch") {
+            return "Gateway TLS hostname mismatch. The certificate subject/SAN does not match the URL host; use the certificate's hostname or regenerate the cert with the correct SAN."
+        }
+        if lower.contains("fingerprint") && (lower.contains("mismatch") || lower.contains("pin")) {
+            return "Gateway TLS pin mismatch. The saved fingerprint does not match the gateway certificate; re-trust/re-pair this gateway to update the pin."
+        }
+        if (lower.contains("ssl") || lower.contains("tls") || lower.contains("certificate")) && lower.contains("self-signed") {
+            return "Gateway TLS uses a self-signed certificate that is not trusted yet. Trust the gateway fingerprint/certificate and retry."
         }
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
@@ -286,10 +305,17 @@ final class ControlChannel {
                 }
             }
 
-            await self.refreshEndpoint(reason: "recovery:\(reasonText)")
-            if case .connected = self.state {
+            // Keep the current degraded message visible during background retries.
+            // Otherwise, fast retry loops can overwrite errors with "Connecting…"
+            // and make failures appear as a silent stall.
+            do {
+                try await self.establishGatewayConnection()
+                self.state = .connected
+                PresenceReporter.shared.sendImmediate(reason: "reconnect")
                 self.logger.info("control channel recovery finished")
-            } else if case let .degraded(message) = self.state {
+            } catch {
+                let message = self.friendlyGatewayMessage(error)
+                self.state = .degraded(message)
                 self.logger.error("control channel recovery failed \(message, privacy: .public)")
             }
 
