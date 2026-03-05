@@ -163,6 +163,66 @@ describe("Neo4jMemoryClient", () => {
         }),
       );
     });
+
+    // OP-97: Write-time credential scan
+    it("should block storage and return sentinel ID when text contains an API key", async () => {
+      const input: StoreMemoryInput = {
+        id: "mem-cred",
+        text: "Use the key sk-abc123def456ghi789jkl012mno345 for requests",
+        embedding: [],
+        importance: 0.5,
+        category: "fact",
+        source: "user",
+        extractionStatus: "pending",
+        agentId: "default",
+      };
+
+      const result = await client.storeMemory(input);
+
+      expect(result).toMatch(/^blocked:credential:\d+$/);
+      expect(mockSession.run).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("storeMemory blocked"));
+    });
+
+    it("should block storage when text contains URL-embedded credentials", async () => {
+      const input: StoreMemoryInput = {
+        id: "mem-url-cred",
+        text: "Connect to https://admin:secretpass@db.example.com/mydb",
+        embedding: [],
+        importance: 0.5,
+        category: "fact",
+        source: "user",
+        extractionStatus: "pending",
+        agentId: "default",
+      };
+
+      const result = await client.storeMemory(input);
+
+      expect(result).toMatch(/^blocked:credential:\d+$/);
+      expect(mockSession.run).not.toHaveBeenCalled();
+    });
+
+    it("should proceed normally when text contains no credentials", async () => {
+      const input: StoreMemoryInput = {
+        id: "mem-clean",
+        text: "Remember to buy groceries tomorrow",
+        embedding: [0.1],
+        importance: 0.3,
+        category: "task",
+        source: "user",
+        extractionStatus: "pending",
+        agentId: "default",
+      };
+
+      mockSession.run.mockResolvedValue({
+        records: [{ get: vi.fn().mockReturnValue("mem-clean") }],
+      });
+
+      const result = await client.storeMemory(input);
+
+      expect(result).toBe("mem-clean");
+      expect(mockSession.run).toHaveBeenCalled();
+    });
   });
 
   // ------------------------------------------------------------------------

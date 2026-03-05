@@ -19,6 +19,7 @@ import {
   makePairKey,
   validateRelationshipType,
 } from "./schema.js";
+import { detectCredential } from "./sleep-cycle.js";
 
 // Strip markdown code fences from LLM output (some providers wrap JSON in ```)
 function stripCodeFences(text: string): string {
@@ -257,8 +258,25 @@ export class Neo4jMemoryClient {
   // Memory CRUD
   // --------------------------------------------------------------------------
 
+  /**
+   * Persist a memory node to Neo4j.
+   *
+   * Returns the stored memory ID on success.
+   * If the text contains a credential-like pattern (OP-97), the memory is NOT
+   * stored and a sentinel ID of the form `"blocked:credential:<timestamp>"` is
+   * returned so callers do not crash. A warning is logged in this case.
+   */
   async storeMemory(input: StoreMemoryInput): Promise<string> {
     await this.ensureInitialized();
+    // OP-97: Write-time credential scan — reject storage of secrets
+    const credentialMatch = detectCredential(input.text);
+    if (credentialMatch !== null) {
+      this.logger.warn(
+        `memory-neo4j: storeMemory blocked — text contains a potential ${credentialMatch}. Refusing to persist.`,
+      );
+      // Return a sentinel ID so callers do not crash; the memory is not stored.
+      return `blocked:credential:${Date.now()}`;
+    }
     return this.retryOnTransient(async () => {
       const session = this.driver!.session();
       try {
