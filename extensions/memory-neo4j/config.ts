@@ -65,6 +65,8 @@ export type MemoryNeo4jConfig = {
   decayCurves: Record<string, { halfLifeDays: number }>;
   sleepCycle: {
     auto: boolean;
+    /** Interval in milliseconds between auto sleep-cycle runs. Default: 10800000 (3h). */
+    autoIntervalMs?: number;
   };
   conflictDetection: {
     /** Enable LLM-based conflict detection on new memory store */
@@ -424,6 +426,13 @@ export const memoryNeo4jConfigSchema = {
     const sleepCycleRaw = cfg.sleepCycle as Record<string, unknown> | undefined;
     assertAllowedKeys(sleepCycleRaw ?? {}, ["auto", "autoIntervalMs"], "sleepCycle config");
     const sleepCycleAuto = sleepCycleRaw?.auto !== false; // enabled by default
+    const rawAutoIntervalMs = sleepCycleRaw?.autoIntervalMs;
+    const sleepCycleAutoIntervalMs =
+      typeof rawAutoIntervalMs === "number" &&
+      Number.isInteger(rawAutoIntervalMs) &&
+      rawAutoIntervalMs > 0
+        ? rawAutoIntervalMs
+        : 10_800_000; // default 3h
 
     // Parse conflictDetection section (optional with defaults)
     const cdRaw = cfg.conflictDetection as Record<string, unknown> | undefined;
@@ -476,6 +485,7 @@ export const memoryNeo4jConfigSchema = {
       decayCurves,
       sleepCycle: {
         auto: sleepCycleAuto,
+        autoIntervalMs: sleepCycleAutoIntervalMs,
       },
       conflictDetection: {
         enabled: cdEnabled,

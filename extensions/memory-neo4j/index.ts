@@ -32,6 +32,7 @@ import { extractUserMessages, extractAssistantMessages } from "./message-utils.j
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import type { Logger, MemoryCategory, MemorySource } from "./schema.js";
 import { hybridSearch } from "./search.js";
+import { runSleepCycle } from "./sleep-cycle.js";
 import { isRelatedToCompletedTask, loadCompletedTaskKeywords } from "./task-filter.js";
 import { parseTaskLedger } from "./task-ledger.js";
 
@@ -424,6 +425,8 @@ const memoryNeo4jPlugin = {
     let lastTtlSweep = Date.now();
 
     const sleepAbortController = new AbortController();
+    let sleepCycleRunning = false;
+    let autoSleepTimerId: ReturnType<typeof setTimeout> | null = null;
 
     /** Evict stale entries from session tracking maps older than SESSION_TTL_MS. */
     function pruneStaleSessionEntries(): void {
@@ -831,8 +834,43 @@ const memoryNeo4jPlugin = {
           // Don't throw — allow graceful degradation.
           // Tools will retry initialization on first use.
         }
+
+        if (cfg.sleepCycle.auto) {
+          const intervalMs = cfg.sleepCycle.autoIntervalMs ?? 10_800_000; // default 3h
+
+          const scheduleNext = (): void => {
+            autoSleepTimerId = setTimeout(async () => {
+              if (sleepAbortController.signal.aborted) return;
+              if (sleepCycleRunning) {
+                api.logger.debug?.("memory-neo4j: auto sleep-cycle skipped (already running)");
+                scheduleNext();
+                return;
+              }
+              sleepCycleRunning = true;
+              try {
+                api.logger.info("memory-neo4j: starting auto sleep-cycle");
+                await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
+                  abortSignal: sleepAbortController.signal,
+                });
+                api.logger.info("memory-neo4j: auto sleep-cycle complete");
+              } catch (err) {
+                api.logger.error(`memory-neo4j: auto sleep-cycle error — ${String(err)}`);
+              } finally {
+                sleepCycleRunning = false;
+                if (!sleepAbortController.signal.aborted) scheduleNext();
+              }
+            }, intervalMs);
+          };
+
+          scheduleNext();
+          api.logger.info(`memory-neo4j: auto sleep-cycle enabled (interval: ${intervalMs}ms)`);
+        }
       },
       stop: async () => {
+        if (autoSleepTimerId !== null) {
+          clearTimeout(autoSleepTimerId);
+          autoSleepTimerId = null;
+        }
         sleepAbortController.abort();
         await db.close();
         api.logger.info("memory-neo4j: service stopped");
