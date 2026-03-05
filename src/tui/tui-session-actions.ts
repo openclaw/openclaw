@@ -42,20 +42,24 @@ type SessionInfoEntry = SessionInfo & {
 };
 
 function isHeartbeatPollHistoryText(text: string, heartbeatPrompt?: string): boolean {
-  const lower = text.trim().toLowerCase();
-  if (!lower) {
+  const trimmed = text.trim();
+  if (!trimmed) {
     return false;
   }
-  const resolvedHeartbeatPrompt = heartbeatPrompt?.trim() || HEARTBEAT_PROMPT;
-  const heartbeatPromptLower = resolvedHeartbeatPrompt.toLowerCase();
+  const normalized = trimmed.toLowerCase();
+  const resolvedHeartbeatPrompt = (heartbeatPrompt?.trim() || HEARTBEAT_PROMPT).toLowerCase();
   return (
-    lower.includes("<relevant-memories>") ||
-    lower.includes(heartbeatPromptLower) ||
-    lower.includes("heartbeat poll:")
+    normalized === resolvedHeartbeatPrompt ||
+    normalized === `<relevant-memories>\n${resolvedHeartbeatPrompt}` ||
+    normalized === `heartbeat poll:\n${resolvedHeartbeatPrompt}` ||
+    normalized === `heartbeat poll: ${resolvedHeartbeatPrompt}`
   );
 }
 
 function isHeartbeatAckOnlyHistoryText(text: string, maxAckChars?: number | string): boolean {
+  if (!/^\s*HEARTBEAT_OK\b/i.test(text)) {
+    return false;
+  }
   const stripped = stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars });
   return stripped.didStrip && stripped.shouldSkip;
 }
