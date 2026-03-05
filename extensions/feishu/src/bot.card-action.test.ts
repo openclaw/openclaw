@@ -39,6 +39,63 @@ describe("Feishu Card Action Handler", () => {
     );
   });
 
+  it("handles card action with form_value (form submit)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok3",
+      action: {
+        value: { command: "submit-form" },
+        form_value: { field1: "hello", field2: "world" },
+        tag: "button",
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            content: expect.stringContaining('"field1":"hello"'),
+            chat_id: "chat1",
+          }),
+        }),
+      }),
+    );
+
+    // Verify the merged object includes both value and form_value fields
+    const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    const parsed = JSON.parse(JSON.parse(call.event.message.content).text);
+    expect(parsed).toEqual({ command: "submit-form", field1: "hello", field2: "world" });
+  });
+
+  it("handles card action with empty form_value (fallback to value logic)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok4",
+      action: {
+        value: { command: "simple-click" },
+        form_value: {},
+        tag: "button",
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            content: '{"text":"simple-click"}',
+            chat_id: "chat1",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("handles card action with JSON object payload", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
