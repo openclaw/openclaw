@@ -174,7 +174,7 @@ describe("message tool schema scoping", () => {
       expectComponents: true,
       expectButtons: false,
       expectButtonStyle: false,
-      expectTelegramPollExtras: false,
+      expectTelegramPollExtras: true,
       expectedActions: ["send", "poll", "poll-vote", "react"],
     },
   ])(

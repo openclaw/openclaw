@@ -548,15 +548,10 @@ function resolveIncludeTelegramPollExtras(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
 }): boolean {
-  const telegramSupportsPoll = listChannelSupportedActions({
+  return listChannelSupportedActions({
     cfg: params.cfg,
     channel: "telegram",
   }).includes("poll");
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    return currentChannel === "telegram" && telegramSupportsPoll;
-  }
-  return telegramSupportsPoll;
 }
 
 function buildMessageToolSchema(params: {

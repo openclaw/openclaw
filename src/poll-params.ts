@@ -36,14 +36,35 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;
     }
-    if (def.kind === "stringArray" && Array.isArray(value) && value.length > 0) {
-      return true;
+    if (def.kind === "stringArray") {
+      if (
+        Array.isArray(value) &&
+        value.some((entry) => typeof entry === "string" && entry.trim())
+      ) {
+        return true;
+      }
+      if (typeof value === "string" && value.trim().length > 0) {
+        return true;
+      }
     }
-    if (def.kind === "number" && typeof value === "number" && Number.isFinite(value)) {
-      return true;
+    if (def.kind === "number") {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return true;
+      }
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed.length > 0 && Number.isFinite(Number.parseFloat(trimmed))) {
+          return true;
+        }
+      }
     }
-    if (def.kind === "boolean" && value === true) {
-      return true;
+    if (def.kind === "boolean") {
+      if (value === true) {
+        return true;
+      }
+      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
+        return true;
+      }
     }
   }
   return false;

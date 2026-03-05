@@ -26,8 +26,18 @@ describe("poll params", () => {
   it("treats finite numeric poll params as poll creation intent", () => {
     expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
+    expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationHours: Number.NaN })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
+  });
+
+  it("treats string-encoded boolean poll params as poll creation intent when true", () => {
+    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(true);
+    expect(hasPollCreationParams({ pollAnonymous: "false" })).toBe(false);
+  });
+
+  it("treats string poll options as poll creation intent", () => {
+    expect(hasPollCreationParams({ pollOption: "Yes" })).toBe(true);
   });
 
   it("resolves telegram poll visibility flags", () => {

@@ -252,6 +252,22 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
 
+  it("rejects send actions that include string-encoded poll params", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+          pollDurationSeconds: "60",
+          pollPublic: "true",
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
   it("allows send when poll booleans are explicitly false", async () => {
     const result = await runDrySend({
       cfg: slackConfig,
