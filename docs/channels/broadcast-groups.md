@@ -1,8 +1,9 @@
 ---
-summary: "Broadcast a WhatsApp message to multiple agents"
+summary: "Broadcast a message to multiple agents (WhatsApp, Telegram)"
 read_when:
   - Configuring broadcast groups
   - Debugging multi-agent replies in WhatsApp
+  - Debugging multi-agent replies in Telegram
 status: experimental
 title: "Broadcast Groups"
 ---
@@ -14,11 +15,11 @@ title: "Broadcast Groups"
 
 ## Overview
 
-Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
+Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single chat group or DM.
 
-Current scope: **WhatsApp only** (web channel).
+Current scope: **WhatsApp** and **Telegram**.
 
-Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
+Broadcast groups are evaluated after channel allowlists and group activation rules. This means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
 
 ## Use Cases
 
@@ -70,20 +71,29 @@ Agents:
 
 ### Basic Setup
 
-Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
+Add a top-level `broadcast` section (next to `bindings`). Keys are peer ids specific to each channel:
+
+**WhatsApp:**
 
 - group chats: group JID (e.g. `120363403215116621@g.us`)
 - DMs: E.164 phone number (e.g. `+15551234567`)
 
+**Telegram:**
+
+- Prefix with `telegram:` followed by the chat ID (e.g. `telegram:1234567890`)
+- For multi-account setups: `telegram:{accountId}:{chatId}` (e.g. `telegram:mybot:1234567890`)
+- Raw chat IDs also work (e.g. `1234567890`) but prefixed keys are recommended to avoid collisions
+
 ```json
 {
   "broadcast": {
-    "120363403215116621@g.us": ["alfred", "baerbel", "assistant3"]
+    "120363403215116621@g.us": ["alfred", "baerbel", "assistant3"],
+    "telegram:1234567890": ["main", "router"]
   }
 }
 ```
 
-**Result:** When OpenClaw would reply in this chat, it will run all three agents.
+**Result:** When OpenClaw would reply in these chats, it will run all listed agents.
 
 ### Processing Strategy
 
@@ -277,7 +287,7 @@ Result: Agent A and C respond, Agent B logs error
 Broadcast groups currently work with:
 
 - ✅ WhatsApp (implemented)
-- 🚧 Telegram (planned)
+- ✅ Telegram (implemented)
 - 🚧 Discord (planned)
 - 🚧 Slack (planned)
 
@@ -416,7 +426,9 @@ interface OpenClawConfig {
 - `strategy` (optional): How to process agents
   - `"parallel"` (default): All agents process simultaneously
   - `"sequential"`: Agents process in array order
-- `[peerId]`: WhatsApp group JID, E.164 number, or other peer ID
+- `[peerId]`: Channel-specific peer identifier
+  - WhatsApp: group JID or E.164 number
+  - Telegram: `telegram:{chatId}`, `telegram:{accountId}:{chatId}`, or raw chat ID
   - Value: Array of agent IDs that should process messages
 
 ## Limitations

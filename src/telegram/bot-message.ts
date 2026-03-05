@@ -9,6 +9,7 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { maybeBroadcastTelegramMessage } from "./broadcast.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -76,6 +77,22 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       sendChatActionHandler,
     });
     if (!context) {
+      return;
+    }
+    // Broadcast groups: fan out to multiple agents when configured.
+    if (
+      await maybeBroadcastTelegramMessage({
+        cfg,
+        context,
+        bot,
+        runtime,
+        replyToMode,
+        streamMode,
+        textLimit,
+        telegramCfg,
+        opts,
+      })
+    ) {
       return;
     }
     await dispatchTelegramMessage({
