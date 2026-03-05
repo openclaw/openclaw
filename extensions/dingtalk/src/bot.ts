@@ -1,3 +1,4 @@
+import axios from "axios";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/dingtalk";
 import {
   buildAgentMediaPayload,
@@ -90,8 +91,8 @@ function extractDownloadCodes(
   switch (msgtype) {
     case "picture": {
       const pic = parsed as DingtalkPictureContent;
-      if (pic.pictureDownloadCode) codes.push(pic.pictureDownloadCode);
-      else if (pic.downloadCode) codes.push(pic.downloadCode);
+      if (pic.downloadCode) codes.push(pic.downloadCode);
+      else if (pic.pictureDownloadCode) codes.push(pic.pictureDownloadCode);
       break;
     }
     case "audio":
@@ -105,8 +106,8 @@ function extractDownloadCodes(
       const rich = parsed as DingtalkRichTextContent;
       if (rich.richText) {
         for (const seg of rich.richText) {
-          if (seg.pictureDownloadCode) codes.push(seg.pictureDownloadCode);
-          else if (seg.downloadCode) codes.push(seg.downloadCode);
+          if (seg.downloadCode) codes.push(seg.downloadCode);
+          else if (seg.pictureDownloadCode) codes.push(seg.pictureDownloadCode);
         }
       }
       break;
@@ -236,7 +237,7 @@ export async function handleDingtalkMessage(params: {
   const isGroup = ctx.conversationType === "2";
 
   log(
-    `dingtalk[${account.accountId}]: received ${isDirect ? "DM" : "group"} message from ${ctx.senderStaffId} (${ctx.senderNick})`,
+    `dingtalk[${account.accountId}]: received ${isDirect ? "DM" : "group"} message from ${ctx.senderStaffId} (${ctx.senderNick}), msgtype=${msg.msgtype}`,
   );
 
   // --- 群组策略检查 / Group policy check ---
@@ -450,8 +451,7 @@ async function resolveDingtalkMedia(params: {
   if (!codes || codes.length === 0) return buildAgentMediaPayload([]);
 
   log(
-    `dingtalk[${account.accountId}]: resolving ${codes.length} media download code(s), ` +
-      `msgtype=${ctx.contentType}, robotCode=${ctx.robotCode}`,
+    `dingtalk[${account.accountId}]: resolving ${codes.length} media download code(s), msgtype=${ctx.contentType}`,
   );
 
   const core = getDingtalkRuntime();
@@ -467,28 +467,33 @@ async function resolveDingtalkMedia(params: {
       });
 
       if (!downloadUrl) {
-        log(`dingtalk[${account.accountId}]: empty download URL for code ${code.slice(0, 20)}...`);
+        log(`dingtalk[${account.accountId}]: empty download URL, skipping`);
         continue;
       }
 
-      const fetched = await core.channel.media.fetchRemoteMedia(downloadUrl, {
-        maxBytes: mediaMaxBytes,
+      const dlRes = await axios.get(downloadUrl, {
+        responseType: "arraybuffer",
+        maxContentLength: mediaMaxBytes,
+        timeout: 30_000,
       });
 
-      let contentType = fetched.contentType ?? undefined;
+      const buffer = Buffer.from(dlRes.data);
+      const ct = dlRes.headers["content-type"];
+      let contentType = typeof ct === "string" ? ct.split(";")[0].trim() : undefined;
+
       if (!contentType) {
-        contentType = await core.media.detectMime({ buffer: fetched.buffer });
+        contentType = await core.media.detectMime({ buffer });
       }
 
       const saved = await core.channel.media.saveMediaBuffer(
-        fetched.buffer,
+        buffer,
         contentType,
         "inbound",
         mediaMaxBytes,
       );
 
       savedMedia.push({ path: saved.path, contentType: saved.contentType });
-      log(`dingtalk[${account.accountId}]: downloaded media, saved to ${saved.path}`);
+      log(`dingtalk[${account.accountId}]: saved media to ${saved.path}`);
     } catch (err) {
       log(`dingtalk[${account.accountId}]: failed to download media: ${err}`);
     }

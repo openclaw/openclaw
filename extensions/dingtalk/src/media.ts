@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import axios from "axios";
-import { getAccessToken } from "./client.js";
+import { getAccessToken, getOAuth2AccessToken } from "./client.js";
 import { sendDingtalkDM, sendDingtalkGroup } from "./send.js";
 import type { ResolvedDingtalkAccount, DingtalkSendResult } from "./types.js";
 
@@ -50,6 +50,7 @@ export async function uploadMedia(params: {
  * 下载机器人接收消息中的文件 / Download file from robot received message
  *
  * POST /v1.0/robot/messageFiles/download
+ * Uses the `downloadCode` field (NOT `pictureDownloadCode`) from the message content.
  */
 export async function downloadMessageFile(params: {
   account: ResolvedDingtalkAccount;
@@ -57,11 +58,11 @@ export async function downloadMessageFile(params: {
   robotCode: string;
 }): Promise<{ downloadUrl: string }> {
   const { account, downloadCode, robotCode } = params;
-  const accessToken = await getAccessToken(account);
+  const accessToken = await getOAuth2AccessToken(account);
 
   try {
     const res = await axios.post(
-      `https://api.dingtalk.com/v1.0/robot/messageFiles/download`,
+      "https://api.dingtalk.com/v1.0/robot/messageFiles/download",
       { downloadCode, robotCode },
       {
         headers: {
