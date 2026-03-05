@@ -74,9 +74,18 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     serializedStoreCache.set(storePath, json);
     return;
   }
+  // 直接从磁盘读取旧内容用于备份（避免使用可能被污染的缓存）
+  // 任何读取错误都应该静默忽略，保持best-effort原则
+  let diskContent: string | null = null;
+  try {
+    diskContent = await fs.promises.readFile(storePath, "utf-8");
+  } catch {
+    // best-effort: 读取失败不影响保存
+  }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, "utf-8");
-  if (previous !== null) {
+  // 备份磁盘上的旧内容
+  if (diskContent !== null) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
     } catch {
