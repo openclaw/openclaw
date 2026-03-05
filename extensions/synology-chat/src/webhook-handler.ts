@@ -16,7 +16,7 @@ import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./type
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
-const SYNLOGY_CHAT_REPLY_CHUNK_MAX = 1800;
+const SYNOLOGY_CHAT_REPLY_CHUNK_MAX = 1800;
 
 function getRateLimiter(account: ResolvedSynologyChatAccount): RateLimiter {
   let rl = rateLimiters.get(account.accountId);
@@ -41,7 +41,7 @@ export function getSynologyWebhookRateLimiterCountForTest(): number {
 
 function splitReplyForSynologyChat(
   text: string,
-  maxChars = SYNLOGY_CHAT_REPLY_CHUNK_MAX,
+  maxChars = SYNOLOGY_CHAT_REPLY_CHUNK_MAX,
 ): string[] {
   const normalized = text.replace(/\r\n/g, "\n");
   if (!normalized) {
