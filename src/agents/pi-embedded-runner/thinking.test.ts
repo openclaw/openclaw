@@ -46,6 +46,25 @@ describe("dropThinkingBlocks", () => {
     expect(assistant.content).toEqual([{ type: "text", text: "final" }]);
   });
 
+  it("does not crash on null or non-object entries in content arrays", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          null,
+          undefined,
+          "stray-string",
+          { type: "thinking", thinking: "internal" },
+          { type: "text", text: "ok" },
+        ] as unknown as Array<{ type: string }>,
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
   it("keeps assistant turn structure when all content blocks were thinking", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({

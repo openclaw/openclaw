@@ -269,7 +269,9 @@ async function probeTool(
       } satisfies OpenAICompletionsOptions),
     );
 
-    const hasToolCall = message.content.some((block) => block.type === "toolCall");
+    const hasToolCall = message.content.some(
+      (block) => block != null && typeof block === "object" && block.type === "toolCall",
+    );
     if (!hasToolCall) {
       return {
         ok: false,

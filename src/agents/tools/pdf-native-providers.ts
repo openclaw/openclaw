@@ -93,7 +93,13 @@ export async function anthropicAnalyzePdf(params: {
   }
 
   const text = responseContent
-    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .filter(
+      (block) =>
+        block != null &&
+        typeof block === "object" &&
+        block.type === "text" &&
+        typeof block.text === "string",
+    )
     .map((block) => block.text!)
     .join("");
 

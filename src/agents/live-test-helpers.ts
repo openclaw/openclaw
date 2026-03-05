@@ -17,7 +17,7 @@ export function extractNonEmptyAssistantText(
   }>,
 ) {
   return content
-    .filter((block) => block.type === "text")
+    .filter((block) => block != null && typeof block === "object" && block.type === "text")
     .map((block) => block.text?.trim() ?? "")
     .filter(Boolean)
     .join(" ");
