@@ -85,6 +85,7 @@ export type MatrixSendResult = {
 };
 
 export type MatrixSendOpts = {
+  cfg?: import("../../types.js").CoreConfig;
   client?: import("@vector-im/matrix-bot-sdk").MatrixClient;
   mediaUrl?: string;
   accountId?: string;
