@@ -142,4 +142,3 @@ Preserve audio pitch when changing playback speed:
 
 ```tsx
 <Video src={staticFile("video.mp4")} playbackRate={2} preservePitch />
-```
