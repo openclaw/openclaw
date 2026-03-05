@@ -13,7 +13,8 @@ const ensureMcpConfigFileMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-mcp.
 
 vi.mock("../gateway/mcp-http.js", () => ({
   MCP_PORT_OFFSET: 1,
-  ensureMcpConfigFile: (...args: unknown[]) => ensureMcpConfigFileMock(...args),
+  ensureMcpConfigFile: (...args: Parameters<typeof ensureMcpConfigFileMock>) =>
+    ensureMcpConfigFileMock(...args),
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
