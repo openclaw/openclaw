@@ -35,6 +35,7 @@ export async function applyAuthChoiceHuggingface(
     tokenProvider: params.opts?.tokenProvider,
     secretInputMode: requestedSecretInputMode,
     config: nextConfig,
+    agentDir: params.agentDir,
     expectedProviders: ["huggingface"],
     provider: "huggingface",
     envLabel: "Hugging Face token",

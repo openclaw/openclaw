@@ -23,6 +23,7 @@ export async function applyAuthChoiceVolcengine(
     tokenProvider: "volcengine",
     secretInputMode: requestedSecretInputMode,
     config: params.config,
+    agentDir: params.agentDir,
     expectedProviders: ["volcengine"],
     provider: "volcengine",
     envLabel: "VOLCANO_ENGINE_API_KEY",

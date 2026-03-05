@@ -109,6 +109,7 @@ export async function applyAuthChoiceAnthropic(
       tokenProvider: params.opts?.tokenProvider ?? "anthropic",
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
+      agentDir: params.agentDir,
       expectedProviders: ["anthropic"],
       provider: "anthropic",
       envLabel: "ANTHROPIC_API_KEY",

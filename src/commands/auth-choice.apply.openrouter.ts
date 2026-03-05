@@ -55,6 +55,7 @@ export async function applyAuthChoiceOpenRouter(
       tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
+      agentDir: params.agentDir,
       expectedProviders: ["openrouter"],
       provider: "openrouter",
       envLabel: "OPENROUTER_API_KEY",

@@ -1,6 +1,22 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import fs from "node:fs/promises";
+import {
+  ensureAuthProfileStore,
+  getCustomProviderApiKey,
+  resolveAuthProfileOrder,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
+import {
+  resolveApiKeyForProfile,
+  resolveAuthStorePathForDisplay,
+  type AuthProfileStore,
+  type AuthProfileCredential,
+} from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
+import {
+  parseEnvTemplateSecretRef,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import {
@@ -86,6 +102,155 @@ function resolveRefFallbackInput(params: {
     },
     resolvedValue: value,
   };
+}
+
+async function resolveExistingProviderApiKey(params: {
+  config: OpenClawConfig;
+  provider: string;
+  agentDir?: string;
+}): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
+  try {
+    let store: AuthProfileStore = { version: 1, profiles: {} };
+    try {
+      const raw = await fs.readFile(resolveAuthStorePathForDisplay(params.agentDir), "utf-8");
+      const parsed = JSON.parse(raw) as {
+        version?: number;
+        profiles?: Record<string, unknown>;
+        order?: Record<string, unknown>;
+        lastGood?: Record<string, unknown>;
+        usageStats?: Record<string, unknown>;
+      };
+      const profiles: Record<string, AuthProfileCredential> = {};
+      if (parsed && typeof parsed === "object" && parsed.profiles) {
+        for (const [profileId, profile] of Object.entries(parsed.profiles)) {
+          if (!profile || typeof profile !== "object") {
+            continue;
+          }
+          profiles[profileId] = profile as AuthProfileCredential;
+        }
+      }
+      const order: Record<string, string[]> = {};
+      if (parsed && typeof parsed === "object" && parsed.order) {
+        for (const [provider, value] of Object.entries(parsed.order)) {
+          if (!Array.isArray(value)) {
+            continue;
+          }
+          const list = value
+            .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+            .filter((entry) => entry.length > 0);
+          if (list.length > 0) {
+            order[provider] = list;
+          }
+        }
+      }
+      const lastGood: Record<string, string> = {};
+      if (parsed && typeof parsed === "object" && parsed.lastGood) {
+        for (const [provider, value] of Object.entries(parsed.lastGood)) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            lastGood[provider] = value;
+          }
+        }
+      }
+      const usageStats =
+        parsed && typeof parsed === "object" && parsed.usageStats && typeof parsed.usageStats === "object"
+          ? (parsed.usageStats as AuthProfileStore["usageStats"])
+          : undefined;
+      store = {
+        version: Number(parsed?.version ?? 1),
+        profiles,
+        ...(Object.keys(order).length > 0 ? { order } : {}),
+        ...(Object.keys(lastGood).length > 0 ? { lastGood } : {}),
+        ...(usageStats ? { usageStats } : {}),
+      };
+    } catch {}
+
+    if (Object.keys(store.profiles).length === 0 && !params.agentDir) {
+      // Keep backwards compatibility on the main/default agent by falling back to the
+      // runtime store when the on-disk store is missing.
+      store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+    }
+    const orderedProfiles = resolveAuthProfileOrder({
+      cfg: params.config,
+      store,
+      provider: params.provider,
+    });
+    const candidateProfileIds = new Set<string>(orderedProfiles);
+    for (const [profileId, profile] of Object.entries(store.profiles)) {
+      if (profile?.type === "api_key" && profile.provider === params.provider) {
+        candidateProfileIds.add(profileId);
+      }
+    }
+    for (const profileId of candidateProfileIds) {
+      const profile = store.profiles[profileId];
+      if (profile?.type !== "api_key") {
+        continue;
+      }
+      try {
+        const profileResolved = await resolveApiKeyForProfile({
+          cfg: params.config,
+          store,
+          profileId,
+          agentDir: params.agentDir,
+        });
+        if (!profileResolved?.apiKey) {
+          continue;
+        }
+        return {
+          apiKey: profileResolved.apiKey,
+          source: `profile:${profileId}`,
+          credential: (() => {
+            if (profile.keyRef) {
+              return profile.keyRef;
+            }
+            if (typeof profile.key === "string" && profile.key.trim().length > 0) {
+              const inlineEnvRef = parseEnvTemplateSecretRef(
+                profile.key,
+                resolveDefaultSecretProviderAlias(params.config, "env", {
+                  preferFirstProviderForSource: true,
+                }),
+              );
+              return inlineEnvRef ?? profile.key;
+            }
+            return profileResolved.apiKey;
+          })(),
+        };
+      } catch {}
+    }
+
+    const envKey = resolveEnvApiKey(params.provider);
+    if (envKey && !envKey.source.includes("OAUTH_TOKEN")) {
+      return {
+        apiKey: envKey.apiKey,
+        source: envKey.source,
+        credential: envKey.apiKey,
+      };
+    }
+
+    const apiEnvVars = PROVIDER_ENV_VARS[params.provider] ?? [];
+    for (const envVar of apiEnvVars) {
+      const value = process.env[envVar]?.trim();
+      if (value) {
+        return {
+          apiKey: value,
+          source: `env: ${envVar}`,
+          credential: value,
+        };
+      }
+    }
+
+    const configApiKey = getCustomProviderApiKey(params.config, params.provider);
+    if (configApiKey) {
+      return {
+        apiKey: configApiKey,
+        source: "models.json",
+        credential: configApiKey,
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export async function promptSecretRefForOnboarding(params: {
@@ -431,6 +596,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   tokenProvider: string | undefined;
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
+  agentDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -460,6 +626,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
+    agentDir: params.agentDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -473,6 +640,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
+  agentDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -508,14 +676,25 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     return resolved.resolvedValue;
   }
 
-  if (envKey && selectedMode === "plaintext") {
+  const existingApiKey = await resolveExistingProviderApiKey({
+    config: params.config,
+    provider: params.provider,
+    agentDir: params.agentDir,
+  });
+
+  if (existingApiKey && selectedMode === "plaintext") {
+    const existingCredentialLabel =
+      existingApiKey.source.startsWith("env:") ||
+      existingApiKey.source.startsWith("shell env:")
+        ? params.envLabel
+        : `${params.provider} credentials`;
     const useExisting = await params.prompter.confirm({
-      message: `Use existing ${params.envLabel} (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      message: `Use existing ${existingCredentialLabel} (${existingApiKey.source}, ${formatApiKeyPreview(existingApiKey.apiKey)})?`,
       initialValue: true,
     });
     if (useExisting) {
-      await params.setCredential(envKey.apiKey, selectedMode);
-      return envKey.apiKey;
+      await params.setCredential(existingApiKey.credential, selectedMode);
+      return existingApiKey.apiKey;
     }
   }
 
