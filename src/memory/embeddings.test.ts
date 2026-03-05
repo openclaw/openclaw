@@ -471,6 +471,187 @@ describe("local embedding normalization", () => {
   });
 });
 
+describe("local embedding ensureContext concurrency", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
+  });
+
+  it("loads the model only once when embedBatch is called concurrently", async () => {
+    const getLlamaSpy = vi.fn();
+    const loadModelSpy = vi.fn();
+    const createContextSpy = vi.fn();
+
+    const nodeLlamaModule = await import("./node-llama.js");
+    vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
+      getLlama: async (...args: unknown[]) => {
+        getLlamaSpy(...args);
+        await new Promise((r) => setTimeout(r, 50));
+        return {
+          loadModel: async (...modelArgs: unknown[]) => {
+            loadModelSpy(...modelArgs);
+            await new Promise((r) => setTimeout(r, 50));
+            return {
+              createEmbeddingContext: async () => {
+                createContextSpy();
+                return {
+                  getEmbeddingFor: vi.fn().mockResolvedValue({
+                    vector: new Float32Array([1, 0, 0, 0]),
+                  }),
+                };
+              },
+            };
+          },
+        };
+      },
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    const results = await Promise.all([
+      provider.embedBatch(["text1"]),
+      provider.embedBatch(["text2"]),
+      provider.embedBatch(["text3"]),
+      provider.embedBatch(["text4"]),
+    ]);
+
+    expect(results).toHaveLength(4);
+    for (const embeddings of results) {
+      expect(embeddings).toHaveLength(1);
+      expect(embeddings[0]).toHaveLength(4);
+    }
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(1);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries initialization after a transient ensureContext failure", async () => {
+    const getLlamaSpy = vi.fn();
+    const loadModelSpy = vi.fn();
+    const createContextSpy = vi.fn();
+
+    let failFirstGetLlama = true;
+    const nodeLlamaModule = await import("./node-llama.js");
+    vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
+      getLlama: async (...args: unknown[]) => {
+        getLlamaSpy(...args);
+        if (failFirstGetLlama) {
+          failFirstGetLlama = false;
+          throw new Error("transient init failure");
+        }
+        return {
+          loadModel: async (...modelArgs: unknown[]) => {
+            loadModelSpy(...modelArgs);
+            return {
+              createEmbeddingContext: async () => {
+                createContextSpy();
+                return {
+                  getEmbeddingFor: vi.fn().mockResolvedValue({
+                    vector: new Float32Array([1, 0, 0, 0]),
+                  }),
+                };
+              },
+            };
+          },
+        };
+      },
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    await expect(provider.embedBatch(["first"])).rejects.toThrow("transient init failure");
+
+    const recovered = await provider.embedBatch(["second"]);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toHaveLength(4);
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(2);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares initialization when embedQuery and embedBatch start concurrently", async () => {
+    const getLlamaSpy = vi.fn();
+    const loadModelSpy = vi.fn();
+    const createContextSpy = vi.fn();
+
+    const nodeLlamaModule = await import("./node-llama.js");
+    vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
+      getLlama: async (...args: unknown[]) => {
+        getLlamaSpy(...args);
+        await new Promise((r) => setTimeout(r, 50));
+        return {
+          loadModel: async (...modelArgs: unknown[]) => {
+            loadModelSpy(...modelArgs);
+            await new Promise((r) => setTimeout(r, 50));
+            return {
+              createEmbeddingContext: async () => {
+                createContextSpy();
+                return {
+                  getEmbeddingFor: vi.fn().mockResolvedValue({
+                    vector: new Float32Array([1, 0, 0, 0]),
+                  }),
+                };
+              },
+            };
+          },
+        };
+      },
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    const [queryA, batch, queryB] = await Promise.all([
+      provider.embedQuery("query-a"),
+      provider.embedBatch(["batch-a", "batch-b"]),
+      provider.embedQuery("query-b"),
+    ]);
+
+    expect(queryA).toHaveLength(4);
+    expect(batch).toHaveLength(2);
+    expect(queryB).toHaveLength(4);
+    expect(batch[0]).toHaveLength(4);
+    expect(batch[1]).toHaveLength(4);
+
+    expect(getLlamaSpy).toHaveBeenCalledTimes(1);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("FTS-only fallback when no provider available", () => {
   it("returns null provider with reason when auto mode finds no providers", async () => {
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(

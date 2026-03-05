@@ -30,6 +30,22 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
+const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
+
+function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+  if (typeof params.sessionKey === "string") {
+    const match = params.sessionKey.match(/^agent:([^:]+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return "main";
+}
+
+function passthroughPluginAutoEnable(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: ({
     sessionKey,
@@ -37,21 +53,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => {
-    if (typeof sessionKey === "string") {
-      const match = sessionKey.match(/^agent:([^:]+)/i);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-    return "main";
-  },
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -110,6 +118,21 @@ async function runPoll(params: Record<string, unknown>) {
     isWebchatConnect: () => false,
   });
   return { respond };
+}
+
+function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
+  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect.objectContaining({
+      session: expect.objectContaining({
+        agentId: params.agentId,
+        key: params.sessionKey,
+      }),
+      mirror: expect.objectContaining({
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      }),
+    }),
+  );
 }
 
 function mockDeliverySuccess(messageId: string) {
@@ -392,7 +415,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:resolved",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:work:slack:channel:resolved",
           agentId: "work",
@@ -412,15 +438,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-session-agent",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
@@ -437,7 +458,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:main:slack:channel:c1",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:main:slack:channel:c1",
           agentId: "work",
@@ -458,15 +482,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-blank",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("forwards threadId to outbound delivery when provided", async () => {
