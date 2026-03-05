@@ -454,6 +454,64 @@ function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllo
   return hits;
 }
 
+function stripDefaultInjectedTelegramTopLevelKeys(params: {
+  cfg: OpenClawConfig;
+  resolvedSource: unknown;
+}): OpenClawConfig {
+  const telegram = asObjectRecord(params.cfg.channels?.telegram);
+  if (!telegram) {
+    return params.cfg;
+  }
+  const accounts = asObjectRecord(telegram.accounts);
+  if (!accounts) {
+    return params.cfg;
+  }
+  const hasDefaultAccount = Object.keys(accounts).some(
+    (accountId) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID,
+  );
+  if (!hasDefaultAccount) {
+    return params.cfg;
+  }
+
+  const sourceChannels = asObjectRecord(asObjectRecord(params.resolvedSource)?.channels);
+  const sourceTelegram = asObjectRecord(sourceChannels?.telegram);
+  const sourceHasOwnKey = (key: string) =>
+    sourceTelegram ? Object.prototype.hasOwnProperty.call(sourceTelegram, key) : false;
+
+  const defaultValues: Record<string, unknown> = {
+    enabled: true,
+    dmPolicy: "pairing",
+    groupPolicy: "allowlist",
+    streaming: "partial",
+  };
+
+  let changed = false;
+  const nextTelegram: Record<string, unknown> = { ...telegram };
+  for (const [key, defaultValue] of Object.entries(defaultValues)) {
+    if (sourceHasOwnKey(key)) {
+      continue;
+    }
+    if (!(key in nextTelegram)) {
+      continue;
+    }
+    if (nextTelegram[key] !== defaultValue) {
+      continue;
+    }
+    delete nextTelegram[key];
+    changed = true;
+  }
+  if (!changed) {
+    return params.cfg;
+  }
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      telegram: nextTelegram as OpenClawConfig["channels"]["telegram"],
+    },
+  };
+}
+
 async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
@@ -1797,7 +1855,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   let snapshot = await readConfigFileSnapshot();
-  const baseCfg = snapshot.config ?? {};
+  const baseCfg = stripDefaultInjectedTelegramTopLevelKeys({
+    cfg: snapshot.config ?? {},
+    resolvedSource: snapshot.resolved,
+  });
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;

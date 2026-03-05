@@ -251,6 +251,60 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("does not inject default telegram top-level keys when accounts.default is configured", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "123:abc",
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["123456"],
+                allowFrom: ["123456"],
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          enabled?: boolean;
+          dmPolicy?: string;
+          groupPolicy?: string;
+          streaming?: string;
+          accounts?: {
+            default?: {
+              enabled?: boolean;
+              botToken?: string;
+              groupPolicy?: string;
+              groupAllowFrom?: string[];
+              allowFrom?: string[];
+            };
+          };
+        };
+      };
+    };
+    expect(cfg.channels.telegram.enabled).toBeUndefined();
+    expect(cfg.channels.telegram.dmPolicy).toBeUndefined();
+    expect(cfg.channels.telegram.groupPolicy).toBeUndefined();
+    expect(cfg.channels.telegram.streaming).toBeUndefined();
+    expect(cfg.channels.telegram.accounts?.default).toEqual({
+      enabled: true,
+      botToken: "123:abc",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["123456"],
+      allowFrom: ["123456"],
+      streaming: "partial",
+    });
+  });
+
   it("converts numeric discord ids to strings on repair", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
