@@ -232,6 +232,7 @@ export async function runAgentTurnWithFallback(params: {
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
                   images: params.opts?.images,
+                  documents: params.opts?.documents,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -331,6 +332,7 @@ export async function runAgentTurnWithFallback(params: {
               bootstrapContextMode: params.opts?.bootstrapContextMode,
               bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
               images: params.opts?.images,
+              documents: params.opts?.documents,
               abortSignal: params.opts?.abortSignal,
               blockReplyBreak: params.resolvedBlockStreamingBreak,
               blockReplyChunking: params.blockReplyChunking,

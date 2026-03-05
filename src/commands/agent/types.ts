@@ -10,6 +10,14 @@ export type ImageContent = {
   mimeType: string;
 };
 
+/** Document content block for Claude API PDF attachments. */
+export type DocumentContent = {
+  type: "document";
+  data: string;
+  mimeType: string;
+  fileName?: string;
+};
+
 export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
@@ -32,6 +40,8 @@ export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
+  /** Optional document attachments (PDFs) for multimodal messages. */
+  documents?: DocumentContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */

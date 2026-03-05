@@ -69,6 +69,7 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  documents?: Array<{ type: "document"; data: string; mimeType: string; fileName?: string }>;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({

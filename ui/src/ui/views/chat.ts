@@ -230,6 +230,17 @@ function addFilesAsAttachments(files: File[]) {
   });
 }
 
+/** MIME types accepted for chat attachments. */
+const ACCEPTED_MIME_PREFIXES = ["image/"];
+const ACCEPTED_MIME_EXACT = new Set(["application/pdf"]);
+
+function isAcceptedMime(mime: string): boolean {
+  return (
+    ACCEPTED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix)) ||
+    ACCEPTED_MIME_EXACT.has(mime)
+  );
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -239,7 +250,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const files: File[] = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (item.type.startsWith("image/")) {
+    if (isAcceptedMime(item.type)) {
       const file = item.getAsFile();
       if (file) {
         files.push(file);
@@ -262,12 +273,12 @@ function handleFileInput(e: Event, props: ChatProps) {
   if (!fileList || !props.onAttachmentsChange) {
     return;
   }
-  // Filter to image/* even though the input has accept="image/*",
-  // as some browsers may allow non-image files through the picker.
+  // Runtime-filter even though the input has an accept attribute,
+  // as some browsers may allow non-matching files through the picker.
   const files: File[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
-    if (file && file.type.startsWith("image/")) {
+    if (file && isAcceptedMime(file.type)) {
       files.push(file);
     }
   }
@@ -297,7 +308,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const files: File[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
-    if (file && file.type.startsWith("image/")) {
+    if (file && isAcceptedMime(file.type)) {
       files.push(file);
     }
   }
@@ -465,7 +476,7 @@ export function renderChat(props: ChatProps) {
       <div class="chat-drop-overlay" aria-hidden="true">
         <div class="chat-drop-overlay__content">
           ${icons.image}
-          <span>Drop images here</span>
+          <span>Drop files here</span>
         </div>
       </div>
 
@@ -579,7 +590,7 @@ export function renderChat(props: ChatProps) {
           <!-- Hidden file inputs (scoped via ref to avoid global ID collisions) -->
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf,application/pdf"
             multiple
             class="chat-compose__file-input"
             ${ref((el) => {
@@ -602,8 +613,8 @@ export function renderChat(props: ChatProps) {
             <button
               class="btn btn--icon chat-compose__attach-btn"
               type="button"
-              title="Attach image"
-              aria-label="Attach image"
+              title="Attach file"
+              aria-label="Attach file"
               ?disabled=${!props.connected}
               @click=${() => fileInputEl?.click()}
             >

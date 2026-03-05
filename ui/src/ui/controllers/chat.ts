@@ -152,13 +152,21 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
+  // Add attachment previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
-      });
+      if (att.mimeType === "application/pdf") {
+        // PDFs can't be previewed inline; show as text indicator
+        contentBlocks.push({
+          type: "text",
+          text: `[PDF attached]`,
+        });
+      } else {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+      }
     }
   }
 
@@ -186,8 +194,9 @@ export async function sendChatMessage(
           if (!parsed) {
             return null;
           }
+          const isPdf = parsed.mimeType === "application/pdf";
           return {
-            type: "image",
+            type: isPdf ? "document" : "image",
             mimeType: parsed.mimeType,
             content: parsed.content,
           };

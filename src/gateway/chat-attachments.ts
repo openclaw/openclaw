@@ -14,9 +14,17 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
+export type ChatDocumentContent = {
+  type: "document";
+  data: string;
+  mimeType: string;
+  fileName?: string;
+};
+
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  documents: ChatDocumentContent[];
 };
 
 type AttachmentLog = {
@@ -39,6 +47,10 @@ function normalizeMime(mime?: string): string | undefined {
 
 function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
+}
+
+function isPdfMime(mime?: string): boolean {
+  return mime === "application/pdf";
 }
 
 function isValidBase64(value: string): boolean {
@@ -102,10 +114,11 @@ export async function parseMessageWithAttachments(
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], documents: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const documents: ChatDocumentContent[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,12 +133,26 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+    const effectiveMime = sniffedMime ?? providedMime ?? mime;
+
+    // PDF documents
+    if (isPdfMime(sniffedMime) || isPdfMime(providedMime)) {
+      documents.push({
+        type: "document",
+        data: b64,
+        mimeType: "application/pdf",
+        fileName: att.fileName || label,
+      });
+      continue;
+    }
+
+    // Images
     if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+      log?.warn(`attachment ${label}: detected unsupported type (${sniffedMime}), dropping`);
       continue;
     }
     if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+      log?.warn(`attachment ${label}: unable to detect mime type, dropping`);
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
@@ -137,11 +164,11 @@ export async function parseMessageWithAttachments(
     images.push({
       type: "image",
       data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
+      mimeType: effectiveMime,
     });
   }
 
-  return { message, images };
+  return { message, images, documents };
 }
 
 /**
