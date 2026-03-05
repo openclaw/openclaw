@@ -1,4 +1,5 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -30,6 +31,7 @@ export type MonitorTelegramOpts = {
   webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
+  setStatus?: (next: ChannelAccountSnapshot) => void;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -127,6 +129,18 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       cfg,
       accountId: opts.accountId,
     });
+    const setStatus = (next: ChannelAccountSnapshot) => {
+      opts.setStatus?.({
+        accountId: account.accountId,
+        ...next,
+      });
+    };
+    const markInboundActivity = (at = Date.now()) => {
+      setStatus({
+        lastInboundAt: at,
+        lastEventAt: at,
+      });
+    };
     const token = opts.token?.trim() || account.token;
     if (!token) {
       throw new Error(
@@ -146,6 +160,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return;
       }
       lastUpdateId = updateId;
+      markInboundActivity();
       try {
         await writeTelegramUpdateOffset({
           accountId: account.accountId,
@@ -173,7 +188,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
+      const connectedAt = Date.now();
+      setStatus({
+        mode: "webhook",
+        connected: true,
+        lastConnectedAt: connectedAt,
+        lastEventAt: connectedAt,
+        lastError: null,
+      });
       await waitForAbortSignal(opts.abortSignal);
+      setStatus({
+        connected: false,
+        lastEventAt: Date.now(),
+      });
       return;
     }
 
@@ -261,6 +288,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
+      const connectedAt = Date.now();
+      setStatus({
+        mode: "polling",
+        connected: true,
+        lastConnectedAt: connectedAt,
+        lastEventAt: connectedAt,
+        lastError: null,
+      });
       let stopPromise: Promise<void> | undefined;
       const stopRunner = () => {
         stopPromise ??= Promise.resolve(runner.stop())
@@ -314,6 +349,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         );
         return shouldRestart ? "continue" : "exit";
       } finally {
+        setStatus({
+          connected: false,
+          lastEventAt: Date.now(),
+        });
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
         await stopBot();

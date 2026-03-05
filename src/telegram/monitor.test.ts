@@ -59,6 +59,15 @@ const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
 }));
 
+const { createTelegramBotOptions } = vi.hoisted(() => ({
+  createTelegramBotOptions: [] as Array<{
+    updateOffset?: {
+      lastUpdateId?: number | null;
+      onUpdateId?: (updateId: number) => void | Promise<void>;
+    };
+  }>,
+}));
+
 const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
 }));
@@ -69,6 +78,11 @@ const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
 }));
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
   startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
+}));
+
+const { readTelegramUpdateOffsetSpy, writeTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
+  readTelegramUpdateOffsetSpy: vi.fn(async () => null),
+  writeTelegramUpdateOffsetSpy: vi.fn(async () => undefined),
 }));
 
 type RunnerStub = {
@@ -135,7 +149,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts: {
+    updateOffset?: {
+      lastUpdateId?: number | null;
+      onUpdateId?: (updateId: number) => void | Promise<void>;
+    };
+  }) => {
+    createTelegramBotOptions.push(opts);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -183,6 +203,11 @@ vi.mock("./webhook.js", () => ({
   startTelegramWebhook: startTelegramWebhookSpy,
 }));
 
+vi.mock("./update-offset-store.js", () => ({
+  readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
+  writeTelegramUpdateOffset: writeTelegramUpdateOffsetSpy,
+}));
+
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: async (ctx: { Body?: string }) => ({
     text: `echo:${ctx.Body}`,
@@ -209,7 +234,10 @@ describe("monitorTelegramProvider (grammY)", () => {
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
+    createTelegramBotOptions.length = 0;
     createdBotStops.length = 0;
+    readTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(null);
+    writeTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(undefined);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -256,6 +284,45 @@ describe("monitorTelegramProvider (grammY)", () => {
           retryInterval: "exponential",
         }),
       }),
+    );
+  });
+
+  it("pushes polling runtime status updates for health monitoring", async () => {
+    const setStatus = vi.fn();
+
+    await monitorWithAutoAbort({ setStatus });
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        mode: "polling",
+        connected: true,
+        lastConnectedAt: expect.any(Number),
+        lastEventAt: expect.any(Number),
+        lastError: null,
+      }),
+    );
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        connected: false,
+        lastEventAt: expect.any(Number),
+      }),
+    );
+
+    const offsetWriter = createTelegramBotOptions[0]?.updateOffset?.onUpdateId;
+    expect(offsetWriter).toBeTypeOf("function");
+    await offsetWriter?.(42);
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        lastInboundAt: expect.any(Number),
+        lastEventAt: expect.any(Number),
+      }),
+    );
+    expect(writeTelegramUpdateOffsetSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "default", updateId: 42 }),
     );
   });
 
