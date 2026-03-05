@@ -212,6 +212,50 @@ export async function isChromeCdpReady(
   return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
 }
 
+export function buildChromeLaunchArgs(params: {
+  resolved: ResolvedBrowserConfig;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): string[] {
+  const { resolved, profile, userDataDir } = params;
+  const args: string[] = [
+    `--remote-debugging-port=${profile.cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-features=Translate,MediaRouter",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--password-store=basic",
+  ];
+
+  if (resolved.headless) {
+    // Best-effort; older Chromes may ignore.
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  }
+  if (resolved.noSandbox) {
+    args.push("--no-sandbox");
+    args.push("--disable-setuid-sandbox");
+  }
+  if (process.platform === "linux") {
+    args.push("--disable-dev-shm-usage");
+  }
+
+  // Append user-configured extra arguments (e.g., window size)
+  if (resolved.extraArgs.length > 0) {
+    args.push(...resolved.extraArgs);
+  }
+
+  // Always open a blank tab to ensure a target exists.
+  args.push("about:blank");
+
+  return args;
+}
+
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -239,44 +283,7 @@ export async function launchOpenClawChrome(
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
-    const args: string[] = [
-      `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-features=Translate,MediaRouter",
-      "--disable-session-crashed-bubble",
-      "--hide-crash-restore-bubble",
-      "--password-store=basic",
-    ];
-
-    if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
-      args.push("--headless=new");
-      args.push("--disable-gpu");
-    }
-    if (resolved.noSandbox) {
-      args.push("--no-sandbox");
-      args.push("--disable-setuid-sandbox");
-    }
-    if (process.platform === "linux") {
-      args.push("--disable-dev-shm-usage");
-    }
-
-    // Stealth: hide navigator.webdriver from automation detection (#80)
-    args.push("--disable-blink-features=AutomationControlled");
-
-    // Append user-configured extra arguments (e.g., stealth flags, window size)
-    if (resolved.extraArgs.length > 0) {
-      args.push(...resolved.extraArgs);
-    }
-
-    // Always open a blank tab to ensure a target exists.
-    args.push("about:blank");
-
+    const args = buildChromeLaunchArgs({ resolved, profile, userDataDir });
     return spawn(exe.path, args, {
       stdio: "pipe",
       env: {

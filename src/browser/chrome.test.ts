@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  buildChromeLaunchArgs,
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
@@ -256,6 +257,22 @@ describe("browser chrome helpers", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableWindows()).toBeNull();
     exists.mockRestore();
+  });
+
+  it("does not include unsupported AutomationControlled launch switch", () => {
+    const args = buildChromeLaunchArgs({
+      resolved: {
+        headless: false,
+        noSandbox: false,
+        extraArgs: [],
+      } as Parameters<typeof buildChromeLaunchArgs>[0]["resolved"],
+      profile: {
+        cdpPort: 9222,
+      } as Parameters<typeof buildChromeLaunchArgs>[0]["profile"],
+      userDataDir: "/tmp/openclaw-browser-test-user-data",
+    });
+
+    expect(args).not.toContain("--disable-blink-features=AutomationControlled");
   });
 
   it("resolves Windows executables without LOCALAPPDATA", () => {
