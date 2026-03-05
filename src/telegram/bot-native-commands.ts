@@ -70,6 +70,23 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const STRICT_CONTROL_COMMAND_WORD_RE = /^\/(stop|status)(?:@[\w_]+)?$/i;
+
+export function resolveTelegramNativeSessionKey(params: {
+  prompt: string;
+  senderId?: string;
+  chatId: string | number;
+  defaultSessionKey: string;
+  useChatScopedCommandLane?: boolean;
+}): string {
+  const identity = params.useChatScopedCommandLane
+    ? String(params.chatId)
+    : (params.senderId ?? String(params.chatId));
+  if (STRICT_CONTROL_COMMAND_WORD_RE.test(params.prompt.trim())) {
+    return `telegram:commands:${identity}`;
+  }
+  return params.defaultSessionKey;
+}
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -615,7 +632,13 @@ export const registerTelegramNativeCommands = ({
             WasMentioned: true,
             CommandAuthorized: commandAuthorized,
             CommandSource: "native" as const,
-            SessionKey: `telegram:slash:${senderId || chatId}`,
+            SessionKey: resolveTelegramNativeSessionKey({
+              prompt,
+              senderId,
+              chatId,
+              defaultSessionKey: `telegram:slash:${senderId || chatId}`,
+              useChatScopedCommandLane: isGroup,
+            }),
             AccountId: route.accountId,
             CommandTargetSessionKey: sessionKey,
             MessageThreadId: threadSpec.id,
