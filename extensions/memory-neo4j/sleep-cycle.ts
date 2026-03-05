@@ -196,6 +196,7 @@ export type SleepCycleOptions = {
       | "entityDedup"
       | "decay"
       | "temporalStaleness"
+      | "retroactiveConflictScan"
       | "extraction"
       | "retroactiveTagging"
       | "cleanup"
@@ -297,12 +298,16 @@ export async function classifyTaskMemory(
   }
 
   try {
+    const safeTitle = taskTitle
+      .replace(/[`"'\n\r]/g, " ")
+      .trim()
+      .slice(0, 200);
     const content = await callOpenRouter(
       config,
       [
         {
           role: "system",
-          content: `A task titled "${taskTitle}" has been completed. The following memory was created during this task.
+          content: `A task titled "${safeTitle}" has been completed. The following memory was created during this task.
 
 Classify this memory:
 - "lasting" if it contains a decision, preference, fact, or knowledge that is valuable INDEPENDENT of the task
@@ -913,6 +918,7 @@ export async function runSleepCycle(
 
     try {
       let hasMore = true;
+      let runningTotal = 0;
       while (hasMore && !abortSignal?.aborted) {
         const untagged = await db.listUntaggedMemories(retroactiveTagBatchSize, agentId);
 
@@ -921,10 +927,9 @@ export async function runSleepCycle(
           break;
         }
 
-        // Count total on first batch
-        if (result.retroactiveTagging.total === 0) {
-          result.retroactiveTagging.total = untagged.length;
-        }
+        // Accumulate total across all batches
+        runningTotal += untagged.length;
+        result.retroactiveTagging.total = runningTotal;
 
         // Process in parallel chunks of llmConcurrency
         for (let i = 0; i < untagged.length && !abortSignal?.aborted; i += llmConcurrency) {
@@ -961,9 +966,8 @@ export async function runSleepCycle(
           }
         }
 
-        // Check if there are more untagged memories
-        const nextBatch = await db.listUntaggedMemories(1, agentId);
-        hasMore = nextBatch.length > 0;
+        // Check if there are more untagged memories by whether this batch was full
+        hasMore = untagged.length >= retroactiveTagBatchSize;
 
         // Delay between batches (abort-aware)
         if (hasMore && !abortSignal?.aborted) {
@@ -1087,7 +1091,7 @@ export async function runSleepCycle(
   // Runs on a small batch each sleep cycle to amortize cost.
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted && config.enabled && !skipRetroactiveConflictScan) {
-    onPhaseStart?.("retroactiveConflictScan" as Parameters<typeof onPhaseStart>[0]);
+    onPhaseStart?.("retroactiveConflictScan");
     logger.info("memory-neo4j: [sleep] Phase 3c: Retroactive Conflict Scan");
 
     try {
@@ -1101,25 +1105,24 @@ export async function runSleepCycle(
 
       result.retroactiveConflictScan.memoriesScanned = candidates.length;
 
-      for (const mem of candidates) {
-        if (abortSignal?.aborted) break;
-        if (!mem.embedding?.length) continue;
+      const CONFLICT_CHUNK = 5;
+      for (let i = 0; i < candidates.length && !abortSignal?.aborted; i += CONFLICT_CHUNK) {
+        const chunk = candidates.slice(i, i + CONFLICT_CHUNK).filter((m) => m.embedding?.length);
 
-        try {
-          const superseded = await db.detectConflicts(
-            mem.id,
-            mem.text,
-            mem.embedding,
-            agentId ?? "default",
-            config,
-            {
+        const outcomes = await Promise.allSettled(
+          chunk.map((mem) =>
+            db.detectConflicts(mem.id, mem.text, mem.embedding, agentId ?? "default", config, {
               similarityThreshold: conflictSimilarityThreshold,
               maxCandidates: conflictMaxCandidates,
-            },
-          );
-          result.retroactiveConflictScan.memoriesSuperseded += superseded;
-        } catch {
-          // Non-fatal
+            }),
+          ),
+        );
+
+        for (const outcome of outcomes) {
+          if (outcome.status === "fulfilled") {
+            result.retroactiveConflictScan.memoriesSuperseded += outcome.value;
+          }
+          // Non-fatal on rejection
         }
       }
 
@@ -1213,7 +1216,7 @@ export async function runSleepCycle(
       }
 
       if (noiseRemoved > 0) {
-        onProgress?.("cleanup", `Removed ${noiseRemoved} noise-pattern memories`);
+        onProgress?.("noiseCleanup", `Removed ${noiseRemoved} noise-pattern memories`);
       }
 
       logger.info(
@@ -1267,12 +1270,15 @@ export async function runSleepCycle(
           }
         }
 
+        let deletedInThisBatch = 0;
         if (toRemove.length > 0) {
-          result.credentialScan.memoriesRemoved += await db.deleteMemoriesByIds(toRemove);
+          deletedInThisBatch = await db.deleteMemoriesByIds(toRemove);
+          result.credentialScan.memoriesRemoved += deletedInThisBatch;
         }
 
         if (batch.length < CREDENTIAL_SCAN_BATCH) break; // last page
-        offset += batch.length;
+        // Subtract deleted records so SKIP stays aligned after in-batch removals
+        offset += batch.length - deletedInThisBatch;
       }
 
       logger.info(
@@ -1382,10 +1388,8 @@ export async function runSleepCycle(
             { id: string; text: string; category: string; taskTitle: string }
           >();
 
-          for (const task of recentCompleted) {
-            if (abortSignal?.aborted) break;
-
-            // Build keywords from task ID and title words
+          // Build keyword lists for all tasks upfront, then search in parallel
+          const taskKeywords = recentCompleted.map((task) => {
             const keywords = [task.id];
             const titleWords = task.title
               .split(/\s+/)
@@ -1393,10 +1397,20 @@ export async function runSleepCycle(
               .map((w) => w.replace(/[^a-zA-Z0-9-]/g, ""))
               .filter((w) => w.length > 3);
             keywords.push(...titleWords);
+            return { task, keywords };
+          });
 
-            const matches = await db.searchMemoriesByKeywords(keywords, 50, agentId);
+          const searchOutcomes = await Promise.allSettled(
+            taskKeywords.map(({ keywords }) => db.searchMemoriesByKeywords(keywords, 50, agentId)),
+          );
 
-            for (const mem of matches) {
+          for (let i = 0; i < searchOutcomes.length; i++) {
+            if (abortSignal?.aborted) break;
+            const outcome = searchOutcomes[i];
+            const { task } = taskKeywords[i];
+            if (outcome.status !== "fulfilled") continue;
+
+            for (const mem of outcome.value) {
               // Skip core memories — those are user-curated
               if (mem.category === "core") continue;
               if (!memoriesToEvaluate.has(mem.id)) {
