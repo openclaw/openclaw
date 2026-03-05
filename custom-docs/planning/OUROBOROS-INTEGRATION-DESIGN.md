@@ -1174,146 +1174,69 @@ enabled=true  → 전체 6-Phase 적용
 
 > "prontoclaw에 새로운 도구 `harness_list_items`를 추가한다"
 
-```
-시간  │ 주체               │ 동작
-──────┼────────────────────┼──────────────────────────────────────────
+```mermaid
+sequenceDiagram
+    autonumber
+    participant 사용자 as 사용자 (Task Hub)
+    participant TaskHub as Task Hub
+    participant Gateway as Gateway
+    participant 평가에이전트 as 평가 에이전트
+    participant ContRunner as continuation-runner
+    participant baram as baram 에이전트
 
-[스펙 작성]
-T+0   │ 사용자 (Task Hub)  │ HarnessProject 생성
-      │                    │ title: "harness_list_items 도구 추가"
-      │                    │ context.goal: "에이전트가 현재 harness 프로젝트의 아이템 목록을 조회할 수 있도록 한다"
-      │                    │ context.constraints: ["기존 harness-tool.ts 패턴 준수", "Task Hub API 활용"]
-      │                    │ ouroboros.enabled: true
-      │                    │
-T+1   │ 사용자 (Task Hub)  │ HarnessItem 생성
-      │                    │ title: "harness_list_items 도구 구현"
-      │                    │ spec.requirements:
-      │                    │   - "GET /api/harness/{projectId}/items 호출하여 아이템 목록 반환"
-      │                    │   - "각 아이템의 title, status, verification.status 포함"
-      │                    │ spec.steps:
-      │                    │   - "harness-tool.ts에 createHarnessListItemsTool 함수 추가"
-      │                    │   - "Task Hub API 호출 로직 구현"
-      │                    │   - "openclaw-tools.ts에 등록"
-      │                    │ spec.verificationChecklist:
-      │                    │   - "빌드 성공 (pnpm build)"
-      │                    │   - "도구가 에이전트 도구 목록에 노출됨"
-      │                    │   - "API 응답이 올바른 형식"
+    rect rgb(230, 240, 255)
+        Note over 사용자,TaskHub: [스펙 작성] T+0~1
+        사용자->>TaskHub: HarnessProject 생성<br/>title: "harness_list_items 도구 추가"<br/>context.goal: "에이전트가 현재 harness 프로젝트의 아이템 목록을 조회할 수 있도록 한다"<br/>ouroboros.enabled: true
+        사용자->>TaskHub: HarnessItem 생성<br/>title: "harness_list_items 도구 구현"<br/>spec.requirements: [GET /api/harness/{projectId}/items, title/status/verification 포함]<br/>spec.steps: [createHarnessListItemsTool 추가, API 호출 구현, openclaw-tools.ts 등록]<br/>spec.verificationChecklist: [빌드 성공, 도구 노출, API 응답 형식]
+    end
 
-[Phase 0: Big Bang — 모호성 평가]
-T+2   │ 사용자 (Task Hub)  │ "모호성 평가 요청" 버튼 클릭
-      │                    │ → POST /api/harness/{id}/request-ambiguity-score
-      │                    │
-T+2   │ Task Hub → Gateway │ 평가 에이전트에 태스크 위임:
-      │                    │ "다음 스펙의 모호성을 평가하세요:
-      │                    │  Goal: 에이전트가 harness 아이템 목록을 조회...
-      │                    │  Constraints: 기존 패턴 준수, Task Hub API 활용
-      │                    │  Requirements: GET /api/harness/... , title/status/verification..."
-      │                    │
-T+3   │ 평가 에이전트       │ LLM 분석 수행:
-      │                    │ - goalClarity: 0.9 (구체적, "harness 아이템 목록 조회")
-      │                    │ - constraintClarity: 0.85 ("기존 패턴 준수"가 약간 모호)
-      │                    │ - successCriteriaClarity: 0.9 (체크리스트가 구체적)
-      │                    │ → harness_score_ambiguity(projectId, {
-      │                    │     goalClarity: 0.9, constraintClarity: 0.85,
-      │                    │     successCriteriaClarity: 0.9 })
-      │                    │
-T+3   │ Task Hub           │ overall = 0.40×0.1 + 0.30×0.15 + 0.30×0.1 = 0.115
-      │                    │ (goal weight × (1-goalClarity) + ...)
-      │                    │ ambiguityScore.overall = 0.115 → ≤ 0.2 ✅
-      │                    │ isReadyForLaunch = true
-      │                    │
-T+4   │ 사용자 (Task Hub)  │ Launch 버튼 활성화 → 클릭
-      │                    │ agentId: "baram", mode: "direct"
+    rect rgb(255, 245, 220)
+        Note over 사용자,평가에이전트: [Phase 0: Big Bang — 모호성 평가] T+2~4
+        사용자->>TaskHub: "모호성 평가 요청" 버튼 클릭<br/>→ POST /api/harness/{id}/request-ambiguity-score
+        TaskHub->>Gateway: 평가 에이전트에 태스크 위임
+        Gateway->>평가에이전트: "다음 스펙의 모호성을 평가하세요:<br/>Goal / Constraints / Requirements"
+        평가에이전트->>TaskHub: harness_score_ambiguity(projectId, {<br/>  goalClarity: 0.9,<br/>  constraintClarity: 0.85,<br/>  successCriteriaClarity: 0.9 })
+        Note over TaskHub: overall = 0.40×0.1 + 0.30×0.15 + 0.30×0.1 = 0.115<br/>ambiguityScore.overall = 0.115 ≤ 0.2 ✅<br/>isReadyForLaunch = true
+        사용자->>TaskHub: Launch 버튼 클릭 (agentId: "baram", mode: "direct")
+    end
 
-[Phase 1: PAL Router — 모델 선택]
-T+4   │ Task Hub           │ computeComplexity({
-      │                    │   estimatedTokens: 450 (태스크 설명 ~1100 chars × 0.4),
-      │                    │   toolCount: 3 (spec.steps.length),
-      │                    │   acDepth: 1 (분해 전)
-      │                    │ })
-      │                    │ → score = 0.3×(450/4000) + 0.3×(3/5) + 0.4×(1/5)
-      │                    │        = 0.3×0.11 + 0.3×0.6 + 0.4×0.2 = 0.293
-      │                    │ → tier = "frugal" (< 0.4)
-      │                    │ → delegateToAgent(agentId, desc, { palTier: "frugal" })
+    rect rgb(220, 255, 230)
+        Note over TaskHub: [Phase 1: PAL Router — 모델 선택] T+4
+        Note over TaskHub: computeComplexity({ estimatedTokens: 450, toolCount: 3, acDepth: 1 })<br/>→ score = 0.293 → tier = "frugal" (< 0.4)<br/>→ delegateToAgent(agentId, desc, { palTier: "frugal" })
+    end
 
-[Phase 2: Double Diamond — AC 분해 판단]
-T+5   │ Gateway → 평가     │ "이 AC의 원자성을 판단하세요:
-      │    에이전트         │  'GET /api/harness/{projectId}/items 호출하여 아이템 목록 반환'"
-      │                    │
-T+5   │ 평가 에이전트       │ 분석: requirements가 2개이고, 각각 독립적이나 긴밀히 연관
-      │                    │ → 원자적으로 판단 (분해 불필요)
-      │                    │ → harness_submit_decomposition({ atomic: true })
-      │                    │
-T+5   │ Gateway            │ AC Tree: 루트 = atomic
-      │                    │ → 분해 불필요, 바로 실행 에이전트에 위임
+    rect rgb(255, 230, 230)
+        Note over Gateway,평가에이전트: [Phase 2: Double Diamond — AC 분해 판단] T+5
+        Gateway->>평가에이전트: "이 AC의 원자성을 판단하세요:<br/>'GET /api/harness/{projectId}/items 호출하여 아이템 목록 반환'"
+        평가에이전트->>Gateway: harness_submit_decomposition({ atomic: true })<br/>분석: requirements 2개, 긴밀히 연관 → 원자적
+        Note over Gateway: AC Tree: 루트 = atomic<br/>→ 분해 불필요, 실행 에이전트에 위임
+    end
 
-[실행 에이전트 작업]
-T+6   │ Gateway → baram    │ task_backlog_add:
-      │                    │ - description: (buildTaskDescription 결과)
-      │                    │ - harnessProjectSlug: "harness-list-items-도구-추가"
-      │                    │ - harnessItemId: "66a1b2c3..."
-      │                    │ - palTier: "frugal"
-      │                    │
-T+7   │ continuation-      │ baram 에이전트 idle 감지 → backlog 픽업
-      │ runner             │ formatBacklogPickupPrompt():
-      │                    │ - Harness Protocol 주입 (item_id, project_slug)
-      │                    │ - Double Diamond Protocol 주입 (Discover→Define→Design→Deliver)
-      │                    │ - PAL tier: frugal → claude-haiku-4-5 모델로 세션 시작
-      │                    │
-T+8   │ baram 에이전트      │ [Discover] harness-tool.ts, milestone-tool.ts 읽기
-      │                    │ → 기존 패턴 파악
-      │                    │
-T+9   │ baram 에이전트      │ [Define] 핵심: hubFetch + tool factory 패턴
-      │                    │
-T+10  │ baram 에이전트      │ [Design] createHarnessListItemsTool 함수 설계
-      │                    │
-T+11  │ baram 에이전트      │ [Deliver]
-      │                    │ 1. harness-tool.ts 수정 → harness_report_step(step_index=0, status="done")
-      │                    │ 2. API 호출 로직 구현 → harness_report_step(step_index=1, status="done")
-      │                    │ 3. openclaw-tools.ts 등록 → harness_report_step(step_index=2, status="done")
+    rect rgb(240, 230, 255)
+        Note over Gateway,baram: [실행 에이전트 작업] T+6~11
+        Gateway->>baram: task_backlog_add:<br/>harnessProjectSlug: "harness-list-items-도구-추가"<br/>harnessItemId: "66a1b2c3..."<br/>palTier: "frugal"
+        ContRunner->>baram: baram 에이전트 idle 감지 → backlog 픽업<br/>formatBacklogPickupPrompt():<br/>- Harness Protocol 주입<br/>- Double Diamond Protocol 주입<br/>- PAL tier: frugal → claude-haiku-4-5 모델로 세션 시작
+        Note over baram: [Discover] T+8: harness-tool.ts, milestone-tool.ts 읽기 → 기존 패턴 파악
+        Note over baram: [Define] T+9: 핵심: hubFetch + tool factory 패턴
+        Note over baram: [Design] T+10: createHarnessListItemsTool 함수 설계
+        Note over baram: [Deliver] T+11:<br/>1. harness-tool.ts 수정 → harness_report_step(step_index=0, status="done")<br/>2. API 호출 로직 구현 → harness_report_step(step_index=1, status="done")<br/>3. openclaw-tools.ts 등록 → harness_report_step(step_index=2, status="done")
+    end
 
-[Phase 4: Evaluation — 3단계 검증]
-T+12  │ baram 에이전트      │ [Stage 1: Mechanical]
-      │                    │ $ pnpm build → 성공 ✅
-      │                    │ $ pnpm test → 성공 ✅
-      │                    │ → harness_report_check(check_index=0, passed=true)  // 빌드 성공
-      │                    │ → task_complete(result="harness_list_items 도구 구현 완료")
-      │                    │
-T+13  │ Gateway            │ baram 태스크 완료 감지
-      │                    │ → 평가 에이전트에 Stage 2 태스크 위임:
-      │                    │ "baram 에이전트의 실행 결과를 평가하세요.
-      │                    │  AC: GET /api/harness/{projectId}/items 호출하여 아이템 목록 반환
-      │                    │  Goal: 에이전트가 harness 아이템 목록을 조회할 수 있도록...
-      │                    │  대상 레포: /Users/server/prontoclaw
-      │                    │  변경 파일: harness-tool.ts, openclaw-tools.ts
-      │                    │  Stage 1 결과: build ✅, test ✅"
-      │                    │
-T+14  │ 평가 에이전트       │ [Stage 2: Semantic]
-      │                    │ - 대상 레포에서 변경 파일 직접 읽기
-      │                    │ - AC 준수: ✅ (GET API 호출 로직 존재)
-      │                    │ - Goal 정렬: 0.95 (도구가 목록 조회 기능 제공)
-      │                    │ - Drift: 0.02 (거의 없음)
-      │                    │ - Uncertainty: 0.05
-      │                    │ → harness_evaluate_semantic(itemId, {
-      │                    │     score: 0.95, ac_compliance: true,
-      │                    │     goal_alignment: 0.95, drift_score: 0.02,
-      │                    │     uncertainty: 0.05 })
-      │                    │
-T+14  │ Gateway            │ 평가 결과 확인:
-      │                    │ - score 0.95 ≥ 0.8 ✅
-      │                    │ - drift 0.02 < 0.3 → 트리거 없음
-      │                    │ - uncertainty 0.05 < 0.3 → 트리거 없음
-      │                    │ → Stage 3 불필요, 통과!
-      │                    │
-T+15  │ Gateway → Task Hub │ HarnessItem.verification:
-      │                    │ - 남은 체크리스트 자동 확인 (도구 노출, API 형식)
-      │                    │ - status: "passed" ✅
-      │                    │ HarnessProject RunRecord: status → "succeeded"
+    rect rgb(255, 250, 220)
+        Note over baram,Gateway: [Phase 4: Evaluation — 3단계 검증] T+12~15
+        Note over baram: [Stage 1: Mechanical] T+12<br/>$ pnpm build → 성공 ✅<br/>$ pnpm test → 성공 ✅<br/>→ harness_report_check(check_index=0, passed=true)
+        baram->>Gateway: task_complete(result="harness_list_items 도구 구현 완료")
+        Gateway->>평가에이전트: baram 태스크 완료 감지 → Stage 2 태스크 위임:<br/>변경 파일: harness-tool.ts, openclaw-tools.ts<br/>Stage 1 결과: build ✅, test ✅
+        Note over 평가에이전트: [Stage 2: Semantic] T+14<br/>AC 준수: ✅ / Goal 정렬: 0.95 / Drift: 0.02 / Uncertainty: 0.05
+        평가에이전트->>Gateway: harness_evaluate_semantic(itemId, {<br/>  score: 0.95, ac_compliance: true,<br/>  goal_alignment: 0.95, drift_score: 0.02,<br/>  uncertainty: 0.05 })
+        Note over Gateway: score 0.95 ≥ 0.8 ✅ / drift 0.02 < 0.3 / uncertainty 0.05 < 0.3<br/>→ Stage 3 불필요, 통과!
+        Gateway->>TaskHub: HarnessItem.verification:<br/>- 남은 체크리스트 자동 확인 (도구 노출, API 형식)<br/>- status: "passed" ✅<br/>HarnessProject RunRecord: status → "succeeded"
+    end
 
-[완료]
-T+15  │ Task Hub UI        │ ✅ 프로젝트 상태: "완료"
-      │                    │ 소요: ~15분, 모델: claude-haiku-4-5 (frugal tier)
-      │                    │ 진화 루프: 0회 (1세대에 통과)
+    rect rgb(220, 255, 250)
+        Note over 사용자,TaskHub: [완료] T+15
+        Note over TaskHub: ✅ 프로젝트 상태: "완료"<br/>소요: ~15분, 모델: claude-haiku-4-5 (frugal tier)<br/>진화 루프: 0회 (1세대에 통과)
+    end
 ```
 
 ---
@@ -1322,62 +1245,40 @@ T+15  │ Task Hub UI        │ ✅ 프로젝트 상태: "완료"
 
 > "복잡한 리팩토링 태스크에서 에이전트가 같은 접근을 반복"
 
-```
-시간  │ 주체               │ 동작
-──────┼────────────────────┼──────────────────────────────────────────
+```mermaid
+sequenceDiagram
+    autonumber
+    participant baram as baram 에이전트
+    participant Gateway as Gateway<br/>(stagnation-detector / persona-selector)
+    participant TaskHub as Task Hub
 
-[Phase 2 실행 중 — 에이전트가 정체]
-T+20  │ baram 에이전트      │ 1차 시도: task_update(progress="패턴 A로 리팩토링 시도")
-      │                    │ → 빌드 실패
-      │                    │
-T+25  │ baram 에이전트      │ 2차 시도: task_update(progress="패턴 A 수정 버전 시도")
-      │                    │ → 빌드 실패 (같은 에러)
-      │                    │
-T+30  │ baram 에이전트      │ 3차 시도: task_update(progress="패턴 A 재시도")
-      │                    │ → 빌드 실패
+    rect rgb(255, 230, 230)
+        Note over baram,Gateway: [Phase 2 실행 중 — 에이전트가 정체]
+        Note over baram: T+20: 1차 시도: task_update(progress="패턴 A로 리팩토링 시도")<br/>→ 빌드 실패
+        Note over baram: T+25: 2차 시도: task_update(progress="패턴 A 수정 버전 시도")<br/>→ 빌드 실패 (같은 에러)
+        Note over baram: T+30: 3차 시도: task_update(progress="패턴 A 재시도")<br/>→ 빌드 실패
+    end
 
-[Phase 3: Resilience — 정체 감지]
-T+31  │ Gateway            │ continuation-runner 체크:
-      │  (stagnation-      │ 1. outputHashes 비교:
-      │   detector)        │    hash("패턴 A로 리팩토링 시도") ≠ hash("패턴 A 수정 버전 시도")
-      │                    │    → spinning 아님 (해시가 다름)
-      │                    │ 2. 빌드 결과 비교: [fail, fail, fail]
-      │                    │    → driftScores: [0.0, 0.0, 0.0]
-      │                    │    → NO_DRIFT 감지! (3회 연속 변화 < 0.01) ✅
-      │                    │
-T+31  │ Gateway            │ 페르소나 선택:
-      │  (persona-         │ PERSONA_AFFINITY["no_drift"] = ["researcher", "architect", "contrarian"]
-      │   selector)        │ appliedPersonas: [] (첫 전환)
-      │                    │ → "researcher" 선택
-      │                    │
-T+32  │ Gateway →          │ continuation prompt에 페르소나 주입:
-      │ baram 에이전트      │ "## RESEARCHER Mode
-      │                    │  진행이 멈춰 있습니다. 코딩을 멈추고 조사하세요:
-      │                    │  - 실제 증거 vs 가정을 구분하세요
-      │                    │  - 유사한 문제와 그 해결책을 검색하세요
-      │                    │  - 어떤 정보가 있으면 접근법이 바뀌겠는가?"
-      │                    │
-T+33  │ baram 에이전트      │ [RESEARCHER 모드]
-      │                    │ - 에러 메시지 분석 → 실제 원인은 순환 의존성
-      │                    │ - 패턴 A가 아닌 패턴 B(의존성 역전)로 접근
-      │                    │ → task_update(progress="패턴 B로 의존성 역전 적용")
-      │                    │ → 빌드 성공 ✅
-      │                    │
-T+34  │ Gateway            │ 정체 해소 확인:
-      │                    │ driftScore 변화: 0.0 → 0.4 (유의미한 변화)
-      │                    │ → 정체 패턴 클리어
-      │                    │ → Phase 4 평가 진행
+    rect rgb(255, 245, 200)
+        Note over Gateway: [Phase 3: Resilience — 정체 감지] T+31
+        Note over Gateway: continuation-runner 체크:<br/>1. outputHashes 비교:<br/>   hash("패턴 A로 리팩토링 시도") ≠ hash("패턴 A 수정 버전 시도")<br/>   → spinning 아님 (해시가 다름)<br/>2. 빌드 결과 비교: [fail, fail, fail]<br/>   → driftScores: [0.0, 0.0, 0.0]<br/>   → NO_DRIFT 감지! (3회 연속 변화 < 0.01) ✅
+        Note over Gateway: 페르소나 선택:<br/>PERSONA_AFFINITY["no_drift"] = ["researcher", "architect", "contrarian"]<br/>appliedPersonas: [] (첫 전환) → "researcher" 선택
+        Gateway->>baram: continuation prompt에 페르소나 주입:<br/>"## RESEARCHER Mode<br/>진행이 멈춰 있습니다. 코딩을 멈추고 조사하세요:<br/>- 실제 증거 vs 가정을 구분하세요<br/>- 유사한 문제와 그 해결책을 검색하세요<br/>- 어떤 정보가 있으면 접근법이 바뀌겠는가?"
+    end
 
-[만약 RESEARCHER도 실패했다면]
-T+33' │ Gateway            │ 4차 시도도 실패 (researcher 모드)
-      │                    │ → appliedPersonas: ["researcher"]
-      │                    │ → 다음: "architect" 선택
-      │                    │ → 5차 시도도 실패
-      │                    │ → appliedPersonas: ["researcher", "architect"]
-      │                    │ → 다음: "contrarian" 선택
-      │                    │ ... 5가지 모두 소진 시:
-      │                    │ → 태스크 status = "blocked"
-      │                    │ → Task Hub에 알림: "에이전트 정체 — 수동 개입 필요"
+    rect rgb(220, 255, 230)
+        Note over baram: [RESEARCHER 모드] T+33<br/>에러 메시지 분석 → 실제 원인은 순환 의존성<br/>패턴 A가 아닌 패턴 B(의존성 역전)로 접근
+        baram->>Gateway: task_update(progress="패턴 B로 의존성 역전 적용")<br/>→ 빌드 성공 ✅
+        Note over Gateway: T+34: 정체 해소 확인:<br/>driftScore 변화: 0.0 → 0.4 (유의미한 변화)<br/>→ 정체 패턴 클리어 → Phase 4 평가 진행
+    end
+
+    rect rgb(240, 230, 255)
+        Note over baram,TaskHub: [만약 RESEARCHER도 실패했다면] T+33'
+        Note over Gateway: 4차 시도도 실패 (researcher 모드)<br/>→ appliedPersonas: ["researcher"] → 다음: "architect" 선택
+        Note over Gateway: 5차 시도도 실패<br/>→ appliedPersonas: ["researcher", "architect"] → 다음: "contrarian" 선택
+        Note over Gateway: ... 5가지 모두 소진 시:<br/>→ 태스크 status = "blocked"
+        Gateway->>TaskHub: 알림: "에이전트 정체 — 수동 개입 필요"
+    end
 ```
 
 ---
@@ -1386,118 +1287,54 @@ T+33' │ Gateway            │ 4차 시도도 실패 (researcher 모드)
 
 > "스펙이 불완전하여 1세대 결과가 평가를 통과하지 못하고 진화가 발생"
 
-```
-시간  │ 주체               │ 동작
-──────┼────────────────────┼──────────────────────────────────────────
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Gateway as Gateway
+    participant 평가에이전트 as 평가 에이전트
+    participant TaskHub as Task Hub
 
-[1세대 — Phase 4 평가 실패]
-T+40  │ 평가 에이전트       │ Stage 2 결과:
-      │                    │ - score: 0.55 (낮음)
-      │                    │ - ac_compliance: false
-      │                    │   → "API 응답에 pagination이 없어 대량 데이터 시 문제"
-      │                    │ - goal_alignment: 0.7
-      │                    │ - drift_score: 0.1
-      │                    │ - uncertainty: 0.35 (> 0.3!)
-      │                    │ → harness_evaluate_semantic(...)
-      │                    │
-T+40  │ Gateway            │ 평가 결과 확인:
-      │                    │ - score 0.55 < 0.8 → 실패
-      │                    │ - uncertainty 0.35 > 0.3 → Consensus 트리거! (조건 5)
-      │                    │ → Stage 3 태스크 위임
+    rect rgb(255, 220, 220)
+        Note over 평가에이전트,Gateway: [1세대 — Phase 4 평가 실패] T+40
+        평가에이전트->>Gateway: harness_evaluate_semantic(...):<br/>score: 0.55 / ac_compliance: false<br/>("API 응답에 pagination이 없어 대량 데이터 시 문제")<br/>goal_alignment: 0.7 / drift_score: 0.1 / uncertainty: 0.35 (> 0.3!)
+        Note over Gateway: 평가 결과 확인:<br/>score 0.55 < 0.8 → 실패<br/>uncertainty 0.35 > 0.3 → Consensus 트리거! (조건 5)<br/>→ Stage 3 태스크 위임
+    end
 
-[Phase 4 Stage 3: Consensus]
-T+41  │ 평가 에이전트       │ 3역할 순차 수행:
-      │                    │
-      │                    │ [Advocate] "구현이 기본 요구사항은 충족. pagination은
-      │                    │  원래 스펙에 없었으므로 scope creep."
-      │                    │  → approved: true, confidence: 0.6
-      │                    │
-      │                    │ [Devil's Advocate] "대량 데이터 시 OOM 위험. 실용적
-      │                    │  관점에서 pagination은 필수. 스펙 누락이 근본 원인."
-      │                    │  → approved: false, confidence: 0.8
-      │                    │
-      │                    │ [Judge] "Advocate의 scope creep 주장은 유효하나,
-      │                    │  Devil의 실용성 우려가 더 중요. 스펙 보완 필요."
-      │                    │  → approved: false, confidence: 0.75
-      │                    │
-      │                    │ → harness_vote_consensus({
-      │                    │     approved: false,  // 1/3 찬성 = 33% < 67%
-      │                    │     majority_ratio: 0.33,
-      │                    │     votes: [...] })
-      │                    │
-T+41  │ Gateway            │ Consensus 결과: 거부
-      │                    │ → Phase 5 진화 루프 진입
+    rect rgb(255, 245, 200)
+        Note over Gateway,평가에이전트: [Phase 4 Stage 3: Consensus] T+41
+        Gateway->>평가에이전트: Stage 3 Consensus 태스크 위임
+        Note over 평가에이전트: [Advocate]<br/>"구현이 기본 요구사항은 충족. pagination은 원래 스펙에 없었으므로 scope creep."<br/>→ approved: true, confidence: 0.6
+        Note over 평가에이전트: [Devil's Advocate]<br/>"대량 데이터 시 OOM 위험. 실용적 관점에서 pagination은 필수. 스펙 누락이 근본 원인."<br/>→ approved: false, confidence: 0.8
+        Note over 평가에이전트: [Judge]<br/>"Advocate의 scope creep 주장은 유효하나, Devil의 실용성 우려가 더 중요. 스펙 보완 필요."<br/>→ approved: false, confidence: 0.75
+        평가에이전트->>Gateway: harness_vote_consensus({<br/>  approved: false,  // 1/3 찬성 = 33% < 67%<br/>  majority_ratio: 0.33, votes: [...] })
+        Note over Gateway: Consensus 결과: 거부<br/>→ Phase 5 진화 루프 진입
+    end
 
-[Phase 5: Evolution — Wonder]
-T+42  │ Gateway → 평가     │ Wonder 태스크 위임:
-      │    에이전트         │ "1세대 결과를 분석하세요.
-      │                    │  평가 점수: 0.55, 합의: 거부 (pagination 누락)
-      │                    │  현재 스펙: [requirements, steps, checklist]
-      │                    │  아직 모르는 것은 무엇인가?"
-      │                    │
-T+43  │ 평가 에이전트       │ Wonder 분석:
-      │                    │ questions:
-      │                    │   1. "API 응답의 최대 아이템 수는? 대량 데이터 시나리오가 있는가?"
-      │                    │   2. "pagination 외에 필터링/정렬도 필요한가?"
-      │                    │   3. "에러 응답 형식은 정의되어 있는가?"
-      │                    │ ontologyTensions:
-      │                    │   - "단순 목록 조회 vs 확장 가능한 쿼리 인터페이스"
-      │                    │ shouldContinue: true
-      │                    │ → harness_submit_wonder(projectId, { ... })
+    rect rgb(230, 230, 255)
+        Note over Gateway,평가에이전트: [Phase 5: Evolution — Wonder] T+42~43
+        Gateway->>평가에이전트: Wonder 태스크 위임:<br/>"1세대 결과를 분석하세요.<br/>평가 점수: 0.55, 합의: 거부 (pagination 누락)<br/>아직 모르는 것은 무엇인가?"
+        평가에이전트->>Gateway: harness_submit_wonder(projectId, {<br/>  questions: [<br/>    "API 응답의 최대 아이템 수는? 대량 데이터 시나리오가 있는가?",<br/>    "pagination 외에 필터링/정렬도 필요한가?",<br/>    "에러 응답 형식은 정의되어 있는가?"<br/>  ],<br/>  ontologyTensions: ["단순 목록 조회 vs 확장 가능한 쿼리 인터페이스"],<br/>  shouldContinue: true })
+    end
 
-[Phase 5: Evolution — Reflect]
-T+44  │ Gateway → 평가     │ Reflect 태스크 위임:
-      │    에이전트         │ "Wonder 질문을 바탕으로 스펙을 개선하세요.
-      │                    │  현재 Seed: [goal, constraints, requirements]
-      │                    │  Wonder 질문: [pagination?, filtering?, error format?]"
-      │                    │
-T+45  │ 평가 에이전트       │ Reflect 결과:
-      │                    │ refinedACs:
-      │                    │   - (기존) "GET /api/harness/{projectId}/items 호출"
-      │                    │   - (추가) "limit/offset 쿼리 파라미터로 pagination 지원"
-      │                    │   - (추가) "총 아이템 수(total)를 응답에 포함"
-      │                    │ refinedConstraints:
-      │                    │   - (기존 유지)
-      │                    │   - (추가) "기본 limit=50, 최대 limit=200"
-      │                    │ ontologyMutations:
-      │                    │   - { action: "add", fieldName: "pagination", reason: "대량 데이터 대응" }
-      │                    │ → harness_submit_reflect(projectId, { ... })
+    rect rgb(220, 245, 255)
+        Note over Gateway,평가에이전트: [Phase 5: Evolution — Reflect] T+44~45
+        Gateway->>평가에이전트: Reflect 태스크 위임:<br/>"Wonder 질문을 바탕으로 스펙을 개선하세요.<br/>Wonder 질문: [pagination?, filtering?, error format?]"
+        평가에이전트->>Gateway: harness_submit_reflect(projectId, {<br/>  refinedACs: [<br/>    "(기존) GET /api/harness/{projectId}/items 호출",<br/>    "(추가) limit/offset 쿼리 파라미터로 pagination 지원",<br/>    "(추가) 총 아이템 수(total)를 응답에 포함"<br/>  ],<br/>  refinedConstraints: ["(추가) 기본 limit=50, 최대 limit=200"],<br/>  ontologyMutations: [{ action: "add", fieldName: "pagination", reason: "대량 데이터 대응" }] })
+    end
 
-[새 세대 생성]
-T+46  │ Gateway            │ ontology similarity 계산:
-      │                    │ 이전: [{ name: "items", type: "array" }]
-      │                    │ 현재: [{ name: "items", type: "array" },
-      │                    │        { name: "pagination", type: "object" }]
-      │                    │ nameOverlap = 1/2 = 0.5
-      │                    │ similarity = 0.5×0.5 + ... = 0.45
-      │                    │ → 0.45 < 0.95 (미수렴)
-      │                    │
-T+46  │ Gateway → Task Hub │ 2세대 HarnessItem 세트 생성:
-      │                    │ - generationNumber: 2
-      │                    │ - parentItemId: (1세대 아이템 ID)
-      │                    │ - 개선된 spec.requirements (pagination 포함)
-      │                    │ - 개선된 spec.verificationChecklist
-      │                    │
-T+47  │ Task Hub           │ 2세대 Launch → Phase 1부터 재시작
-      │                    │ → PAL Router: computeComplexity() 재계산 → 여전히 frugal
-      │                    │ → delegateToAgent(palTier: "frugal") → 실행 에이전트에 위임
+    rect rgb(240, 255, 230)
+        Note over Gateway,TaskHub: [새 세대 생성] T+46~47
+        Note over Gateway: ontology similarity 계산:<br/>이전: [{ name: "items" }]<br/>현재: [{ name: "items" }, { name: "pagination" }]<br/>nameOverlap = 1/2 = 0.5 → similarity = 0.45 < 0.95 (미수렴)
+        Gateway->>TaskHub: 2세대 HarnessItem 세트 생성:<br/>generationNumber: 2 / parentItemId: (1세대 아이템 ID)<br/>개선된 spec.requirements (pagination 포함)<br/>개선된 spec.verificationChecklist
+        Note over TaskHub: 2세대 Launch → Phase 1부터 재시작<br/>PAL Router: computeComplexity() 재계산 → 여전히 frugal<br/>→ delegateToAgent(palTier: "frugal") → 실행 에이전트에 위임
+    end
 
-[2세대 — 성공]
-T+55  │ 평가 에이전트       │ Stage 2: score 0.92, ac_compliance: true ✅
-      │                    │ uncertainty: 0.08 → 트리거 없음
-      │                    │ → 통과!
-      │                    │
-T+55  │ Gateway            │ ontology similarity 재계산:
-      │                    │ 1세대 → 2세대 변화가 유의미했으나, 2세대 결과가 통과
-      │                    │ → 진화 루프 종료
-      │                    │
-T+56  │ Task Hub           │ evolutionState:
-      │                    │   currentGeneration: 2
-      │                    │   status: "converged"
-      │                    │   generations: [
-      │                    │     { gen: 1, status: "failed", score: 0.55 },
-      │                    │     { gen: 2, status: "completed", score: 0.92 }
-      │                    │   ]
+    rect rgb(220, 255, 220)
+        Note over 평가에이전트,TaskHub: [2세대 — 성공] T+55~56
+        Note over 평가에이전트: Stage 2: score 0.92, ac_compliance: true ✅<br/>uncertainty: 0.08 → 트리거 없음 → 통과!
+        Note over Gateway: ontology similarity 재계산:<br/>1세대 → 2세대 변화가 유의미했으나, 2세대 결과가 통과<br/>→ 진화 루프 종료
+        Note over TaskHub: evolutionState:<br/>  currentGeneration: 2 / status: "converged"<br/>  generations: [<br/>    { gen: 1, status: "failed", score: 0.55 },<br/>    { gen: 2, status: "completed", score: 0.92 }<br/>  ]
+    end
 ```
 
 ---
@@ -1506,66 +1343,39 @@ T+56  │ Task Hub           │ evolutionState:
 
 > "Task Hub에 검색 기능 추가 — 백엔드 API + 프론트엔드 UI + 인덱스"
 
-```
-시간  │ 주체               │ 동작
-──────┼────────────────────┼──────────────────────────────────────────
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Gateway as Gateway
+    participant 평가에이전트 as 평가 에이전트
+    participant baram as baram 에이전트
 
-[Phase 2: AC 분해]
-T+10  │ Gateway → 평가     │ "이 AC의 원자성을 판단하세요:
-      │    에이전트         │  'Task Hub에 전문 검색 기능을 추가하여 프로젝트/아이템을
-      │                    │   텍스트로 검색할 수 있게 한다'"
-      │                    │
-T+11  │ 평가 에이전트       │ 비원자적 판단: 백엔드/프론트엔드/인덱스 3가지 관심사
-      │                    │ → harness_submit_decomposition({
-      │                    │     atomic: false,
-      │                    │     children: [
-      │                    │       { content: "MongoDB text index 생성",
-      │                    │         dependsOn: [] },
-      │                    │       { content: "GET /api/search 엔드포인트 구현",
-      │                    │         dependsOn: ["ac_001"] },  // 인덱스 필요
-      │                    │       { content: "검색 UI 컴포넌트 구현",
-      │                    │         dependsOn: ["ac_002"] },  // API 필요
-      │                    │     ]
-      │                    │   })
-      │                    │
-T+11  │ Gateway            │ AC Tree 구성:
-      │                    │ root (비원자적)
-      │                    │ ├── ac_001: MongoDB text index (원자적, 의존성 없음)
-      │                    │ ├── ac_002: GET /api/search (원자적, ac_001 의존)
-      │                    │ └── ac_003: 검색 UI (원자적, ac_002 의존)
-      │                    │
-      │                    │ 실행 순서 결정 (의존성 DAG):
-      │                    │ → ac_001 먼저 (의존성 없음)
-      │                    │ → ac_001 완료 후 ac_002
-      │                    │ → ac_002 완료 후 ac_003
+    rect rgb(230, 230, 255)
+        Note over Gateway,평가에이전트: [Phase 2: AC 분해] T+10~11
+        Gateway->>평가에이전트: "이 AC의 원자성을 판단하세요:<br/>'Task Hub에 전문 검색 기능을 추가하여<br/>프로젝트/아이템을 텍스트로 검색할 수 있게 한다'"
+        평가에이전트->>Gateway: harness_submit_decomposition({<br/>  atomic: false,<br/>  children: [<br/>    { content: "MongoDB text index 생성", dependsOn: [] },<br/>    { content: "GET /api/search 엔드포인트 구현", dependsOn: ["ac_001"] },<br/>    { content: "검색 UI 컴포넌트 구현", dependsOn: ["ac_002"] }<br/>  ]<br/>})<br/>비원자적 판단: 백엔드/프론트엔드/인덱스 3가지 관심사
+        Note over Gateway: AC Tree 구성:<br/>root (비원자적)<br/>├── ac_001: MongoDB text index (원자적, 의존성 없음)<br/>├── ac_002: GET /api/search (원자적, ac_001 의존)<br/>└── ac_003: 검색 UI (원자적, ac_002 의존)<br/><br/>실행 순서 결정 (의존성 DAG):<br/>ac_001 먼저 → ac_001 완료 후 ac_002 → ac_002 완료 후 ac_003
+    end
 
-[병렬/순차 실행]
-T+12  │ Gateway            │ ac_001 → baram 에이전트에 위임
-      │                    │ (ac_002, ac_003은 대기)
-      │                    │
-T+15  │ baram 에이전트      │ ac_001 완료 → harness_report_step(...)
-      │                    │
-T+15  │ Gateway            │ ac_001 완료 감지 → ac_002 위임 가능
-      │                    │ ac_002 → baram 에이전트에 위임
-      │                    │
-T+20  │ baram 에이전트      │ ac_002 완료
-      │                    │
-T+20  │ Gateway            │ ac_002 완료 → ac_003 위임 가능
-      │                    │ ac_003 → baram 에이전트에 위임
-      │                    │ (만약 다른 에이전트가 할당 가능하면 병렬 실행)
-      │                    │
-T+25  │ baram 에이전트      │ ac_003 완료
-      │                    │ → 전체 AC Tree 완료
+    rect rgb(220, 255, 230)
+        Note over Gateway,baram: [병렬/순차 실행] T+12~25
+        Gateway->>baram: T+12: ac_001 위임 (ac_002, ac_003은 대기)
+        baram->>Gateway: T+15: ac_001 완료 → harness_report_step(...)
+        Note over Gateway: ac_001 완료 감지 → ac_002 위임 가능
+        Gateway->>baram: T+15: ac_002 위임
+        baram->>Gateway: T+20: ac_002 완료
+        Note over Gateway: ac_002 완료 → ac_003 위임 가능<br/>(만약 다른 에이전트가 할당 가능하면 병렬 실행)
+        Gateway->>baram: T+20: ac_003 위임
+        baram->>Gateway: T+25: ac_003 완료 → 전체 AC Tree 완료
+    end
 
-[Phase 4: 전체 평가]
-T+26  │ Gateway            │ AC Tree 전체 완료 감지
-      │                    │ → 평가 에이전트에 통합 평가 태스크 위임
-      │                    │ (3개 AC의 통합 결과물 평가)
-      │                    │
-T+27  │ 평가 에이전트       │ Stage 2: 전체 통합 평가
-      │                    │ - 인덱스 + API + UI가 일관성 있게 동작하는가?
-      │                    │ - 각 AC 개별 평가도 수행
-      │                    │ → score: 0.88, 통과 ✅
+    rect rgb(255, 245, 210)
+        Note over Gateway,평가에이전트: [Phase 4: 전체 평가] T+26~27
+        Note over Gateway: AC Tree 전체 완료 감지<br/>→ 평가 에이전트에 통합 평가 태스크 위임 (3개 AC의 통합 결과물 평가)
+        Gateway->>평가에이전트: 통합 평가 태스크 위임
+        Note over 평가에이전트: Stage 2: 전체 통합 평가<br/>- 인덱스 + API + UI가 일관성 있게 동작하는가?<br/>- 각 AC 개별 평가도 수행
+        평가에이전트->>Gateway: score: 0.88, 통과 ✅
+    end
 ```
 
 ---
@@ -1577,41 +1387,38 @@ T+27  │ 평가 에이전트       │ Stage 2: 전체 통합 평가
 ```mermaid
 stateDiagram-v2
   [*] --> drafting
-  drafting --> designing: AI 설계 에이전트
-  designing --> ready: gates 통과
+  drafting --> designing : AI 설계 에이전트
+  designing --> ready : gates 통과
 
-  ready --> launched: Launch (ambiguity ≤ 0.2)
+  ready --> launched : Launch (ambiguity 0.2 이하)
 
   state launched {
     [*] --> Phase0
-    Phase0: Phase 0: Big Bang
-    Phase1: Phase 1: PAL Router
-    Phase2: Phase 2: Double Diamond
-    Phase3: Phase 3: Resilience
-    Phase4: Phase 4: Evaluation
-    Phase5: Phase 5: Evolution
+    Phase0 : Phase 0 Big Bang
+    Phase1 : Phase 1 PAL Router
+    Phase2 : Phase 2 Double Diamond
+    Phase3 : Phase 3 Resilience
+    Phase4 : Phase 4 Evaluation
+    Phase5 : Phase 5 Evolution
 
     Phase0 --> Phase1
     Phase1 --> Phase2
-    Phase2 --> Phase3: 정체 감지 시
-    Phase2 --> Phase4: 실행 완료 시
-    Phase3 --> Phase2: 재시도
+    Phase2 --> Phase3 : 정체 감지 시
+    Phase2 --> Phase4 : 실행 완료 시
+    Phase3 --> Phase2 : 재시도
     Phase4 --> eval_check
 
     state eval_check <<choice>>
-    eval_check --> archived_ok: score ≥ 0.8
-    eval_check --> Phase5: score < 0.8
+    eval_check --> Phase5 : score 0.8 미만
+    eval_check --> done_ok : score 0.8 이상
 
     Phase5 --> convergence_check
     state convergence_check <<choice>>
-    convergence_check --> Phase1: 미수렴 (다음 세대)
-    convergence_check --> archived_converge: similarity ≥ 0.95 OR gen ≥ 30 OR 3연속 무변화
+    convergence_check --> Phase1 : 미수렴, 다음 세대
+    convergence_check --> done_converge : 수렴 완료
   }
 
-  state archived_ok <<join>>
-  archived_ok --> archived
-  state archived_converge <<join>>
-  archived_converge --> archived
+  launched --> archived : 평가 통과 또는 수렴 완료
 
   archived --> [*]
 ```
@@ -1620,23 +1427,23 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-  [*] --> pending: launch 시
+  [*] --> pending : launch 시
 
-  pending --> in_progress: agent 작업 시작
+  pending --> in_progress : agent 작업 시작
 
-  in_progress --> in_progress: report_step / report_check
-  in_progress --> passed: all checks 통과
+  in_progress --> in_progress : report_step / report_check
+  in_progress --> passed : all checks 통과
 
   passed --> phase4_check
   state phase4_check <<choice>>
-  phase4_check --> completed: 평가 통과 (YES)
-  phase4_check --> evolution: 평가 실패 (NO)
+  phase4_check --> completed : 평가 통과
+  phase4_check --> evolution : 평가 실패
 
   completed --> [*]
-  evolution --> new_items: 새 HarnessItem 세트 생성
+  evolution --> new_items : 새 HarnessItem 세트 생성
   new_items --> [*]
 
-  in_progress --> failed: 타임아웃 / 수동 실패
+  in_progress --> failed : 타임아웃 또는 수동 실패
   failed --> [*]
 ```
 
