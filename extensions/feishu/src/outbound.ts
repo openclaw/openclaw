@@ -43,7 +43,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, accountId }) => {
+  sendText: async ({ cfg, to, text, accountId, threadId }) => {
+    const normalizedThreadId =
+      threadId != null && String(threadId).trim() ? String(threadId).trim() : undefined;
+    const replyMeta = normalizedThreadId
+      ? {
+          replyToMessageId: normalizedThreadId,
+          // threadId for Feishu represents topic root message id.
+          // Sending as reply_in_thread keeps delivery inside the same topic.
+          replyInThread: true,
+        }
+      : {};
+
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
@@ -55,6 +66,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           mediaUrl: localImagePath,
           accountId: accountId ?? undefined,
+          ...replyMeta,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
@@ -63,13 +75,34 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
-    const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
+    const result = await sendMessageFeishu({
+      cfg,
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      ...replyMeta,
+    });
     return { channel: "feishu", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots, threadId }) => {
+    const normalizedThreadId =
+      threadId != null && String(threadId).trim() ? String(threadId).trim() : undefined;
+    const replyMeta = normalizedThreadId
+      ? {
+          replyToMessageId: normalizedThreadId,
+          replyInThread: true,
+        }
+      : {};
+
     // Send text first if provided
     if (text?.trim()) {
-      await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
+      await sendMessageFeishu({
+        cfg,
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        ...replyMeta,
+      });
     }
 
     // Upload and send media if URL or local path provided
@@ -81,6 +114,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           mediaUrl,
           accountId: accountId ?? undefined,
           mediaLocalRoots,
+          ...replyMeta,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
@@ -93,6 +127,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text: fallbackText,
           accountId: accountId ?? undefined,
+          ...replyMeta,
         });
         return { channel: "feishu", ...result };
       }
@@ -104,6 +139,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       to,
       text: text ?? "",
       accountId: accountId ?? undefined,
+      ...replyMeta,
     });
     return { channel: "feishu", ...result };
   },

@@ -108,4 +108,24 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("maps threadId to Feishu reply-in-thread fields for text delivery", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "threaded result",
+      accountId: "main",
+      threadId: "om_root_123",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "threaded result",
+        accountId: "main",
+        replyToMessageId: "om_root_123",
+        replyInThread: true,
+      }),
+    );
+  });
 });
