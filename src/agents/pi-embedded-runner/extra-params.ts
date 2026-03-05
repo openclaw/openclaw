@@ -900,6 +900,30 @@ function hasMeaningfulMessageData(msg: PayloadMessage): boolean {
   );
 }
 
+function hasNonTextMessageContent(content: unknown): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      return true;
+    }
+    const block = part as Record<string, unknown>;
+    const blockType = typeof block.type === "string" ? block.type.toLowerCase() : "";
+    const text = block.text;
+    const hasText = typeof text === "string" && text.trim().length > 0;
+    const isTextBlockType =
+      blockType === "" ||
+      blockType === "text" ||
+      blockType === "input_text" ||
+      blockType === "output_text";
+    if (!hasText || !isTextBlockType) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeMessagesToResponsesInput(
   messages: PayloadMessage[],
 ): NormalizeMessagesToResponsesInputResult {
@@ -922,6 +946,9 @@ function normalizeMessagesToResponsesInput(
         lossless = false;
       }
       continue;
+    }
+    if (hasNonTextMessageContent(msg.content)) {
+      lossless = false;
     }
     normalized.push({
       type: "message",

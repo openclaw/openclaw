@@ -1853,6 +1853,52 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.stream).toBe(true);
   });
 
+  it("preserves messages when sub2api gpt-5.2 conversion would drop mixed-content blocks", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        stream: false,
+        messages: [
+          { role: "system", content: "system note" },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "describe this image" },
+              { type: "input_image", image_url: "https://example.com/a.png" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.instructions).toBe("system note");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "describe this image" }],
+      },
+    ]);
+    expect(payload.messages).toEqual([
+      { role: "system", content: "system note" },
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe this image" },
+          { type: "input_image", image_url: "https://example.com/a.png" },
+        ],
+      },
+    ]);
+    expect(payload.stream).toBe(true);
+  });
+
   it("downgrades required tool_choice to auto for sub2api-passthrough gpt-5.2 when tools are missing", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "sub2api-passthrough",
