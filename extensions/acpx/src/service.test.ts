@@ -20,15 +20,18 @@ vi.mock("./ensure.js", () => ({
 type RuntimeStub = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  stop?: () => void | Promise<void>;
 };
 
 function createRuntimeStub(healthy: boolean): {
   runtime: RuntimeStub;
+  stopSpy: ReturnType<typeof vi.fn>;
   probeAvailabilitySpy: ReturnType<typeof vi.fn>;
   isHealthySpy: ReturnType<typeof vi.fn>;
 } {
   const probeAvailabilitySpy = vi.fn(async () => {});
   const isHealthySpy = vi.fn(() => healthy);
+  const stopSpy = vi.fn(async () => {});
   return {
     runtime: {
       ensureSession: vi.fn(async (input) => ({
@@ -41,6 +44,7 @@ function createRuntimeStub(healthy: boolean): {
       }),
       cancel: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
+      stop: stopSpy,
       async probeAvailability() {
         await probeAvailabilitySpy();
       },
@@ -48,6 +52,7 @@ function createRuntimeStub(healthy: boolean): {
         return isHealthySpy();
       },
     },
+    stopSpy,
     probeAvailabilitySpy,
     isHealthySpy,
   };
@@ -171,5 +176,18 @@ describe("createAcpxRuntimeService", () => {
 
     expect(startResult).toBe("started");
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
+  });
+
+  it("forwards service stop to runtime stop handler", async () => {
+    const { runtime, stopSpy } = createRuntimeStub(true);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+    await service.stop?.(context);
+
+    expect(stopSpy).toHaveBeenCalledOnce();
   });
 });

@@ -12,6 +12,7 @@ import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  stop?: () => void | Promise<void>;
 };
 
 type AcpxRuntimeFactoryParams = {
@@ -98,7 +99,11 @@ export function createAcpxRuntimeService(
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;
       unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      const stoppingRuntime = runtime;
       runtime = null;
+      if (stoppingRuntime?.stop) {
+        await Promise.resolve(stoppingRuntime.stop());
+      }
     },
   };
 }

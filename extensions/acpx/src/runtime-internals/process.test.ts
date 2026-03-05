@@ -2,14 +2,31 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as killTree from "../../../../src/process/kill-tree.js";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
+  spawnWithResolvedCommand,
   resolveSpawnCommand,
   spawnAndCollect,
   type SpawnCommandCache,
   waitForExit,
 } from "./process.js";
+
+const { spawnSpyMock } = vi.hoisted(() => ({
+  spawnSpyMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      spawnSpyMock(...args);
+      return actual.spawn(...args);
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 
@@ -253,6 +270,23 @@ describe("waitForExit", () => {
 });
 
 describe("spawnAndCollect", () => {
+  it("spawns in a new process group when configured", () => {
+    spawnSpyMock.mockClear();
+    const child = spawnWithResolvedCommand(
+      {
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: process.cwd(),
+      },
+      { spawnInNewProcessGroup: true },
+    );
+    expect(spawnSpyMock).toHaveBeenCalledTimes(1);
+    const spawnOptions = spawnSpyMock.mock.calls[0]?.[2];
+    expect(spawnOptions?.detached).toBe(true);
+    spawnSpyMock.mockReset();
+    child.on("error", () => {});
+  });
+
   it("returns abort error immediately when signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -288,5 +322,38 @@ describe("spawnAndCollect", () => {
 
     const result = await resultPromise;
     expect(result.error?.name).toBe("AbortError");
+  });
+
+  it("kills entire process group when aborting detached child process collection", async () => {
+    const originalKillProcessTree = killTree.killProcessTree;
+    const killCalls: number[] = [];
+    const killProcessTreeSpy = vi.spyOn(killTree, "killProcessTree").mockImplementation((pid) => {
+      killCalls.push(pid);
+      return originalKillProcessTree(pid);
+    });
+    const controller = new AbortController();
+    const resultPromise = spawnAndCollect(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10_000)"],
+        cwd: process.cwd(),
+      },
+      undefined,
+      {
+        signal: controller.signal,
+        spawnInNewProcessGroup: true,
+      },
+    );
+
+    setTimeout(() => {
+      controller.abort();
+    }, 10);
+
+    const result = await resultPromise;
+    expect(result.error?.name).toBe("AbortError");
+    expect(killCalls.length).toBeGreaterThan(0);
+    expect(killCalls.at(-1)).toBeGreaterThan(0);
+
+    killProcessTreeSpy.mockRestore();
   });
 });

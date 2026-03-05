@@ -10,6 +10,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgramCandidate,
 } from "openclaw/plugin-sdk/acpx";
+import { killProcessTree } from "../../../../src/process/kill-tree.js";
 
 export type SpawnExit = {
   code: number | null;
@@ -47,6 +48,7 @@ export type SpawnCommandOptions = {
   strictWindowsCmdWrapper?: boolean;
   cache?: SpawnCommandCache;
   onResolved?: (event: SpawnResolutionEvent) => void;
+  spawnInNewProcessGroup?: boolean;
 };
 
 const DEFAULT_RUNTIME: SpawnRuntime = {
@@ -141,6 +143,7 @@ export function spawnWithResolvedCommand(
     env: { ...process.env, OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
+    detached: options?.spawnInNewProcessGroup === true,
     windowsHide: resolved.windowsHide,
   });
 }
@@ -184,6 +187,7 @@ export async function spawnAndCollect(
   options?: SpawnCommandOptions,
   runtime?: {
     signal?: AbortSignal;
+    spawnInNewProcessGroup?: boolean;
   },
 ): Promise<{
   stdout: string;
@@ -215,6 +219,12 @@ export async function spawnAndCollect(
   let aborted = false;
   const onAbort = () => {
     aborted = true;
+    if (runtime?.spawnInNewProcessGroup) {
+      if (child.pid != null) {
+        killProcessTree(child.pid);
+      }
+      return;
+    }
     try {
       child.kill("SIGTERM");
     } catch {
@@ -222,6 +232,12 @@ export async function spawnAndCollect(
     }
     abortKillTimer = setTimeout(() => {
       if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      if (runtime?.spawnInNewProcessGroup) {
+        if (child.pid != null) {
+          killProcessTree(child.pid);
+        }
         return;
       }
       try {

@@ -12,6 +12,7 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
+import { killProcessTree } from "../../../src/process/kill-tree.js";
 import { type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";
 import {
@@ -42,8 +43,16 @@ export const ACPX_BACKEND_ID = "acpx";
 
 const ACPX_RUNTIME_HANDLE_PREFIX = "acpx:v1:";
 const DEFAULT_AGENT_FALLBACK = "codex";
+const ACPX_PROMPT_PROCESS_REAPER_INTERVAL_MS = 60_000;
+const ACPX_PROMPT_PROCESS_REAPER_STALE_MS = 10 * 60_000;
 const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
+};
+
+type PromptProcessState = {
+  processGroupId: number;
+  lastTouchedAt: number;
+  active: boolean;
 };
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
@@ -100,6 +109,8 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly spawnCommandCache: SpawnCommandCache = {};
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
+  private readonly promptProcessGroups = new Map<string, PromptProcessState>();
+  private readonly promptProcessReaper: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -123,6 +134,10 @@ export class AcpxRuntime implements AcpRuntime {
         this.logSpawnResolution(event);
       },
     };
+    this.promptProcessReaper = setInterval(() => {
+      this.reapPromptProcessGroups();
+    }, ACPX_PROMPT_PROCESS_REAPER_INTERVAL_MS);
+    this.promptProcessReaper.unref();
   }
 
   isHealthy(): boolean {
@@ -275,8 +290,12 @@ export class AcpxRuntime implements AcpRuntime {
         args,
         cwd: state.cwd,
       },
-      this.spawnCommandOptions,
+      {
+        ...this.spawnCommandOptions,
+        spawnInNewProcessGroup: true,
+      },
     );
+    this.trackPromptProcess(state.name, child.pid ?? 0);
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -343,6 +362,7 @@ export class AcpxRuntime implements AcpRuntime {
       }
     } finally {
       lines.close();
+      this.setPromptProcessIdle(state.name);
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
       }
@@ -529,15 +549,19 @@ export class AcpxRuntime implements AcpRuntime {
 
   async close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void> {
     const state = this.resolveHandleState(input.handle);
-    await this.runControlCommand({
-      args: this.buildControlArgs({
+    try {
+      await this.runControlCommand({
+        args: this.buildControlArgs({
+          cwd: state.cwd,
+          command: [state.agent, "sessions", "close", state.name],
+        }),
         cwd: state.cwd,
-        command: [state.agent, "sessions", "close", state.name],
-      }),
-      cwd: state.cwd,
-      fallbackCode: "ACP_TURN_FAILED",
-      ignoreNoSession: true,
-    });
+        fallbackCode: "ACP_TURN_FAILED",
+        ignoreNoSession: true,
+      });
+    } finally {
+      this.stopPromptProcess(state.name);
+    }
   }
 
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
@@ -583,6 +607,66 @@ export class AcpxRuntime implements AcpRuntime {
     args.push("--ttl", String(this.queueOwnerTtlSeconds));
     args.push(params.agent, "prompt", "--session", params.sessionName, "--file", "-");
     return args;
+  }
+
+  stop(): void {
+    clearInterval(this.promptProcessReaper);
+    this.stopAllPromptProcesses();
+  }
+
+  private trackPromptProcess(sessionName: string, processGroupId: number): void {
+    if (!sessionName || !Number.isFinite(processGroupId) || processGroupId <= 0) {
+      return;
+    }
+    const existing = this.promptProcessGroups.get(sessionName);
+    if (existing && existing.processGroupId !== processGroupId) {
+      this.stopPromptProcess(sessionName);
+    }
+    this.promptProcessGroups.set(sessionName, {
+      processGroupId,
+      lastTouchedAt: Date.now(),
+      active: true,
+    });
+  }
+
+  private setPromptProcessIdle(sessionName: string): void {
+    const current = this.promptProcessGroups.get(sessionName);
+    if (!current) {
+      return;
+    }
+    current.active = false;
+    current.lastTouchedAt = Date.now();
+  }
+
+  private stopPromptProcess(sessionName: string): void {
+    const current = this.promptProcessGroups.get(sessionName);
+    if (!current) {
+      return;
+    }
+    this.promptProcessGroups.delete(sessionName);
+    killProcessTree(current.processGroupId);
+    this.logger?.debug?.(
+      `acpx runtime: stopped prompt process group=${current.processGroupId} session=${sessionName}`,
+    );
+  }
+
+  private stopAllPromptProcesses(): void {
+    for (const sessionName of this.promptProcessGroups.keys()) {
+      this.stopPromptProcess(sessionName);
+    }
+  }
+
+  private reapPromptProcessGroups(): void {
+    const now = Date.now();
+    for (const [sessionName, state] of this.promptProcessGroups) {
+      if (state.active) {
+        continue;
+      }
+      if (now - state.lastTouchedAt < ACPX_PROMPT_PROCESS_REAPER_STALE_MS) {
+        continue;
+      }
+      this.stopPromptProcess(sessionName);
+    }
   }
 
   private async runControlCommand(params: {

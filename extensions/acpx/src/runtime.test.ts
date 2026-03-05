@@ -1,6 +1,12 @@
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+const { killProcessTreeMock } = vi.hoisted(() => ({
+  killProcessTreeMock: vi.fn(),
+}));
+vi.mock("../../../src/process/kill-tree.js", () => ({
+  killProcessTree: killProcessTreeMock,
+}));
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -245,6 +251,34 @@ describe("AcpxRuntime", () => {
     const close = logs.find((entry) => entry.kind === "close");
     expect(cancel?.sessionName).toBe("agent:claude:acp:789");
     expect(close?.sessionName).toBe("agent:claude:acp:789");
+  });
+
+  it("kills tracked prompt process groups when a session is closed", async () => {
+    killProcessTreeMock.mockReset();
+    const { runtime } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 0.1 });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:close-cleans",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "hello world",
+      mode: "prompt",
+      requestId: "req-close-cleans",
+    })) {
+      events.push(event);
+    }
+    expect(events).toContainEqual({
+      type: "done",
+      stopReason: "end_turn",
+    });
+
+    await runtime.close({ handle, reason: "close-cleans" });
+    expect(killProcessTreeMock.mock.calls.length).toBeGreaterThan(0);
+    expect(typeof killProcessTreeMock.mock.calls[0]?.[0]).toBe("number");
+    expect((killProcessTreeMock.mock.calls[0]?.[0] ?? 0) > 0).toBe(true);
   });
 
   it("exposes control capabilities and runs set-mode/set/status commands", async () => {
