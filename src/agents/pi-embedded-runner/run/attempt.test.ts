@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  extractToolNameFromCallId,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
@@ -491,5 +492,151 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes numeric character references", () => {
     expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
     expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+
+describe("extractToolNameFromCallId", () => {
+  const tools = new Set(["read", "write", "exec", "browser", "image", "web_search"]);
+
+  it("extracts tool name from standard format: functions.read:0", () => {
+    expect(extractToolNameFromCallId("functions.read:0", tools)).toBe("read");
+  });
+
+  it("extracts tool name from standard format: functions.write:1", () => {
+    expect(extractToolNameFromCallId("functions.write:1", tools)).toBe("write");
+  });
+
+  it("extracts tool name from standard format: functions.exec:2", () => {
+    expect(extractToolNameFromCallId("functions.exec:2", tools)).toBe("exec");
+  });
+
+  it("extracts tool name from missing-colon format: functions.read1", () => {
+    expect(extractToolNameFromCallId("functions.read1", tools)).toBe("read");
+  });
+
+  it("extracts tool name from no-separator format: functionsread3", () => {
+    expect(extractToolNameFromCallId("functionsread3", tools)).toBe("read");
+  });
+
+  it("extracts tool name from no-separator format: functionswrite4", () => {
+    expect(extractToolNameFromCallId("functionswrite4", tools)).toBe("write");
+  });
+
+  it("extracts tool name from no-separator format: functionsexec5", () => {
+    expect(extractToolNameFromCallId("functionsexec5", tools)).toBe("exec");
+  });
+
+  it("prefers longer tool name matches over shorter ones", () => {
+    expect(extractToolNameFromCallId("functionsweb_search3", tools)).toBe("web_search");
+  });
+
+  it("returns null when no tool name matches", () => {
+    expect(extractToolNameFromCallId("functions.unknown:0", tools)).toBeNull();
+  });
+
+  it("returns null for empty toolCallId", () => {
+    expect(extractToolNameFromCallId("", tools)).toBeNull();
+  });
+
+  it("returns null for empty allowedToolNames", () => {
+    expect(extractToolNameFromCallId("functions.read:0", new Set())).toBeNull();
+  });
+
+  it("is case-insensitive for matching", () => {
+    expect(extractToolNameFromCallId("functions.READ:0", tools)).toBe("read");
+    expect(extractToolNameFromCallId("FUNCTIONS.Read:0", tools)).toBe("read");
+  });
+});
+
+describe("wrapStreamFnTrimToolCallNames - toolCallId name recovery", () => {
+  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
+    result: () => Promise<unknown>;
+    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+  } {
+    return {
+      async result() {
+        return params.resultMessage;
+      },
+      [Symbol.asyncIterator]() {
+        return (async function* () {
+          for (const event of params.events) {
+            yield event;
+          }
+        })();
+      },
+    };
+  }
+
+  async function invokeWrappedStream(
+    baseFn: (...args: never[]) => unknown,
+    allowedToolNames?: Set<string>,
+  ) {
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  it("recovers tool name from toolCallId when name is empty", async () => {
+    const toolCall = { type: "toolCall", name: "", id: "functions.read:0" };
+    const finalMessage = { role: "assistant", content: [toolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    await stream.result();
+
+    expect(toolCall.name).toBe("read");
+  });
+
+  it("recovers tool name from toolCallId with missing colon", async () => {
+    const toolCall = { type: "toolCall", name: "", id: "functions.read1" };
+    const finalMessage = { role: "assistant", content: [toolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    await stream.result();
+
+    expect(toolCall.name).toBe("read");
+  });
+
+  it("recovers tool name from toolCallId with no separator", async () => {
+    const toolCall = { type: "toolCall", name: "", id: "functionswrite4" };
+    const finalMessage = { role: "assistant", content: [toolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    await stream.result();
+
+    expect(toolCall.name).toBe("write");
+  });
+
+  it("does not overwrite valid tool names with toolCallId extraction", async () => {
+    const toolCall = { type: "toolCall", name: "exec", id: "functions.read:0" };
+    const finalMessage = { role: "assistant", content: [toolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage: finalMessage }));
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    await stream.result();
+
+    // Should keep the explicit name "exec", not overwrite with "read" from ID
+    expect(toolCall.name).toBe("exec");
+  });
+
+  it("recovers tool name from toolCallId in partial/message events during streaming", async () => {
+    const partialToolCall = { type: "toolCall", name: "", id: "functionsread3" };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalToolCall = { type: "toolCall", name: "", id: "functionswrite4" };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCall.name).toBe("write");
   });
 });

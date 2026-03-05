@@ -236,6 +236,58 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
+/**
+ * Extract a tool name from a tool call ID by matching against known tool names.
+ *
+ * Some providers (e.g. Kimi) encode the tool name inside the tool call ID with
+ * inconsistent formats:
+ *   - `functions.read:0`   (standard: dotSeparator + colonIndex)
+ *   - `functions.read1`    (missing colon)
+ *   - `functionsread3`     (no separator at all)
+ *
+ * We match against the known tool name set to find the longest tool name that
+ * appears inside the ID, preferring longer matches to avoid false positives
+ * (e.g. "exec" matching inside "functionse**exec**ute3").
+ */
+export function extractToolNameFromCallId(
+  toolCallId: string,
+  allowedToolNames: Set<string>,
+): string | null {
+  if (!toolCallId || allowedToolNames.size === 0) {
+    return null;
+  }
+  const lower = toolCallId.toLowerCase();
+
+  // Try the standard `functions.<name>:<index>` format first.
+  const dotPos = lower.indexOf(".");
+  if (dotPos >= 0) {
+    const afterDot = lower.slice(dotPos + 1);
+    // Strip trailing `:N` index or trailing digits
+    const colonPos = afterDot.indexOf(":");
+    const candidate = colonPos >= 0 ? afterDot.slice(0, colonPos) : afterDot.replace(/\d+$/, "");
+    if (candidate) {
+      for (const name of allowedToolNames) {
+        if (name.toLowerCase() === candidate) {
+          return name;
+        }
+      }
+    }
+  }
+
+  // Fallback: find the longest allowed tool name that appears as a substring
+  // of the lowered ID. Longer matches take priority to avoid false positives.
+  let bestMatch: string | null = null;
+  let bestLen = 0;
+  for (const name of allowedToolNames) {
+    const nameLower = name.toLowerCase();
+    if (nameLower.length > bestLen && lower.includes(nameLower)) {
+      bestMatch = name;
+      bestLen = nameLower.length;
+    }
+  }
+  return bestMatch;
+}
+
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
@@ -355,13 +407,37 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (typedBlock.type !== "toolCall") {
       continue;
     }
-    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
-    if (normalized !== typedBlock.name) {
-      typedBlock.name = normalized;
+
+    // When the model provides a valid name, normalize it as before.
+    if (typeof typedBlock.name === "string" && typedBlock.name.trim()) {
+      const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+      continue;
+    }
+
+    // Recovery: when the name is empty/missing, try to extract it from the
+    // toolCallId. Some providers (e.g. Kimi) encode the tool name inside the
+    // ID with inconsistent formats like `functions.read:0` or `functionsread3`.
+    if (allowedToolNames && allowedToolNames.size > 0 && typeof typedBlock.id === "string") {
+      const recovered = extractToolNameFromCallId(typedBlock.id, allowedToolNames);
+      if (recovered) {
+        typedBlock.name = recovered;
+        continue;
+      }
+    }
+
+    // Fallback: normalize whatever string value is there (may be empty).
+    if (typeof typedBlock.name === "string") {
+      const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
     }
   }
   normalizeToolCallIdsInMessage(message);
