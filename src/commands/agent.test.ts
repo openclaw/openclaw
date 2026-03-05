@@ -513,6 +513,49 @@ describe("agentCommand", () => {
     });
   });
 
+  it("preserves subagent task body on model fallback retry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: {
+          primary: "anthropic/claude-opus-4-5",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("timeout"), { status: 408 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "task done" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-subagent-task", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      await agentCommand(
+        {
+          message: "[Subagent Task]: Analyze the data",
+          lane: "subagent",
+        },
+        runtime,
+      );
+
+      // Second call (fallback) must still carry the original task, not
+      // the generic "Continue where you left off" continuation prompt.
+      const secondCallPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.prompt;
+      expect(secondCallPrompt).toBe("[Subagent Task]: Analyze the data");
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
