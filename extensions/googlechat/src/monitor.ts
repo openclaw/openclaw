@@ -500,11 +500,13 @@ async function deliverGoogleChatReply(params: {
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error?.(`Google Chat message send failed (chunk ${i}): ${String(err)}`);
-        // Retry without the thread reference — the most common failure is
-        // "invalid thread resource name" (400). Sending unthreaded is better
-        // than silently losing the message.
+        // Retry: when the update path failed (i === 0 + typingMessageName),
+        // the error is unrelated to threading so preserve the thread param.
+        // When the threaded send failed, drop thread (likely "invalid thread
+        // resource name" 400) — unthreaded is better than losing the message.
         try {
-          if (i === 0 && typingMessageName) {
+          const failedUpdate = i === 0 && !!typingMessageName;
+          if (failedUpdate) {
             await deleteGoogleChatMessage({ account, messageName: typingMessageName }).catch(
               () => {},
             );
@@ -514,6 +516,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
+            thread: failedUpdate ? thread : undefined,
           });
           statusSink?.({ lastOutboundAt: Date.now() });
           continue;
