@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -34,6 +35,7 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    emitter = new EventEmitter();
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
@@ -193,5 +195,21 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches a fallback gateway error listener", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    }) as unknown as { emitter?: EventEmitter };
+
+    expect(plugin.emitter?.listenerCount("error")).toBeGreaterThan(0);
+    expect(() =>
+      plugin.emitter?.emit(
+        "error",
+        new Error("Max reconnect attempts (0) reached after code 1006"),
+      ),
+    ).not.toThrow();
   });
 });

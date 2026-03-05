@@ -7,6 +7,18 @@ import type { DiscordAccountConfig } from "../../config/types.js";
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+const NOOP_GATEWAY_ERROR_LISTENER = () => {};
+
+function attachGatewayErrorFallback(plugin: GatewayPlugin): GatewayPlugin {
+  const emitter = (
+    plugin as unknown as { emitter?: { on?: (event: string, cb: () => void) => void } }
+  ).emitter;
+  // Keep a fallback error listener so late gateway "error" events do not
+  // become uncaught exceptions when lifecycle listeners detach during shutdown.
+  emitter?.on?.("error", NOOP_GATEWAY_ERROR_LISTENER);
+  return plugin;
+}
+
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
 ): number {
@@ -40,7 +52,7 @@ export function createDiscordGatewayPlugin(params: {
   };
 
   if (!proxy) {
-    return new GatewayPlugin(options);
+    return attachGatewayErrorFallback(new GatewayPlugin(options));
   }
 
   try {
@@ -79,9 +91,9 @@ export function createDiscordGatewayPlugin(params: {
       }
     }
 
-    return new ProxyGatewayPlugin();
+    return attachGatewayErrorFallback(new ProxyGatewayPlugin());
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-    return new GatewayPlugin(options);
+    return attachGatewayErrorFallback(new GatewayPlugin(options));
   }
 }
