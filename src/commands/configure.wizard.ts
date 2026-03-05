@@ -252,7 +252,6 @@ async function promptWebToolsConfig(
       }),
       runtime,
     );
-    );
     const key = String(keyInput ?? "").trim();
 
     if (key || existingKey) {
