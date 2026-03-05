@@ -400,9 +400,6 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                       @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         props.onAddAgentFieldChange("provider", val);
-                        props.onAddAgentFieldChange("authMethod", "");
-                        props.onAddAgentFieldChange("apiKey", "");
-                        props.onAddAgentFieldChange("useEnvVar", false);
                       }}
                     >
                       <option value="">— Skip —</option>

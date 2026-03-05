@@ -284,9 +284,16 @@ export function renderApp(state: AppViewState) {
         }
         state.agentAddOpen = false;
         state.agentAddError = null;
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await loadAgents(state);
-        state.agentsSelectedId = createResult.agentId;
+        // Retry until the new agent appears in the list (gateway config reload is async).
+        const newId = createResult.agentId;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await loadAgents(state);
+          if (state.agentsList?.agents.some((a) => a.id === newId)) {
+            break;
+          }
+        }
+        state.agentsSelectedId = newId;
       } catch (err) {
         state.agentAddError = err instanceof Error ? err.message : "Failed to create agent.";
       } finally {
