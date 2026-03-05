@@ -1,12 +1,8 @@
-import { describe, expect, it } from "vitest";
-import {
-  resolveCacheTtlMs,
-  isCacheEnabled,
-  getFileStatSnapshot,
-} from "./cache-utils.js";
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveCacheTtlMs, isCacheEnabled, getFileStatSnapshot } from "./cache-utils.js";
 
 describe("cache-utils", () => {
   describe("resolveCacheTtlMs", () => {
@@ -72,11 +68,11 @@ describe("cache-utils", () => {
     it("returns snapshot for existing file", () => {
       const tmpDir = os.tmpdir();
       const testFile = path.join(tmpDir, `cache-utils-test-${Date.now()}.txt`);
-      
+
       try {
         fs.writeFileSync(testFile, "test content");
         const result = getFileStatSnapshot(testFile);
-        
+
         expect(result).toBeDefined();
         expect(result?.mtimeMs).toBeGreaterThan(0);
         expect(result?.sizeBytes).toBe(13); // "test content".length
@@ -92,11 +88,11 @@ describe("cache-utils", () => {
     it("returns correct size for empty file", () => {
       const tmpDir = os.tmpdir();
       const testFile = path.join(tmpDir, `cache-utils-empty-test-${Date.now()}.txt`);
-      
+
       try {
         fs.writeFileSync(testFile, "");
         const result = getFileStatSnapshot(testFile);
-        
+
         expect(result).toBeDefined();
         expect(result?.sizeBytes).toBe(0);
       } finally {
