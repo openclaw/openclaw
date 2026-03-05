@@ -32,6 +32,24 @@ grants, and prompts can disappear entirely until the stale entries are cleared.
 4. If the prompt still does not appear, reset TCC entries with `tccutil` and try again.
 5. Some permissions only reappear after a full macOS restart.
 
+## Gatekeeper launch block troubleshooting
+
+If macOS shows a launch error like:
+
+- "OpenClaw cannot be opened because Apple cannot check it for malicious software"
+
+check in order:
+
+1. Confirm you downloaded from the official GitHub release for `openclaw/openclaw`.
+2. Try Finder -> right-click app -> Open (one-time Gatekeeper approval path).
+3. If needed for local testing, remove quarantine from the app bundle:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpenClaw.app
+```
+
+4. Relaunch the app and continue normal TCC permission setup.
+
 Example resets (replace bundle ID as needed):
 
 ```bash
