@@ -162,7 +162,7 @@ describe("shouldRequireGatewayTokenForInstall", () => {
     expect(required).toBe(false);
   });
 
-  it("does not require token in inferred mode when password env exists", async () => {
+  it("requires token in inferred mode when password env exists only in shell", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "password-from-env" }, async () => {
       const required = shouldRequireGatewayTokenForInstall(
         {
@@ -172,7 +172,7 @@ describe("shouldRequireGatewayTokenForInstall", () => {
         } as OpenClawConfig,
         process.env,
       );
-      expect(required).toBe(false);
+      expect(required).toBe(true);
     });
   });
 
@@ -187,6 +187,23 @@ describe("shouldRequireGatewayTokenForInstall", () => {
         secrets: {
           providers: {
             default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      {} as NodeJS.ProcessEnv,
+    );
+    expect(required).toBe(false);
+  });
+
+  it("does not require token in inferred mode when password env is configured in config", () => {
+    const required = shouldRequireGatewayTokenForInstall(
+      {
+        gateway: {
+          auth: {},
+        },
+        env: {
+          vars: {
+            OPENCLAW_GATEWAY_PASSWORD: "configured-password",
           },
         },
       } as OpenClawConfig,
