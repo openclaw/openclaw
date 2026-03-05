@@ -323,6 +323,9 @@ describe("config paths", () => {
     expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
     expect(parseConfigPath("constructor.polluted").ok).toBe(false);
     expect(parseConfigPath("prototype.polluted").ok).toBe(false);
+    expect(parseConfigPath('["__proto__"].polluted').ok).toBe(false);
+    expect(parseConfigPath("['constructor'].polluted").ok).toBe(false);
+    expect(parseConfigPath("[prototype].polluted").ok).toBe(false);
   });
 
   it("parses paths with array bracket notation", () => {
