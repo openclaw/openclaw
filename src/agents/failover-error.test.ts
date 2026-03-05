@@ -14,11 +14,15 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
-    // Transient server errors (502/503/504) should trigger failover as timeout.
+    // Keep the status-only path behavior-preserving and conservative.
+    expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
-    // Anthropic 529 (overloaded) should trigger failover as rate_limit.
+    expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
   });
 
