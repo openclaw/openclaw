@@ -79,6 +79,7 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
   ],
 };
 
+const HOOK_TRANSFORM_CACHE_MAX = 128;
 const transformCache = new Map<string, HookTransformFn>();
 
 type HookTransformResult = Partial<{
@@ -325,15 +326,28 @@ function validateAction(action: HookAction): HookMappingResult {
   return { ok: true, action };
 }
 
+function setTransformCache(cacheKey: string, fn: HookTransformFn): void {
+  transformCache.delete(cacheKey);
+  transformCache.set(cacheKey, fn);
+  if (transformCache.size <= HOOK_TRANSFORM_CACHE_MAX) {
+    return;
+  }
+  const oldest = transformCache.keys().next();
+  if (!oldest.done) {
+    transformCache.delete(oldest.value);
+  }
+}
+
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
   const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
   const cached = transformCache.get(cacheKey);
   if (cached) {
+    setTransformCache(cacheKey, cached);
     return cached;
   }
   const mod = await importFileModule({ modulePath: transform.modulePath });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(cacheKey, fn);
+  setTransformCache(cacheKey, fn);
   return fn;
 }
 
@@ -524,3 +538,8 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   }
   return current;
 }
+
+export const __test = {
+  transformCache,
+  HOOK_TRANSFORM_CACHE_MAX,
+};

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
+import { __test, applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
@@ -470,6 +470,51 @@ describe("hooks mapping", () => {
     if (resultB?.ok && resultB.action?.kind === "wake") {
       expect(resultB.action.text).toBe("from-B");
     }
+  });
+
+  it("evicts oldest transform cache entries when over capacity", async () => {
+    __test.transformCache.clear();
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-cap-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "many-export.mjs");
+    const exportCount = __test.HOOK_TRANSFORM_CACHE_MAX + 2;
+    fs.writeFileSync(
+      modPath,
+      Array.from(
+        { length: exportCount },
+        (_, i) => `export function transform${i}() { return { kind: "wake", text: "from-${i}" }; }`,
+      ).join("\n"),
+    );
+
+    for (let i = 0; i < exportCount; i += 1) {
+      const mapping = resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: `evict-${i}` },
+              action: "agent",
+              messageTemplate: "unused",
+              transform: { module: "many-export.mjs", export: `transform${i}` },
+            },
+          ],
+        },
+        { configDir },
+      );
+      const result = await applyHookMappings(mapping, {
+        payload: {},
+        headers: {},
+        url: new URL(`http://127.0.0.1:18789/hooks/evict-${i}`),
+        path: `evict-${i}`,
+      });
+      expect(result?.ok).toBe(true);
+    }
+
+    expect(__test.transformCache.size).toBe(__test.HOOK_TRANSFORM_CACHE_MAX);
+    expect(__test.transformCache.has(`${modPath}::transform0`)).toBe(false);
+    expect(__test.transformCache.has(`${modPath}::transform1`)).toBe(false);
+    expect(__test.transformCache.has(`${modPath}::transform${exportCount - 1}`)).toBe(true);
+    __test.transformCache.clear();
   });
 
   it("rejects missing message", async () => {
