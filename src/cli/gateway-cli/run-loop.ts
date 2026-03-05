@@ -1,3 +1,4 @@
+import { readConfigFileSnapshot } from "../../config/io.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -19,6 +20,25 @@ import type { defaultRuntime } from "../../runtime.js";
 const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
+
+function formatRestartConfigIssues(
+  issues: Array<{
+    path?: string;
+    message?: string;
+  }>,
+): string {
+  if (issues.length === 0) {
+    return "unknown validation issue";
+  }
+  return issues
+    .slice(0, 3)
+    .map((issue) => {
+      const path = issue.path?.trim() || "<root>";
+      const message = issue.message?.trim() || "invalid config";
+      return `${path}: ${message}`;
+    })
+    .join("; ");
+}
 
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
@@ -164,8 +184,25 @@ export async function runGatewayLoop(params: {
       );
       return;
     }
-    markGatewaySigusr1RestartHandled();
-    request("restart", "SIGUSR1");
+    void (async () => {
+      try {
+        const snapshot = await readConfigFileSnapshot();
+        if (!snapshot.valid) {
+          markGatewaySigusr1RestartHandled();
+          gatewayLog.error(
+            `SIGUSR1 restart blocked: config invalid (${formatRestartConfigIssues(snapshot.issues)}). Run \`openclaw doctor --fix\` and retry.`,
+          );
+          return;
+        }
+        markGatewaySigusr1RestartHandled();
+        request("restart", "SIGUSR1");
+      } catch (err) {
+        markGatewaySigusr1RestartHandled();
+        gatewayLog.error(
+          `SIGUSR1 restart blocked: failed to validate config before restart (${String(err)})`,
+        );
+      }
+    })();
   };
 
   process.on("SIGTERM", onSigterm);

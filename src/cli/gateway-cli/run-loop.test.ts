@@ -2,9 +2,43 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
+type ConfigSnapshotIssue = {
+  path: string;
+  message: string;
+};
+
+type MockConfigSnapshot = {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  parsed: Record<string, unknown>;
+  resolved: Record<string, unknown>;
+  valid: boolean;
+  config: Record<string, unknown>;
+  hash: string;
+  issues: ConfigSnapshotIssue[];
+  warnings: ConfigSnapshotIssue[];
+  legacyIssues: Array<Record<string, unknown>>;
+};
+
+const createValidConfigSnapshot = (): MockConfigSnapshot => ({
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
+  parsed: {},
+  resolved: {},
+  valid: true,
+  config: {},
+  hash: "hash",
+  issues: [],
+  warnings: [],
+  legacyIssues: [],
+});
+
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
+const readConfigFileSnapshot = vi.fn(async () => createValidConfigSnapshot());
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
@@ -24,6 +58,10 @@ const gatewayLog = {
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
+}));
+
+vi.mock("../../config/io.js", () => ({
+  readConfigFileSnapshot: () => readConfigFileSnapshot(),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -325,6 +363,35 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.error).toHaveBeenCalledWith(
         expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
       );
+    });
+  });
+
+  it("blocks SIGUSR1 restart when config validation fails", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      readConfigFileSnapshot.mockResolvedValueOnce({
+        ...createValidConfigSnapshot(),
+        valid: false,
+        issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+      });
+
+      const { close, exited } = await createSignaledLoopHarness();
+      process.emit("SIGUSR1");
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(close).not.toHaveBeenCalled();
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("SIGUSR1 restart blocked: config invalid"),
+      );
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("agents.defaults.pdfModel: Unrecognized key"),
+      );
+
+      process.emit("SIGTERM");
+      await expect(exited).resolves.toBe(0);
     });
   });
 });
