@@ -179,6 +179,124 @@ export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): n
   }
 }
 
+/**
+ * Maximum number of credential files before triggering pruning.
+ * Baileys generates pre-key files on each reconnect; unbounded growth leads to
+ * session corruption after 2-3 weeks (~7000+ files). See issue #19618.
+ */
+const CREDENTIAL_FILE_THRESHOLD = 500;
+
+/**
+ * Number of recent pre-key files to retain after pruning.
+ * Keeping some history allows for brief reconnect races.
+ */
+const PREKEY_FILES_TO_KEEP = 100;
+
+/**
+ * Prune stale pre-key and session files from the WhatsApp credential store.
+ * Baileys accumulates pre-key files on each reconnect without cleanup, eventually
+ * corrupting the session. This function removes the oldest files when the count
+ * exceeds CREDENTIAL_FILE_THRESHOLD, keeping the most recent PREKEY_FILES_TO_KEEP.
+ *
+ * Safe to call on every gateway start or reconnect.
+ *
+ * @returns Object with pruned count and remaining count, or null if no pruning needed.
+ */
+export async function pruneStaleCredentials(
+  authDir: string = resolveDefaultWebAuthDir(),
+): Promise<{ pruned: number; remaining: number } | null> {
+  const logger = getChildLogger({ module: "web-auth-prune" });
+  const resolvedAuthDir = resolveUserPath(authDir);
+
+  try {
+    await fs.access(resolvedAuthDir);
+  } catch {
+    return null; // Directory doesn't exist
+  }
+
+  const isPrunableFile = (name: string): boolean => {
+    // Only prune pre-key, sender-key, and session files (not creds.json or app-state)
+    if (!name.endsWith(".json")) {
+      return false;
+    }
+    return /^(pre-key|sender-key|session)-/.test(name);
+  };
+
+  try {
+    const entries = await fs.readdir(resolvedAuthDir, { withFileTypes: true });
+    const allFiles = entries.filter((e) => e.isFile());
+    const prunableFiles: { name: string; mtimeMs: number }[] = [];
+
+    // Gather prunable files with their modification times
+    for (const entry of allFiles) {
+      if (!isPrunableFile(entry.name)) {
+        continue;
+      }
+      try {
+        const stats = await fs.stat(path.join(resolvedAuthDir, entry.name));
+        prunableFiles.push({ name: entry.name, mtimeMs: stats.mtimeMs });
+      } catch {
+        // Skip files we can't stat
+      }
+    }
+
+    const totalFiles = allFiles.length;
+
+    // Only prune if prunable files exceed the threshold
+    if (prunableFiles.length <= CREDENTIAL_FILE_THRESHOLD) {
+      return null;
+    }
+
+    // Sort by modification time, oldest first
+    prunableFiles.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+    // Calculate how many to delete (keep the most recent PREKEY_FILES_TO_KEEP)
+    const toDelete = prunableFiles.slice(
+      0,
+      Math.max(0, prunableFiles.length - PREKEY_FILES_TO_KEEP),
+    );
+
+    if (toDelete.length === 0) {
+      return null;
+    }
+
+    // Delete old files
+    let deletedCount = 0;
+    for (const file of toDelete) {
+      try {
+        await fs.rm(path.join(resolvedAuthDir, file.name), { force: true });
+        deletedCount++;
+      } catch {
+        // Continue on individual file errors
+      }
+    }
+
+    const remaining = totalFiles - deletedCount;
+    logger.info(
+      { pruned: deletedCount, remaining, threshold: CREDENTIAL_FILE_THRESHOLD },
+      "pruned stale WhatsApp credential files",
+    );
+
+    return { pruned: deletedCount, remaining };
+  } catch (err) {
+    logger.warn({ err }, "failed to prune WhatsApp credentials");
+    return null;
+  }
+}
+
+/**
+ * Get the current credential file count for diagnostics.
+ */
+export function getCredentialFileCount(authDir: string = resolveDefaultWebAuthDir()): number {
+  try {
+    const resolvedAuthDir = resolveUserPath(authDir);
+    const entries = fsSync.readdirSync(resolvedAuthDir, { withFileTypes: true });
+    return entries.filter((e) => e.isFile()).length;
+  } catch {
+    return 0;
+  }
+}
+
 export function logWebSelfId(
   authDir: string = resolveDefaultWebAuthDir(),
   runtime: RuntimeEnv = defaultRuntime,

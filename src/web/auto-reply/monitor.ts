@@ -22,7 +22,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, pruneStaleCredentials, readWebSelfId } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -145,6 +145,13 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+
+  // Prune stale credential files once at startup to prevent bloat.
+  // Baileys accumulates pre-key files without cleanup; see issue #19618.
+  // Done outside the loop to avoid async timing issues with tests.
+  pruneStaleCredentials(account.authDir).catch(() => {
+    // Non-fatal: continue even if pruning fails.
+  });
 
   while (true) {
     if (stopRequested()) {

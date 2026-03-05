@@ -22,10 +22,12 @@ import {
 } from "./auth-store.js";
 
 export {
+  getCredentialFileCount,
   getWebAuthAgeMs,
   logoutWeb,
   logWebSelfId,
   pickWebChannel,
+  pruneStaleCredentials,
   readWebSelfId,
   WA_WEB_AUTH_DIR,
   webAuthExists,
