@@ -33,7 +33,7 @@
         <p class="getting-started__desc">Get started in 3 steps to unlock your financial AI dashboard.</p>
       </div>
       <div class="getting-started__steps">
-        <a class="getting-started__card" href="/dashboard/setting" data-step="1">
+        <a class="getting-started__card" href="/plugins/findoo-trader/dashboard/setting" data-step="1">
           <span class="getting-started__num">1</span>
           <div class="getting-started__info">
             <span class="getting-started__card-title">Connect Exchange</span>
@@ -41,7 +41,7 @@
           </div>
           <span class="getting-started__arrow">&#8250;</span>
         </a>
-        <a class="getting-started__card" href="/dashboard/strategy" data-step="2">
+        <a class="getting-started__card" href="/plugins/findoo-trader/dashboard/strategy" data-step="2">
           <span class="getting-started__num">2</span>
           <div class="getting-started__info">
             <span class="getting-started__card-title">Create Strategy</span>
@@ -49,7 +49,7 @@
           </div>
           <span class="getting-started__arrow">&#8250;</span>
         </a>
-        <a class="getting-started__card" href="/dashboard/trader" data-step="3">
+        <a class="getting-started__card" href="/plugins/findoo-trader/dashboard/trader" data-step="3">
           <span class="getting-started__num">3</span>
           <div class="getting-started__info">
             <span class="getting-started__card-title">Start Trading</span>
@@ -61,6 +61,34 @@
       <button class="getting-started__skip" onclick="document.getElementById('gettingStarted').style.display='none'">
         Skip &mdash; I'll explore on my own
       </button>
+    </div>
+
+    <!-- QUICK START (shown when no strategies exist) -->
+    <div class="quick-start" id="quickStart" style="display:none">
+      <div class="quick-start__header">
+        <h2 class="quick-start__title">Quick Start</h2>
+        <p class="quick-start__desc">Choose a trading style. The AI agent will deploy matching strategies and risk settings automatically.</p>
+      </div>
+      <div class="quick-start__cards">
+        <button class="quick-start__card" onclick="OV.quickStart('conservative')">
+          <span class="quick-start__icon">&#128737;</span>
+          <span class="quick-start__name">Conservative</span>
+          <span class="quick-start__sub">Low-volatility mean reversion</span>
+          <span class="quick-start__hint">Target 8-15% APY</span>
+        </button>
+        <button class="quick-start__card quick-start__card--primary" onclick="OV.quickStart('balanced')">
+          <span class="quick-start__icon">&#9878;</span>
+          <span class="quick-start__name">Balanced</span>
+          <span class="quick-start__sub">Trend + mean reversion mix</span>
+          <span class="quick-start__hint">Target 15-30% APY</span>
+        </button>
+        <button class="quick-start__card" onclick="OV.quickStart('aggressive')">
+          <span class="quick-start__icon">&#128640;</span>
+          <span class="quick-start__name">Aggressive</span>
+          <span class="quick-start__sub">Momentum strategies</span>
+          <span class="quick-start__hint">Target 30%+ APY</span>
+        </button>
+      </div>
     </div>
 
     <!-- RISK HALO -->
@@ -78,11 +106,11 @@
       </div>
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
-        <a class="topbar__nav-item active" href="/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
       <div class="topbar__agents" id="agentDots"></div>
@@ -1079,7 +1107,7 @@
           checkEmptyState(t, state.config);
         }
 
-        // ── Empty-state detection: show Getting Started panel ──
+        // ── Empty-state detection: show Getting Started panel + Quick Start ──
         function checkEmptyState(trading, config) {
           var exchanges = (config && config.exchanges) || [];
           var strategies = (trading && trading.strategies) || [];
@@ -1089,12 +1117,16 @@
           var isEmpty = exchanges.length === 0 && strategies.length === 0 && positions.length === 0 && eq === 0;
           var el = $("gettingStarted");
           if (el) el.style.display = isEmpty ? "" : "none";
+
+          // Show Quick Start only when no strategies exist yet
+          var qs = $("quickStart");
+          if (qs) qs.style.display = strategies.length === 0 ? "" : "none";
         }
 
         // ── Propagate ?embedded=1 to internal dashboard links ──
         (function() {
           if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function(a) {
             var href = a.getAttribute("href");
             if (href && href.indexOf("embedded") === -1) {
               a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
@@ -1150,6 +1182,8 @@
 
           function startPolling() {
             var pollUrl = url.replace("/stream", "");
+            // Fix: /api/v1/fund/stream → /api/v1/fund has no route; use /api/v1/fund/status
+            if (pollUrl === "/api/v1/fund") pollUrl = "/api/v1/fund/status";
             if (dotEl) dotEl.className = "sse-dot";
             fetch(pollUrl)
               .then(function (r) {
@@ -1256,6 +1290,20 @@
               })
               .catch(function (e) {
                 $("botMsg").textContent = "Emergency stop failed: " + e.message;
+              });
+          },
+          quickStart: function (preset) {
+            var btns = document.querySelectorAll(".quick-start__card");
+            btns.forEach(function (b) { b.disabled = true; });
+            postApi("/api/v1/finance/strategy-packs/quick-start", { preset: preset })
+              .then(function (r) {
+                var count = (r.deployed || []).length;
+                toast(count + " strategies deployed (" + preset + ")", "success");
+                $("quickStart").style.display = "none";
+              })
+              .catch(function (e) {
+                toast("Quick start failed: " + e.message, "error");
+                btns.forEach(function (b) { b.disabled = false; });
               });
           },
           setSide: function (side) {

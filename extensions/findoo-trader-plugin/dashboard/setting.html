@@ -35,11 +35,11 @@
       </div>
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
-        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item active" href="/dashboard/setting">Setting</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
       <div class="topbar__sse" id="sseDots" title="SSE connections">
@@ -249,6 +249,19 @@
                 </label>
               </div>
               <div class="notif-card__desc">Receive alerts via Telegram bot</div>
+              <div class="notif-card__fields" id="telegramFields">
+                <div class="setting-field">
+                  <label class="setting-field__label">Bot Token</label>
+                  <input type="password" id="tgBotToken" class="setting-input" placeholder="123456:ABC-DEF..." autocomplete="off" />
+                  <span class="setting-field__hint">From @BotFather. Also reads FINDOO_TELEGRAM_BOT_TOKEN env var.</span>
+                </div>
+                <div class="setting-field">
+                  <label class="setting-field__label">Chat ID</label>
+                  <input type="text" id="tgChatId" class="setting-input" placeholder="-1001234567890" />
+                  <span class="setting-field__hint">Your Telegram chat/group ID. Also reads FINDOO_TELEGRAM_CHAT_ID env var.</span>
+                </div>
+                <button class="save-btn" onclick="SE.saveTelegram()">Save Telegram Config</button>
+              </div>
             </div>
             <div class="notif-card">
               <div class="notif-card__head">
@@ -426,7 +439,7 @@
         // ── Propagate ?embedded=1 to internal dashboard links ──
         (function() {
           if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function(a) {
             var href = a.getAttribute("href");
             if (href && href.indexOf("embedded") === -1) {
               a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
@@ -586,6 +599,10 @@
           $("notifTelegram").checked = n.telegram && n.telegram.enabled;
           $("notifDiscord").checked = n.discord && n.discord.enabled;
           $("notifEmail").checked = n.email && n.email.enabled;
+
+          // Populate Telegram fields
+          if (n.telegramBotToken) $("tgBotToken").value = n.telegramBotToken;
+          if (n.telegramChatId) $("tgChatId").value = n.telegramChatId;
         }
 
         // ── Render: Plugins ──
@@ -866,6 +883,20 @@
             putApi("/api/v1/finance/config/gates", body)
               .then(function () {
                 toast("Gate config saved", "success");
+              })
+              .catch(function (e) {
+                toast("Save failed: " + e.message, "error");
+              });
+          },
+
+          saveTelegram: function () {
+            var body = {
+              telegramBotToken: $("tgBotToken").value.trim() || undefined,
+              telegramChatId: $("tgChatId").value.trim() || undefined,
+            };
+            putApi("/api/v1/finance/config/notifications", body)
+              .then(function () {
+                toast("Telegram config saved", "success");
               })
               .catch(function (e) {
                 toast("Save failed: " + e.message, "error");

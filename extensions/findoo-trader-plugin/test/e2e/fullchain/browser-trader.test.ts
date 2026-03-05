@@ -77,7 +77,7 @@ d("Phase F — A3: Browser Trader", () => {
 
   // ── Helper: navigate to trader page, strip CDN scripts that block offline ──
   async function gotoTrader(query = "") {
-    const res = await fetch(`${ctx.baseUrl}/dashboard/trader${query}`);
+    const res = await fetch(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/trader${query}`);
     let html = await res.text();
     html = stripChartJsCdn(html);
     // Also strip lightweight-charts CDN to avoid network timeouts

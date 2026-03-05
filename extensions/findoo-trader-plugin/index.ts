@@ -5,8 +5,7 @@
  *
  * Services: fin-exchange-registry, fin-risk-controller, fin-event-store,
  *           fin-exchange-health-store, fin-live-executor,
- *           fin-paper-engine, fin-strategy-registry, fin-backtest-engine,
- *           fin-fund-manager
+ *           fin-paper-engine, fin-strategy-registry, fin-fund-manager
  * AI Tools (23): 5 trading + 6 paper + 5 strategy + 7 fund
  * HTTP Routes: 38 (API + dashboards)
  * SSE Streams: 4 (config, trading, events, fund)
@@ -16,6 +15,7 @@
  * Notification: Telegram event routing + inline approval buttons
  */
 
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
@@ -38,6 +38,8 @@ import { registerSseRoutes } from "./src/core/sse-handlers.js";
 import { registerTelegramApprovalRoute } from "./src/core/telegram-approval.js";
 import { loadDashboardTemplates } from "./src/core/template-renderer.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
+import { LiveHealthMonitor } from "./src/execution/live-health-monitor.js";
+import { LiveReconciler } from "./src/execution/live-reconciler.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
 import { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 import { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
@@ -47,13 +49,19 @@ import { registerPackRoutes } from "./src/fund/routes-packs.js";
 import { registerFundRoutes } from "./src/fund/routes.js";
 import { registerFundTools } from "./src/fund/tools.js";
 import type { FundConfig } from "./src/fund/types.js";
+import { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
+import { IdeationEngine } from "./src/ideation/ideation-engine.js";
+import { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
+import { MarketScanner } from "./src/ideation/market-scanner.js";
+import { DEFAULT_IDEATION_CONFIG } from "./src/ideation/types.js";
+import type { IdeationConfig } from "./src/ideation/types.js";
 import { PaperEngine } from "./src/paper/paper-engine.js";
 import { PaperHealthMonitor } from "./src/paper/paper-health-monitor.js";
 import { PaperScheduler } from "./src/paper/paper-scheduler.js";
 import { PaperStore } from "./src/paper/paper-store.js";
 import { registerPaperTools } from "./src/paper/tools.js";
-import { BacktestEngine } from "./src/strategy/backtest-engine.js";
 import { BacktestProgressStore } from "./src/strategy/backtest-progress-store.js";
+import { RemoteBacktestBridge } from "./src/strategy/remote-backtest-bridge.js";
 import { StrategyRegistry } from "./src/strategy/strategy-registry.js";
 import { registerStrategyTools } from "./src/strategy/tools.js";
 import type { RuntimeServices } from "./src/types-http.js";
@@ -67,11 +75,14 @@ export { JsonConfigStore } from "./src/core/config-store.js";
 export { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 export { ExchangeRegistry } from "./src/core/exchange-registry.js";
 export { LiveExecutor } from "./src/execution/live-executor.js";
+export { LiveHealthMonitor } from "./src/execution/live-health-monitor.js";
+export { LiveReconciler } from "./src/execution/live-reconciler.js";
 export { RiskController } from "./src/core/risk-controller.js";
 export { CcxtBridge, CcxtBridgeError } from "./src/execution/ccxt-bridge.js";
 export { PaperEngine } from "./src/paper/paper-engine.js";
 export { PaperStore } from "./src/paper/paper-store.js";
-export { BacktestEngine } from "./src/strategy/backtest-engine.js";
+export { RemoteBacktestBridge } from "./src/strategy/remote-backtest-bridge.js";
+export { buildIndicatorLib } from "./src/strategy/indicator-lib.js";
 export { StrategyRegistry } from "./src/strategy/strategy-registry.js";
 export { NotificationRouter } from "./src/core/notification-router.js";
 export { buildFinancialContext } from "./src/core/prompt-context.js";
@@ -93,6 +104,10 @@ export { ActivityLogStore } from "./src/core/activity-log-store.js";
 export { AgentWakeBridge } from "./src/core/agent-wake-bridge.js";
 export { LifecycleEngine } from "./src/core/lifecycle-engine.js";
 export { STRATEGY_PACKS, getStrategyPack } from "./src/fund/strategy-packs.js";
+export { MarketScanner } from "./src/ideation/market-scanner.js";
+export { IdeationEngine } from "./src/ideation/ideation-engine.js";
+export { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
+export { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -233,28 +248,13 @@ const findooTraderPlugin = {
 
     // ── Agent Wake Bridge (enqueues system events to wake heartbeat runner) ──
 
-    const runtimeSystem = (
-      api.runtime as unknown as { system?: { enqueueSystemEvent?: (...args: unknown[]) => void } }
-    )?.system;
-    const wakeBridge = runtimeSystem?.enqueueSystemEvent
+    const enqueueSystemEvent = runtime.system?.enqueueSystemEvent as
+      | ((text: string, options: { sessionKey: string; contextKey?: string }) => void)
+      | undefined;
+    const wakeBridge = enqueueSystemEvent
       ? new AgentWakeBridge({
-          enqueueSystemEvent: runtimeSystem.enqueueSystemEvent as (
-            text: string,
-            options: { sessionKey: string; contextKey?: string },
-          ) => void,
-          sessionKeyResolver: () => {
-            // Use "main" session — the heartbeat runner's default session key
-            // This is resolved lazily because sessions may not exist at registration time
-            try {
-              const sessions = (runtime as unknown as { sessions?: Map<string, unknown> }).sessions;
-              if (sessions && sessions.size > 0) {
-                return sessions.keys().next().value as string;
-              }
-            } catch {
-              // fall through
-            }
-            return "main";
-          },
+          enqueueSystemEvent,
+          sessionKeyResolver: () => "main",
           activityLog,
         })
       : undefined;
@@ -282,6 +282,9 @@ const findooTraderPlugin = {
     // lifecycleEngine is created later — use a lazy reference
     const lifecycleRef: { engine?: InstanceType<typeof LifecycleEngine> } = {};
 
+    // ideationScheduler is created later — use a lazy reference
+    const ideationRef: { scheduler?: InstanceType<typeof IdeationScheduler> } = {};
+
     registerHttpRoutes({
       api,
       gatherDeps,
@@ -293,6 +296,9 @@ const findooTraderPlugin = {
       registry,
       get lifecycleEngine() {
         return lifecycleRef.engine;
+      },
+      get ideationScheduler() {
+        return ideationRef.scheduler;
       },
     });
 
@@ -334,7 +340,18 @@ const findooTraderPlugin = {
 
     const strategyRegistryPath = api.resolvePath("state/findoo-strategies.json");
     const strategyRegistry = new StrategyRegistry(strategyRegistryPath);
-    const backtestEngine = new BacktestEngine();
+
+    // Remote backtest bridge — lazy lookup of fin-remote-backtest service from findoo-backtest-plugin
+    const backtestBridge = new RemoteBacktestBridge(() => {
+      try {
+        const svc = runtime.services?.get?.("fin-remote-backtest");
+        return svc as
+          | import("./src/strategy/remote-backtest-bridge.js").RemoteBacktestService
+          | undefined;
+      } catch {
+        return undefined;
+      }
+    });
 
     api.registerService({
       id: "fin-strategy-registry",
@@ -342,18 +359,12 @@ const findooTraderPlugin = {
       instance: strategyRegistry,
     } as Parameters<typeof api.registerService>[0]);
 
-    api.registerService({
-      id: "fin-backtest-engine",
-      start: () => {},
-      instance: backtestEngine,
-    } as Parameters<typeof api.registerService>[0]);
-
     // ── Register strategy AI tools (5 tools, L3 uses liveExecutor directly) ──
 
     registerStrategyTools(
       api,
       strategyRegistry,
-      backtestEngine,
+      backtestBridge,
       liveExecutor,
       paperEngine,
       progressStore,
@@ -421,6 +432,27 @@ const findooTraderPlugin = {
 
     registerFundRoutes(api, fundDeps);
 
+    // ── L3 Live Health Monitor (circuit breaker for cumulative loss) ──
+
+    const liveHealthMonitor = new LiveHealthMonitor({
+      liveExecutor,
+      strategyRegistry,
+      eventStore,
+      activityLog,
+      wakeBridge,
+    });
+
+    // ── L3 Live Reconciler (position drift detection: live vs paper) ──
+
+    const liveReconciler = new LiveReconciler({
+      liveExecutor,
+      paperEngine,
+      strategyRegistry,
+      eventStore,
+      activityLog,
+      wakeBridge,
+    });
+
     // ── Lifecycle Engine (autonomous promotion/demotion, runs every 5 min) ──
 
     const lifecycleEngine = new LifecycleEngine(
@@ -437,6 +469,8 @@ const findooTraderPlugin = {
             sessionKeyResolver: () => undefined,
             activityLog,
           }),
+        liveHealthMonitor,
+        liveReconciler,
       },
       5 * 60_000, // 5 minutes
     );
@@ -464,6 +498,15 @@ const findooTraderPlugin = {
         try {
           return runtime.services?.get?.("fin-data-provider") as
             | typeof paperScheduler.deps.dataProvider
+            | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      regimeDetectorResolver: () => {
+        try {
+          return runtime.services?.get?.("fin-regime-detector") as
+            | { detect: (ohlcv: unknown[]) => string }
             | undefined;
         } catch {
           return undefined;
@@ -497,6 +540,71 @@ const findooTraderPlugin = {
     });
     briefScheduler.start();
 
+    // ── Strategy Ideation Scheduler (market scan → LLM → auto-create strategies) ──
+
+    const ideationUserConfig = (
+      (api.config as Record<string, unknown>)?.financial as Record<string, unknown> | undefined
+    )?.ideation as Partial<IdeationConfig> | undefined;
+
+    const ideationConfig: IdeationConfig = {
+      ...DEFAULT_IDEATION_CONFIG,
+      ...ideationUserConfig,
+    };
+
+    const marketScanner = new MarketScanner({
+      dataProviderResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-data-provider");
+          return svc as import("./src/ideation/market-scanner.js").DataProviderLike | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      regimeDetectorResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-regime-detector");
+          return svc as import("./src/ideation/market-scanner.js").RegimeDetectorLike | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    });
+
+    const dedupFilter = new DeduplicationFilter(strategyRegistry);
+
+    const ideationEngine = new IdeationEngine({
+      wakeBridge,
+      activityLog,
+    });
+
+    const ideationScheduler = new IdeationScheduler(
+      {
+        scanner: marketScanner,
+        engine: ideationEngine,
+        filter: dedupFilter,
+        activityLog,
+        existingStrategyNamesResolver: () => {
+          try {
+            return strategyRegistry
+              .list()
+              .map((s) => `${s.name} (${s.definition.symbols.join(",")})`);
+          } catch {
+            return [];
+          }
+        },
+        maxConcurrentResolver: () => {
+          try {
+            return agentConfigStore.get().maxConcurrentStrategies ?? 20;
+          } catch {
+            return 20;
+          }
+        },
+      },
+      ideationConfig,
+    );
+    ideationScheduler.start();
+    ideationRef.scheduler = ideationScheduler;
+
     // ── Cold-Start Seeder (seeds 5 classic strategies on first launch) ──
     // Creates seed strategies at L0 and promotes to L1. The LLM agent handles
     // all further lifecycle decisions (backtests, promotions, demotions) via
@@ -504,23 +612,15 @@ const findooTraderPlugin = {
 
     const coldStartSeeder = new ColdStartSeeder({
       strategyRegistry,
-      backtestEngine,
+      bridge: backtestBridge,
       eventStore,
       wakeBridge,
-      dataProviderResolver: () => {
-        try {
-          const svc = runtime.services?.get?.("fin-data-provider");
-          return svc as import("./src/types-http.js").DataProviderLike | undefined;
-        } catch {
-          return undefined;
-        }
-      },
     });
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
 
     // ── Strategy Pack HTTP Routes ──
 
-    registerPackRoutes(api, { strategyRegistry, eventStore });
+    registerPackRoutes(api, { strategyRegistry, eventStore, riskController });
 
     // ── Daily Brief HTTP endpoint ──
 
@@ -595,7 +695,10 @@ const findooTraderPlugin = {
     const telegramChatId =
       (notificationConfig?.telegramChatId as string | undefined) ??
       process.env.FINDOO_TELEGRAM_CHAT_ID;
-    const telegramBotToken = notificationConfig?.telegramBotToken as string | undefined;
+    const telegramBotToken =
+      (notificationConfig?.telegramBotToken as string | undefined) ??
+      process.env.FINDOO_TELEGRAM_BOT_TOKEN ??
+      process.env.TELEGRAM_BOT_TOKEN;
 
     if (telegramChatId) {
       const notificationRouter = new NotificationRouter(eventStore, {
@@ -624,33 +727,52 @@ const findooTraderPlugin = {
       lifecycleEngineResolver: () => lifecycleRef.engine,
     });
 
+    // Telegram approval flow: users reply "approve"/"reject" in Telegram chat.
+    // Agent heartbeat reads replies → calls fin_fund_promote / fin_fund_reject.
+    // No independent polling — all user interaction is Agent-mediated.
+
     // ── Risk control hook: intercept fin_* trading tool calls ──
 
     api.registerHook(
       "before_tool_call",
-      async (ctx) => {
-        const toolName = (ctx as unknown as Record<string, unknown>).toolName as string | undefined;
+      async (ctx: Record<string, unknown>) => {
+        const toolName = typeof ctx.toolName === "string" ? ctx.toolName : undefined;
         if (
           !toolName ||
           (!toolName.startsWith("fin_place_order") && !toolName.startsWith("fin_modify_order"))
         ) {
           return;
         }
-        (ctx as unknown as Record<string, unknown>).riskController = riskController;
+        ctx.riskController = riskController;
       },
       { name: "fin-risk-gate" },
     );
+
+    // ── Load HEARTBEAT-FINANCIAL.md template (optional, silent on failure) ──
+
+    let heartbeatChecklist: string | undefined;
+    try {
+      const templatePath = join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../docs/reference/templates/HEARTBEAT-FINANCIAL.md",
+      );
+      heartbeatChecklist = readFileSync(templatePath, "utf-8");
+    } catch {
+      // Template not found — skip silently
+    }
 
     // ── Prompt context hook: inject financial state into every agent prompt ──
 
     api.on("before_prompt_build", async () => {
       const context = buildFinancialContext({
+        heartbeatChecklist,
         paperEngine,
         strategyRegistry,
         riskController,
         exchangeRegistry: registry,
         eventStore,
         lifecycleEngine: lifecycleRef.engine,
+        ideationScheduler,
       });
       if (!context) return;
       return { prependContext: context };

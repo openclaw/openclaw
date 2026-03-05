@@ -76,7 +76,7 @@ d("Phase F — A4: Browser Setting", () => {
 
   // ── Helper: navigate to setting page, strip CDN scripts ──
   async function gotoSetting() {
-    const res = await fetch(`${ctx.baseUrl}/dashboard/setting`);
+    const res = await fetch(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/setting`);
     let html = await res.text();
     html = stripChartJsCdn(html);
     await page.setContent(html, { waitUntil: "domcontentloaded" });

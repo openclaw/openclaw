@@ -304,7 +304,9 @@ describe("Phase F — Full Lifecycle Journey (B12)", () => {
   // ── J10: Dashboard strategy data ──
 
   it("J10: GET /dashboard/strategy returns pipeline overview", async () => {
-    const { status, body, headers } = await fetchText(`${ctx.baseUrl}/dashboard/strategy`);
+    const { status, body, headers } = await fetchText(
+      `${ctx.baseUrl}/plugins/findoo-trader/dashboard/strategy`,
+    );
     expect(status).toBe(200);
     expect(body.length).toBeGreaterThan(0);
 

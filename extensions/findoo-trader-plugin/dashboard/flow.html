@@ -38,11 +38,11 @@
       </div>
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
-        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item active" href="/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
       <div class="topbar__agents" id="agentDots"></div>
@@ -429,6 +429,7 @@
 
         sse.onerror = function() {
           if (dotEl) dotEl.style.background = 'var(--loss)';
+          setTimeout(connectStrategySSE, 5000);
         };
       }
 

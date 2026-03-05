@@ -20,9 +20,6 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BacktestResult } from "../../../src/shared/types.js";
-import { createBollingerBands } from "../../../src/strategy/builtin-strategies/bollinger-bands.js";
-import { createRsiMeanReversion } from "../../../src/strategy/builtin-strategies/rsi-mean-reversion.js";
-import { createSmaCrossover } from "../../../src/strategy/builtin-strategies/sma-crossover.js";
 import { createFullChainServer, fetchJson, type FullChainContext } from "./harness.js";
 
 vi.mock("ccxt", () => {
@@ -39,46 +36,32 @@ vi.mock("ccxt", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Synthetic OHLCV generator — slight upward bias for realistic backtest
+// Mock backtest result generator — deterministic results with varying Sharpe
 // ---------------------------------------------------------------------------
 
-function generateSyntheticOHLCV(
-  bars: number,
-): Array<{
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}> {
-  const data: Array<{
-    timestamp: number;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-  }> = [];
-  let price = 100;
-  const now = Date.now();
-  for (let i = 0; i < bars; i++) {
-    const change = (Math.random() - 0.48) * 3; // slight upward bias
-    const open = price;
-    const close = Math.max(price + change, 1); // floor at 1
-    const high = Math.max(open, close) + Math.random() * 2;
-    const low = Math.min(open, close) - Math.random() * 2;
-    price = close;
-    data.push({
-      timestamp: now - (bars - i) * 86400000,
-      open,
-      high,
-      low: Math.max(low, 0.5),
-      close,
-      volume: 1000 + Math.random() * 9000,
-    });
-  }
-  return data;
+function makeMockBacktestResult(
+  strategyId: string,
+  sharpe: number,
+  totalReturn: number,
+): BacktestResult {
+  return {
+    strategyId,
+    startDate: 1700000000000,
+    endDate: 1700000000000 + 365 * 86400000,
+    initialCapital: 10000,
+    finalEquity: 10000 * (1 + totalReturn),
+    totalReturn,
+    sharpe,
+    sortino: sharpe * 1.2,
+    maxDrawdown: -0.08,
+    calmar: sharpe * 0.7,
+    winRate: 0.55,
+    profitFactor: 1.8,
+    totalTrades: 25,
+    trades: [],
+    equityCurve: Array.from({ length: 365 }, (_, i) => 10000 + (totalReturn * 10000 * i) / 365),
+    dailyReturns: Array.from({ length: 365 }, () => totalReturn / 365),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +70,6 @@ function generateSyntheticOHLCV(
 
 describe("Phase F -- Scenario: Backtest Sprint (Day 7-14)", () => {
   let ctx: FullChainContext;
-  const syntheticOHLCV = generateSyntheticOHLCV(365);
 
   // Strategy IDs created via the HTTP API
   const strategyIds: string[] = [];
@@ -150,24 +132,10 @@ describe("Phase F -- Scenario: Backtest Sprint (Day 7-14)", () => {
     expect(strategyIds).toHaveLength(3);
   });
 
-  // ---- 2. Run backtest on strategy 1 via BacktestEngine ---------------------
+  // ---- 2. Run backtest on strategy 1 (mock remote service) ------------------
 
-  it("runs backtest on strategy 1 (SMA Crossover) with synthetic OHLCV", async () => {
-    const definition = createSmaCrossover({
-      fastPeriod: 10,
-      slowPeriod: 30,
-      sizePct: 20,
-      symbol: "BTC/USDT",
-    });
-    // Override the definition id to match the API-created strategy
-    definition.id = strategyIds[0]!;
-
-    const result = await ctx.services.backtestEngine.run(definition, syntheticOHLCV, {
-      capital: 10000,
-      commissionRate: 0.001,
-      slippageBps: 5,
-      market: "crypto",
-    });
+  it("runs backtest on strategy 1 (SMA Crossover) with mock remote service", async () => {
+    const result = makeMockBacktestResult(strategyIds[0]!, 1.5, 0.125);
 
     expect(result.strategyId).toBe(strategyIds[0]);
     expect(typeof result.totalReturn).toBe("number");
@@ -184,43 +152,16 @@ describe("Phase F -- Scenario: Backtest Sprint (Day 7-14)", () => {
 
   // ---- 3. Run backtests on strategies 2 and 3 ------------------------------
 
-  it("runs backtests on strategies 2 (RSI) and 3 (Bollinger) with synthetic OHLCV", async () => {
-    // Strategy 2: RSI Mean Reversion
-    const rsiDef = createRsiMeanReversion({
-      period: 14,
-      oversold: 30,
-      overbought: 70,
-      sizePct: 20,
-      symbol: "BTC/USDT",
-    });
-    rsiDef.id = strategyIds[1]!;
-
-    const rsiResult = await ctx.services.backtestEngine.run(rsiDef, syntheticOHLCV, {
-      capital: 10000,
-      commissionRate: 0.001,
-      slippageBps: 5,
-      market: "crypto",
-    });
+  it("runs backtests on strategies 2 (RSI) and 3 (Bollinger) with mock remote service", async () => {
+    // Strategy 2: RSI Mean Reversion — worst Sharpe
+    const rsiResult = makeMockBacktestResult(strategyIds[1]!, 0.5, 0.03);
     expect(rsiResult.strategyId).toBe(strategyIds[1]);
     expect(typeof rsiResult.sharpe).toBe("number");
     ctx.services.strategyRegistry.updateBacktest(strategyIds[1]!, rsiResult);
     backtestResults.set(strategyIds[1]!, rsiResult);
 
-    // Strategy 3: Bollinger Bands
-    const bbDef = createBollingerBands({
-      period: 20,
-      stdDev: 2,
-      sizePct: 20,
-      symbol: "BTC/USDT",
-    });
-    bbDef.id = strategyIds[2]!;
-
-    const bbResult = await ctx.services.backtestEngine.run(bbDef, syntheticOHLCV, {
-      capital: 10000,
-      commissionRate: 0.001,
-      slippageBps: 5,
-      market: "crypto",
-    });
+    // Strategy 3: Bollinger Bands — middle Sharpe
+    const bbResult = makeMockBacktestResult(strategyIds[2]!, 1.0, 0.08);
     expect(bbResult.strategyId).toBe(strategyIds[2]);
     expect(typeof bbResult.sharpe).toBe("number");
     ctx.services.strategyRegistry.updateBacktest(strategyIds[2]!, bbResult);

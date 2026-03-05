@@ -39,11 +39,11 @@
       </div>
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
-        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item active" href="/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
       <div class="topbar__agents" id="agentDots"></div>
@@ -432,7 +432,7 @@
         // ── Propagate ?embedded=1 to internal dashboard links ──
         (function() {
           if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function(a) {
             var href = a.getAttribute("href");
             if (href && href.indexOf("embedded") === -1) {
               a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
@@ -1192,13 +1192,8 @@
           },
           triggerEvolution: function () {
             $("botMsg").innerHTML = "<em>Triggering evolution cycle...</em>";
-            postApi("/api/v1/finance/evolution/trigger", {})
-              .then(function () {
-                toast("Evolution cycle triggered", "success");
-              })
-              .catch(function (e) {
-                toast("Evolution trigger failed: " + e.message, "error");
-              });
+            toast("Evolution is triggered by the AI agent automatically via heartbeat. Check agent activity for status.", "info");
+            $("botMsg").innerHTML = "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
           },
           runAllBacktests: function () {
             $("botMsg").innerHTML = "<em>Running all backtests...</em>";
@@ -1211,7 +1206,7 @@
               });
           },
           stratAction: function (id, action) {
-            postApi("/api/v1/finance/strategies/" + action, { strategyId: id })
+            postApi("/api/v1/finance/strategies/" + action, { id: id })
               .then(function () {
                 toast("Strategy " + id + " \u2014 " + action + " OK", "success");
               })

@@ -464,41 +464,44 @@ function createMockServer() {
       return res.end();
     }
 
-    // ── Dashboard pages ──
-    if (method === "GET" && url === "/dashboard/overview") {
+    // ── Dashboard pages (namespaced) ──
+    const P = "/plugins/findoo-trader/dashboard";
+    if (method === "GET" && url === `${P}/overview`) {
       const page = renderPage("overview", buildOverviewData());
       return page ? htmlRes(res, page) : json(res, 200, buildOverviewData());
     }
-    if (method === "GET" && url === "/dashboard/strategy") {
+    if (method === "GET" && url === `${P}/strategy`) {
       const page = renderPage("strategy", buildStrategyData());
       return page ? htmlRes(res, page) : json(res, 200, buildStrategyData());
     }
-    if (method === "GET" && (url === "/dashboard/trader" || url.startsWith("/dashboard/trader?"))) {
+    if (method === "GET" && (url === `${P}/trader` || url.startsWith(`${P}/trader?`))) {
       const parsedUrl = new URL(url, "http://localhost");
       const domain = parsedUrl.searchParams.get("domain") || "paper";
       const page = renderPage("trader", buildTraderData(domain));
       return page ? htmlRes(res, page) : json(res, 200, buildTraderData(domain));
     }
-    if (method === "GET" && url === "/dashboard/setting") {
+    if (method === "GET" && url === `${P}/setting`) {
       const page = renderPage("setting", buildSettingData());
       return page ? htmlRes(res, page) : json(res, 200, buildSettingData());
     }
 
-    // ── Legacy redirects ──
-    if (method === "GET" && url === "/dashboard/finance")
-      return redirect(res, "/dashboard/overview");
-    if (method === "GET" && url === "/dashboard/trading") return redirect(res, "/dashboard/trader");
-    if (method === "GET" && url === "/dashboard/command-center")
-      return redirect(res, "/dashboard/trader");
-    if (method === "GET" && url === "/dashboard/mission-control")
-      return redirect(res, "/dashboard/overview");
-    if (method === "GET" && url === "/dashboard/evolution")
-      return redirect(res, "/dashboard/strategy");
-    if (method === "GET" && url === "/dashboard/fund") return redirect(res, "/dashboard/strategy");
-    if (method === "GET" && url === "/dashboard/trading-desk")
-      return redirect(res, "/dashboard/trader");
-    if (method === "GET" && url === "/dashboard/strategy-arena")
-      return redirect(res, "/dashboard/strategy");
+    // ── Backward-compat: /dashboard/* → 301 → /plugins/findoo-trader/dashboard/* ──
+    if (method === "GET" && url.startsWith("/dashboard/")) {
+      const page = url.slice("/dashboard/".length).split("?")[0];
+      const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+      res.writeHead(301, { Location: `${P}/${page}${qs}` });
+      return res.end();
+    }
+
+    // ── Alias redirects (namespaced) ──
+    if (method === "GET" && url === `${P}/finance`) return redirect(res, `${P}/overview`);
+    if (method === "GET" && url === `${P}/trading`) return redirect(res, `${P}/trader`);
+    if (method === "GET" && url === `${P}/command-center`) return redirect(res, `${P}/trader`);
+    if (method === "GET" && url === `${P}/mission-control`) return redirect(res, `${P}/overview`);
+    if (method === "GET" && url === `${P}/evolution`) return redirect(res, `${P}/strategy`);
+    if (method === "GET" && url === `${P}/fund`) return redirect(res, `${P}/strategy`);
+    if (method === "GET" && url === `${P}/trading-desk`) return redirect(res, `${P}/trader`);
+    if (method === "GET" && url === `${P}/strategy-arena`) return redirect(res, `${P}/strategy`);
 
     // ── JSON API: Config ──
     if (method === "GET" && url === "/api/v1/finance/config") {
@@ -821,7 +824,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J1: First-time setup — Setting page", () => {
     it("loads setting page with exchange section", async () => {
-      await page.goto(`${baseUrl}/dashboard/setting`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/setting`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.title()).toContain("Setting");
@@ -830,7 +833,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("shows add-exchange modal and submits exchange", async () => {
-      await page.goto(`${baseUrl}/dashboard/setting`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/setting`);
       await page.waitForLoadState("domcontentloaded");
 
       // Click "Add Exchange" button
@@ -857,7 +860,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("updates risk config via form", async () => {
-      await page.goto(`${baseUrl}/dashboard/setting`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/setting`);
       await page.waitForLoadState("domcontentloaded");
 
       // Navigate to risk section
@@ -879,7 +882,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("updates agent config via form", async () => {
-      await page.goto(`${baseUrl}/dashboard/setting`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/setting`);
       await page.waitForLoadState("domcontentloaded");
 
       // Navigate to agent section
@@ -899,7 +902,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J2: Strategy lifecycle — Strategy page", () => {
     it("loads with pipeline counts matching mock data", async () => {
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.title()).toContain("Strategy");
@@ -912,7 +915,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("opens create strategy slide-over and submits", async () => {
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // Click "New Strategy" button
@@ -935,7 +938,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("runs backtest-all and renders results", async () => {
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // Click "Backtest All" button
@@ -947,7 +950,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("renders leaderboard rows in raceboard", async () => {
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // The leaderboard should have rows for each strategy
@@ -956,7 +959,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("shows evolution stats", async () => {
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // Active count and total
@@ -972,7 +975,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
   describe("J3: L3 approval flow — Strategy page", () => {
     it("L2→L3 promotion returns pending approval", async () => {
       // Set up a L2 strategy via promote action on the mock
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // Manually trigger a promote via API (simulating the button click flow)
@@ -1003,7 +1006,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
         actionParams: { strategyId: "s-beta", fromLevel: "L2_PAPER", toLevel: "L3_LIVE" },
       });
 
-      await page.goto(`${baseUrl}/dashboard/strategy`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/strategy`);
       await page.waitForLoadState("domcontentloaded");
 
       // Approve via API call from page context
@@ -1027,7 +1030,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J4: Paper trading — Trader page", () => {
     it("loads trader page with paper domain active", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.title()).toContain("Trader");
@@ -1040,7 +1043,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("renders positions list", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       // Positions list should exist
@@ -1049,7 +1052,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("submits quick order via inline form", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       // Fill quick order form
@@ -1077,7 +1080,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("shows order book and k-line chart containers", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#klineChartContainer").isVisible()).toBe(true);
@@ -1085,7 +1088,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("equity value is displayed in topbar", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       const eqVal = await page.locator("#eqVal").textContent();
@@ -1099,7 +1102,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J5: Morning briefing — Overview page", () => {
     it("loads overview with equity and stats", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.title()).toContain("Overview");
@@ -1111,7 +1114,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("renders stat pills with position and strategy counts", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#spPositions").isVisible()).toBe(true);
@@ -1125,7 +1128,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("shows risk status badge", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#riskStatus").isVisible()).toBe(true);
@@ -1134,14 +1137,14 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("shows SSE dots in topbar", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#sseDots").isVisible()).toBe(true);
     });
 
     it("renders pipeline counts", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#pipeL0").textContent()).toBe("1");
@@ -1151,27 +1154,33 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("navigates to other pages via topbar", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       // Click Strategy nav link
-      await page.locator('a.topbar__nav-item[href="/dashboard/strategy"]').click();
+      await page
+        .locator('a.topbar__nav-item[href="/plugins/findoo-trader/dashboard/strategy"]')
+        .click();
       await page.waitForLoadState("domcontentloaded");
-      expect(page.url()).toContain("/dashboard/strategy");
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/strategy");
 
       // Click Trader nav link
-      await page.locator('a.topbar__nav-item[href="/dashboard/trader"]').click();
+      await page
+        .locator('a.topbar__nav-item[href="/plugins/findoo-trader/dashboard/trader"]')
+        .click();
       await page.waitForLoadState("domcontentloaded");
-      expect(page.url()).toContain("/dashboard/trader");
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/trader");
 
       // Click Setting nav link
-      await page.locator('a.topbar__nav-item[href="/dashboard/setting"]').click();
+      await page
+        .locator('a.topbar__nav-item[href="/plugins/findoo-trader/dashboard/setting"]')
+        .click();
       await page.waitForLoadState("domcontentloaded");
-      expect(page.url()).toContain("/dashboard/setting");
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/setting");
     });
 
     it("injects pageData correctly", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       const pageData = await page.evaluate(
@@ -1190,14 +1199,14 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J6: Risk response — Emergency stop", () => {
     it("shows estop button on trader page", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#estopBtn").isVisible()).toBe(true);
     });
 
     it("opens estop modal on button click", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       // Click ESTOP button (on trader page it calls TR.showEstop())
@@ -1210,7 +1219,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("confirms emergency stop and disables trading", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       // Trigger emergency stop via API
@@ -1244,7 +1253,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
       // Start with trading disabled
       mock.setRiskEnabled(false);
 
-      await page.goto(`${baseUrl}/dashboard/setting`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/setting`);
       await page.waitForLoadState("domcontentloaded");
 
       // Re-enable via API
@@ -1268,14 +1277,14 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J7: Alert management — Overview page", () => {
     it("starts with no alerts", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(mock.getAlerts()).toHaveLength(0);
     });
 
     it("creates alert via API and verifies", async () => {
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       const res = await page.evaluate(async () => {
@@ -1306,7 +1315,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
         status: "completed",
       });
 
-      await page.goto(`${baseUrl}/dashboard/overview`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
       // Create then remove
@@ -1335,7 +1344,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
 
   describe("J8: Multi-domain switching — Trader page", () => {
     it("defaults to paper domain", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       const paperCls = await page.locator("#domPaper").getAttribute("class");
@@ -1346,7 +1355,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("domain switcher buttons exist and are visible", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       expect(await page.locator("#domLive").isVisible()).toBe(true);
@@ -1355,7 +1364,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("domain label shows current domain", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       const domainLabel = await page.locator("#domainLabel").textContent();
@@ -1363,7 +1372,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     });
 
     it("backtest section is hidden in paper/live modes", async () => {
-      await page.goto(`${baseUrl}/dashboard/trader`);
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trader`);
       await page.waitForLoadState("domcontentloaded");
 
       const btSection = page.locator("#backtestSection");
@@ -1380,35 +1389,35 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
   describe("Navigation & legacy redirects", () => {
     it("all 4 dashboard pages return 200 with HTML", async () => {
       for (const p of ["overview", "strategy", "trader", "setting"]) {
-        const res = await page.goto(`${baseUrl}/dashboard/${p}`);
+        const res = await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/${p}`);
         expect(res?.status()).toBe(200);
         expect(res?.headers()["content-type"]).toContain("text/html");
       }
     });
 
     it("/dashboard/finance redirects to /dashboard/overview", async () => {
-      await page.goto(`${baseUrl}/dashboard/finance`);
-      expect(page.url()).toContain("/dashboard/overview");
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/finance`);
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/overview");
     });
 
     it("/dashboard/trading redirects to /dashboard/trader", async () => {
-      await page.goto(`${baseUrl}/dashboard/trading`);
-      expect(page.url()).toContain("/dashboard/trader");
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/trading`);
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/trader");
     });
 
     it("/dashboard/evolution redirects to /dashboard/strategy", async () => {
-      await page.goto(`${baseUrl}/dashboard/evolution`);
-      expect(page.url()).toContain("/dashboard/strategy");
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/evolution`);
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/strategy");
     });
 
     it("/dashboard/command-center redirects to /dashboard/trader", async () => {
-      await page.goto(`${baseUrl}/dashboard/command-center`);
-      expect(page.url()).toContain("/dashboard/trader");
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/command-center`);
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/trader");
     });
 
     it("/dashboard/mission-control redirects to /dashboard/overview", async () => {
-      await page.goto(`${baseUrl}/dashboard/mission-control`);
-      expect(page.url()).toContain("/dashboard/overview");
+      await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/mission-control`);
+      expect(page.url()).toContain("/plugins/findoo-trader/dashboard/overview");
     });
   });
 });

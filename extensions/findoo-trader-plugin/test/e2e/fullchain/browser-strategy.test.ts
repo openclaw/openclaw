@@ -74,7 +74,7 @@ d("Phase F — A2: Browser Strategy", () => {
   // ── Helper: navigate to strategy page and check for HTML ──
 
   async function gotoStrategy(): Promise<boolean> {
-    await page.goto(`${ctx.baseUrl}/dashboard/strategy`);
+    await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/strategy`);
     await page.waitForLoadState("domcontentloaded");
     const contentType = await page.evaluate(() => document.contentType);
     return contentType === "text/html";

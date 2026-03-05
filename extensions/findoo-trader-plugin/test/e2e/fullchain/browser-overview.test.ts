@@ -74,7 +74,7 @@ d("Phase F — A1: Browser Overview", () => {
   // ── Helper: navigate to overview and check for HTML ──
 
   async function gotoOverview(): Promise<boolean> {
-    await page.goto(`${ctx.baseUrl}/dashboard/overview`);
+    await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/overview`);
     await page.waitForLoadState("domcontentloaded");
     const contentType = await page.evaluate(() => document.contentType);
     return contentType === "text/html";

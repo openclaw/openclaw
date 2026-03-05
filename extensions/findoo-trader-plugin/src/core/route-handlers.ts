@@ -37,6 +37,18 @@ import { registerStrategyRoutes } from "./routes-strategies.js";
 import type { DashboardTemplates } from "./template-renderer.js";
 import { renderDashboard, renderUnifiedDashboard } from "./template-renderer.js";
 
+type IdeationSchedulerLike = {
+  getStats(): {
+    running: boolean;
+    cycleCount: number;
+    lastCycleAt: number | null;
+    enabled: boolean;
+    intervalMs: number;
+  };
+  getLastResult(): unknown;
+  runCycle(): Promise<unknown>;
+};
+
 type LifecycleEngineLike = {
   getStats(): {
     running: boolean;
@@ -61,6 +73,7 @@ export type RouteHandlerDeps = {
   registry?: ExchangeRegistry;
   perfStore?: PerformanceSnapshotStore;
   lifecycleEngine?: LifecycleEngineLike;
+  ideationScheduler?: IdeationSchedulerLike;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -76,9 +89,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Finance Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
-    path: "/dashboard/finance",
+    path: "/plugins/findoo-trader/dashboard/finance",
     handler: async (_req: unknown, res: HttpRes) => {
-      res.writeHead(302, { Location: "/dashboard/overview" });
+      res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
       res.end();
     },
   });
@@ -101,9 +114,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Trading Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
-    path: "/dashboard/trading",
+    path: "/plugins/findoo-trader/dashboard/trading",
     handler: async (_req: unknown, res: HttpRes) => {
-      res.writeHead(302, { Location: "/dashboard/trader" });
+      res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
       res.end();
     },
   });
@@ -523,9 +536,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Command Center Dashboard → redirect to unified trader ──
   api.registerHttpRoute({
-    path: "/dashboard/command-center",
+    path: "/plugins/findoo-trader/dashboard/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
-      res.writeHead(302, { Location: "/dashboard/trader" });
+      res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/trader" });
       res.end();
     },
   });
@@ -540,16 +553,16 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Mission Control Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
-    path: "/dashboard/mission-control",
+    path: "/plugins/findoo-trader/dashboard/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
-      res.writeHead(302, { Location: "/dashboard/overview" });
+      res.writeHead(302, { Location: "/plugins/findoo-trader/dashboard/overview" });
       res.end();
     },
   });
 
   // ── Unified Dashboard: Overview ──
   api.registerHttpRoute({
-    path: "/dashboard/overview",
+    path: "/plugins/findoo-trader/dashboard/overview",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherOverviewData(gatherDeps);
       const html = renderUnifiedDashboard(templates.overview, data);
@@ -564,7 +577,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Strategy (merged Arena + Lab) ──
   api.registerHttpRoute({
-    path: "/dashboard/strategy",
+    path: "/plugins/findoo-trader/dashboard/strategy",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherStrategyData(gatherDeps);
       const html = renderUnifiedDashboard(templates.strategy, data);
@@ -579,7 +592,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Trader (with domain switching) ──
   api.registerHttpRoute({
-    path: "/dashboard/trader",
+    path: "/plugins/findoo-trader/dashboard/trader",
     handler: async (req: unknown, res: HttpRes) => {
       // Extract domain from query string if available
       const url = (req as { url?: string }).url ?? "";
@@ -598,7 +611,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Setting ──
   api.registerHttpRoute({
-    path: "/dashboard/setting",
+    path: "/plugins/findoo-trader/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherSettingData({ ...gatherDeps, healthStore });
       const html = renderUnifiedDashboard(templates.setting, data);
@@ -638,7 +651,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Unified Dashboard: Flow (lifecycle pipeline) ──
   api.registerHttpRoute({
-    path: "/dashboard/flow",
+    path: "/plugins/findoo-trader/dashboard/flow",
     handler: async (_req: unknown, res: HttpRes) => {
       const data = gatherFlowData(gatherDeps, deps.lifecycleEngine);
       const html = renderUnifiedDashboard(templates.flow, data);
@@ -809,18 +822,85 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
-  // ── Legacy path redirects ──
+  // ── Ideation: Status ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/ideation/status",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const scheduler = deps.ideationScheduler;
+      if (!scheduler) {
+        jsonResponse(res, 200, { enabled: false, message: "Ideation scheduler not initialized" });
+        return;
+      }
+      jsonResponse(res, 200, {
+        stats: scheduler.getStats(),
+        lastResult: scheduler.getLastResult(),
+      });
+    },
+  });
+
+  // ── Ideation: Manual Trigger ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/ideation/trigger",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const scheduler = deps.ideationScheduler;
+      if (!scheduler) {
+        errorResponse(res, 503, "Ideation scheduler not initialized");
+        return;
+      }
+      try {
+        const result = await scheduler.runCycle();
+        jsonResponse(res, 200, { triggered: true, result });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // ── Legacy path redirects (old namespaced paths) ──
   for (const [from, to] of [
-    ["/dashboard/evolution", "/dashboard/strategy-lab"],
-    ["/dashboard/fund", "/dashboard/strategy-lab"],
-    ["/dashboard/trading-desk", "/dashboard/trader"],
-    ["/dashboard/strategy-arena", "/dashboard/strategy"],
-    ["/dashboard/strategy-lab", "/dashboard/strategy"],
+    ["/plugins/findoo-trader/dashboard/evolution", "/plugins/findoo-trader/dashboard/strategy"],
+    ["/plugins/findoo-trader/dashboard/fund", "/plugins/findoo-trader/dashboard/strategy"],
+    ["/plugins/findoo-trader/dashboard/trading-desk", "/plugins/findoo-trader/dashboard/trader"],
+    [
+      "/plugins/findoo-trader/dashboard/strategy-arena",
+      "/plugins/findoo-trader/dashboard/strategy",
+    ],
+    ["/plugins/findoo-trader/dashboard/strategy-lab", "/plugins/findoo-trader/dashboard/strategy"],
   ] as const) {
     api.registerHttpRoute({
       path: from,
       handler: async (_req: unknown, res: HttpRes) => {
         res.writeHead(302, { Location: to });
+        res.end();
+      },
+    });
+  }
+
+  // ── Backward-compat: /dashboard/* → /plugins/findoo-trader/dashboard/* ──
+  for (const page of [
+    "overview",
+    "strategy",
+    "trader",
+    "setting",
+    "flow",
+    "finance",
+    "trading",
+    "command-center",
+    "mission-control",
+    "evolution",
+    "fund",
+    "trading-desk",
+    "strategy-arena",
+    "strategy-lab",
+  ]) {
+    api.registerHttpRoute({
+      path: `/dashboard/${page}`,
+      handler: async (req: unknown, res: HttpRes) => {
+        const url = (req as { url?: string }).url ?? "";
+        const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+        res.writeHead(301, {
+          Location: `/plugins/findoo-trader/dashboard/${page}${qs}`,
+        });
         res.end();
       },
     });

@@ -92,7 +92,18 @@ export type StrategyRegistryLike = {
       strategyId: string;
     };
   }>;
-  get?: (id: string) => { id: string; name: string; level: string; status?: string; definition?: Record<string, unknown>; symbol?: string } | undefined;
+  get?: (
+    id: string,
+  ) =>
+    | {
+        id: string;
+        name: string;
+        level: string;
+        status?: string;
+        definition?: Record<string, unknown>;
+        symbol?: string;
+      }
+    | undefined;
   updateLevel?: (id: string, level: string) => void;
   updateStatus?: (id: string, status: string) => void;
   updateBacktest?: (id: string, result: Record<string, unknown>) => void;
@@ -105,31 +116,21 @@ export type FundManagerLike = {
   };
 };
 
-export type BacktestEngineLike = {
-  run: (
-    definition: Record<string, unknown>,
-    ohlcv: Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>,
-    config?: Record<string, unknown>,
-  ) => {
-    totalReturn: number;
-    sharpe: number;
-    sortino: number;
-    maxDrawdown: number;
-    winRate: number;
-    profitFactor: number;
-    totalTrades: number;
-    finalEquity: number;
-    initialCapital: number;
-    strategyId: string;
-  };
-};
-
 export type DataProviderLike = {
   getOHLCV: (
     symbol: string,
     timeframe: string,
     limit?: number,
-  ) => Promise<Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>>;
+  ) => Promise<
+    Array<{
+      timestamp: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>
+  >;
 };
 
 export type AlertEngineLike = {
@@ -156,7 +157,10 @@ export type AlertEngineLike = {
 
 // ── Runtime services accessor ──
 
-export type RuntimeServices = { services?: Map<string, unknown> };
+export type RuntimeServices = {
+  services?: Map<string, unknown>;
+  system?: { enqueueSystemEvent?: (...args: unknown[]) => void };
+};
 
 // ── HTTP helper functions ──
 

@@ -64,7 +64,7 @@ d("Phase F — A5: Browser Flow", () => {
 
   // ── Helper: navigate to flow page and check for HTML ──
   async function gotoFlow(): Promise<boolean> {
-    await page.goto(`${ctx.baseUrl}/dashboard/flow`);
+    await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
     const contentType = await page.evaluate(() => document.contentType);
     return contentType === "text/html";

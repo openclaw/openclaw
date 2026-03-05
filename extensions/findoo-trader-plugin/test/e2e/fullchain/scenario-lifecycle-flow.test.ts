@@ -82,7 +82,7 @@ describe("Phase F — Scenario: Lifecycle Flow", () => {
 
   // ── 1. Flow dashboard HTML endpoint ──
   it("GET /dashboard/flow returns HTML with pipeline columns and activity timeline", async () => {
-    const { status, body } = await fetchText(`${ctx.baseUrl}/dashboard/flow`);
+    const { status, body } = await fetchText(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
 
     expect(status).toBe(200);
     const html = body;

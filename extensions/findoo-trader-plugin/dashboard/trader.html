@@ -542,11 +542,11 @@ body.embedded .topbar__logo{display:none}
       </div>
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
-        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item active" href="/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
       <!-- Domain Switcher -->
@@ -627,8 +627,8 @@ body.embedded .topbar__logo{display:none}
           <span class="chart-header__symbol" id="chartSymbolLabel">BTC/USDT</span>
           <span class="chart-header__price num" id="chartPrice">--</span>
           <span class="chart-header__chg num" id="chartChg"></span>
-          <input type="text" id="klineSymbol" value="BTC/USDT" style="width:80px;font-size:10px;padding:2px 6px;background:var(--surface);border:1px solid var(--border);color:var(--text-dim);border-radius:3px;margin-left:8px" />
-          <select id="klineTf" style="width:auto;font-size:10px;padding:2px 4px;background:var(--surface);border:1px solid var(--border);color:var(--text-dim);border-radius:3px;margin-left:4px">
+          <input type="text" id="klineSymbol" value="BTC/USDT" style="width:80px;font-size:10px;padding:2px 6px;background:var(--card);border:1px solid var(--border);color:var(--text-dim);border-radius:3px;margin-left:8px" />
+          <select id="klineTf" style="width:auto;font-size:10px;padding:2px 4px;background:var(--card);border:1px solid var(--border);color:var(--text-dim);border-radius:3px;margin-left:4px">
             <option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option>
             <option value="1h" selected>1h</option><option value="4h">4h</option><option value="1d">1d</option>
           </select>
@@ -865,7 +865,7 @@ body.embedded .topbar__logo{display:none}
         // ── Embedded link propagation ──
         (function() {
           if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function(a) {
             var href = a.getAttribute("href");
             if (href && href.indexOf("embedded") === -1)
               a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
@@ -1515,7 +1515,7 @@ body.embedded .topbar__logo{display:none}
             var type = $("orderType").value.toLowerCase();
             var amount = parseFloat($("orderAmount").value);
             var price = type === "market" ? undefined : parseFloat($("orderPrice").value.replace(/[^0-9.]/g, ""));
-            postApi("/api/v1/finance/orders", { side: side, symbol: symbol, type: type, amount: amount, price: price, domain: state.domain })
+            postApi("/api/v1/finance/orders", { side: side, symbol: symbol, type: type, quantity: amount, limitPrice: price, domain: state.domain })
               .then(function () { TR.closeSlide("order"); toast(side.toUpperCase() + " " + amount + " " + symbol + " submitted", "success"); })
               .catch(function (e) { toast("Order failed: " + e.message, "error"); });
           },
@@ -1525,7 +1525,7 @@ body.embedded .topbar__logo{display:none}
             var type = $("qoType").value.toLowerCase();
             var amount = parseFloat($("qoAmount").value);
             var price = type === "market" ? undefined : parseFloat($("qoPrice").value.replace(/[^0-9.]/g, ""));
-            postApi("/api/v1/finance/orders", { side: side, symbol: symbol, type: type, amount: amount, price: price, domain: state.domain })
+            postApi("/api/v1/finance/orders", { side: side, symbol: symbol, type: type, quantity: amount, limitPrice: price, domain: state.domain })
               .then(function () { toast(side.toUpperCase() + " " + amount + " " + symbol + " submitted", "success"); })
               .catch(function (e) { toast("Order failed: " + e.message, "error"); });
           },
