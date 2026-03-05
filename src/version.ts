@@ -8,6 +8,9 @@ const PACKAGE_JSON_CANDIDATES = [
   "../../package.json",
   "../../../package.json",
   "./package.json",
+  // Homebrew installation paths
+  "../../../../package.json",
+  "../../../../../package.json",
 ] as const;
 
 const BUILD_INFO_CANDIDATES = [
