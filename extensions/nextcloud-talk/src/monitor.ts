@@ -6,7 +6,7 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
@@ -303,10 +303,12 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     });
   };
 
+  let stopped = false;
   const stop = (): Promise<void> => {
-    if (!server.listening && !listening) {
+    if (stopped || (!server.listening && !listening)) {
       return Promise.resolve();
     }
+    stopped = true;
 
     return new Promise((resolve, reject) => {
       server.close((error) => {
@@ -321,13 +323,17 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   };
 
   if (abortSignal) {
-    abortSignal.addEventListener(
-      "abort",
-      () => {
-        void stop();
-      },
-      { once: true },
-    );
+    if (abortSignal.aborted) {
+      void stop();
+    } else {
+      abortSignal.addEventListener(
+        "abort",
+        () => {
+          void stop();
+        },
+        { once: true },
+      );
+    }
   }
 
   return { server, start, stop };
@@ -430,7 +436,14 @@ export async function monitorNextcloudTalkProvider(
     abortSignal: opts.abortSignal,
   });
 
+  if (opts.abortSignal?.aborted) {
+    return { stop };
+  }
   await start();
+  if (opts.abortSignal?.aborted) {
+    stop();
+    return { stop };
+  }
 
   const publicUrl =
     account.config.webhookPublicUrl ??

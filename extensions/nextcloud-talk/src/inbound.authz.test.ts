@@ -1,4 +1,4 @@
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/nextcloud-talk";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -75,7 +75,10 @@ describe("nextcloud-talk inbound authz", () => {
       } as unknown as RuntimeEnv,
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledWith("nextcloud-talk");
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "nextcloud-talk",
+      accountId: "default",
+    });
     expect(buildMentionRegexes).not.toHaveBeenCalled();
   });
 });

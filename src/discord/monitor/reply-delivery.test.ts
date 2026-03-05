@@ -9,11 +9,16 @@ import {
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
+const sendDiscordTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.js", () => ({
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
   sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
   sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
 describe("deliverDiscordReply", () => {
@@ -61,6 +66,10 @@ describe("deliverDiscordReply", () => {
     sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "webhook-1",
       channelId: "thread-1",
+    });
+    sendDiscordTextMock.mockClear().mockResolvedValue({
+      id: "msg-direct-1",
+      channel_id: "channel-1",
     });
     threadBindingTesting.resetThreadBindingsForTests();
   });
@@ -126,6 +135,45 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
+  it("passes mediaLocalRoots through media sends", async () => {
+    const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "Media reply",
+          mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+      mediaLocalRoots,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:654",
+      "Media reply",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/first.png",
+        mediaLocalRoots,
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:654",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/second.png",
+        mediaLocalRoots,
+      }),
+    );
+  });
+
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
     await deliverDiscordReply({
       replies: [
@@ -165,6 +213,148 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("preserves leading whitespace in delivered text chunks", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "  leading text" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "  leading text",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
+  it("sends text chunks in order via sendDiscordText when rest is provided", async () => {
+    const fakeRest = {} as import("@buape/carbon").RequestClient;
+    const callOrder: string[] = [];
+    sendDiscordTextMock.mockImplementation(
+      async (_rest: unknown, _channelId: unknown, text: string) => {
+        callOrder.push(text);
+        return { id: `msg-${callOrder.length}`, channel_id: "789" };
+      },
+    );
+
+    await deliverDiscordReply({
+      replies: [{ text: "1234567890" }],
+      target: "channel:789",
+      token: "token",
+      rest: fakeRest,
+      runtime,
+      textLimit: 5,
+    });
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendDiscordTextMock).toHaveBeenCalledTimes(2);
+    expect(callOrder).toEqual(["12345", "67890"]);
+    expect(sendDiscordTextMock.mock.calls[0]?.[1]).toBe("789");
+    expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("789");
+  });
+
+  it("falls back to sendMessageDiscord when rest is not provided", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "single chunk" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendDiscordTextMock).not.toHaveBeenCalled();
+  });
+
+  it("retries bot send on 429 rate limit then succeeds", async () => {
+    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(rateLimitErr)
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries bot send on 500 server error then succeeds", async () => {
+    const serverErr = Object.assign(new Error("internal"), { status: 500 });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(serverErr)
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 4xx client errors", async () => {
+    const clientErr = Object.assign(new Error("bad request"), { status: 400 });
+    sendMessageDiscordMock.mockRejectedValueOnce(clientErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("bad request");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws after exhausting retry attempts", async () => {
+    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
+    sendMessageDiscordMock.mockRejectedValue(rateLimitErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "persistent failure" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("rate limited");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("delivers remaining chunks after a mid-sequence retry", async () => {
+    sendMessageDiscordMock
+      .mockResolvedValueOnce({ messageId: "c1" })
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce({ messageId: "c2-retry" })
+      .mockResolvedValueOnce({ messageId: "c3" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "A".repeat(6) }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(4);
+  });
+
   it("sends bound-session text replies through webhook delivery", async () => {
     const threadBindings = await createBoundThreadBindings({ label: "codex-refactor" });
 
@@ -191,6 +381,31 @@ describe("deliverDiscordReply", () => {
       }),
     );
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("touches bound-thread activity after outbound delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+      const threadBindings = await createBoundThreadBindings();
+      vi.setSystemTime(new Date("2026-02-20T00:02:00.000Z"));
+
+      await deliverDiscordReply({
+        replies: [{ text: "Activity ping" }],
+        target: "channel:thread-1",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+        sessionKey: "agent:main:subagent:child",
+        threadBindings,
+      });
+
+      expect(threadBindings.getByThreadId("thread-1")?.lastActivityAt).toBe(
+        new Date("2026-02-20T00:02:00.000Z").getTime(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to bot send when webhook delivery fails", async () => {

@@ -13,6 +13,15 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   }
 }
 
+async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
+  const dir = await fs.mkdtemp(path.join(process.cwd(), "openclaw-patch-workspace-"));
+  try {
+    return await fn(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 function buildAddFilePatch(targetPath: string): string {
   return `*** Begin Patch
 *** Add File: ${targetPath}
@@ -139,6 +148,10 @@ describe("applyPatch", () => {
   });
 
   it("rejects symlink escape attempts by default", async () => {
+    // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+    if (process.platform === "win32") {
+      return;
+    }
     await withTempDir(async (dir) => {
       const outside = path.join(path.dirname(dir), "outside-target.txt");
       const linkPath = path.join(dir, "link.txt");
@@ -156,6 +169,33 @@ describe("applyPatch", () => {
       const outsideContents = await fs.readFile(outside, "utf8");
       expect(outsideContents).toBe("initial\n");
       await fs.rm(outside, { force: true });
+    });
+  });
+
+  it("rejects broken final symlink targets outside cwd by default", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withWorkspaceTempDir(async (dir) => {
+      const outsideDir = path.join(path.dirname(dir), `outside-broken-link-${Date.now()}`);
+      const outsideFile = path.join(outsideDir, "owned.txt");
+      const linkPath = path.join(dir, "jump");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.symlink(outsideFile, linkPath);
+
+      const patch = `*** Begin Patch
+*** Add File: jump
++pwned
+*** End Patch`;
+
+      try {
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /Symlink escapes sandbox root/,
+        );
+        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -196,6 +236,10 @@ describe("applyPatch", () => {
   });
 
   it("allows symlinks that resolve within cwd by default", async () => {
+    // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+    if (process.platform === "win32") {
+      return;
+    }
     await withTempDir(async (dir) => {
       const target = path.join(dir, "target.txt");
       const linkPath = path.join(dir, "link.txt");
@@ -223,7 +267,9 @@ describe("applyPatch", () => {
       await fs.writeFile(outsideFile, "victim\n", "utf8");
 
       const linkDir = path.join(dir, "linkdir");
-      await fs.symlink(outsideDir, linkDir);
+      // Use 'junction' on Windows — junctions target directories without
+      // requiring SeCreateSymbolicLinkPrivilege.
+      await fs.symlink(outsideDir, linkDir, process.platform === "win32" ? "junction" : undefined);
 
       const patch = `*** Begin Patch
 *** Delete File: linkdir/victim.txt
@@ -274,7 +320,13 @@ describe("applyPatch", () => {
         await fs.writeFile(outsideTarget, "keep\n", "utf8");
 
         const linkDir = path.join(dir, "link");
-        await fs.symlink(outsideDir, linkDir);
+        // Use 'junction' on Windows — junctions target directories without
+        // requiring SeCreateSymbolicLinkPrivilege.
+        await fs.symlink(
+          outsideDir,
+          linkDir,
+          process.platform === "win32" ? "junction" : undefined,
+        );
 
         const patch = `*** Begin Patch
 *** Delete File: link

@@ -1,16 +1,18 @@
+import type { SecretInput } from "openclaw/plugin-sdk/zalo";
+
 export type ZaloAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start this Zalo account. Default: true. */
   enabled?: boolean;
   /** Bot token from Zalo Bot Creator. */
-  botToken?: string;
+  botToken?: SecretInput;
   /** Path to file containing the bot token. */
   tokenFile?: string;
   /** Webhook URL for receiving updates (HTTPS required). */
   webhookUrl?: string;
   /** Webhook secret token (8-256 chars) for request verification. */
-  webhookSecret?: string;
+  webhookSecret?: SecretInput;
   /** Webhook path for the gateway HTTP server (defaults to webhook URL path). */
   webhookPath?: string;
   /** Direct message access policy (default: pairing). */

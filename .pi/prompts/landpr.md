@@ -9,7 +9,7 @@ Input
   - If ambiguous: ask.
 
 Do (end-to-end)
-Goal: PR must end in GitHub state = MERGED (never CLOSED). Use `gh pr merge` with `--rebase` or `--squash`.
+Goal: PR must end in GitHub state = MERGED (never CLOSED). Prefer `gh pr merge --squash`; use `--rebase` only when preserving commit history is required.
 
 1. Assign PR to self:
    - `gh pr edit <PR> --add-assignee @me`
@@ -37,8 +37,8 @@ Goal: PR must end in GitHub state = MERGED (never CLOSED). Use `gh pr merge` wit
    - Implement fixes + add/adjust tests
    - Update `CHANGELOG.md` and mention `#<PR>` + `@$contrib`
 9. Decide merge strategy:
-   - Rebase if we want to preserve commit history
-   - Squash if we want a single clean commit
+   - Squash (preferred): use when we want a single clean commit
+   - Rebase: use only when we explicitly want to preserve commit history
    - If unclear, ask
 10. Full gate (BEFORE commit):
     - `pnpm lint && pnpm build && pnpm test`
@@ -54,8 +54,8 @@ Goal: PR must end in GitHub state = MERGED (never CLOSED). Use `gh pr merge` wit
     ```
 
 13. Merge PR (must show MERGED on GitHub):
-    - Rebase: `gh pr merge <PR> --rebase`
-    - Squash: `gh pr merge <PR> --squash`
+    - Squash (preferred): `gh pr merge <PR> --squash`
+    - Rebase (history-preserving fallback): `gh pr merge <PR> --rebase`
     - Never `gh pr close` (closing is wrong)
 14. Sync main:
     - `git checkout main`
