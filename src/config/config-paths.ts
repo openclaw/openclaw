@@ -3,6 +3,50 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
 
+function tokenizePath(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inBracket = false;
+  let bracketChar: string | null = null;
+
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+
+    if (inBracket) {
+      if (char === bracketChar && raw[i + 1] === "]") {
+        tokens.push(current.trim());
+        current = "";
+        inBracket = false;
+        bracketChar = null;
+        i++; // skip the closing ]
+      } else {
+        current += char;
+      }
+    } else if (char === "[" && (raw[i + 1] === '"' || raw[i + 1] === "'")) {
+      if (current) {
+        tokens.push(current.trim());
+        current = "";
+      }
+      inBracket = true;
+      bracketChar = raw[i + 1];
+      i++; // skip the opening quote
+    } else if (char === ".") {
+      if (current.trim()) {
+        tokens.push(current.trim());
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (current.trim()) {
+    tokens.push(current.trim());
+  }
+
+  return tokens;
+}
+
 export function parseConfigPath(raw: string): {
   ok: boolean;
   path?: string[];
@@ -15,7 +59,7 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
-  const parts = trimmed.split(".").map((part) => part.trim());
+  const parts = tokenizePath(trimmed);
   if (parts.some((part) => !part)) {
     return {
       ok: false,
