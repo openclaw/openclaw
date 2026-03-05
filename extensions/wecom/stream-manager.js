@@ -14,10 +14,21 @@ function enforceByteLimit(content) {
   if (contentBytes <= MAX_STREAM_BYTES) {
     return content;
   }
-  logger.warn("Stream content exceeds byte limit, truncating", { bytes: contentBytes });
-  // Truncate at byte boundary, then trim any broken trailing multi-byte char.
+  logger.warn("Stream content exceeds byte limit, truncating", {
+    bytes: contentBytes,
+  });
   const buf = Buffer.from(content, "utf8").subarray(0, MAX_STREAM_BYTES);
-  return buf.toString("utf8");
+  // Walk backwards past any incomplete UTF-8 continuation bytes (0x80–0xBF)
+  // to avoid producing U+FFFD replacement characters.
+  let end = buf.length;
+  while (end > 0 && buf[end - 1] >= 0x80 && buf[end - 1] <= 0xbf) {
+    end--;
+  }
+  // If we stopped on a multi-byte lead byte, drop it too (it's incomplete).
+  if (end > 0 && buf[end - 1] >= 0xc0) {
+    end--;
+  }
+  return buf.subarray(0, end).toString("utf8");
 }
 
 class StreamManager {
@@ -55,7 +66,10 @@ class StreamManager {
    */
   createStream(streamId, options = {}) {
     this.startCleanup();
-    logger.debug("Creating stream", { streamId, feedbackId: options.feedbackId });
+    logger.debug("Creating stream", {
+      streamId,
+      feedbackId: options.feedbackId,
+    });
     this.streams.set(streamId, {
       content: "",
       finished: false,

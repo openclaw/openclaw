@@ -3,9 +3,19 @@ import { logger } from "../logger.js";
 import { streamManager } from "../stream-manager.js";
 import { WecomWebhook } from "../webhook.js";
 import { handleAgentInbound } from "./agent-inbound.js";
-import { extractLeadingSlashCommand, isHighPriorityCommand } from "./commands.js";
-import { DEBOUNCE_MS, MAIN_RESPONSE_IDLE_CLOSE_MS, THINKING_PLACEHOLDER } from "./constants.js";
-import { flushMessageBuffer, processInboundMessage } from "./inbound-processor.js";
+import {
+  extractLeadingSlashCommand,
+  isHighPriorityCommand,
+} from "./commands.js";
+import {
+  DEBOUNCE_MS,
+  MAIN_RESPONSE_IDLE_CLOSE_MS,
+  THINKING_PLACEHOLDER,
+} from "./constants.js";
+import {
+  flushMessageBuffer,
+  processInboundMessage,
+} from "./inbound-processor.js";
 import { messageBuffers, streamMeta, webhookTargets } from "./state.js";
 import {
   clearBufferedMessagesForStream,
@@ -13,6 +23,17 @@ import {
   handleStreamError,
 } from "./stream-utils.js";
 import { normalizeWebhookPath } from "./webhook-targets.js";
+
+/** Maximum allowed request body size for Bot mode POST (1 MB). */
+const MAX_BOT_BODY_SIZE = 1 * 1024 * 1024;
+
+/**
+ * Shared deduplicator instance — persists across requests so that
+ * duplicate message IDs are correctly suppressed.
+ */
+const sharedDeduplicator = new (
+  await import("../utils.js")
+).MessageDeduplicator();
 
 export async function wecomHttpHandler(req, res) {
   const url = new URL(req.url || "", "http://localhost");
@@ -76,18 +97,29 @@ export async function wecomHttpHandler(req, res) {
       return true;
     }
 
-    // Read request body
+    // Read request body with size limit.
     const chunks = [];
+    let bodySize = 0;
     for await (const chunk of req) {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BOT_BODY_SIZE) {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("Payload Too Large");
+        logger.warn("WeCom POST body exceeded size limit", { bodySize });
+        return true;
+      }
       chunks.push(chunk);
     }
     const body = Buffer.concat(chunks).toString("utf-8");
     logger.debug("WeCom message received", { bodyLength: body.length });
 
-    const webhook = new WecomWebhook({
-      token: target.account.token,
-      encodingAesKey: target.account.encodingAesKey,
-    });
+    const webhook = new WecomWebhook(
+      {
+        token: target.account.token,
+        encodingAesKey: target.account.encodingAesKey,
+      },
+      sharedDeduplicator,
+    );
 
     const result = await webhook.handleMessage(query, body);
     if (result === WecomWebhook.DUPLICATE) {
@@ -116,7 +148,13 @@ export async function wecomHttpHandler(req, res) {
 
       // Passive reply: return stream id immediately in the sync response.
       // Include the placeholder so the client displays it right away.
-      const streamResponse = webhook.buildStreamResponse(streamId, THINKING_PLACEHOLDER, false, timestamp, nonce);
+      const streamResponse = webhook.buildStreamResponse(
+        streamId,
+        THINKING_PLACEHOLDER,
+        false,
+        timestamp,
+        nonce,
+      );
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(streamResponse);
@@ -133,13 +171,19 @@ export async function wecomHttpHandler(req, res) {
       const highPriorityCommand = isHighPriorityCommand(leadingCommand);
 
       if (highPriorityCommand) {
-        const drained = clearBufferedMessagesForStream(streamKey, `消息已被 ${leadingCommand} 中断。`);
+        const drained = clearBufferedMessagesForStream(
+          streamKey,
+          `消息已被 ${leadingCommand} 中断。`,
+        );
         if (drained > 0) {
-          logger.info("WeCom: drained buffered messages before high-priority command", {
-            streamKey,
-            command: leadingCommand,
-            drained,
-          });
+          logger.info(
+            "WeCom: drained buffered messages before high-priority command",
+            {
+              streamKey,
+              command: leadingCommand,
+              drained,
+            },
+          );
         }
       }
 
@@ -153,8 +197,14 @@ export async function wecomHttpHandler(req, res) {
           account: target.account,
           config: target.config,
         }).catch(async (err) => {
-          logger.error("WeCom message processing failed", { error: err.message });
-          await handleStreamError(streamId, streamKey, "处理消息时出错，请稍后再试。");
+          logger.error("WeCom message processing failed", {
+            error: err.message,
+          });
+          await handleStreamError(
+            streamId,
+            streamKey,
+            "处理消息时出错，请稍后再试。",
+          );
         });
         return true;
       }
@@ -167,7 +217,10 @@ export async function wecomHttpHandler(req, res) {
         existing.messages.push(msg);
         existing.streamIds.push(streamId);
         clearTimeout(existing.timer);
-        existing.timer = setTimeout(() => flushMessageBuffer(streamKey, target), DEBOUNCE_MS);
+        existing.timer = setTimeout(
+          () => flushMessageBuffer(streamKey, target),
+          DEBOUNCE_MS,
+        );
         logger.info("WeCom: message buffered for merge", {
           streamKey,
           streamId,
@@ -181,7 +234,10 @@ export async function wecomHttpHandler(req, res) {
           target,
           timestamp,
           nonce,
-          timer: setTimeout(() => flushMessageBuffer(streamKey, target), DEBOUNCE_MS),
+          timer: setTimeout(
+            () => flushMessageBuffer(streamKey, target),
+            DEBOUNCE_MS,
+          ),
         };
         messageBuffers.set(streamKey, buffer);
         logger.info("WeCom: message buffered (first)", { streamKey, streamId });
@@ -220,11 +276,17 @@ export async function wecomHttpHandler(req, res) {
         const idleMs = Date.now() - stream.updatedAt;
         // Keep stream alive a bit longer for delayed subagent/tool follow-up messages.
         if (idleMs > MAIN_RESPONSE_IDLE_CLOSE_MS) {
-          logger.info("WeCom: closing stream due to idle timeout", { streamId, idleMs });
+          logger.info("WeCom: closing stream due to idle timeout", {
+            streamId,
+            idleMs,
+          });
           try {
             await streamManager.finishStream(streamId);
           } catch (err) {
-            logger.error("WeCom: failed to finish stream", { streamId, error: err.message });
+            logger.error("WeCom: failed to finish stream", {
+              streamId,
+              error: err.message,
+            });
           }
         }
       }
@@ -237,7 +299,9 @@ export async function wecomHttpHandler(req, res) {
         timestamp,
         nonce,
         // Pass msgItem when stream is finished and has images
-        stream.finished && stream.msgItem.length > 0 ? { msgItem: stream.msgItem } : {},
+        stream.finished && stream.msgItem.length > 0
+          ? { msgItem: stream.msgItem }
+          : {},
       );
 
       res.writeHead(200, { "Content-Type": "application/json" });

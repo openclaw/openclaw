@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  createHash,
+} from "node:crypto";
 import { logger } from "./logger.js";
 import { CONSTANTS } from "./utils.js";
 
@@ -14,7 +19,9 @@ export class WecomCrypto {
 
   constructor(token, encodingAesKey) {
     if (!encodingAesKey || encodingAesKey.length !== CONSTANTS.AES_KEY_LENGTH) {
-      throw new Error(`EncodingAESKey invalid: length must be ${CONSTANTS.AES_KEY_LENGTH}`);
+      throw new Error(
+        `EncodingAESKey invalid: length must be ${CONSTANTS.AES_KEY_LENGTH}`,
+      );
     }
     if (!token) {
       throw new Error("Token is required");
@@ -45,18 +52,31 @@ export class WecomCrypto {
       throw new Error(`Decrypt init failed: ${String(e)}`, { cause: e });
     }
 
-    let deciphered = Buffer.concat([decipher.update(text, "base64"), decipher.final()]);
+    let deciphered = Buffer.concat([
+      decipher.update(text, "base64"),
+      decipher.final(),
+    ]);
 
     deciphered = this.decodePkcs7(deciphered);
 
-    // Format: 16 random bytes | 4 bytes msg_len | msg_content | appid
+    // Format: 16 random bytes | 4 bytes msg_len | msg_content | receiveid
     const content = deciphered.subarray(16);
     const lenList = content.subarray(0, 4);
     const xmlLen = lenList.readUInt32BE(0);
     const xmlContent = content.subarray(4, 4 + xmlLen).toString("utf-8");
-    // For AI Bot mode, corpId/appid is empty, skip validation
+    const receiveid = content.subarray(4 + xmlLen).toString("utf-8");
 
-    return { message: xmlContent };
+    return { message: xmlContent, receiveid };
+  }
+
+  /**
+   * Validate that the receiveid from decryption matches the expected corpId.
+   * For AI Bot mode, receiveid is empty — skip validation.
+   * For Agent mode, receiveid must match corpId to prevent cross-corp message injection.
+   */
+  validateReceiverId(receiveid, expectedCorpId) {
+    if (!expectedCorpId || !receiveid) return true;
+    return receiveid === expectedCorpId;
   }
 
   encrypt(text) {

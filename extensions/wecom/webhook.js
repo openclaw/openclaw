@@ -1,6 +1,20 @@
+import { timingSafeEqual } from "node:crypto";
 import { WecomCrypto } from "./crypto.js";
 import { logger } from "./logger.js";
 import { MessageDeduplicator } from "./utils.js";
+
+/**
+ * Timing-safe hex signature comparison.
+ * Converts both strings to Buffers and uses crypto.timingSafeEqual
+ * to prevent timing oracle attacks on signature verification.
+ */
+function safeCompare(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 /**
  * WeCom AI Bot Webhook Handler
@@ -14,14 +28,13 @@ import { MessageDeduplicator } from "./utils.js";
 export class WecomWebhook {
   config;
   crypto;
-  deduplicator = new MessageDeduplicator();
-
   /** Sentinel returned when a message is a duplicate (caller should ACK 200). */
   static DUPLICATE = Symbol.for("wecom.duplicate");
 
-  constructor(config) {
+  constructor(config, deduplicator) {
     this.config = config;
     this.crypto = new WecomCrypto(config.token, config.encodingAesKey);
+    this.deduplicator = deduplicator || new MessageDeduplicator();
     logger.debug("WecomWebhook initialized (AI Bot mode)");
   }
 
@@ -42,7 +55,7 @@ export class WecomWebhook {
     logger.debug("Handling verify request", { timestamp, nonce });
 
     const calcSignature = this.crypto.getSignature(timestamp, nonce, echostr);
-    if (calcSignature !== signature) {
+    if (!safeCompare(calcSignature, signature)) {
       logger.error("Signature mismatch in verify", {
         expected: signature,
         calculated: calcSignature,
@@ -97,7 +110,7 @@ export class WecomWebhook {
 
     // 2. Verify signature
     const calcSignature = this.crypto.getSignature(timestamp, nonce, encrypt);
-    if (calcSignature !== signature) {
+    if (!safeCompare(calcSignature, signature)) {
       logger.error("Signature mismatch in message", {
         expected: signature,
         calculated: calcSignature,
@@ -110,7 +123,9 @@ export class WecomWebhook {
     try {
       const result = this.crypto.decrypt(encrypt);
       decryptedContent = result.message;
-      logger.debug("Decrypted content", { content: decryptedContent.substring(0, 300) });
+      logger.debug("Decrypted content", {
+        content: decryptedContent.substring(0, 300),
+      });
     } catch (e) {
       logger.error("Message decrypt failed", {
         error: e instanceof Error ? e.message : String(e),
@@ -335,7 +350,11 @@ export class WecomWebhook {
         return WecomWebhook.DUPLICATE;
       }
 
-      logger.info("Received file message", { fromUser, fileName, fileUrl: fileUrl.substring(0, 80) });
+      logger.info("Received file message", {
+        fromUser,
+        fileName,
+        fileUrl: fileUrl.substring(0, 80),
+      });
 
       return {
         message: {
@@ -369,7 +388,12 @@ export class WecomWebhook {
         ? `[位置] ${name} (${latitude}, ${longitude})`
         : `[位置] ${latitude}, ${longitude}`;
 
-      logger.info("Received location message", { fromUser, latitude, longitude, name });
+      logger.info("Received location message", {
+        fromUser,
+        latitude,
+        longitude,
+        name,
+      });
 
       return {
         message: {
@@ -404,7 +428,11 @@ export class WecomWebhook {
       if (url) parts.push(url);
       const content = parts.join("\n") || "[链接]";
 
-      logger.info("Received link message", { fromUser, title, url: url.substring(0, 80) });
+      logger.info("Received link message", {
+        fromUser,
+        title,
+        url: url.substring(0, 80),
+      });
 
       return {
         message: {
@@ -428,7 +456,14 @@ export class WecomWebhook {
   // Build Stream Response (AI Bot format)
   // Supports all core WeCom stream response fields used by this plugin.
   // =========================================================================
-  buildStreamResponse(streamId, content, finish, timestamp, nonce, options = {}) {
+  buildStreamResponse(
+    streamId,
+    content,
+    finish,
+    timestamp,
+    nonce,
+    options = {},
+  ) {
     const stream = {
       id: streamId,
       finish: finish,

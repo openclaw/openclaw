@@ -9,8 +9,20 @@
  * Uses the same sessionKey format as Bot mode for unified session management.
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { logger } from "../logger.js";
 import { WecomCrypto } from "../crypto.js";
+
+/**
+ * Timing-safe hex signature comparison.
+ */
+function safeCompare(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 import {
   generateAgentId,
   getDynamicAgentConfig,
@@ -19,7 +31,11 @@ import {
 import { agentSendText, agentDownloadMedia } from "./agent-api.js";
 import { resolveAccount } from "./accounts.js";
 import { resolveWecomCommandAuthorized } from "./allow-from.js";
-import { checkCommandAllowlist, getCommandConfig, isWecomAdmin } from "./commands.js";
+import {
+  checkCommandAllowlist,
+  getCommandConfig,
+  isWecomAdmin,
+} from "./commands.js";
 import { MAX_REQUEST_BODY_SIZE } from "./constants.js";
 import {
   consumeUploadTicket,
@@ -71,7 +87,10 @@ async function withTimeout(promise, timeoutMs) {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(dispatchTimeoutError(timeoutMs)), timeoutMs);
+        timer = setTimeout(
+          () => reject(dispatchTimeoutError(timeoutMs)),
+          timeoutMs,
+        );
       }),
     ]);
   } finally {
@@ -119,7 +138,7 @@ function handleUrlVerification(req, res, crypto) {
 
   // Verify signature
   const expectedSig = crypto.getSignature(timestamp, nonce, echostr);
-  if (expectedSig !== msgSignature) {
+  if (!safeCompare(expectedSig, msgSignature)) {
     logger.warn("[agent-inbound] URL verification: signature mismatch");
     res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("unauthorized - 签名验证失败，请检查 Token 配置");
@@ -134,7 +153,9 @@ function handleUrlVerification(req, res, crypto) {
     logger.info("[agent-inbound] URL verification successful");
     return true;
   } catch (err) {
-    logger.error("[agent-inbound] URL verification: decrypt failed", { error: err.message });
+    logger.error("[agent-inbound] URL verification: decrypt failed", {
+      error: err.message,
+    });
     res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("decrypt failed - 解密失败，请检查 EncodingAESKey 配置");
     return true;
@@ -147,10 +168,19 @@ function handleUrlVerification(req, res, crypto) {
  * Handle WeCom message callback.
  * Read XML → extract Encrypt → verify → decrypt → parse → dedup → respond 200 → async process.
  */
-async function handleMessageCallback(req, res, crypto, agentConfig, config, accountId) {
+async function handleMessageCallback(
+  req,
+  res,
+  crypto,
+  agentConfig,
+  config,
+  accountId,
+) {
   try {
     const rawXml = await readRawBody(req);
-    logger.debug("[agent-inbound] received callback", { bodyBytes: Buffer.byteLength(rawXml, "utf8") });
+    logger.debug("[agent-inbound] received callback", {
+      bodyBytes: Buffer.byteLength(rawXml, "utf8"),
+    });
 
     const encrypted = extractEncryptFromXml(rawXml);
 
@@ -161,7 +191,7 @@ async function handleMessageCallback(req, res, crypto, agentConfig, config, acco
 
     // Verify signature
     const expectedSig = crypto.getSignature(timestamp, nonce, encrypted);
-    if (expectedSig !== msgSignature) {
+    if (!safeCompare(expectedSig, msgSignature)) {
       logger.warn("[agent-inbound] message callback: signature mismatch");
       res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("unauthorized - 签名验证失败");
@@ -169,8 +199,21 @@ async function handleMessageCallback(req, res, crypto, agentConfig, config, acco
     }
 
     // Decrypt
-    const { message: decryptedXml } = crypto.decrypt(encrypted);
-    logger.debug("[agent-inbound] decrypted", { bytes: Buffer.byteLength(decryptedXml, "utf8") });
+    const { message: decryptedXml, receiveid } = crypto.decrypt(encrypted);
+    logger.debug("[agent-inbound] decrypted", {
+      bytes: Buffer.byteLength(decryptedXml, "utf8"),
+    });
+
+    // Validate receiveid matches expected corpId (prevents cross-corp injection).
+    if (!crypto.validateReceiverId(receiveid, agentConfig.corpId)) {
+      logger.warn("[agent-inbound] receiveid mismatch", {
+        receiveid,
+        expectedCorpId: agentConfig.corpId,
+      });
+      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("forbidden - receiveid mismatch");
+      return true;
+    }
 
     // Parse XML
     const msg = parseXml(decryptedXml);
@@ -196,7 +239,9 @@ async function handleMessageCallback(req, res, crypto, agentConfig, config, acco
           openKfId,
           syncToken,
         }).catch((err) => {
-          const forbiddenByPermission = /\b48002\b/.test(String(err?.message || ""));
+          const forbiddenByPermission = /\b48002\b/.test(
+            String(err?.message || ""),
+          );
           const outOfRange = /\b60030\b/.test(String(err?.message || ""));
           logger.error("[agent-inbound] kf callback processing failed", {
             openKfId,
@@ -247,7 +292,10 @@ async function handleMessageCallback(req, res, crypto, agentConfig, config, acco
     // Deduplication
     if (msgId) {
       if (!rememberAgentMsgId(msgId)) {
-        logger.debug("[agent-inbound] duplicate msgId, skipping", { msgId, fromUser });
+        logger.debug("[agent-inbound] duplicate msgId, skipping", {
+          msgId,
+          fromUser,
+        });
         res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("success");
         return true;
@@ -279,7 +327,9 @@ async function handleMessageCallback(req, res, crypto, agentConfig, config, acco
       content,
       msg,
     }).catch((err) => {
-      logger.error("[agent-inbound] async processing failed", { error: err.message });
+      logger.error("[agent-inbound] async processing failed", {
+        error: err.message,
+      });
     });
 
     return true;
@@ -344,7 +394,10 @@ async function processAgentMessage({
           25 * 1024 * 1024,
           originalFileName,
         );
-        logger.info("[agent-inbound] media saved", { path: saved.path, size: buffer.length });
+        logger.info("[agent-inbound] media saved", {
+          path: saved.path,
+          size: buffer.length,
+        });
 
         mediaPaths.push(saved.path);
         mediaTypes.push(contentType);
@@ -355,7 +408,9 @@ async function processAgentMessage({
           finalContent = "[用户发送了一张图片]";
         }
       } catch (err) {
-        logger.error("[agent-inbound] media download failed", { error: err.message });
+        logger.error("[agent-inbound] media download failed", {
+          error: err.message,
+        });
         finalContent = `${content}\n\n媒体处理失败：${err.message}`;
       }
     }
@@ -411,11 +466,20 @@ async function processAgentMessage({
 
   if (commandCheck.isCommand && !commandCheck.allowed && !senderIsAdmin) {
     const cmdConfig = getCommandConfig(accountCfg);
-    logger.warn("[agent-inbound] blocked command", { command: commandCheck.command, from: fromUser });
+    logger.warn("[agent-inbound] blocked command", {
+      command: commandCheck.command,
+      from: fromUser,
+    });
     try {
-      await agentSendText({ agent: agentConfig, toUser: fromUser, text: cmdConfig.blockMessage });
+      await agentSendText({
+        agent: agentConfig,
+        toUser: fromUser,
+        text: cmdConfig.blockMessage,
+      });
     } catch (err) {
-      logger.error("[agent-inbound] failed to send block message", { error: err.message });
+      logger.error("[agent-inbound] failed to send block message", {
+        error: err.message,
+      });
     }
     return;
   }
@@ -424,13 +488,17 @@ async function processAgentMessage({
 
   const dynamicConfig = getDynamicAgentConfig(accountCfg);
   const targetAgentId =
-    dynamicConfig.enabled && shouldUseDynamicAgent({ chatType: peerKind, config: accountCfg })
+    dynamicConfig.enabled &&
+    shouldUseDynamicAgent({ chatType: peerKind, config: accountCfg })
       ? generateAgentId(peerKind, peerId, accountId)
       : null;
 
   if (targetAgentId) {
     await ensureDynamicAgentListed(targetAgentId);
-    logger.debug("[agent-inbound] dynamic agent", { agentId: targetAgentId, peerId });
+    logger.debug("[agent-inbound] dynamic agent", {
+      agentId: targetAgentId,
+      peerId,
+    });
   }
 
   // ── Route resolution ──────────────────────────────────────────
@@ -474,7 +542,9 @@ async function processAgentMessage({
     senderId: fromUser,
   });
 
-  const conversationId = isGroup ? `wecom:group:${chatId}` : `wecom:${fromUser}`;
+  const conversationId = isGroup
+    ? `wecom:group:${chatId}`
+    : `wecom:${fromUser}`;
 
   const ctxPayload = core.reply.finalizeInboundContext({
     Body: body,
@@ -506,7 +576,9 @@ async function processAgentMessage({
       ctx: ctxPayload,
     })
     .catch((err) => {
-      logger.error("[agent-inbound] session record failed", { error: err.message });
+      logger.error("[agent-inbound] session record failed", {
+        error: err.message,
+      });
     });
 
   // ── Dispatch to LLM ──────────────────────────────────────────
@@ -535,18 +607,27 @@ async function processAgentMessage({
 
             try {
               // Agent mode: reply via API to the sender (DM, even for group messages)
-              await agentSendText({ agent: agentConfig, toUser: fromUser, text });
+              await agentSendText({
+                agent: agentConfig,
+                toUser: fromUser,
+                text,
+              });
               logger.info("[agent-inbound] reply delivered", {
                 kind: info.kind,
                 to: fromUser,
                 contentPreview: text.substring(0, 50),
               });
             } catch (err) {
-              logger.error("[agent-inbound] reply delivery failed", { error: err.message });
+              logger.error("[agent-inbound] reply delivery failed", {
+                error: err.message,
+              });
             }
           },
           onError: (err, info) => {
-            logger.error("[agent-inbound] dispatch error", { kind: info.kind, error: err.message });
+            logger.error("[agent-inbound] dispatch error", {
+              kind: info.kind,
+              error: err.message,
+            });
           },
         },
       }),
@@ -566,7 +647,9 @@ async function processAgentMessage({
           text: "⏱ 处理超时（120秒），请重试一次；如果仍超时，我会改成更稳的回退模式。",
         });
       } catch (sendErr) {
-        logger.error("[agent-inbound] timeout notify failed", { error: sendErr.message });
+        logger.error("[agent-inbound] timeout notify failed", {
+          error: sendErr.message,
+        });
       }
       return;
     }
@@ -588,7 +671,10 @@ async function processAgentMessage({
  * @returns {Promise<boolean>} Whether the request was handled
  */
 export async function handleAgentInbound({ req, res, agentAccount, config }) {
-  const crypto = new WecomCrypto(agentAccount.token, agentAccount.encodingAesKey);
+  const crypto = new WecomCrypto(
+    agentAccount.token,
+    agentAccount.encodingAesKey,
+  );
   const agentConfig = {
     corpId: agentAccount.corpId,
     corpSecret: agentAccount.corpSecret,
@@ -601,7 +687,14 @@ export async function handleAgentInbound({ req, res, agentAccount, config }) {
   }
 
   if (req.method === "POST") {
-    return handleMessageCallback(req, res, crypto, agentConfig, config, accountId);
+    return handleMessageCallback(
+      req,
+      res,
+      crypto,
+      agentConfig,
+      config,
+      accountId,
+    );
   }
 
   res.writeHead(405, { "Content-Type": "text/plain" });

@@ -74,27 +74,41 @@ function isLegacyConfig(wecom) {
 function buildAccount(accountId, accountCfg) {
   const agent = accountCfg?.agent;
   const webhooks = accountCfg?.webhooks;
-  const agentConfigured = Boolean(agent?.corpId && agent?.corpSecret && agent?.agentId);
+  const agentConfigured = Boolean(
+    agent?.corpId && agent?.corpSecret && agent?.agentId,
+  );
   const agentInboundConfigured = Boolean(
-    agent?.corpId && agent?.corpSecret && agent?.agentId && agent?.token && agent?.encodingAesKey,
+    agent?.corpId &&
+    agent?.corpSecret &&
+    agent?.agentId &&
+    agent?.token &&
+    agent?.encodingAesKey,
   );
 
   return {
     accountId,
     name: accountCfg?.name || accountId,
     enabled: accountCfg?.enabled !== false,
-    configured: Boolean(accountCfg?.token && accountCfg?.encodingAesKey) || agentConfigured,
+    configured:
+      Boolean(accountCfg?.token && accountCfg?.encodingAesKey) ||
+      agentConfigured,
     token: accountCfg?.token || "",
     encodingAesKey: accountCfg?.encodingAesKey || "",
     webhookPath:
       accountCfg?.webhookPath ||
-      (accountId === DEFAULT_ACCOUNT_ID ? "/webhooks/wecom" : `/webhooks/wecom/${accountId}`),
+      (accountId === DEFAULT_ACCOUNT_ID
+        ? "/webhooks/wecom"
+        : `/webhooks/wecom/${accountId}`),
     config: accountCfg || {},
     agentConfigured,
     agentInboundConfigured,
     webhooksConfigured: Boolean(webhooks && Object.keys(webhooks).length > 0),
     agentCredentials: agentConfigured
-      ? { corpId: agent.corpId, corpSecret: agent.corpSecret, agentId: agent.agentId }
+      ? {
+          corpId: agent.corpId,
+          corpSecret: agent.corpSecret,
+          agentId: agent.agentId,
+        }
       : null,
   };
 }
@@ -103,7 +117,10 @@ function buildAccount(accountId, accountCfg) {
  * Normalize a raw account key → canonical ID (lowercase, safe chars only).
  */
 function normalizeAccountKey(key) {
-  return String(key).trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  return String(key)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -124,6 +141,20 @@ export function listAccountIds(cfg) {
   for (const key of Object.keys(wecom)) {
     if (RESERVED_KEYS.has(key)) continue;
     const val = wecom[key];
+    // Support `instances` array: each entry has a `name` that becomes the accountId.
+    if (key === "instances" && Array.isArray(val)) {
+      for (const entry of val) {
+        if (
+          entry &&
+          typeof entry === "object" &&
+          typeof entry.name === "string"
+        ) {
+          const id = normalizeAccountKey(entry.name);
+          if (id && !ids.includes(id)) ids.push(id);
+        }
+      }
+      continue;
+    }
     if (val && typeof val === "object" && !Array.isArray(val)) {
       const id = normalizeAccountKey(key);
       if (id && !ids.includes(id)) ids.push(id);
@@ -131,7 +162,9 @@ export function listAccountIds(cfg) {
   }
 
   if (ids.length === 0) {
-    logger.warn("[accounts] wecom config has no account entries and no legacy token — returning empty");
+    logger.warn(
+      "[accounts] wecom config has no account entries and no legacy token — returning empty",
+    );
   }
   return ids;
 }
@@ -148,7 +181,9 @@ export function resolveAccount(cfg, accountId) {
   // Legacy single-account: the entire wecom block IS the account config.
   if (isLegacyConfig(wecom)) {
     if (resolvedId !== DEFAULT_ACCOUNT_ID) {
-      logger.warn(`[accounts] legacy config does not have account "${resolvedId}"`);
+      logger.warn(
+        `[accounts] legacy config does not have account "${resolvedId}"`,
+      );
       return buildAccount(resolvedId, { enabled: false });
     }
     return buildAccount(DEFAULT_ACCOUNT_ID, wecom);
@@ -158,6 +193,21 @@ export function resolveAccount(cfg, accountId) {
   const normalizedId = normalizeAccountKey(resolvedId);
   for (const key of Object.keys(wecom)) {
     if (RESERVED_KEYS.has(key)) continue;
+    // Support `instances` array lookup.
+    if (key === "instances" && Array.isArray(wecom[key])) {
+      for (const entry of wecom[key]) {
+        if (
+          entry &&
+          typeof entry === "object" &&
+          typeof entry.name === "string"
+        ) {
+          if (normalizeAccountKey(entry.name) === normalizedId) {
+            return buildAccount(normalizedId, entry);
+          }
+        }
+      }
+      continue;
+    }
     if (normalizeAccountKey(key) === normalizedId) {
       const val = wecom[key];
       if (val && typeof val === "object" && !Array.isArray(val)) {

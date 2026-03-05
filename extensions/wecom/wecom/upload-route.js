@@ -5,7 +5,32 @@ import { logger } from "../logger.js";
 import { createUploadTicket } from "./upload-ticket.js";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const UPLOAD_BASE_DIR = join(process.env.HOME || "/tmp", ".openclaw", "media", "wecom-upload");
+const UPLOAD_BASE_DIR = join(
+  process.env.HOME || "/tmp",
+  ".openclaw",
+  "media",
+  "wecom-upload",
+);
+
+// Simple per-IP rate limiter for upload endpoint.
+const UPLOAD_RATE_WINDOW_MS = 60_000; // 1 minute
+const UPLOAD_RATE_MAX = 10; // max uploads per window per IP
+const uploadRateBuckets = new Map();
+
+function isUploadRateLimited(req) {
+  const ip =
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    "unknown";
+  const now = Date.now();
+  let bucket = uploadRateBuckets.get(ip);
+  if (!bucket || now - bucket.windowStart > UPLOAD_RATE_WINDOW_MS) {
+    bucket = { windowStart: now, count: 0 };
+    uploadRateBuckets.set(ip, bucket);
+  }
+  bucket.count += 1;
+  return bucket.count > UPLOAD_RATE_MAX;
+}
 
 function escapeHtml(str) {
   return String(str || "")
@@ -17,7 +42,10 @@ function escapeHtml(str) {
 }
 
 function sanitizeFileName(name) {
-  const safe = basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9._-\u4e00-\u9fa5]/g, "_");
+  const safe = basename(String(name || "upload.bin")).replace(
+    /[^a-zA-Z0-9._-\u4e00-\u9fa5]/g,
+    "_",
+  );
   return safe || "upload.bin";
 }
 
@@ -46,7 +74,9 @@ function parseMultipartBody(buffer, boundary) {
     if (bodyText.endsWith("\r\n")) bodyText = bodyText.slice(0, -2);
 
     const headerLines = headerText.split("\r\n");
-    const disposition = headerLines.find((line) => /^content-disposition:/i.test(line));
+    const disposition = headerLines.find((line) =>
+      /^content-disposition:/i.test(line),
+    );
     if (!disposition) continue;
 
     const nameMatch = disposition.match(/name="([^"]+)"/i);
@@ -54,8 +84,11 @@ function parseMultipartBody(buffer, boundary) {
     const fieldName = nameMatch?.[1] || "";
     if (!fieldName) continue;
 
-    const contentTypeLine = headerLines.find((line) => /^content-type:/i.test(line));
-    const partContentType = contentTypeLine?.split(":")[1]?.trim() || "application/octet-stream";
+    const contentTypeLine = headerLines.find((line) =>
+      /^content-type:/i.test(line),
+    );
+    const partContentType =
+      contentTypeLine?.split(":")[1]?.trim() || "application/octet-stream";
 
     if (filenameMatch) {
       files.push({
@@ -87,7 +120,14 @@ async function readBodyBuffer(req, maxBytes) {
   return Buffer.concat(chunks);
 }
 
-function renderFormPage({ userId = "", note = "", message = "", error = "", command = "", code = "" }) {
+function renderFormPage({
+  userId = "",
+  note = "",
+  message = "",
+  error = "",
+  command = "",
+  code = "",
+}) {
   const msgBlock = error
     ? `<div class="alert error">${escapeHtml(error)}</div>`
     : message
@@ -191,11 +231,20 @@ export async function wecomUploadHttpHandler(req, res) {
     return true;
   }
 
+  if (isUploadRateLimited(req)) {
+    const html = renderFormPage({ error: "上传过于频繁，请稍后再试。" });
+    res.writeHead(429, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(html);
+    return true;
+  }
+
   try {
     const contentType = req.headers["content-type"] || "";
     const boundary = parseBoundary(contentType);
     if (!boundary) {
-      const html = renderFormPage({ error: "请求格式错误：未检测到 multipart boundary。" });
+      const html = renderFormPage({
+        error: "请求格式错误：未检测到 multipart boundary。",
+      });
       res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return true;
@@ -242,7 +291,9 @@ export async function wecomUploadHttpHandler(req, res) {
       note,
     });
 
-    const command = note ? `取件 ${ticket.code} ${note}` : `取件 ${ticket.code}`;
+    const command = note
+      ? `取件 ${ticket.code} ${note}`
+      : `取件 ${ticket.code}`;
 
     logger.info("[upload-route] upload accepted", {
       fileName: saved.safeName,

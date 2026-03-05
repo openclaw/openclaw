@@ -1,18 +1,24 @@
 import { logger } from "../logger.js";
 import { streamManager } from "../stream-manager.js";
 import { THINKING_PLACEHOLDER } from "./constants.js";
-import { activeStreamHistory, activeStreams, lastStreamByKey, messageBuffers } from "./state.js";
+import {
+  activeStreamHistory,
+  activeStreams,
+  lastStreamByKey,
+  messageBuffers,
+} from "./state.js";
 
 export function getMessageStreamKey(message) {
   if (!message || typeof message !== "object") {
     return "";
   }
+  const prefix = message.accountId ? `${message.accountId}:` : "";
   const chatType = message.chatType || "single";
   const chatId = message.chatId || "";
   if (chatType === "group" && chatId) {
-    return chatId;
+    return `${prefix}${chatId}`;
   }
-  return message.fromUser || "";
+  return `${prefix}${message.fromUser || ""}`;
 }
 
 export function registerActiveStream(streamKey, streamId) {
@@ -116,16 +122,23 @@ export function clearBufferedMessagesForStream(streamKey, reason) {
       continue;
     }
     drained += 1;
-    streamManager.replaceIfPlaceholder(bufferedStreamId, notice, THINKING_PLACEHOLDER);
-    streamManager.finishStream(bufferedStreamId).then(() => {
-      unregisterActiveStream(streamKey, bufferedStreamId);
-    }).catch((err) => {
-      logger.warn("WeCom: failed finishing buffered stream", {
-        streamKey,
-        streamId: bufferedStreamId,
-        error: err?.message || String(err),
+    streamManager.replaceIfPlaceholder(
+      bufferedStreamId,
+      notice,
+      THINKING_PLACEHOLDER,
+    );
+    streamManager
+      .finishStream(bufferedStreamId)
+      .then(() => {
+        unregisterActiveStream(streamKey, bufferedStreamId);
+      })
+      .catch((err) => {
+        logger.warn("WeCom: failed finishing buffered stream", {
+          streamKey,
+          streamId: bufferedStreamId,
+          error: err?.message || String(err),
+        });
       });
-    });
   }
 
   return drained;
@@ -141,7 +154,11 @@ export async function handleStreamError(streamId, streamKey, errorMessage) {
   const stream = streamManager.getStream(streamId);
   if (stream && !stream.finished) {
     if (stream.content.trim() === THINKING_PLACEHOLDER.trim()) {
-      streamManager.replaceIfPlaceholder(streamId, errorMessage, THINKING_PLACEHOLDER);
+      streamManager.replaceIfPlaceholder(
+        streamId,
+        errorMessage,
+        THINKING_PLACEHOLDER,
+      );
     }
     await streamManager.finishStream(streamId);
   }
