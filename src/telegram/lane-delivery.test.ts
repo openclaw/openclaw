@@ -293,6 +293,32 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("falls back to normal send when draft materialize throws", async () => {
+    const answerStream = createTestDraftStream({ previewMode: "draft" });
+    answerStream.materialize.mockRejectedValue(new Error("boom"));
+    const harness = createHarness({
+      answerStream: answerStream as DraftLaneState["stream"],
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Hello final",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("sent");
+    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hello final" }),
+    );
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("draft preview materialize failed"),
+    );
+  });
+
   it("does not use DM draft final shortcut for media payloads", async () => {
     const answerStream = createTestDraftStream({ previewMode: "draft" });
     const harness = createHarness({

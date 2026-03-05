@@ -179,8 +179,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     // Draft previews have no message_id to edit; materialize the final text
     // into a real message and treat that as the finalized delivery.
-    stream.update(args.text);
-    const materializedMessageId = await stream.materialize?.();
+    let materializedMessageId: number | undefined;
+    try {
+      stream.update(args.text);
+      materializedMessageId = await stream.materialize?.();
+    } catch (err) {
+      params.log(
+        `telegram: ${args.laneName} draft preview materialize failed; falling back to standard send (${String(err)})`,
+      );
+      return false;
+    }
     if (typeof materializedMessageId !== "number") {
       params.log(
         `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
