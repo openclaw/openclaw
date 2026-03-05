@@ -108,6 +108,32 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   return nextMs;
 }
 
+export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+  if (schedule.kind !== "cron") {
+    return undefined;
+  }
+  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
+  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
+  if (!expr) {
+    return undefined;
+  }
+  const cron = resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
+  const previousRuns = cron.previousRuns(1, new Date(nowMs));
+  const previous = previousRuns[0];
+  if (!previous) {
+    return undefined;
+  }
+  const previousMs = previous.getTime();
+  if (!Number.isFinite(previousMs)) {
+    return undefined;
+  }
+  return previousMs;
+}
+
 export function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }

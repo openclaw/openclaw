@@ -131,4 +131,136 @@ describe("CronService restart catch-up", () => {
     cron.stop();
     await store.cleanup();
   });
+  it("replays the most recent missed cron slot after restart when nextRunAtMs already advanced", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-missed-slot",
+        name: "every ten minutes +1",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+        schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "catch missed slot" },
+        state: {
+          // Persisted state may already be recomputed from restart time and
+          // point to the future slot, even though 04:01 was missed.
+          nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+          lastStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "catch missed slot",
+      expect.objectContaining({ agentId: undefined }),
+    );
+    expect(requestHeartbeatNow).toHaveBeenCalled();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((job) => job.id === "restart-missed-slot");
+    expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not replay interrupted one-shot jobs on startup", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
+    const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-stale-one-shot",
+        name: "one shot stale marker",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
+        schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "one-shot stale marker" },
+        state: {
+          nextRunAtMs: dueAt,
+          runningAtMs: staleRunningAt,
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((job) => job.id === "restart-stale-one-shot");
+    expect(updated?.state.runningAtMs).toBeUndefined();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not replay cron slot when the latest slot already ran before restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-no-duplicate-slot",
+        name: "every ten minutes +1 no duplicate",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+        schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "already ran" },
+        state: {
+          nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+          lastStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    cron.stop();
+    await store.cleanup();
+  });
 });

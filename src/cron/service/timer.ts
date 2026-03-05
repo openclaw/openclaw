@@ -14,6 +14,7 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 import {
+  computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -700,6 +701,7 @@ function isRunnableJob(params: {
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
+  allowCronMissedRunByLastRun?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -732,13 +734,37 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  return typeof next === "number" && Number.isFinite(next) && nowMs >= next;
+  if (typeof next === "number" && Number.isFinite(next) && nowMs >= next) {
+    return true;
+  }
+  if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
+    return false;
+  }
+  let previousRunAtMs: number | undefined;
+  try {
+    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+  } catch {
+    return false;
+  }
+  if (typeof previousRunAtMs !== "number" || !Number.isFinite(previousRunAtMs)) {
+    return false;
+  }
+  const lastRunAtMs = job.state.lastRunAtMs;
+  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+    // Only replay a "missed slot" when there is concrete run history.
+    return false;
+  }
+  return previousRunAtMs > lastRunAtMs;
 }
 
 function collectRunnableJobs(
   state: CronServiceState,
   nowMs: number,
-  opts?: { skipJobIds?: ReadonlySet<string>; skipAtIfAlreadyRan?: boolean },
+  opts?: {
+    skipJobIds?: ReadonlySet<string>;
+    skipAtIfAlreadyRan?: boolean;
+    allowCronMissedRunByLastRun?: boolean;
+  },
 ): CronJob[] {
   if (!state.store) {
     return [];
@@ -749,6 +775,7 @@ function collectRunnableJobs(
       nowMs,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
+      allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
     }),
   );
 }
@@ -764,7 +791,11 @@ export async function runMissedJobs(
     }
     const now = state.deps.nowMs();
     const skipJobIds = opts?.skipJobIds;
-    const missed = collectRunnableJobs(state, now, { skipJobIds, skipAtIfAlreadyRan: true });
+    const missed = collectRunnableJobs(state, now, {
+      skipJobIds,
+      skipAtIfAlreadyRan: true,
+      allowCronMissedRunByLastRun: true,
+    });
     if (missed.length === 0) {
       return [] as Array<{ jobId: string; job: CronJob }>;
     }
