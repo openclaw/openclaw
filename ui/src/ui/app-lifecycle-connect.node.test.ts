@@ -41,6 +41,7 @@ function createHost() {
   return {
     basePath: "",
     client: null,
+    connectGeneration: 0,
     connected: false,
     tab: "chat",
     assistantName: "OpenClaw",
@@ -78,5 +79,25 @@ describe("handleConnected", () => {
     resolveBootstrap();
     await Promise.resolve();
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips deferred connect when disconnected before bootstrap resolves", async () => {
+    let resolveBootstrap!: () => void;
+    loadBootstrapMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveBootstrap = resolve;
+      }),
+    );
+    connectGatewayMock.mockReset();
+    const host = createHost();
+
+    handleConnected(host as never);
+    expect(connectGatewayMock).not.toHaveBeenCalled();
+
+    host.connectGeneration += 1;
+    resolveBootstrap();
+    await Promise.resolve();
+
+    expect(connectGatewayMock).not.toHaveBeenCalled();
   });
 });
