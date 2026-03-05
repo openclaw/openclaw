@@ -57,6 +57,13 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
   });
 
+  it("defaults markdown tables to code-block rendering for Telegram", () => {
+    const res = markdownToTelegramHtml("| Task | Status |\n| --- | --- |\n| Fix | ✅ |\n");
+    expect(res).toContain("<pre><code>");
+    expect(res).toContain("Task");
+    expect(res).toContain("Status");
+  });
+
   it("properly nests overlapping bold and autolink (#4071)", () => {
     const res = markdownToTelegramHtml("**start https://example.com** end");
     expect(res).toMatch(

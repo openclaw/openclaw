@@ -109,7 +109,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
 
 export function markdownToTelegramHtml(
   markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
+  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = { tableMode: "code" },
 ): string {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
@@ -354,7 +354,7 @@ function renderTelegramChunksWithinHtmlLimit(
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: { tableMode?: MarkdownTableMode } = { tableMode: "code" },
 ): TelegramFormattedChunk[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
