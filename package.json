@@ -277,6 +277,9 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "patchedDependencies": {
+      "@whiskeysockets/baileys": "patches/@whiskeysockets__baileys.patch"
+    }
   }
 }

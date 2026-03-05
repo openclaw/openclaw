@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -99,6 +100,35 @@ export async function checkInboundAccessControl(params: {
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
+  // Monitor-only groups bypass all sender-level filtering.
+  // They are passive (hooks fire, bot never responds), so groupAllowFrom is unnecessary.
+  // group-gating handles the rest downstream.
+  if (
+    params.group &&
+    resolveChannelGroupRequireMention({
+      cfg,
+      channel: "whatsapp",
+      groupId: params.remoteJid,
+    }) === "monitor"
+  ) {
+    // DEBUG: log monitor bypass
+    try {
+      const fs = await import("fs");
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        point: "access-control-monitor-bypass",
+        jid: params.remoteJid,
+      });
+      fs.appendFileSync(process.env.HOME + "/.openclaw/data/debug-group-flow.jsonl", line + "\n");
+    } catch {}
+    return {
+      allowed: true,
+      shouldMarkRead: true,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
+
   const normalizedDmSender = normalizeE164(params.from);
   const normalizedGroupSender =
     typeof params.senderE164 === "string" ? normalizeE164(params.senderE164) : null;
@@ -128,6 +158,20 @@ export async function checkInboundAccessControl(params: {
         : normalizedEntrySet.has(normalizedDmSender);
     },
   });
+  // DEBUG: log group access decision
+  if (params.group) {
+    try {
+      const fs = await import("fs");
+      const line = JSON.stringify({
+        ts: new Date().toISOString(),
+        point: "access-control-group-decision",
+        jid: params.remoteJid,
+        decision: access.decision,
+        reason: access.reason,
+      });
+      fs.appendFileSync(process.env.HOME + "/.openclaw/data/debug-group-flow.jsonl", line + "\n");
+    } catch {}
+  }
   if (params.group && access.decision !== "allow") {
     if (access.reason === "groupPolicy=disabled") {
       logVerbose("Blocked group message (groupPolicy: disabled)");

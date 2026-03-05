@@ -41,6 +41,8 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+export const RequireMentionSchema = z.union([z.boolean(), z.literal("monitor")]).optional();
+
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
   .refine((value) => typeof value === "string", {

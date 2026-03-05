@@ -80,7 +80,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
 };
 
 export type ChannelGroupAdapter = {
-  resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
+  resolveRequireMention?: (params: ChannelGroupContext) => boolean | "monitor" | undefined;
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };

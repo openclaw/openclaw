@@ -1,0 +1,124 @@
+diff --git a/lib/Socket/messages-recv.js b/lib/Socket/messages-recv.js
+index f2e2e10284db35d6673995be1eeb10647d68448f..8d2ba0ac6ff3a62b795cb35ccb1bafd24af0957f 100644
+--- a/lib/Socket/messages-recv.js
++++ b/lib/Socket/messages-recv.js
+@@ -947,18 +947,23 @@ export const makeMessagesRecvSocket = (config) => {
+         }
+     };
+     const handleMessage = async (node) => {
++        // DEBUG: log ALL incoming messages at the lowest level
++        try {
++            const debugFrom = node.attrs.from || 'unknown';
++            const debugEncNode = getBinaryNodeChild(node, 'enc');
++            const debugEncType = debugEncNode?.attrs?.type || 'no-enc';
++            const fs = await import('fs');
++            fs.appendFileSync(process.env.HOME + '/.openclaw/data/debug-group-flow.jsonl',
++                JSON.stringify({ ts: new Date().toISOString(), point: 'baileys-raw-message', from: debugFrom, encType: debugEncType, participant: node.attrs.participant }) + '\n');
++        } catch {}
+         if (shouldIgnoreJid(node.attrs.from) && node.attrs.from !== S_WHATSAPP_NET) {
+             logger.debug({ key: node.attrs.key }, 'ignored message');
+             await sendMessageAck(node, NACK_REASONS.UnhandledError);
+             return;
+         }
+         const encNode = getBinaryNodeChild(node, 'enc');
+-        // TODO: temporary fix for crashes and issues resulting of failed msmsg decryption
+-        if (encNode && encNode.attrs.type === 'msmsg') {
+-            logger.debug({ key: node.attrs.key }, 'ignored msmsg');
+-            await sendMessageAck(node, NACK_REASONS.MissingMessageSecret);
+-            return;
+-        }
++        // msmsg (multi-send messages) used by WhatsApp community sub-groups.
++        // Previously ignored — now handled via pairwise decryption in decode-wa-message.js.
+         const { fullMessage: msg, category, author, decrypt } = decryptMessageNode(node, authState.creds.me.id, authState.creds.me.lid || '', signalRepository, logger);
+         const alt = msg.key.participantAlt || msg.key.remoteJidAlt;
+         // store new mappings we didn't have before
+@@ -1070,11 +1075,23 @@ export const makeMessagesRecvSocket = (config) => {
+                     }
+                 }
+                 cleanMessage(msg, authState.creds.me.id, authState.creds.me.lid);
++                // DEBUG: log successful upsert
++                try {
++                    const fs = await import('fs');
++                    fs.appendFileSync(process.env.HOME + '/.openclaw/data/debug-group-flow.jsonl',
++                        JSON.stringify({ ts: new Date().toISOString(), point: 'baileys-upsert', type: node.attrs.offline ? 'append' : 'notify', jid: msg.key?.remoteJid, id: msg.key?.id, participant: msg.key?.participant, hasMessage: !!msg.message }) + '\n');
++                } catch {}
+                 await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');
+             });
+         }
+         catch (error) {
+             logger.error({ error, node: binaryNodeToString(node) }, 'error in handling message');
++            // DEBUG: log decrypt/handling errors
++            try {
++                const fs = await import('fs');
++                fs.appendFileSync(process.env.HOME + '/.openclaw/data/debug-group-flow.jsonl',
++                    JSON.stringify({ ts: new Date().toISOString(), point: 'baileys-error', error: String(error), node: node?.attrs?.from || 'unknown' }) + '\n');
++            } catch {}
+         }
+     };
+     const handleCall = async (node) => {
+@@ -1209,6 +1226,16 @@ export const makeMessagesRecvSocket = (config) => {
+     };
+     // recv a message
+     ws.on('CB:message', async (node) => {
++        // DEBUG: log at websocket level
++        try {
++            const fs = await import('fs');
++            const from = node.attrs?.from || 'unknown';
++            if (from.endsWith('@g.us')) {
++                const encChild = node.content?.find?.(c => c?.tag === 'enc');
++                fs.appendFileSync(process.env.HOME + '/.openclaw/data/debug-group-flow.jsonl',
++                    JSON.stringify({ ts: new Date().toISOString(), point: 'ws-cb-message', from, encType: encChild?.attrs?.type || 'none', offline: !!node.attrs.offline }) + '\n');
++            }
++        } catch {}
+         await processNode('message', node, 'processing message', handleMessage);
+     });
+     ws.on('CB:call', async (node) => {
+@@ -1217,6 +1244,19 @@ export const makeMessagesRecvSocket = (config) => {
+     ws.on('CB:receipt', async (node) => {
+         await processNode('receipt', node, 'handling receipt', handleReceipt);
+     });
++    // DEBUG: catch ALL websocket events for group JIDs
++    for (const evtType of ['CB:notification', 'CB:ack', 'CB:ib']) {
++        ws.on(evtType, async (node) => {
++            try {
++                const from = node.attrs?.from || '';
++                if (from.endsWith('@g.us')) {
++                    const fs = await import('fs');
++                    fs.appendFileSync(process.env.HOME + '/.openclaw/data/debug-group-flow.jsonl',
++                        JSON.stringify({ ts: new Date().toISOString(), point: 'ws-event', type: evtType, from, attrs: JSON.stringify(node.attrs).slice(0, 200) }) + '\n');
++                }
++            } catch {}
++        });
++    }
+     ws.on('CB:notification', async (node) => {
+         await processNode('notification', node, 'handling notification', handleNotification);
+     });
+diff --git a/lib/Utils/decode-wa-message.js b/lib/Utils/decode-wa-message.js
+index 794be801aa5d112b9667f468533078de65f9143c..2e0f32652899e9e8598358f5b11a4fc40e2a8666 100644
+--- a/lib/Utils/decode-wa-message.js
++++ b/lib/Utils/decode-wa-message.js
+@@ -226,6 +226,24 @@ export const decryptMessageNode = (stanza, meId, meLid, repository, logger) => {
+                             case 'plaintext':
+                                 msgBuffer = content;
+                                 break;
++                            case 'msmsg':
++                                // Multi-Send Message: pairwise-encrypted message used
++                                // for community sub-group broadcasts. Try decrypting
++                                // as a normal whisper message first, fall back to pre-key.
++                                try {
++                                    msgBuffer = await repository.decryptMessage({
++                                        jid: decryptionJid,
++                                        type: 'msg',
++                                        ciphertext: content
++                                    });
++                                } catch {
++                                    msgBuffer = await repository.decryptMessage({
++                                        jid: decryptionJid,
++                                        type: 'pkmsg',
++                                        ciphertext: content
++                                    });
++                                }
++                                break;
+                             default:
+                                 throw new Error(`Unknown e2e type: ${e2eType}`);
+                         }
