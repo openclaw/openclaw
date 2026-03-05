@@ -198,33 +198,74 @@ function estimateTokensByTiktokenSync(text: string): number | null {
 // HuggingFace Tokenizer
 // ================================
 
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
-let hfTokenizer: unknown | null = null;
-let hfLoadPromise: Promise<unknown> | null = null;
+interface HfTokenizer {
+  encode: (text: string) => { ids: number[] };
+}
 
-async function loadHuggingfaceTokenizer(): Promise<unknown> {
-  // 如果已经加载，直接返回
+let hfTokenizer: HfTokenizer | null = null;
+let hfLoadPromise: Promise<HfTokenizer> | null = null;
+/** 加载是否已永久失败（避免反复重试） */
+let hfLoadFailed = false;
+
+async function loadHuggingfaceTokenizer(): Promise<HfTokenizer> {
   if (hfTokenizer) {
     return hfTokenizer;
   }
-
-  // 如果正在加载，等待加载完成
+  if (hfLoadFailed) {
+    throw new Error("[tokenizer] HuggingFace tokenizer previously failed to load");
+  }
   if (hfLoadPromise) {
     return hfLoadPromise;
   }
 
-  // 开始加载
   hfLoadPromise = (async () => {
     try {
       const { Tokenizer } = await import("@huggingface/tokenizers");
       const model = config.model;
 
-      const tokenizer = await Tokenizer.fromPretrained(model);
-      hfTokenizer = tokenizer;
-      console.log(`[tokenizer] Loaded HuggingFace model: ${model}`);
-      return tokenizer;
+      let tokenizerJson: object;
+      let tokenizerConfig: object;
+
+      // 判断是本地路径还是 HF Hub 模型名
+      const isLocalPath =
+        model.startsWith("/") || model.startsWith("./") || model.startsWith("../");
+
+      if (isLocalPath) {
+        // 本地路径：从文件系统读取 tokenizer.json 和 tokenizer_config.json
+        const { readFileSync } = await import("node:fs");
+        tokenizerJson = JSON.parse(readFileSync(`${model}/tokenizer.json`, "utf-8")) as object;
+        // tokenizer_config.json 是可选的，缺失时使用空对象
+        try {
+          tokenizerConfig = JSON.parse(
+            readFileSync(`${model}/tokenizer_config.json`, "utf-8"),
+          ) as object;
+        } catch {
+          tokenizerConfig = {};
+        }
+        console.log(`[tokenizer] Loaded HuggingFace tokenizer from local path: ${model}`);
+      } else {
+        // HF Hub 模型名：通过 HTTP fetch tokenizer 配置文件
+        const base = `https://huggingface.co/${model}/resolve/main`;
+        const [jsonRes, configRes] = await Promise.all([
+          fetch(`${base}/tokenizer.json`),
+          fetch(`${base}/tokenizer_config.json`),
+        ]);
+        if (!jsonRes.ok) {
+          throw new Error(
+            `[tokenizer] Failed to fetch tokenizer.json for model "${model}": ${jsonRes.status}`,
+          );
+        }
+        tokenizerJson = (await jsonRes.json()) as object;
+        tokenizerConfig = configRes.ok ? ((await configRes.json()) as object) : {};
+        console.log(`[tokenizer] Loaded HuggingFace model from Hub: ${model}`);
+      }
+
+      const tokenizer = new Tokenizer(tokenizerJson, tokenizerConfig);
+      hfTokenizer = tokenizer as HfTokenizer;
+      return hfTokenizer;
     } catch (error) {
       console.error("[tokenizer] Failed to load HuggingFace tokenizer:", error);
+      hfLoadFailed = true;
       hfLoadPromise = null;
       throw error;
     }
@@ -234,11 +275,9 @@ async function loadHuggingfaceTokenizer(): Promise<unknown> {
 }
 
 export async function estimateTokensWithHuggingface(text: string): Promise<number> {
-  const tokenizer = (await loadHuggingfaceTokenizer()) as {
-    encode: (text: string) => { length: number };
-  };
+  const tokenizer = await loadHuggingfaceTokenizer();
   const encoded = tokenizer.encode(text);
-  return encoded.length;
+  return encoded.ids.length;
 }
 
 // ================================
@@ -324,16 +363,26 @@ export function estimateTokensWithTokenizer(message: Message): number {
           // tiktoken 已就绪，使用精确值
           tokenCount = tiktokenResult;
         } else {
-          // tiktoken 还在加载，触发异步加载
+          // tiktoken 还在加载，触发异步加载，本次不缓存 fallback
           loadTiktokenTokenizer().catch(() => {});
-          // 使用字符估算（下次请求时如果 tokenizer 已加载，会命中缓存但还是旧值，
-          // 这里我们选择先缓存 fallback 值以保证性能和测试一致性）
-          tokenCount = estimateTokensByChars(content);
+          return estimateTokensByChars(content);
         }
       } else {
-        // HuggingFace 触发加载
-        loadHuggingfaceTokenizer().catch(() => {});
-        tokenCount = estimateTokensByChars(content);
+        // HuggingFace：如果已加载则使用精确值，否则触发异步加载并暂时 fallback
+        if (hfTokenizer) {
+          const encoded = hfTokenizer.encode(content);
+          tokenCount = encoded.ids.length;
+        } else if (!hfLoadFailed) {
+          // 触发加载（首次或加载中），本次用 chars 估算，不缓存
+          // 避免把临时 fallback 值写入缓存导致 tokenizer 加载后仍读到旧值
+          if (!hfLoadPromise) {
+            loadHuggingfaceTokenizer().catch(() => {});
+          }
+          return estimateTokensByChars(content);
+        } else {
+          // 已永久失败，直接用 chars
+          tokenCount = estimateTokensByChars(content);
+        }
       }
     } catch (error) {
       console.warn("[tokenizer] Estimation failed, falling back to char estimation:", error);
@@ -396,6 +445,8 @@ export async function warmupTokenizer(): Promise<void> {
     if (config.provider === "tiktoken") {
       await loadTiktokenTokenizer();
     } else {
+      // warmup 时允许重置失败状态重试
+      hfLoadFailed = false;
       await loadHuggingfaceTokenizer();
     }
     console.log("[tokenizer] Warmup complete");
