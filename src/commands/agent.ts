@@ -127,8 +127,17 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  isSubagent?: boolean;
+}): string {
   if (!params.isFallbackRetry) {
+    return params.body;
+  }
+  // Subagents carry their task in the first message body — replacing it with a
+  // generic continuation prompt would drop the task context entirely.
+  if (params.isSubagent) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -174,10 +183,12 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  isSubagentLane: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    isSubagent: params.isSubagentLane,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -866,6 +877,7 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            isSubagentLane,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
