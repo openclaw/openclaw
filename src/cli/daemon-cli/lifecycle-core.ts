@@ -115,7 +115,7 @@ async function signalGatewayProcessesOnPort(params: {
       usage.listeners
         .filter((listener) => classifyPortListener(listener, params.port) === "gateway")
         .map((listener) => listener.pid)
-        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
     ),
   );
   if (gatewayPids.length === 0) {
