@@ -202,4 +202,42 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", heartbeat: { every: "30m" } },
+            { id: "finance", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+
+    runner.stop();
+  });
 });

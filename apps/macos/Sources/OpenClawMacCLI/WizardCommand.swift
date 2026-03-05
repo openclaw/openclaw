@@ -285,16 +285,12 @@ actor GatewayWizardClient {
             nonce: connectNonce,
             platform: platform,
             deviceFamily: "Mac")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
+        if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
+            payload: payload,
+            identity: identity,
+            signedAtMs: signedAtMs,
+            nonce: connectNonce)
         {
-            let device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
-                "nonce": ProtoAnyCodable(connectNonce),
-            ]
             params["device"] = ProtoAnyCodable(device)
         }
 

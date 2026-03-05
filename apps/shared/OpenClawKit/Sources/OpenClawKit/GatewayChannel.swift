@@ -406,15 +406,12 @@ public actor GatewayChannelActor {
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
-            if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-                let device: [String: ProtoAnyCodable] = [
-                    "id": ProtoAnyCodable(identity.deviceId),
-                    "publicKey": ProtoAnyCodable(publicKey),
-                    "signature": ProtoAnyCodable(signature),
-                    "signedAt": ProtoAnyCodable(signedAtMs),
-                    "nonce": ProtoAnyCodable(connectNonce),
-                ]
+            if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
+                payload: payload,
+                identity: identity,
+                signedAtMs: signedAtMs,
+                nonce: connectNonce)
+            {
                 params["device"] = ProtoAnyCodable(device)
             }
         }

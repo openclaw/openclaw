@@ -1,5 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type {
+  GatewayRequestHandlerOptions,
+  OpenClawPluginApi,
+} from "openclaw/plugin-sdk/voice-call";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -181,7 +184,15 @@ const voiceCallPlugin = {
           logger: api.logger,
         });
       }
-      runtime = await runtimePromise;
+      try {
+        runtime = await runtimePromise;
+      } catch (err) {
+        // Reset so the next call can retry instead of caching the
+        // rejected promise forever (which also leaves the port orphaned
+        // if the server started before the failure).  See: #32387
+        runtimePromise = null;
+        throw err;
+      }
       return runtime;
     };
 

@@ -18,6 +18,8 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
+    // Anthropic 529 (overloaded) should trigger failover as rate_limit.
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
   });
 
   it("infers format errors from error messages", () => {
@@ -33,12 +35,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
-  it("infers timeout from abort stop-reason messages", () => {
+  it("infers timeout from abort/error stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "timeout",
+    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
+  });
+
+  it("infers timeout from connection/network error messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
+      "timeout",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
+      "timeout",
+    );
   });
 
   it("treats AbortError reason=abort as timeout", () => {

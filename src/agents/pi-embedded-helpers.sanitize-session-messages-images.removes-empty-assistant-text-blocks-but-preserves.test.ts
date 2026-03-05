@@ -1,11 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
+import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-function makeToolCallResultPairInput(): AgentMessage[] {
+let testTimestamp = 1;
+const nextTimestamp = () => testTimestamp++;
+
+function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessage> {
   return [
     {
       role: "assistant",
@@ -17,6 +22,19 @@ function makeToolCallResultPairInput(): AgentMessage[] {
           arguments: { path: "package.json" },
         },
       ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: nextTimestamp(),
     },
     {
       role: "toolResult",
@@ -24,25 +42,23 @@ function makeToolCallResultPairInput(): AgentMessage[] {
       toolName: "read",
       content: [{ type: "text", text: "ok" }],
       isError: false,
+      timestamp: nextTimestamp(),
     },
-  ] as AgentMessage[];
+  ];
 }
 
 function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
-  const assistant = out[0] as unknown as { role?: string; content?: unknown };
+  const assistant = out[0];
   expect(assistant.role).toBe("assistant");
-  expect(Array.isArray(assistant.content)).toBe(true);
-  const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
-    (block) => block.type === "toolCall",
-  );
+  const assistantContent = assistant.role === "assistant" ? assistant.content : [];
+  const toolCall = assistantContent.find((block) => block.type === "toolCall");
   expect(toolCall?.id).toBe(expectedId);
 
-  const toolResult = out[1] as unknown as {
-    role?: string;
-    toolCallId?: string;
-  };
+  const toolResult = out[1];
   expect(toolResult.role).toBe("toolResult");
-  expect(toolResult.toolCallId).toBe(expectedId);
+  if (toolResult.role === "toolResult") {
+    expect(toolResult.toolCallId).toBe(expectedId);
+  }
 }
 
 function expectSingleAssistantContentEntry(
@@ -50,8 +66,8 @@ function expectSingleAssistantContentEntry(
   expectEntry: (entry: { type?: string; text?: string }) => void,
 ) {
   expect(out).toHaveLength(1);
-  const content = (out[0] as { content?: unknown }).content;
-  expect(Array.isArray(content)).toBe(true);
+  expect(out[0]?.role).toBe("assistant");
+  const content = out[0]?.role === "assistant" ? out[0].content : [];
   expect(content).toHaveLength(1);
   expectEntry((content as Array<{ type?: string; text?: string }>)[0] ?? {});
 }
@@ -78,12 +94,25 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("does not synthesize tool call input when missing", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: nextTimestamp(),
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
@@ -94,15 +123,28 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
           { type: "text", text: "" },
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: nextTimestamp(),
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -112,7 +154,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
@@ -130,7 +172,7 @@ describe("sanitizeSessionMessagesImages", () => {
         toolUseId: "call_abc|item:123",
         content: [{ type: "text", text: "ok" }],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeToolCallIds: true,
@@ -146,11 +188,24 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(toolResult.toolUseId).toBe("callabcitem123");
   });
 
-  it("does not sanitize tool IDs in images-only mode", async () => {
-    const input = [
+  it("sanitizes tool IDs in images-only mode when explicitly enabled", async () => {
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_123|fc_456", name: "read", arguments: {} }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: nextTimestamp(),
       },
       {
         role: "toolResult",
@@ -158,8 +213,9 @@ describe("sanitizeSessionMessagesImages", () => {
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
         isError: false,
+        timestamp: nextTimestamp(),
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeMode: "images-only",
@@ -167,23 +223,42 @@ describe("sanitizeSessionMessagesImages", () => {
       toolCallIdMode: "strict",
     });
 
-    const assistant = out[0] as unknown as { content?: Array<{ type?: string; id?: string }> };
-    const toolCall = assistant.content?.find((b) => b.type === "toolCall");
-    expect(toolCall?.id).toBe("call_123|fc_456");
+    const assistant = out[0];
+    const toolCall =
+      assistant?.role === "assistant"
+        ? assistant.content.find((b) => b.type === "toolCall")
+        : undefined;
+    expect(toolCall?.id).toBe("call123fc456");
 
-    const toolResult = out[1] as unknown as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe("call_123|fc_456");
+    const toolResult = out[1];
+    expect(toolResult?.role).toBe("toolResult");
+    if (toolResult?.role === "toolResult") {
+      expect(toolResult.toolCallId).toBe("call123fc456");
+    }
   });
   it("filters whitespace-only assistant text blocks", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
           { type: "text", text: "   " },
           { type: "text", text: "ok" },
         ],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: nextTimestamp(),
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -192,10 +267,26 @@ describe("sanitizeSessionMessagesImages", () => {
     });
   });
   it("drops assistant messages that only contain empty text", async () => {
-    const input = [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: [{ type: "text", text: "" }] },
-    ] as unknown as AgentMessage[];
+    const input = castAgentMessages([
+      { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: nextTimestamp(),
+      } satisfies AssistantMessage,
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -203,11 +294,43 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[0]?.role).toBe("user");
   });
   it("keeps empty assistant error messages", async () => {
-    const input = [
-      { role: "user", content: "hello" },
-      { role: "assistant", stopReason: "error", content: [] },
-      { role: "assistant", stopReason: "error" },
-    ] as unknown as AgentMessage[];
+    const input = castAgentMessages([
+      { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: nextTimestamp(),
+      } satisfies AssistantMessage,
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: nextTimestamp(),
+      } satisfies AssistantMessage,
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -218,13 +341,16 @@ describe("sanitizeSessionMessagesImages", () => {
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
-      { role: "user", content: "hello" },
+      { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
         role: "toolResult",
         toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
         content: [{ type: "text", text: "result" }],
-      },
-    ] as unknown as AgentMessage[];
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -235,7 +361,7 @@ describe("sanitizeSessionMessagesImages", () => {
 
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [
@@ -247,7 +373,7 @@ describe("sanitizeSessionMessagesImages", () => {
             },
           ],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -262,19 +388,19 @@ describe("sanitizeSessionMessagesImages", () => {
 
 describe("sanitizeGoogleTurnOrdering", () => {
   it("prepends a synthetic user turn when history starts with assistant", () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("assistant");
   });
   it("is a no-op when history starts with user", () => {
-    const input = [{ role: "user", content: "hi" }] as unknown as AgentMessage[];
+    const input = castAgentMessages([{ role: "user", content: "hi" }]);
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out).toBe(input);
   });

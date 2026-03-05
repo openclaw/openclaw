@@ -106,13 +106,24 @@ function resolveSiblingAgentSessionsDir(
   return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
 }
 
-function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string | undefined {
+function resolveAgentSessionsPathParts(
+  candidateAbsPath: string,
+): { parts: string[]; sessionsIndex: number } | null {
   const normalized = path.normalize(path.resolve(candidateAbsPath));
   const parts = normalized.split(path.sep).filter(Boolean);
   const sessionsIndex = parts.lastIndexOf("sessions");
   if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
+    return null;
+  }
+  return { parts, sessionsIndex };
+}
+
+function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
     return undefined;
   }
+  const { parts, sessionsIndex } = parsed;
   const agentId = parts[sessionsIndex - 1];
   return agentId || undefined;
 }
@@ -121,12 +132,11 @@ function resolveStructuralSessionFallbackPath(
   candidateAbsPath: string,
   expectedAgentId: string,
 ): string | undefined {
-  const normalized = path.normalize(path.resolve(candidateAbsPath));
-  const parts = normalized.split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
     return undefined;
   }
+  const { parts, sessionsIndex } = parsed;
   const agentIdPart = parts[sessionsIndex - 1];
   if (!agentIdPart) {
     return undefined;
@@ -147,7 +157,7 @@ function resolveStructuralSessionFallbackPath(
   if (!fileName || fileName === "." || fileName === "..") {
     return undefined;
   }
-  return normalized;
+  return path.normalize(path.resolve(candidateAbsPath));
 }
 
 function safeRealpathSync(filePath: string): string | undefined {

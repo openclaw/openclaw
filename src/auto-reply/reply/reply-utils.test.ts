@@ -157,6 +157,27 @@ describe("typing controller", () => {
     vi.useRealTimers();
   });
 
+  function createTestTypingController() {
+    const onReplyStart = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 30_000,
+    });
+    return { typing, onReplyStart };
+  }
+
+  function markTypingState(
+    typing: ReturnType<typeof createTypingController>,
+    state: "run" | "idle",
+  ) {
+    if (state === "run") {
+      typing.markRunComplete();
+      return;
+    }
+    typing.markDispatchIdle();
+  }
+
   it("stops only after both run completion and dispatcher idle are set (any order)", async () => {
     vi.useFakeTimers();
     const cases = [
@@ -165,12 +186,7 @@ describe("typing controller", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const onReplyStart = vi.fn();
-      const typing = createTypingController({
-        onReplyStart,
-        typingIntervalSeconds: 1,
-        typingTtlMs: 30_000,
-      });
+      const { typing, onReplyStart } = createTestTypingController();
 
       await typing.startTypingLoop();
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(1);
@@ -178,19 +194,11 @@ describe("typing controller", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(3);
 
-      if (testCase.first === "run") {
-        typing.markRunComplete();
-      } else {
-        typing.markDispatchIdle();
-      }
+      markTypingState(typing, testCase.first);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
 
-      if (testCase.second === "run") {
-        typing.markRunComplete();
-      } else {
-        typing.markDispatchIdle();
-      }
+      markTypingState(typing, testCase.second);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
     }
@@ -198,12 +206,7 @@ describe("typing controller", () => {
 
   it("does not start typing after run completion", async () => {
     vi.useFakeTimers();
-    const onReplyStart = vi.fn();
-    const typing = createTypingController({
-      onReplyStart,
-      typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
-    });
+    const { typing, onReplyStart } = createTestTypingController();
 
     typing.markRunComplete();
     await typing.startTypingOnText("late text");
@@ -213,12 +216,7 @@ describe("typing controller", () => {
 
   it("does not restart typing after it has stopped", async () => {
     vi.useFakeTimers();
-    const onReplyStart = vi.fn();
-    const typing = createTypingController({
-      onReplyStart,
-      typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
-    });
+    const { typing, onReplyStart } = createTestTypingController();
 
     await typing.startTypingLoop();
     expect(onReplyStart).toHaveBeenCalledTimes(1);
@@ -358,6 +356,21 @@ describe("parseAudioTag", () => {
 });
 
 describe("resolveResponsePrefixTemplate", () => {
+  function expectResolvedTemplateCases<
+    T extends ReadonlyArray<{
+      name: string;
+      template: string | undefined;
+      values: Parameters<typeof resolveResponsePrefixTemplate>[1];
+      expected: string | undefined;
+    }>,
+  >(cases: T) {
+    for (const testCase of cases) {
+      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
+  }
+
   it("resolves known variables, aliases, and case-insensitive tokens", () => {
     const cases = [
       {
@@ -420,11 +433,7 @@ describe("resolveResponsePrefixTemplate", () => {
         expected: "[OpenClaw] anthropic/claude-opus-4-5 (think:high)",
       },
     ] as const;
-    for (const testCase of cases) {
-      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
-        testCase.expected,
-      );
-    }
+    expectResolvedTemplateCases(cases);
   });
 
   it("preserves unresolved/unknown placeholders and handles static inputs", () => {
@@ -450,11 +459,7 @@ describe("resolveResponsePrefixTemplate", () => {
         expected: "[gpt-5.2 | {provider}]",
       },
     ] as const;
-    for (const testCase of cases) {
-      expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
-        testCase.expected,
-      );
-    }
+    expectResolvedTemplateCases(cases);
   });
 });
 
@@ -556,15 +561,31 @@ describe("block reply coalescer", () => {
     vi.useRealTimers();
   });
 
-  it("coalesces chunks within the idle window", async () => {
-    vi.useFakeTimers();
+  function createBlockCoalescerHarness(config: {
+    minChars: number;
+    maxChars: number;
+    idleMs: number;
+    joiner: string;
+    flushOnEnqueue?: boolean;
+  }) {
     const flushes: string[] = [];
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 200, idleMs: 100, joiner: " " },
+      config,
       shouldAbort: () => false,
       onFlush: (payload) => {
         flushes.push(payload.text ?? "");
       },
+    });
+    return { flushes, coalescer };
+  }
+
+  it("coalesces chunks within the idle window", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 200,
+      idleMs: 100,
+      joiner: " ",
     });
 
     coalescer.enqueue({ text: "Hello" });
@@ -577,13 +598,11 @@ describe("block reply coalescer", () => {
 
   it("waits until minChars before idle flush", async () => {
     vi.useFakeTimers();
-    const flushes: string[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 10, maxChars: 200, idleMs: 50, joiner: " " },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push(payload.text ?? "");
-      },
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 10,
+      maxChars: 200,
+      idleMs: 50,
+      joiner: " ",
     });
 
     coalescer.enqueue({ text: "short" });
@@ -598,13 +617,11 @@ describe("block reply coalescer", () => {
 
   it("still accumulates when flushOnEnqueue is not set (default)", async () => {
     vi.useFakeTimers();
-    const flushes: string[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 2000, idleMs: 100, joiner: "\n\n" },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push(payload.text ?? "");
-      },
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 100,
+      joiner: "\n\n",
     });
 
     coalescer.enqueue({ text: "First paragraph" });
@@ -630,14 +647,7 @@ describe("block reply coalescer", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const flushes: string[] = [];
-      const coalescer = createBlockReplyCoalescer({
-        config: testCase.config,
-        shouldAbort: () => false,
-        onFlush: (payload) => {
-          flushes.push(payload.text ?? "");
-        },
-      });
+      const { flushes, coalescer } = createBlockCoalescerHarness(testCase.config);
       for (const input of testCase.inputs) {
         coalescer.enqueue({ text: input });
       }

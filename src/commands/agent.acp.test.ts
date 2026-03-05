@@ -26,12 +26,12 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
 }
 
-function mockConfig(home: string, storePath: string) {
-  loadConfigSpy.mockReturnValue({
+function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
+  return {
     acp: {
       enabled: true,
       backend: "acpx",
-      allowedAgents: ["codex"],
+      allowedAgents: ["codex", "kimi"],
       dispatch: { enabled: true },
     },
     agents: {
@@ -42,7 +42,11 @@ function mockConfig(home: string, storePath: string) {
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  };
+}
+
+function mockConfig(home: string, storePath: string) {
+  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
 }
 
 function mockConfigWithAcpOverrides(
@@ -50,38 +54,28 @@ function mockConfigWithAcpOverrides(
   storePath: string,
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
 ) {
-  loadConfigSpy.mockReturnValue({
-    acp: {
-      enabled: true,
-      backend: "acpx",
-      allowedAgents: ["codex"],
-      dispatch: { enabled: true },
-      ...acpOverrides,
-    },
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.3-codex" },
-        models: { "openai/gpt-5.3-codex": {} },
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } satisfies OpenClawConfig);
+  const cfg = createAcpEnabledConfig(home, storePath);
+  cfg.acp = {
+    ...cfg.acp,
+    ...acpOverrides,
+  };
+  loadConfigSpy.mockReturnValue(cfg);
 }
 
-function writeAcpSessionStore(storePath: string) {
+function writeAcpSessionStore(storePath: string, agent = "codex") {
+  const sessionKey = `agent:${agent}:acp:test`;
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(
     storePath,
     JSON.stringify(
       {
-        "agent:codex:acp:test": {
+        [sessionKey]: {
           sessionId: "acp-session-1",
           updatedAt: Date.now(),
           acp: {
             backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "agent:codex:acp:test",
+            agent,
+            runtimeSessionName: sessionKey,
             mode: "oneshot",
             state: "idle",
             lastActivityAt: Date.now(),
@@ -282,6 +276,32 @@ describe("agentCommand ACP runtime routing", () => {
         message: expect.stringContaining("not allowed by policy"),
       });
       expect(runTurn).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows ACP turns for kimi when policy allowlists kimi", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath, "kimi");
+      mockConfigWithAcpOverrides(home, storePath, {
+        allowedAgents: ["kimi"],
+      });
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:kimi:acp:test",
+          text: "ping",
+        }),
+      );
       expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
     });
   });

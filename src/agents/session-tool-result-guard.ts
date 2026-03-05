@@ -9,6 +9,7 @@ import {
   HARD_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
+import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -106,7 +107,7 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
-  const pending = new Map<string, string | undefined>();
+  const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -142,11 +143,11 @@ export function installSessionToolResultGuard(
   };
 
   const flushPendingToolResults = () => {
-    if (pending.size === 0) {
+    if (pendingState.size() === 0) {
       return;
     }
     if (allowSyntheticToolResults) {
-      for (const [id, name] of pending.entries()) {
+      for (const [id, name] of pendingState.entries()) {
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
@@ -160,7 +161,7 @@ export function installSessionToolResultGuard(
         }
       }
     }
-    pending.clear();
+    pendingState.clear();
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -171,7 +172,7 @@ export function installSessionToolResultGuard(
         allowedToolNames: opts?.allowedToolNames,
       });
       if (sanitized.length === 0) {
-        if (allowSyntheticToolResults && pending.size > 0) {
+        if (pendingState.shouldFlushForSanitizedDrop()) {
           flushPendingToolResults();
         }
         return undefined;
@@ -182,9 +183,9 @@ export function installSessionToolResultGuard(
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
-      const toolName = id ? pending.get(id) : undefined;
+      const toolName = id ? pendingState.getToolName(id) : undefined;
       if (id) {
-        pending.delete(id);
+        pendingState.delete(id);
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
@@ -215,15 +216,18 @@ export function installSessionToolResultGuard(
         ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
-    if (allowSyntheticToolResults) {
-      // If previous tool calls are still pending, flush before non-tool results.
-      if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
-        flushPendingToolResults();
-      }
-      // If new tool calls arrive while older ones are pending, flush the old ones first.
-      if (pending.size > 0 && toolCalls.length > 0) {
-        flushPendingToolResults();
-      }
+    // Always clear pending tool call state before appending non-tool-result messages.
+    // flushPendingToolResults() only inserts synthetic results when allowSyntheticToolResults
+    // is true; it always clears the pending map. Without this, providers that disable
+    // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
+    // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
+    // that cause API 400 errors on subsequent requests.
+    if (pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)) {
+      flushPendingToolResults();
+    }
+    // If new tool calls arrive while older ones are pending, flush the old ones first.
+    if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
+      flushPendingToolResults();
     }
 
     const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
@@ -240,9 +244,7 @@ export function installSessionToolResultGuard(
     }
 
     if (toolCalls.length > 0) {
-      for (const call of toolCalls) {
-        pending.set(call.id, call.name);
-      }
+      pendingState.trackToolCalls(toolCalls);
     }
 
     return result;
@@ -253,6 +255,6 @@ export function installSessionToolResultGuard(
 
   return {
     flushPendingToolResults,
-    getPendingIds: () => Array.from(pending.keys()),
+    getPendingIds: pendingState.getPendingIds,
   };
 }

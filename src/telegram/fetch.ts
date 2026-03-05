@@ -3,6 +3,7 @@ import * as net from "node:net";
 import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -13,25 +14,6 @@ let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
-const PROXY_ENV_KEYS = [
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "ALL_PROXY",
-  "https_proxy",
-  "http_proxy",
-  "all_proxy",
-] as const;
-
-function hasProxyEnvConfigured(): boolean {
-  for (const key of PROXY_ENV_KEYS) {
-    const value = process.env[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
   return typeof ctorName === "string" && ctorName.includes("ProxyAgent");

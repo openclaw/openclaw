@@ -244,6 +244,22 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
+  // If the gateway is already connected when the lifecycle starts (the
+  // "WebSocket connection opened" debug event was emitted before we
+  // registered the listener above), push the initial connected status now.
+  // Guard against lifecycleStopping: if the abortSignal was already aborted,
+  // onAbort() ran synchronously above and pushed connected: false — don't
+  // contradict it with a spurious connected: true.
+  if (gateway?.isConnected && !lifecycleStopping) {
+    const at = Date.now();
+    pushStatus({
+      connected: true,
+      lastEventAt: at,
+      lastConnectedAt: at,
+      lastDisconnect: null,
+    });
+  }
+
   let sawDisallowedIntents = false;
   const logGatewayError = (err: unknown) => {
     if (params.isDisallowedIntentsError(err)) {

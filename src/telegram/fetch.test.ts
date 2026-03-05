@@ -37,6 +37,23 @@ vi.mock("undici", () => ({
 
 const originalFetch = globalThis.fetch;
 
+function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFamily: boolean }) {
+  expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(params.nth, {
+    connect: {
+      autoSelectFamily: params.autoSelectFamily,
+      autoSelectFamilyAttemptTimeout: 300,
+    },
+  });
+}
+
+function resolveTelegramFetchOrThrow() {
+  const resolved = resolveTelegramFetch();
+  if (!resolved) {
+    throw new Error("expected resolved fetch");
+  }
+  return resolved;
+}
+
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
@@ -157,12 +174,7 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
   });
 
   it("keeps an existing proxy-like global dispatcher", async () => {
@@ -204,18 +216,8 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });
 
   it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
@@ -239,27 +241,14 @@ describe("resolveTelegramFetch", () => {
       .mockResolvedValueOnce({ ok: true } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });
 
   it("retries with ipv4 fallback once per request, not once per process", async () => {
@@ -277,10 +266,7 @@ describe("resolveTelegramFetch", () => {
       .mockResolvedValueOnce({ ok: true } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
     await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
@@ -297,10 +283,7 @@ describe("resolveTelegramFetch", () => {
     const fetchMock = vi.fn().mockRejectedValue(fetchError);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
       "fetch failed",

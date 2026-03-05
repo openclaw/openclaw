@@ -1,30 +1,37 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { createBrowserProgram } from "./browser-cli-test-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
-    req.path === "/"
-      ? {
-          enabled: true,
-          running: true,
-          pid: 1,
-          cdpPort: 18800,
-          chosenBrowser: "chrome",
-          userDataDir: "/tmp/openclaw",
-          color: "blue",
-          headless: true,
-          attachOnly: false,
-        }
-      : {},
-  ),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
-}));
+const mocks = vi.hoisted(() => {
+  const runtimeLog = vi.fn();
+  const runtimeError = vi.fn();
+  const runtimeExit = vi.fn();
+  return {
+    callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            running: true,
+            pid: 1,
+            cdpPort: 18800,
+            chosenBrowser: "chrome",
+            userDataDir: "/tmp/openclaw",
+            color: "blue",
+            headless: true,
+            attachOnly: false,
+          }
+        : {},
+    ),
+    runtimeLog,
+    runtimeError,
+    runtimeExit,
+    runtime: {
+      log: runtimeLog,
+      error: runtimeError,
+      exit: runtimeExit,
+    },
+  };
+});
 
 vi.mock("./browser-cli-shared.js", () => ({
   callBrowserRequest: mocks.callBrowserRequest,
@@ -35,13 +42,7 @@ vi.mock("./cli-utils.js", () => ({
     _runtime: unknown,
     action: () => Promise<void>,
     onError: (err: unknown) => void,
-  ) => {
-    try {
-      await action();
-    } catch (err) {
-      onError(err);
-    }
-  },
+  ) => await action().catch(onError),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -50,22 +51,17 @@ vi.mock("../runtime.js", () => ({
 
 describe("browser manage start timeout option", () => {
   function createProgram() {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false)
-      .option("--timeout <ms>", "Timeout in ms", "30000");
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+    const { program, browser, parentOpts } = createBrowserProgram();
+    browser.option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserManageCommands(browser, parentOpts);
     return program;
   }
 
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.exit.mockClear();
+    mocks.runtimeLog.mockClear();
+    mocks.runtimeError.mockClear();
+    mocks.runtimeExit.mockClear();
   });
 
   it("uses parent --timeout for browser start instead of hardcoded 15s", async () => {
