@@ -1457,8 +1457,7 @@
                   "zh-CN/install/docker",
                   "zh-CN/install/nix",
                   "zh-CN/install/ansible",
-                  "zh-CN/install/bun",
-                  "zh-CN/install/claworc"
+                  "zh-CN/install/bun"
                 ]
               },
               {
