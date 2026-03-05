@@ -7,8 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
-  /** Profile color (hex). Auto-assigned at creation. */
-  color: string;
+  /** Profile color (hex). Auto-assigned at creation if omitted. */
+  color?: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
