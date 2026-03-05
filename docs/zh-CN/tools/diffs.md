@@ -113,6 +113,6 @@ Patch：
 
 ## 相关文档
 
-- [Diffs 插件配置](/plugins/diffs)
-- [Canvas 工具](/tools/canvas)
-- [Message 工具](/tools/message)
+- [Tools 总览](/tools)
+- [插件文档](/tools/plugin)
+- [浏览器工具](/tools/browser)

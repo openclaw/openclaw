@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONFIG_BACKUP_COUNT,
@@ -17,18 +18,17 @@ describe("backup-rotation", () => {
   });
 
   describe("rotateConfigBackups", () => {
-    it("does nothing when CONFIG_BACKUP_COUNT is 1 or less", async () => {
+    it("rotates backups when CONFIG_BACKUP_COUNT > 1", async () => {
       const mockFs: BackupRotationFs = {
         unlink: vi.fn().mockResolvedValue(undefined),
         rename: vi.fn().mockResolvedValue(undefined),
       };
 
-      // We can't easily override the constant, but we can verify the function works
-
       await rotateConfigBackups("/config/openclaw.json", mockFs);
 
       // With default count of 5, it should perform rotations
       expect(mockFs.unlink).toHaveBeenCalled();
+      expect(mockFs.rename).toHaveBeenCalled();
     });
 
     it("rotates backups in correct order", async () => {
@@ -154,18 +154,21 @@ describe("backup-rotation", () => {
         ]),
       };
 
-      await cleanOrphanBackups("/config/openclaw.json", mockFs);
+      const configPath = "/config/openclaw.json";
+      const baseDir = path.dirname(configPath);
+
+      await cleanOrphanBackups(configPath, mockFs);
 
       // Should remove orphans
-      expect(unlinked).toContain("/config/openclaw.json.bak.12345");
-      expect(unlinked).toContain("/config/openclaw.json.bak.before-migration");
+      expect(unlinked).toContain(path.join(baseDir, "openclaw.json.bak.12345"));
+      expect(unlinked).toContain(path.join(baseDir, "openclaw.json.bak.before-migration"));
 
       // Should NOT remove valid numbered backups
-      expect(unlinked).not.toContain("/config/openclaw.json.bak.1");
-      expect(unlinked).not.toContain("/config/openclaw.json.bak.2");
+      expect(unlinked).not.toContain(path.join(baseDir, "openclaw.json.bak.1"));
+      expect(unlinked).not.toContain(path.join(baseDir, "openclaw.json.bak.2"));
 
       // Should NOT remove primary .bak
-      expect(unlinked).not.toContain("/config/openclaw.json.bak");
+      expect(unlinked).not.toContain(path.join(baseDir, "openclaw.json.bak"));
     });
 
     it("handles readdir errors gracefully", async () => {
@@ -205,12 +208,15 @@ describe("backup-rotation", () => {
         ]),
       };
 
-      await cleanOrphanBackups("/config/openclaw.json", mockFs);
+      const configPath = "/config/openclaw.json";
+      const baseDir = path.dirname(configPath);
+
+      await cleanOrphanBackups(configPath, mockFs);
 
       // Should only remove .bak.* files
-      expect(unlinked).toContain("/config/openclaw.json.bak.extra");
-      expect(unlinked).not.toContain("/config/openclaw.json.backup.1");
-      expect(unlinked).not.toContain("/config/openclaw.json.bak");
+      expect(unlinked).toContain(path.join(baseDir, "openclaw.json.bak.extra"));
+      expect(unlinked).not.toContain(path.join(baseDir, "openclaw.json.backup.1"));
+      expect(unlinked).not.toContain(path.join(baseDir, "openclaw.json.bak"));
     });
   });
 
