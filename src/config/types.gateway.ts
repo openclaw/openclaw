@@ -104,6 +104,16 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /**
+   * Legacy compatibility field retained for config parsing only.
+   * No longer affects runtime behavior.
+   */
+  autoApproveDevices?: boolean;
+  /**
+   * Legacy compatibility field retained for config parsing only.
+   * No longer affects runtime behavior.
+   */
+  requirePairing?: boolean;
 };
 
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";

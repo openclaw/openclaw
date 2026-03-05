@@ -184,4 +184,17 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts legacy gateway.controlUi compatibility keys", () => {
+    const res = validateConfigObject({
+      gateway: {
+        controlUi: {
+          autoApproveDevices: true,
+          requirePairing: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

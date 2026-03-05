@@ -607,6 +607,10 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+            // Legacy compatibility keys kept as no-op accepts to avoid startup failures
+            // on upgraded configs that still contain these fields.
+            autoApproveDevices: z.boolean().optional(),
+            requirePairing: z.boolean().optional(),
           })
           .strict()
           .optional(),
