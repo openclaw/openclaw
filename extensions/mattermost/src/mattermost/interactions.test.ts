@@ -103,6 +103,16 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
     const reorderedContext = { action: "do", action_id: "bm_do", tweet_id: "999" };
     expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
   });
+
+  it("scopes tokens per account when account secrets differ", () => {
+    setInteractionSecret("acct-a", "bot-token-a");
+    setInteractionSecret("acct-b", "bot-token-b");
+    const context = { action_id: "do_now", item_id: "123" };
+    const tokenA = generateInteractionToken(context, "acct-a");
+
+    expect(verifyInteractionToken(context, tokenA, "acct-a")).toBe(true);
+    expect(verifyInteractionToken(context, tokenA, "acct-b")).toBe(false);
+  });
 });
 
 // ── Callback URL registry ────────────────────────────────────────────

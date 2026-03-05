@@ -12,7 +12,9 @@ const mockState = vi.hoisted(() => ({
   createMattermostClient: vi.fn(),
   createMattermostDirectChannel: vi.fn(),
   createMattermostPost: vi.fn(),
+  fetchMattermostChannelByName: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
   uploadMattermostFile: vi.fn(),
@@ -30,7 +32,9 @@ vi.mock("./client.js", () => ({
   createMattermostClient: mockState.createMattermostClient,
   createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostPost: mockState.createMattermostPost,
+  fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
   fetchMattermostMe: mockState.fetchMattermostMe,
+  fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
   fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
   uploadMattermostFile: mockState.uploadMattermostFile,
@@ -71,11 +75,16 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostClient.mockReset();
     mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostPost.mockReset();
+    mockState.fetchMattermostChannelByName.mockReset();
     mockState.fetchMattermostMe.mockReset();
+    mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
+    mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+    mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
   });
 

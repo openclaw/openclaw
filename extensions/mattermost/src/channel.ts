@@ -164,7 +164,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     let props: Record<string, unknown> | undefined;
     if (params.buttons && Array.isArray(params.buttons)) {
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
-      if (account.botToken) setInteractionSecret(account.botToken);
+      if (account.botToken) setInteractionSecret(account.accountId, account.botToken);
       const callbackUrl = resolveInteractionCallbackUrl(account.accountId, cfg);
 
       // Flatten 2D array (rows of buttons) to 1D — core schema sends Array<Array<Button>>
@@ -191,6 +191,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       props = {
         attachments: buildButtonAttachments({
           callbackUrl,
+          accountId: account.accountId,
           buttons,
           text: attachmentText,
         }),

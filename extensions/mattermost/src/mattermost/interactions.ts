@@ -63,32 +63,58 @@ export function resolveInteractionCallbackUrl(
 // ── HMAC token management ──────────────────────────────────────────────
 // Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
-let interactionSecret: string | undefined;
+const interactionSecrets = new Map<string, string>();
+let defaultInteractionSecret: string | undefined;
 
-export function setInteractionSecret(botToken: string): void {
-  interactionSecret = createHmac("sha256", "openclaw-mattermost-interactions")
-    .update(botToken)
-    .digest("hex");
+function deriveInteractionSecret(botToken: string): string {
+  return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
 }
 
-export function getInteractionSecret(): string {
-  if (!interactionSecret) {
-    throw new Error(
-      "Interaction secret not initialized — call setInteractionSecret(botToken) first",
-    );
+export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {
+  if (typeof botToken === "string") {
+    interactionSecrets.set(accountIdOrBotToken, deriveInteractionSecret(botToken));
+    return;
   }
-  return interactionSecret;
+  // Backward-compatible fallback for call sites/tests that only pass botToken.
+  defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
 }
 
-export function generateInteractionToken(context: Record<string, unknown>): string {
-  const secret = getInteractionSecret();
+export function getInteractionSecret(accountId?: string): string {
+  const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
+  if (scoped) {
+    return scoped;
+  }
+  if (defaultInteractionSecret) {
+    return defaultInteractionSecret;
+  }
+  // Fallback for single-account runtimes that only registered scoped secrets.
+  if (interactionSecrets.size === 1) {
+    const first = interactionSecrets.values().next().value;
+    if (typeof first === "string") {
+      return first;
+    }
+  }
+  throw new Error(
+    "Interaction secret not initialized — call setInteractionSecret(accountId, botToken) first",
+  );
+}
+
+export function generateInteractionToken(
+  context: Record<string, unknown>,
+  accountId?: string,
+): string {
+  const secret = getInteractionSecret(accountId);
   // Sort keys for stable serialization — Mattermost may reorder context keys
   const payload = JSON.stringify(context, Object.keys(context).sort());
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-export function verifyInteractionToken(context: Record<string, unknown>, token: string): boolean {
-  const expected = generateInteractionToken(context);
+export function verifyInteractionToken(
+  context: Record<string, unknown>,
+  token: string,
+  accountId?: string,
+): boolean {
+  const expected = generateInteractionToken(context, accountId);
   if (expected.length !== token.length) {
     return false;
   }
@@ -133,6 +159,7 @@ function sanitizeActionId(id: string): string {
 
 export function buildButtonAttachments(params: {
   callbackUrl: string;
+  accountId?: string;
   buttons: Array<{
     id: string;
     name: string;
@@ -147,7 +174,7 @@ export function buildButtonAttachments(params: {
       action_id: safeId,
       ...btn.context,
     };
-    const token = generateInteractionToken(context);
+    const token = generateInteractionToken(context, params.accountId);
     return {
       id: safeId,
       type: "button" as const,
@@ -225,7 +252,7 @@ export function createMattermostInteractionHandler(params: {
   botUserId: string;
   accountId: string;
   callbackUrl: string;
-  resolveSessionKey?: (channelId: string) => Promise<string>;
+  resolveSessionKey?: (channelId: string, userId: string) => Promise<string>;
   dispatchButtonClick?: (opts: {
     channelId: string;
     userId: string;
@@ -236,7 +263,7 @@ export function createMattermostInteractionHandler(params: {
   }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const { client, botUserId, accountId, log } = params;
+  const { client, accountId, log } = params;
   const core = getMattermostRuntime();
 
   return async (req: IncomingMessage, res: ServerResponse) => {
@@ -292,7 +319,7 @@ export function createMattermostInteractionHandler(params: {
 
     // Strip _token before verification (it wasn't in the original context)
     const { _token, ...contextWithoutToken } = context;
-    if (!verifyInteractionToken(contextWithoutToken, token)) {
+    if (!verifyInteractionToken(contextWithoutToken, token, accountId)) {
       log?.("mattermost interaction: invalid _token");
       res.statusCode = 403;
       res.setHeader("Content-Type", "application/json");
@@ -323,7 +350,7 @@ export function createMattermostInteractionHandler(params: {
         `in channel ${payload.channel_id}`;
 
       const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey(payload.channel_id)
+        ? await params.resolveSessionKey(payload.channel_id, payload.user_id)
         : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
 
       core.system.enqueueSystemEvent(eventLabel, {

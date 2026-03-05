@@ -448,7 +448,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   // ─── Interactive buttons registration ──────────────────────────────────────
   // Derive a stable HMAC secret from the bot token so CLI and gateway share it.
-  setInteractionSecret(botToken);
+  setInteractionSecret(account.accountId, botToken);
 
   // Register HTTP callback endpoint for interactive button clicks.
   // Mattermost POSTs to this URL when a user clicks a button action.
@@ -465,7 +465,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       botUserId,
       accountId: account.accountId,
       callbackUrl,
-      resolveSessionKey: async (channelId: string) => {
+      resolveSessionKey: async (channelId: string, userId: string) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
         const teamId = channelInfo?.team_id ?? undefined;
@@ -476,7 +476,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           peer: {
             kind,
-            id: kind === "direct" ? botUserId : channelId,
+            id: kind === "direct" ? userId : channelId,
           },
         });
         return route.sessionKey;
@@ -495,7 +495,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           peer: {
             kind,
-            id: kind === "direct" ? botUserId : opts.channelId,
+            id: kind === "direct" ? opts.userId : opts.channelId,
           },
         });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
