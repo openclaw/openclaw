@@ -422,6 +422,50 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
 
+  it("falls back to GOOGLE_CLOUD_PROJECT when only canary endpoints return permission errors", async () => {
+    process.env.GOOGLE_CLOUD_PROJECT = "env-project";
+
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if (url === LOAD_PROD) {
+        return responseJson({ error: { message: "temporary outage" } }, 503);
+      }
+      if ([LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson(
+          {
+            error: {
+              message: "The caller does not have permission",
+              details: [{ reason: "PERMISSION_DENIED" }],
+            },
+          },
+          403,
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(result.projectId).toBe("env-project");
+    expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+    expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
+  });
+
   it("continues with onboarding when a later endpoint succeeds with sparse data", async () => {
     process.env.GOOGLE_CLOUD_PROJECT = "env-project";
 

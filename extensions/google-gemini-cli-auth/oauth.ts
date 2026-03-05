@@ -553,11 +553,14 @@ async function discoverProject(accessToken: string): Promise<string> {
 
   if (!hasLoadCodeAssistData && loadFailures.length > 0) {
     const hasPermanentFailure = loadFailures.some((failure) => !failure.transient);
+    const hasPermanentProdFailure = loadFailures.some(
+      (failure) => !failure.transient && failure.endpoint === CODE_ASSIST_ENDPOINT_PROD,
+    );
     const hasSilentNonTransientFailure = hasSuccessfulLoadCodeAssistResponse && hasPermanentFailure;
     const shouldSurfaceFailure =
       !hasSuccessfulLoadCodeAssistResponse || hasSilentNonTransientFailure;
     if (shouldSurfaceFailure) {
-      if (envProject && !hasPermanentFailure) {
+      if (envProject && (!hasPermanentFailure || !hasPermanentProdFailure)) {
         return envProject;
       }
       throw buildLoadCodeAssistFailureError(loadFailures, Boolean(envProject));
