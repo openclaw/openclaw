@@ -30,6 +30,9 @@ describe("config discord", () => {
               stickerUploads: false,
               channels: true,
             },
+            agentComponents: {
+              enabled: true,
+            },
             guilds: {
               "123": {
                 slug: "friends-of-openclaw",
@@ -52,6 +55,7 @@ describe("config discord", () => {
         expect(cfg.channels?.discord?.actions?.emojiUploads).toBe(true);
         expect(cfg.channels?.discord?.actions?.stickerUploads).toBe(false);
         expect(cfg.channels?.discord?.actions?.channels).toBe(true);
+        expect(cfg.channels?.discord?.agentComponents?.enabled).toBe(true);
         expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
         expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
       },
