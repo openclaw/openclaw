@@ -91,10 +91,9 @@ export function handleMessageUpdate(
   // Instead, we'll add it when calculating the cleaned text for emission.
   // This ensures proper separation between tool-call cycles when block
   // streaming is enabled (issue #35308).
+  // IMPORTANT: Don't clear the flag yet! We only clear it after we've
+  // actually emitted text, to handle cases where the first event is thinking_*.
   const needsCrossTurnSeparator = ctx.state.pendingCrossTurnSeparator;
-  if (ctx.state.pendingCrossTurnSeparator) {
-    ctx.state.pendingCrossTurnSeparator = false;
-  }
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -206,13 +205,19 @@ export function handleMessageUpdate(
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
-    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+    let previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     // If this is the first chunk after a cross-turn boundary, prepend the separator.
-    // We add it to cleanedText before slicing to ensure the delta includes the separator.
-    // This must be done before the startsWith check to maintain correct diff logic.
-    if (needsCrossTurnSeparator && !previousCleaned) {
+    // We need to add it to both cleanedText (for this emission) AND to
+    // previousCleaned (as a baseline for future diff calculations). This ensures:
+    // 1. The separator is included in the emitted text
+    // 2. Future chunks can diff correctly against the baseline that includes the separator
+    if (needsCrossTurnSeparator && !previousCleaned && cleanedText) {
       cleanedText = "\n\n" + cleanedText;
+      // Set the baseline to include the separator so future diffs work correctly
+      previousCleaned = "\n\n";
+      // Mark that we've consumed the separator (only clear it after we emit)
+      ctx.state.pendingCrossTurnSeparator = false;
     }
 
     let shouldEmit = false;
