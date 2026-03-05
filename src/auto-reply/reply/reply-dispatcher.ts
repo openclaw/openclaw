@@ -191,6 +191,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
               },
             );
             if (sendingResult?.cancel) {
+              queuedCounts[kind] = Math.max(0, queuedCounts[kind] - 1);
               return; // Cancel sending
             }
             if (sendingResult?.content != null) {

@@ -1441,6 +1441,26 @@ describe("createReplyDispatcher", () => {
     hookSpy.mockRestore();
   });
 
+  it("rolls back queued counts when message_sending cancels delivery", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const runMessageSending = vi.fn().mockResolvedValue({ cancel: true });
+    const hookRunner = {
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    };
+    const hookSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue(hookRunner as never);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendFinalReply({ text: "x" });
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(dispatcher.getQueuedCounts().final).toBe(0);
+    hookSpy.mockRestore();
+  });
+
   it("does not block queue on pending message_sent hooks", async () => {
     let resolveSent: (() => void) | undefined;
     const pendingSent = new Promise<void>((resolve) => {
