@@ -133,6 +133,43 @@ function parseReadToolArgs(value: unknown): ReadCallMeta | null {
   };
 }
 
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolcall", "tooluse", "functioncall"]);
+
+function readToolName(call: Record<string, unknown>): string {
+  if (typeof call.name === "string") {
+    return call.name.toLowerCase();
+  }
+
+  const fn = call.function;
+  if (fn && typeof fn === "object") {
+    const fnName = (fn as Record<string, unknown>).name;
+    if (typeof fnName === "string") {
+      return fnName.toLowerCase();
+    }
+  }
+
+  return "";
+}
+
+function readToolArguments(call: Record<string, unknown>): unknown {
+  if (call.arguments !== undefined) {
+    return call.arguments;
+  }
+  if (call.input !== undefined) {
+    return call.input;
+  }
+
+  const fn = call.function;
+  if (fn && typeof fn === "object") {
+    const fnArgs = (fn as Record<string, unknown>).arguments;
+    if (fnArgs !== undefined) {
+      return fnArgs;
+    }
+  }
+
+  return undefined;
+}
+
 function collectReadToolCallMeta(messages: any[]): Map<string, ReadCallMeta> {
   const byToolCallId = new Map<string, ReadCallMeta>();
 
@@ -146,18 +183,19 @@ function collectReadToolCallMeta(messages: any[]): Map<string, ReadCallMeta> {
       if (!block || typeof block !== "object") {
         continue;
       }
+
       const call = block as Record<string, unknown>;
-      if (call.type !== "toolCall") {
+      const blockType = typeof call.type === "string" ? call.type.toLowerCase() : "";
+      if (!TOOL_CALL_BLOCK_TYPES.has(blockType)) {
         continue;
       }
 
       const id = typeof call.id === "string" ? call.id : undefined;
-      const toolName = typeof call.name === "string" ? call.name.toLowerCase() : "";
-      if (!id || toolName !== "read") {
+      if (!id || readToolName(call) !== "read") {
         continue;
       }
 
-      const parsed = parseReadToolArgs(call.arguments);
+      const parsed = parseReadToolArgs(readToolArguments(call));
       if (parsed && !byToolCallId.has(id)) {
         byToolCallId.set(id, parsed);
       }
@@ -552,11 +590,19 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
     const role = String(msg?.role ?? "").toLowerCase();
     const toolName = String(msg?.toolName ?? "").toLowerCase();
 
-    if (role !== "toolresult" || toolName !== "read") {
+    if (role !== "toolresult") {
+      continue;
+    }
+    if (toolName && toolName !== "read") {
       continue;
     }
 
-    const toolCallId = typeof msg?.toolCallId === "string" ? msg.toolCallId : undefined;
+    const toolCallId =
+      typeof msg?.toolCallId === "string"
+        ? msg.toolCallId
+        : typeof msg?.toolUseId === "string"
+          ? msg.toolUseId
+          : undefined;
     if (!toolCallId) {
       continue;
     }

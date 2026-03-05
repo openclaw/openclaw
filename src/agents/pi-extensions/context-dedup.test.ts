@@ -295,6 +295,57 @@ describe("context-dedup", () => {
     expect(hunkCount).toBeLessThanOrEqual(3);
   });
 
+  it("supports toolUse/functionCall read blocks and toolUseId-linked results", () => {
+    const baseLines = Array.from(
+      { length: 30 },
+      (_, idx) => `line ${idx + 1} :: ${"u".repeat(48)}`,
+    );
+    const changedLines = [...baseLines];
+    changedLines[6] = "line 7 changed :: UUUUUUUU";
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "use_1",
+            name: "read",
+            input: { path: "/tmp/tooluse-demo.txt", offset: 1 },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolUseId: "use_1",
+        content: baseLines.join("\n"),
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "functionCall",
+            id: "fn_2",
+            name: "read",
+            arguments: { path: "/tmp/tooluse-demo.txt", offset: 1 },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "fn_2",
+        content: changedLines.join("\n"),
+      },
+    ];
+
+    const result = applyReadLineageCompaction(messages as any[]);
+    const deltaText = String(result.messages[3].content);
+
+    expect(deltaText).toContain("[Read delta from earlier chunk]");
+    expect(deltaText).toContain("Same as earlier chunk lines 1-30, except:");
+    expect(result.stats.partiallyTrimmedChunks).toBe(1);
+  });
+
   it("rewrites dedup pointers that target lineage notes back to root source", () => {
     const fullChunk = "Heartbeat content line ".repeat(20);
     const lineageNote =
