@@ -6,9 +6,9 @@ import {
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  runConfigWriteTransaction,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -243,6 +243,39 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   });
 }
 
+async function commitConfigTransactionOrRespond(params: {
+  method: "config.set" | "config.patch" | "config.apply";
+  config: OpenClawConfig;
+  writeOptions: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["writeOptions"];
+  respond: RespondFn;
+}): Promise<{ transactionId: string } | null> {
+  const transaction = await runConfigWriteTransaction({
+    config: params.config,
+    writeOptions: params.writeOptions,
+  });
+  if (transaction.ok) {
+    return { transactionId: transaction.transactionId };
+  }
+
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `${params.method} transaction failed: ${transaction.error ?? "unknown error"}`,
+      {
+        details: {
+          transactionId: transaction.transactionId,
+          stage: transaction.stage,
+          rolledBack: transaction.rolledBack,
+          issues: transaction.issues,
+        },
+      },
+    ),
+  );
+  return null;
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -270,13 +303,25 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    await writeConfigFile(parsed.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.set",
+      config: parsed.config,
+      writeOptions,
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
+        },
       },
       undefined,
     );
@@ -360,7 +405,15 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
-    await writeConfigFile(validated.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.patch",
+      config: validated.config,
+      writeOptions,
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -399,6 +452,10 @@ export const configHandlers: GatewayRequestHandlers = {
           path: sentinelPath,
           payload,
         },
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
+        },
       },
       undefined,
     );
@@ -420,7 +477,15 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
-    await writeConfigFile(parsed.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.apply",
+      config: parsed.config,
+      writeOptions,
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -458,6 +523,10 @@ export const configHandlers: GatewayRequestHandlers = {
         sentinel: {
           path: sentinelPath,
           payload,
+        },
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
         },
       },
       undefined,

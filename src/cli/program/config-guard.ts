@@ -1,5 +1,5 @@
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, recoverConfigFromBackups } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
@@ -71,7 +71,7 @@ export async function ensureConfigReady(params: {
     }
   }
 
-  const snapshot = await getConfigSnapshot();
+  let snapshot = await getConfigSnapshot();
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName
@@ -80,6 +80,26 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
+  let recovery: Awaited<ReturnType<typeof recoverConfigFromBackups>> | null = null;
+  if (snapshot.exists && !snapshot.valid) {
+    recovery = await recoverConfigFromBackups({ snapshot }).catch((err) => ({
+      recovered: false,
+      configPath: snapshot.path,
+      sourceBackupPath: null,
+      error: String(err),
+      issues: snapshot.issues,
+    }));
+    if (recovery.recovered) {
+      configSnapshotPromise = readConfigFileSnapshot();
+      const recoveredSnapshot = await configSnapshotPromise;
+      if (recoveredSnapshot.valid) {
+        return;
+      }
+      snapshot = recoveredSnapshot;
+      recovery = { ...recovery, issues: recoveredSnapshot.issues };
+    }
+  }
+
   const issues =
     snapshot.exists && !snapshot.valid
       ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
@@ -107,6 +127,12 @@ export async function ensureConfigReady(params: {
   if (legacyIssues.length > 0) {
     params.runtime.error(muted("Legacy config keys detected:"));
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
+  }
+  if (recovery && !recovery.recovered) {
+    params.runtime.error(muted("Automatic backup recovery failed."));
+    if (recovery.error) {
+      params.runtime.error(muted(`Recovery error: ${recovery.error}`));
+    }
   }
   params.runtime.error("");
   params.runtime.error(

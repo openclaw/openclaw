@@ -7,7 +7,11 @@ import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.j
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import {
+  resolveStateDir,
+  runConfigWriteTransaction,
+  type OpenClawConfig,
+} from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -750,7 +754,32 @@ export async function runSecretsApply(params: {
   }
 
   try {
-    await io.writeConfigFile(projected.nextConfig, projected.configWriteOptions);
+    const transaction = await runConfigWriteTransaction(
+      {
+        config: projected.nextConfig,
+        writeOptions: projected.configWriteOptions,
+      },
+      {
+        env,
+        createConfigIO: (overrides = {}) =>
+          createSecretsConfigIO({
+            env,
+            configPath: overrides.configPath,
+          }),
+        readConfigFileSnapshot: () => io.readConfigFileSnapshot(),
+        writeConfigFile: (cfg, options) => io.writeConfigFile(cfg, options),
+      },
+    );
+    if (!transaction.ok) {
+      const stageLabel = transaction.stage ? ` stage=${transaction.stage};` : "";
+      const rollbackLabel = transaction.rolledBack ? " rollback=ok;" : "";
+      throw new Error(
+        `config transaction failed;${stageLabel}${rollbackLabel} ${
+          transaction.error ?? "unknown error"
+        }`,
+      );
+    }
+
     for (const write of writes) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }

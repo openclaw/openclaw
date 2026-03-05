@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createConfigIO } from "../config/config.js";
+import { createConfigIO, runConfigWriteTransaction } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -400,7 +400,18 @@ export async function fixSecurityFootguns(opts?: {
   const actions: SecurityFixAction[] = [];
   const errors: string[] = [];
 
-  const io = createConfigIO({ env, configPath });
+  const createScopedConfigIO = (
+    params: {
+      configPath?: string;
+      logger?: Pick<typeof console, "error" | "warn">;
+    } = {},
+  ) =>
+    createConfigIO({
+      env,
+      configPath: params.configPath ?? configPath,
+      logger: params.logger,
+    });
+  const io = createScopedConfigIO();
   const snap = await io.readConfigFileSnapshot();
   if (!snap.valid) {
     errors.push(...snap.issues.map((i) => `${i.path}: ${i.message}`));
@@ -428,7 +439,28 @@ export async function fixSecurityFootguns(opts?: {
 
     if (changes.length > 0) {
       try {
-        await io.writeConfigFile(fixed.cfg);
+        const transaction = await runConfigWriteTransaction(
+          { config: fixed.cfg },
+          {
+            env,
+            createConfigIO: (overrides = {}) =>
+              createScopedConfigIO({
+                configPath: overrides.configPath,
+                logger: overrides.logger,
+              }),
+            readConfigFileSnapshot: () => io.readConfigFileSnapshot(),
+            writeConfigFile: (cfg, options) => io.writeConfigFile(cfg, options),
+          },
+        );
+        if (!transaction.ok) {
+          const stageLabel = transaction.stage ? ` stage=${transaction.stage};` : "";
+          const rollbackLabel = transaction.rolledBack ? " rollback=ok;" : "";
+          throw new Error(
+            `config transaction failed;${stageLabel}${rollbackLabel} ${
+              transaction.error ?? "unknown error"
+            }`,
+          );
+        }
         configWritten = true;
       } catch (err) {
         errors.push(`writeConfigFile failed: ${String(err)}`);
