@@ -364,6 +364,20 @@ function formatContinuationPrompt(task: TaskFile, pendingCount: number): string 
   lines.push(
     `Please continue working on this task. Use task_update() to log progress and task_complete() when finished.`,
   );
+  lines.push(``);
+  lines.push(
+    `When completing, provide a structured summary in the 'summary' parameter:`,
+    ``,
+    `## 작업 요약`,
+    `{한 줄 요약}`,
+    ``,
+    `## 변경 내용`,
+    `- {변경 1}`,
+    `- {변경 2}`,
+    ``,
+    `## 참고 사항`,
+    `{없으면 생략 가능}`,
+  );
 
   // Instruct agent to report results to the originating Discord channel
   if (task.createdBySessionKey) {
@@ -436,6 +450,20 @@ function formatBacklogPickupPrompt(task: TaskFile): string {
   lines.push(`DO NOT call task_start() — the task already exists.`);
   lines.push(`Use task_update(task_id="${task.id}", progress="...") to log progress.`);
   lines.push(`Use task_complete(task_id="${task.id}", result="...") when finished.`);
+  lines.push(``);
+  lines.push(
+    `When completing, provide a structured summary in the 'summary' parameter:`,
+    ``,
+    `## 작업 요약`,
+    `{한 줄 요약}`,
+    ``,
+    `## 변경 내용`,
+    `- {변경 1}`,
+    `- {변경 2}`,
+    ``,
+    `## 참고 사항`,
+    `{없으면 생략 가능}`,
+  );
 
   // Instruct agent to report results to the originating Discord channel
   if (task.createdBySessionKey) {

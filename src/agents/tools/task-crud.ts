@@ -478,7 +478,10 @@ export function createTaskCompleteTool(options: {
     label: "Task Complete",
     name: "task_complete",
     description:
-      "Mark a task as complete. If task_id is omitted, completes the most recent in_progress task. Archives the task to TASK_HISTORY.md and removes the task file.",
+      "Mark a task as complete. If task_id is omitted, completes the most recent in_progress task. " +
+      "Archives the task to TASK_HISTORY.md and removes the task file. " +
+      "The 'summary' parameter should follow this markdown format:\n" +
+      "## 작업 요약\n{한 줄 요약}\n\n## 변경 내용\n- {변경 1}\n- {변경 2}\n\n## 참고 사항\n{없으면 생략}",
     parameters: TaskCompleteSchema,
     execute: async (_toolCallId, params) => {
       const taskIdParam = readStringParam(params, "task_id");
