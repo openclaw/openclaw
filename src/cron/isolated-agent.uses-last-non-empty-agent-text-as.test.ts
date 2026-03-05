@@ -358,6 +358,56 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("injects self-improve runbook and conversation history signals", async () => {
+    await withTempHome(async (home) => {
+      const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
+      const transcriptPath = path.join(sessionsDir, "self-improve-history.jsonl");
+      const transcriptLines = [
+        {
+          timestamp: "2026-03-05T10:00:00.000Z",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please add better retry handling when DB access fails in Slack.",
+              },
+            ],
+          },
+        },
+        {
+          timestamp: "2026-03-05T10:00:05.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "I don't have direct DB access from this surface." }],
+          },
+        },
+      ];
+      await fs.writeFile(
+        transcriptPath,
+        transcriptLines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+        "utf-8",
+      );
+
+      await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "self-improve bot replies and open PRs",
+          deliver: false,
+        },
+      });
+
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        prompt?: string;
+      };
+      expect(call?.prompt).toContain("Self-improvement runbook");
+      expect(call?.prompt).toContain("Conversation history signals");
+      expect(call?.prompt).toContain("Potential failures");
+      expect(call?.prompt).toContain("Potential improvements/new features");
+      expect(call?.prompt).toContain("I don't have direct DB access from this surface");
+    });
+  });
+
   it("uses agentId for workspace, session key, and store paths", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
