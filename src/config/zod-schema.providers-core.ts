@@ -76,6 +76,7 @@ export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
+    ignoreReplyToBot: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
