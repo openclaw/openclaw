@@ -340,6 +340,27 @@ export function resolveOllamaBaseUrlForRun(params: {
   return OLLAMA_NATIVE_BASE_URL;
 }
 
+/**
+ * When the LLM request times out or the stream ends without a result, the
+ * underlying EventStream resolves with `undefined`.  Downstream code
+ * (pi-agent-core) expects a valid AssistantMessage object and will call
+ * Object.keys / Object.entries on it — throwing "Cannot convert undefined or
+ * null to object" if it is null.  Return a minimal error-typed message instead.
+ */
+function toTimeoutFallbackMessage(): ReturnType<ReturnType<typeof streamSimple>["result"]> extends Promise<infer R> ? R : never {
+  return {
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: "LLM request timed out or returned no result.",
+    usage: { input: 0, output: 0 },
+    api: "",
+    provider: "",
+    model: "",
+    timestamp: Date.now(),
+  } as never;
+}
+
 function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
@@ -374,6 +395,9 @@ function wrapStreamTrimToolCallNames(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
+    if (message == null) {
+      return toTimeoutFallbackMessage();
+    }
     trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
     return message;
   };
@@ -485,6 +509,9 @@ function wrapStreamDecodeXaiToolCallArguments(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
+    if (message == null) {
+      return toTimeoutFallbackMessage();
+    }
     decodeXaiToolCallArgumentsInMessage(message);
     return message;
   };
