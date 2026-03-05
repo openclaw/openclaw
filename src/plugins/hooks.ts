@@ -801,11 +801,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       (acc, next) => ({
-        // First-writer-wins for content/allContent: once a higher-priority
-        // plugin (e.g. security redaction) sets content, later plugins cannot
-        // override it. This matches the one-way latch on block.
-        content: acc?.content ?? next.content,
-        allContent: acc?.allContent ?? next.allContent,
+        // First-writer-wins for content/allContent, treated as mutually exclusive:
+        // once a higher-priority plugin sets EITHER field, both are locked out
+        // for later plugins. This prevents a lower-priority plugin from bypassing
+        // single-message redaction (content) by supplying allContent (which takes
+        // precedence in application), or vice versa.
+        content:
+          acc?.content !== undefined || acc?.allContent !== undefined ? acc?.content : next.content,
+        allContent:
+          acc?.allContent !== undefined || acc?.content !== undefined
+            ? acc?.allContent
+            : next.allContent,
         block: next.block || acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
       }),
