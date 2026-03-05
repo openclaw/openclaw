@@ -359,6 +359,19 @@ openclaw gateway install --force
 openclaw gateway restart
 ```
 
+If restart is blocked due to invalid config:
+
+```bash
+openclaw config validate
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Notes:
+
+- Restart preflight already attempts backup recovery first.
+- If no valid backup exists, fix or restore config manually, then retry restart.
+
 Related:
 
 - [/gateway/pairing](/gateway/pairing)

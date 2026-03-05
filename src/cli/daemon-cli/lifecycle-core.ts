@@ -249,6 +249,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
+  preRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -275,6 +276,9 @@ export async function runServiceRestart(params: {
   }
 
   const warnings: string[] = [];
+  if (params.preRestartCheck) {
+    await params.preRestartCheck({ json, stdout, warnings, fail });
+  }
   if (params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {

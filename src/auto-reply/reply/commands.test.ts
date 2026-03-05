@@ -564,6 +564,36 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");
   });
+
+  it("reports transactional write failures to the channel user", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        messages: { ackReaction: "✅" },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    writeConfigFileMock.mockRejectedValueOnce(
+      new Error(
+        "writeConfigFile transaction failed; stage=verify; rollback=ok; committed config failed verification; last config update failed (rolled back to the previous version); please retry",
+      ),
+    );
+
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"], configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildParams('/config set messages.ackReaction=":)"', cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config update failed");
+    expect(result.reply?.text).toContain("rolled back to the previous version");
+    expect(result.reply?.text).toContain("committed config failed verification");
+  });
 });
 
 describe("handleCommands bash alias", () => {
@@ -680,6 +710,37 @@ describe("handleCommands /allowlist", () => {
       entry: "789",
     });
     expect(result.reply?.text).toContain("DM allowlist added");
+  });
+
+  it("reports config transaction failures during allowlist edits", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: { telegram: { allowFrom: ["123"] } },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    writeConfigFileMock.mockRejectedValueOnce(
+      new Error(
+        "writeConfigFile transaction failed; stage=verify; rollback=ok; committed config failed verification; last config update failed (rolled back to the previous version); please retry",
+      ),
+    );
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm 789", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+    expect(result.reply?.text).toContain("Config update failed");
+    expect(result.reply?.text).toContain("rolled back to the previous version");
+    expect(result.reply?.text).toContain("committed config failed verification");
   });
 
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {

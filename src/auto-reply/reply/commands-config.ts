@@ -7,6 +7,7 @@ import {
   unsetConfigValueAtPath,
 } from "../../config/config-paths.js";
 import {
+  formatConfigWriteFailureForChannel,
   readConfigFileSnapshot,
   validateConfigObjectWithPlugins,
   writeConfigFile,
@@ -21,6 +22,15 @@ import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
+
+function formatConfigWriteFailureText(error: unknown): string {
+  const formatted = formatConfigWriteFailureForChannel(error);
+  if (formatted) {
+    return formatted;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return `⚠️ Config update failed: ${message}`;
+}
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -131,7 +141,16 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    try {
+      await writeConfigFile(validated.config);
+    } catch (err) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: formatConfigWriteFailureText(err),
+        },
+      };
+    }
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -157,7 +176,16 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    try {
+      await writeConfigFile(validated.config);
+    } catch (err) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: formatConfigWriteFailureText(err),
+        },
+      };
+    }
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

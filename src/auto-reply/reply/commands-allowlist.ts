@@ -5,6 +5,7 @@ import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  formatConfigWriteFailureForChannel,
   readConfigFileSnapshot,
   validateConfigObjectWithPlugins,
   writeConfigFile,
@@ -319,6 +320,15 @@ function mapResolvedAllowlistNames(entries: ResolvedAllowlistName[]): Map<string
     }
   }
   return map;
+}
+
+function formatConfigWriteFailureText(error: unknown): string {
+  const formatted = formatConfigWriteFailureForChannel(error);
+  if (formatted) {
+    return formatted;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return `⚠️ Config update failed: ${message}`;
 }
 
 async function resolveSlackNames(params: {
@@ -686,7 +696,14 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
         };
       }
-      await writeConfigFile(validated.config);
+      try {
+        await writeConfigFile(validated.config);
+      } catch (err) {
+        return {
+          shouldContinue: false,
+          reply: { text: formatConfigWriteFailureText(err) },
+        };
+      }
     }
 
     if (!configChanged && !shouldTouchStore) {

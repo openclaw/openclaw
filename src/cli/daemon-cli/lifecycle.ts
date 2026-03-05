@@ -1,4 +1,9 @@
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  recoverConfigFromBackups,
+  resolveGatewayPort,
+} from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -33,6 +38,47 @@ async function resolveGatewayRestartPort() {
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
+}
+
+async function resolveGatewayRestartPortWithFallback(): Promise<number> {
+  return await resolveGatewayRestartPort().catch(() =>
+    resolveGatewayPort(loadConfig(), process.env),
+  );
+}
+
+async function runRestartConfigPreflight(params: {
+  json: boolean;
+  warnings: string[];
+  fail: (message: string, hints?: string[]) => void;
+}): Promise<void> {
+  const snapshot = await readConfigFileSnapshot().catch((err) => {
+    params.fail(`Gateway restart blocked: failed to read config (${String(err)}).`, [
+      formatCliCommand("openclaw config validate"),
+      formatCliCommand("openclaw doctor"),
+    ]);
+    return null;
+  });
+  if (!snapshot || snapshot.valid) {
+    return;
+  }
+
+  const issue = snapshot.issues[0];
+  const issueText = issue ? `${issue.path || "<root>"}: ${issue.message}` : "unknown issue";
+  const recovered = await recoverConfigFromBackups({ snapshot });
+  if (recovered.recovered) {
+    const message = `Recovered invalid config from backup (${recovered.sourceBackupPath ?? "unknown"}).`;
+    params.warnings.push(message);
+    if (!params.json) {
+      defaultRuntime.log(theme.warn(message));
+    }
+    return;
+  }
+
+  const recoveryTail = recovered.error ? ` Recovery error: ${recovered.error}` : "";
+  params.fail(`Gateway restart blocked: config invalid (${issueText}).${recoveryTail}`, [
+    formatCliCommand("openclaw config validate"),
+    formatCliCommand("openclaw doctor"),
+  ]);
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
@@ -70,9 +116,6 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
-  );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
@@ -82,7 +125,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
+    preRestartCheck: async ({ json, warnings, fail }) => {
+      await runRestartConfigPreflight({ json, warnings, fail });
+    },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
+      const restartPort = await resolveGatewayRestartPortWithFallback();
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,

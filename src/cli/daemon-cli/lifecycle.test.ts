@@ -16,6 +16,7 @@ type RestartPostCheckContext = {
 
 type RestartParams = {
   opts?: { json?: boolean };
+  preRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 };
 
@@ -30,10 +31,14 @@ const terminateStaleGatewayPids = vi.fn();
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const loadConfig = vi.fn(() => ({}));
+const readConfigFileSnapshot = vi.fn();
+const recoverConfigFromBackups = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   resolveGatewayPort,
+  readConfigFileSnapshot,
+  recoverConfigFromBackups,
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -71,10 +76,29 @@ describe("runDaemonRestart health checks", () => {
     renderRestartDiagnostics.mockClear();
     resolveGatewayPort.mockClear();
     loadConfig.mockClear();
+    readConfigFileSnapshot.mockClear();
+    recoverConfigFromBackups.mockClear();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
+    });
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: '{"gateway":{"mode":"local"}}\n',
+      parsed: { gateway: { mode: "local" } },
+      resolved: { gateway: { mode: "local" } },
+      valid: true,
+      config: { gateway: { mode: "local" } },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    recoverConfigFromBackups.mockResolvedValue({
+      recovered: false,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: null,
     });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
@@ -83,6 +107,12 @@ describe("runDaemonRestart health checks", () => {
         err.hints = hints;
         throw err;
       };
+      await params.preRestartCheck?.({
+        json: Boolean(params.opts?.json),
+        stdout: process.stdout,
+        warnings: [],
+        fail,
+      });
       await params.postRestartCheck?.({
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
@@ -132,5 +162,103 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("attempts backup recovery when config is invalid before restart", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{invalid",
+      parsed: {},
+      resolved: {},
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "invalid gateway mode" }],
+      warnings: [],
+      legacyIssues: [],
+    });
+    recoverConfigFromBackups.mockResolvedValue({
+      recovered: true,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: "/tmp/openclaw.json.bak",
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(recoverConfigFromBackups).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves health-check port after preflight recovery", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway"],
+      environment: {},
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{invalid",
+      parsed: {},
+      resolved: {},
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "invalid gateway mode" }],
+      warnings: [],
+      legacyIssues: [],
+    });
+    recoverConfigFromBackups.mockImplementation(async () => {
+      resolveGatewayPort.mockReturnValue(19999);
+      return {
+        recovered: true,
+        configPath: "/tmp/openclaw.json",
+        sourceBackupPath: "/tmp/openclaw.json.bak",
+      };
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 19999, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 19999 }),
+    );
+  });
+
+  it("blocks restart when config is invalid and backup recovery fails", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{invalid",
+      parsed: {},
+      resolved: {},
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "invalid gateway mode" }],
+      warnings: [],
+      legacyIssues: [],
+    });
+    recoverConfigFromBackups.mockResolvedValue({
+      recovered: false,
+      configPath: "/tmp/openclaw.json",
+      sourceBackupPath: null,
+    });
+
+    await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
+      message: "Gateway restart blocked: config invalid (gateway.mode: invalid gateway mode).",
+      hints: ["openclaw config validate", "openclaw doctor"],
+    });
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
   });
 });
