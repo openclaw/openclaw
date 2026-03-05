@@ -187,7 +187,7 @@ export const buildTelegramMessageContext = async ({
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const isForum = (msg.chat as { is_forum?: boolean }).is_forum;
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
     isForum,

@@ -103,13 +103,23 @@ export function resolveTelegramThreadSpec(params: {
   messageThreadId?: number | null;
 }): TelegramThreadSpec {
   if (params.isGroup) {
+    // In some Telegram payloads, `is_forum` may be omitted while message_thread_id
+    // is present for topic messages. Treat that as forum context.
+    const isForum =
+      params.isForum === true || (params.isForum == null && params.messageThreadId != null);
+    if (!isForum) {
+      return {
+        id: undefined,
+        scope: "none",
+      };
+    }
     const id = resolveTelegramForumThreadId({
-      isForum: params.isForum,
+      isForum: true,
       messageThreadId: params.messageThreadId,
     });
     return {
       id,
-      scope: params.isForum ? "forum" : "none",
+      scope: "forum",
     };
   }
   if (params.messageThreadId == null) {

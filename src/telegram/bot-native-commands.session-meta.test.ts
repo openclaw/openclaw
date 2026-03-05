@@ -87,6 +87,22 @@ function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHa
   return handler as TelegramCommandHandler;
 }
 
+function buildForumGroupStatusCommandContext(messageThreadId: number) {
+  return {
+    match: "",
+    message: {
+      message_id: 1,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: 100,
+        type: "supergroup",
+      },
+      message_thread_id: messageThreadId,
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(() => {
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
@@ -127,5 +143,23 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes forum topic MessageThreadId to native command session metadata when is_forum is absent", async () => {
+    const cfg: OpenClawConfig = {};
+    const handler = registerAndResolveStatusHandler(cfg);
+    await handler(buildForumGroupStatusCommandContext(158));
+
+    const call = sessionMocks.recordSessionMetaFromInbound.mock.calls[0]?.[0] as {
+      sessionKey?: string;
+      ctx?: {
+        From?: string;
+        MessageThreadId?: number | string;
+        CommandTargetSessionKey?: string;
+      };
+    };
+    expect(call?.ctx?.From).toBe("telegram:group:100:topic:158");
+    expect(call?.ctx?.MessageThreadId).toBe(158);
+    expect(call?.ctx?.CommandTargetSessionKey).toContain("topic:158");
   });
 });

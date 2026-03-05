@@ -46,6 +46,7 @@ import { resolveMedia } from "./bot/delivery.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  resolveTelegramThreadSpec,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
@@ -265,7 +266,7 @@ export const registerTelegramHandlers = ({
   const resolveTelegramSessionState = (params: {
     chatId: number | string;
     isGroup: boolean;
-    isForum: boolean;
+    isForum?: boolean;
     messageThreadId?: number;
     resolvedThreadId?: number;
   }): {
@@ -273,12 +274,12 @@ export const registerTelegramHandlers = ({
     sessionEntry: ReturnType<typeof loadSessionStore>[string];
     model?: string;
   } => {
-    const resolvedThreadId =
-      params.resolvedThreadId ??
-      resolveTelegramForumThreadId({
-        isForum: params.isForum,
-        messageThreadId: params.messageThreadId,
-      });
+    const threadSpec = resolveTelegramThreadSpec({
+      isGroup: params.isGroup,
+      isForum: params.isForum,
+      messageThreadId: params.messageThreadId,
+    });
+    const resolvedThreadId = params.resolvedThreadId ?? threadSpec.id;
     const peerId = params.isGroup
       ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
       : String(params.chatId);
@@ -620,7 +621,7 @@ export const registerTelegramHandlers = ({
   const resolveTelegramEventAuthorizationContext = async (params: {
     chatId: number;
     isGroup: boolean;
-    isForum: boolean;
+    isForum?: boolean;
     messageThreadId?: number;
     groupAllowContext?: TelegramGroupAllowContext;
   }): Promise<TelegramEventAuthorizationContext> => {
@@ -736,7 +737,7 @@ export const registerTelegramHandlers = ({
       const senderId = user?.id != null ? String(user.id) : "";
       const senderUsername = user?.username ?? "";
       const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
-      const isForum = reaction.chat.is_forum === true;
+      const isForum = reaction.chat.is_forum;
 
       // Resolve reaction notification mode (default: "own").
       const reactionMode = telegramCfg.reactionNotifications ?? "own";
@@ -1104,7 +1105,7 @@ export const registerTelegramHandlers = ({
       }
 
       const messageThreadId = callbackMessage.message_thread_id;
-      const isForum = callbackMessage.chat.is_forum === true;
+      const isForum = callbackMessage.chat.is_forum;
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
         isGroup,
@@ -1372,7 +1373,7 @@ export const registerTelegramHandlers = ({
     msg: Message;
     chatId: number;
     isGroup: boolean;
-    isForum: boolean;
+    isForum?: boolean;
     messageThreadId?: number;
     senderId: string;
     senderUsername: string;
@@ -1476,7 +1477,7 @@ export const registerTelegramHandlers = ({
       msg,
       chatId: msg.chat.id,
       isGroup: msg.chat.type === "group" || msg.chat.type === "supergroup",
-      isForum: msg.chat.is_forum === true,
+      isForum: msg.chat.is_forum,
       messageThreadId: msg.message_thread_id,
       senderId: msg.from?.id != null ? String(msg.from.id) : "",
       senderUsername: msg.from?.username ?? "",

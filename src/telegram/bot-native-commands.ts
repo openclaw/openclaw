@@ -76,7 +76,7 @@ type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramCommandAuthResult = {
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
+  isForum?: boolean;
   resolvedThreadId?: number;
   senderId: string;
   senderUsername: string;
@@ -169,7 +169,7 @@ async function resolveTelegramCommandAuth(params: {
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const isForum = (msg.chat as { is_forum?: boolean }).is_forum;
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -412,7 +412,7 @@ export const registerTelegramNativeCommands = ({
   const resolveCommandRuntimeContext = (params: {
     msg: NonNullable<TelegramNativeCommandContext["message"]>;
     isGroup: boolean;
-    isForum: boolean;
+    isForum?: boolean;
     resolvedThreadId?: number;
   }) => {
     const { msg, isGroup, isForum, resolvedThreadId } = params;

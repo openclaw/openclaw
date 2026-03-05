@@ -7,6 +7,7 @@ import {
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -80,6 +81,13 @@ describe("thread id normalization", () => {
     },
   ])("normalizes thread ids to integers", ({ build, expected }) => {
     expect(build()).toEqual(expected);
+  });
+
+  it("infers forum topic scope when is_forum is missing but message_thread_id is present", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: true, messageThreadId: 158 })).toEqual({
+      id: 158,
+      scope: "forum",
+    });
   });
 });
 
