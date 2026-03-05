@@ -87,7 +87,10 @@ export async function ensureBrowserControlAuth(params: {
     env,
     persist: true,
   });
-  const ensuredAuth = resolveBrowserControlAuth(ensured.cfg, env);
+  const ensuredAuth = {
+    token: ensured.auth.token,
+    password: ensured.auth.password,
+  };
   return {
     auth: ensuredAuth,
     generatedToken: ensured.generatedToken,

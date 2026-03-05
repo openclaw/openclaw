@@ -104,6 +104,10 @@ export function registerOnboardCommand(program: Command) {
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
+    .option(
+      "--gateway-token-ref-env <name>",
+      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
+    )
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
@@ -177,6 +181,7 @@ export function registerOnboardCommand(program: Command) {
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
+          gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
