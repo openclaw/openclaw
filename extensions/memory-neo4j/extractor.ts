@@ -666,7 +666,9 @@ export async function rateImportance(text: string, config: ExtractionConfig): Pr
     }
 
     const clamped = Math.max(1, Math.min(10, score));
-    return Math.max(0.1, Math.min(1.0, clamped / 10));
+    // Cap auto-extracted importance at 0.85 — reserve 0.9-1.0 for
+    // user-initiated memory_store calls (OP-86)
+    return Math.max(0.1, Math.min(0.85, clamped / 10));
   } catch {
     return 0.5;
   }

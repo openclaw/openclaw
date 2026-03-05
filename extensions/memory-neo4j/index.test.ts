@@ -170,6 +170,22 @@ describe("passesAttentionGate", () => {
       expect(passesAttentionGate("ok, I'll do that")).toBe(false);
       expect(passesAttentionGate("yes, sounds right")).toBe(false);
     });
+
+    it("should reject raw sender metadata that survived stripping", () => {
+      expect(
+        passesAttentionGate(
+          'Sender (untrusted metadata): {"label": "Tarun (878224171)", "id": "878224171", "name": "Tarun"} Can you create a sonarr and sonarr-recommend skill for me please?',
+        ),
+      ).toBe(false);
+    });
+
+    it("should reject content with channel envelope JSON keys", () => {
+      expect(
+        passesAttentionGate(
+          '{"sender_id": "12345", "chat_id": "67890", "text": "hello world this is a test message"}',
+        ),
+      ).toBe(false);
+    });
   });
 
   // -----------------------------------------------------------------------

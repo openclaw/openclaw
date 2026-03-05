@@ -43,6 +43,10 @@ const NOISE_PATTERNS = [
   /\[slack message id:/i,
   /\[message_id:/i,
   /\[telegram message id:/i,
+  // Raw message envelope metadata that survived the stripping layer
+  /^Sender \(untrusted metadata\)/i,
+  // Channel envelope JSON keys leaked into message text
+  /["']?(sender_id|chat_id)["']?\s*[:=]/i,
 
   // --- System infrastructure messages (never user-generated) ---
   // Heartbeat prompts

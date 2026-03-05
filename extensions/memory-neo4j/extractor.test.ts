@@ -1487,7 +1487,7 @@ describe("rateImportance", () => {
     });
 
     const result = await rateImportance("test", enabledConfig);
-    expect(result).toBe(1.0); // 15 clamped to 10, mapped to 1.0
+    expect(result).toBe(0.85); // 15 clamped to 10, then capped at 0.85 (OP-86)
   });
 
   it("should clamp low scores", async () => {
