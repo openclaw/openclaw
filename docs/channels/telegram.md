@@ -469,6 +469,59 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Each topic then has its own session key: `agent:zu:telegram:group:-1001234567890:topic:3`
 
+    **Persistent ACP topic binding**: Forum topics can pin ACP harness sessions through top-level typed ACP bindings:
+
+    - `bindings[]` with `type: "acp"` and `match.channel: "telegram"`
+
+    Example:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "codex",
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex",
+                backend: "acpx",
+                mode: "persistent",
+                cwd: "/workspace/openclaw",
+              },
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-1001234567890:topic:42" },
+          },
+        },
+      ],
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              topics: {
+                "42": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    This is currently scoped to forum topics in groups and supergroups.
+
     Template context includes:
 
     - `MessageThreadId`
@@ -778,6 +831,7 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
   - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
+  - top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
   - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
@@ -809,7 +863,7 @@ Primary reference:
 Telegram-specific high-signal fields:
 
 - startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`
-- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
+- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
