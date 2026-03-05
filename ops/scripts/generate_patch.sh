@@ -18,6 +18,20 @@ echo "[generate_patch] collecting repository context..."
 
 REPO_CONTEXT=$(git ls-files | grep -E '\.(sh|py|js|ts|json|yaml|yml)$' | head -n 200 || true)
 
+# Candidate search hits from the task goal (helps target correct file/function/lines)
+# Build a small regex from the first few goal tokens
+SEARCH_QUERY=$(echo "$goal" | tr -cs '[:alnum:]_-' ' ' | awk '{
+  for (i=1; i<=NF && i<=6; i++) {
+    printf "%s%s", $i, (i<6 && i<NF ? "|" : "")
+  }
+}')
+CANDIDATE_HITS=""
+if [[ -n "${SEARCH_QUERY:-}" ]]; then
+  CANDIDATE_HITS=$(rg -n --no-heading -S \
+    -g'*.sh' -g'*.py' -g'*.js' -g'*.ts' -g'*.json' -g'*.yml' -g'*.yaml' \
+    "${SEARCH_QUERY}" . 2>/dev/null | head -n 60 || true)
+fi
+
 FILE_SAMPLE=""
 
 for f in ops/scripts/task_runner.sh ops/scripts/generate_patch.sh ops/scripts/review_patch.sh; do
@@ -46,6 +60,11 @@ openclaw-safe agent \
 
 Repository files (partial list):
 $REPO_CONTEXT
+
+Top search hits from the task goal (file:line:match):
+$CANDIDATE_HITS
+
+Use the search hits to pick the correct file and line range before editing.
 
 Likely files to modify should be selected from the repository list above.
 Choose the most relevant file before generating the patch.
