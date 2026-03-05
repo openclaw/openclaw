@@ -131,7 +131,9 @@ backtest:
 
 - `style`: trend | mean_reversion | dca | momentum | swing | hybrid
 - `visibility`: public | private | unlisted
-- `summary`, `description` (Markdown), `tags`, `license`, `changelog`, `author`, `createdAt`, `updatedAt`
+- `summary`, `description` (Markdown), `license`, `changelog`, `author`, `createdAt`, `updatedAt`
+- `tags`: **string array** (YAML list)，例如：`tags: [dca, btc, adaptive, crypto]`  
+  （不要生成 `tags: "dca, btc, adaptive, crypto"` 这种单一字符串，必须是字符串数组）
 
 ### Classification (optional)
 
@@ -217,7 +219,8 @@ Propose: strategy archetype (DCA, trend, mean-reversion, momentum, grid), indica
 
 Generate:
 
-1. **fep.yaml** — `fep: "1.1"`, identity (id, type, name, version; add style, market, riskLevel, parameters as needed), technical (language, entryPoint), backtest (defaultPeriod, initialCapital, benchmark). Add classification, risk, agent (L2), evolution only when needed.
+1. **fep.yaml** — `fep: "1.1"`, identity (id, type, name, version; add style, market, riskLevel, parameters as needed), technical (language, entryPoint), backtest (defaultPeriod, initialCapital, benchmark)。  
+   - 生成 `backtest.defaultPeriod` 时，**默认使用当前日期作为 `endDate`**（格式 `YYYY-MM-DD`，可用「今天」的日期），`startDate` 根据用户描述选择合理区间（例如最近 6–12 个月），不要总是写死固定年份。
 2. **scripts/strategy.py** — Must define `compute(data)` returning `{"action", "amount", "price", "reason"}`. Use only allowed imports; no os/subprocess/socket/eval/exec/open/requests/urllib/__import__/importlib.
 3. **Optional:** scripts/indicators.py, scripts/risk_manager.py (if design needs them; entry contract remains `compute(data)` in strategy.py).
 

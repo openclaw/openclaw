@@ -7,6 +7,16 @@ import plugin from "./index.js";
 import { BacktestEngine } from "./src/backtest-engine.js";
 import { StrategyRegistry } from "./src/strategy-registry.js";
 
+let mockedHomeDir = "";
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => mockedHomeDir || actual.homedir(),
+  };
+});
+
 function createFakeApi(stateDir: string) {
   const tools = new Map<
     string,
@@ -59,6 +69,7 @@ describe("fin-strategy-engine plugin", () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "fin-strategy-engine-test-"));
+    mockedHomeDir = tempDir;
     const fake = createFakeApi(tempDir);
     tools = fake.tools;
     services = fake.services;

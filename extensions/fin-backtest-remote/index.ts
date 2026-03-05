@@ -257,7 +257,105 @@ const finBacktestRemotePlugin = {
             }
             const { status, data } = await backtestRequest(config, "GET", `/backtests/${encodeURIComponent(taskId)}/report`);
             if (status >= 200 && status < 300) {
-              return json({ success: true, ...(data as object) });
+              const report = data as {
+                metadata?: {
+                  name?: string;
+                  id?: string;
+                  style?: string;
+                  market?: string;
+                  riskLevel?: string;
+                  tags?: string[];
+                };
+                performance?: {
+                  totalReturn?: number;
+                  annualizedReturn?: number;
+                  sharpe?: number;
+                  sortino?: number;
+                  calmar?: number;
+                  maxDrawdown?: number;
+                  winRate?: number;
+                  profitFactor?: number | null;
+                  totalTrades?: number;
+                  finalEquity?: number;
+                  monthlyReturns?: Record<string, number>;
+                };
+              };
+
+              const lines: string[] = [];
+              const meta = report.metadata ?? {};
+              const perf = report.performance ?? {};
+
+              lines.push("远程回测已完成，以下是简要报告：");
+              lines.push("");
+              lines.push(`- 策略名称: ${meta.name ?? "(未知)"}`);
+              lines.push(`- 策略 ID : ${meta.id ?? "(未知)"}`);
+              if (meta.style) {
+                lines.push(`- 策略风格: ${meta.style}`);
+              }
+              if (meta.market) {
+                lines.push(`- 市场类型: ${meta.market}`);
+              }
+              if (meta.riskLevel) {
+                lines.push(`- 风险等级: ${meta.riskLevel}`);
+              }
+              if (Array.isArray(meta.tags) && meta.tags.length > 0) {
+                lines.push(`- 标签: ${meta.tags.join(", ")}`);
+              }
+              lines.push("");
+              if (
+                typeof perf.totalReturn === "number" ||
+                typeof perf.annualizedReturn === "number" ||
+                typeof perf.sharpe === "number" ||
+                typeof perf.sortino === "number" ||
+                typeof perf.calmar === "number" ||
+                typeof perf.maxDrawdown === "number" ||
+                typeof perf.winRate === "number" ||
+                typeof perf.totalTrades === "number" ||
+                typeof perf.finalEquity === "number"
+              ) {
+                lines.push("核心表现指标：");
+                if (typeof perf.totalReturn === "number") {
+                  lines.push(`- 总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.annualizedReturn === "number") {
+                  lines.push(`- 年化收益率: ${(perf.annualizedReturn * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.sharpe === "number") {
+                  lines.push(`- 夏普比率: ${perf.sharpe.toFixed(3)}`);
+                }
+                if (typeof perf.sortino === "number") {
+                  lines.push(`- 索提诺比率: ${perf.sortino.toFixed(3)}`);
+                }
+                if (typeof perf.calmar === "number") {
+                  lines.push(`- 卡玛比率: ${perf.calmar.toFixed(3)}`);
+                }
+                if (typeof perf.maxDrawdown === "number") {
+                  lines.push(`- 最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.winRate === "number") {
+                  lines.push(`- 胜率: ${perf.winRate.toFixed(1)}%`);
+                }
+                if (typeof perf.profitFactor === "number") {
+                  lines.push(`- 盈亏比(Profit Factor): ${perf.profitFactor.toFixed(2)}`);
+                }
+                if (typeof perf.totalTrades === "number") {
+                  lines.push(`- 交易笔数: ${perf.totalTrades}`);
+                }
+                if (typeof perf.finalEquity === "number") {
+                  lines.push(`- 期末权益: ${perf.finalEquity.toFixed(2)}`);
+                }
+              } else {
+                lines.push("（报告中未包含标准 performance 字段，请查看原始 JSON 详情。）");
+              }
+              lines.push("");
+              lines.push("完整原始报告如下（供高级分析使用）：");
+
+              const summaryText = `${lines.join("\n")}\n\n${JSON.stringify(data, null, 2)}`;
+
+              return {
+                content: [{ type: "text" as const, text: summaryText }],
+                details: { success: true, ...(data as object) },
+              };
             }
             return json({
               success: false,

@@ -1,16 +1,32 @@
 {
   "$schema": "https://openclaw.ai/schema/config.json",
-  "name": "finclaw-starter",
-  "description": "FinClaw starter workspace with finance-focused defaults",
+  "wizard": {
+    "lastRunAt": "2026-03-05T06:41:21.682Z",
+    "lastRunVersion": "2026.3.3",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
   "tools": {
     "profile": "coding",
-    "alsoAllow": ["read", "exec", "write", "edit"]
+    "alsoAllow": [
+      "read",
+      "exec",
+      "write",
+      "edit"
+    ]
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
   },
   "skills": {
-    "autoDiscover": true,
-    "skillsDir": "./skills",
     "load": {
-      "extraDirs": ["skills", "commons/skills"]
+      "extraDirs": [
+        "skills",
+        "commons/skills"
+      ]
     }
   },
   "plugins": {
@@ -23,5 +39,9 @@
         }
       }
     }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.3",
+    "lastTouchedAt": "2026-03-05T06:41:21.726Z"
   }
 }

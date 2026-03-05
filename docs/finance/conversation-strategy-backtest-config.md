@@ -23,7 +23,8 @@ Agent 需要 **read**、**write**、**edit**、**exec** 才能在工作区生成
 
 ### 1.1 确保配置已生效（尤其通过 Gateway 对话时）
 
-- **生效的配置**：由「进程启动时」的环境与路径决定。未设置 `OPENCLAW_CONFIG_PATH`（或 `OPENFINCLAW_CONFIG_PATH`）时，会按优先级查找：**新路径** `~/.openfinclaw/openfinclaw.json`、**旧路径** `~/.openclaw/openclaw.json` 等。
+- **生效的配置**：由「进程启动时」的环境与路径决定。未设置 `OPENCLAW_CONFIG_PATH`（或 `OPENFINCLAW_CONFIG_PATH`）时，会按优先级查找：**新路径** `~/.openfinclaw/openfinclaw.json`、**旧路径** `~/.openclaw/openclaw.json` 等。  
+  从本仓库当前版本起，`fin-strategy-engine` 插件在对话中通过 `fin_strategy_create` 等工具创建的策略元数据，会统一持久化到 `~/.openfinclaw/strategy/fin-strategies.json`，便于后续集中管理与备份。
 - **通过 Gateway 对话**：加载的是 **Gateway 进程**使用的配置。若启动 Gateway 时未设置 `OPENCLAW_CONFIG_PATH`，则不会使用模板里的 `commons/templates/finclaw-starter/openclaw.json`，只会用上述默认路径下的文件。
 - **正确做法二选一**：
   1. **用模板当主配置**：启动 Gateway（或 CLI agent）时设置环境变量，例如  

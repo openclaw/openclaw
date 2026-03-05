@@ -50,7 +50,15 @@ backtest:
   benchmark: BTC-USD
 ```
 
-可选扩展：identity 下可加 `style` (trend|mean_reversion|dca|momentum|swing|hybrid)、`tags`、`summary`、`description`；classification 下 `market` (Crypto|US|CN|HK|Forex|Commodity)；risk 下 `riskLevel` (low|medium|high)；parameters 数组等。见回测 Server 使用指南完整示例。
+可选扩展：
+
+- identity 下可加 `style` (trend|mean_reversion|dca|momentum|swing|hybrid)、`summary`、`description`、`license`、`changelog`、`author`、`createdAt`、`updatedAt`；
+- `tags` **必须为字符串数组** (YAML list)，例如：`tags: [dca, btc, adaptive, crypto]`，不要生成 `tags: "dca, btc, adaptive, crypto"` 这种单一字符串；
+- classification 下 `market` (Crypto|US|CN|HK|Forex|Commodity)、`assetClasses`、`frequency`；
+- risk 下 `riskLevel` (low|medium|high)；
+- `parameters` 数组等。
+
+这些扩展字段的含义与约束应与《回测Server-fep-v1.1使用指南》中 4.2/4.2.1 的示例保持一致。
 
 ## scripts/strategy.py 要求
 

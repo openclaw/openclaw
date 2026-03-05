@@ -131,7 +131,9 @@ backtest:
 
 - `style`: trend | mean_reversion | dca | momentum | swing | hybrid
 - `visibility`: public | private | unlisted
-- `summary`, `description` (Markdown), `tags`, `license`, `changelog`, `author`, `createdAt`, `updatedAt`
+- `summary`, `description` (Markdown), `license`, `changelog`, `author`, `createdAt`, `updatedAt`
+- `tags`: **string array** (YAML list)，例如：`tags: [dca, btc, adaptive, crypto]`  
+  （不要生成 `tags: "dca, btc, adaptive, crypto"` 这种单一字符串，必须是字符串数组）
 
 ### Classification (optional)
 

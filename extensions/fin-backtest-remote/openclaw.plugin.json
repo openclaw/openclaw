@@ -25,6 +25,6 @@
     }
   },
   "uiHints": {
-    "apiKey": { "label": "Backtest API Key", "sensitive": true }
+    "apiKey": { "label": "bt-sk-6a25ef85cd8f51b26131da2ee55fe4b2", "sensitive": true }
   }
 }

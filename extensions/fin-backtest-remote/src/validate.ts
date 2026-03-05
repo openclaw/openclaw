@@ -69,18 +69,66 @@ export async function validateStrategyPackage(dirPath: string): Promise<Validate
   if (!/^\s*identity\s*:/m.test(fepStr)) {
     errors.push("fep.yaml must contain 'identity:' section");
   }
-  const hasId = /^\s*id\s*:/m.test(fepStr) || /identity:[\s\S]*?id\s*:/m.test(fepStr);
-  if (!hasId) {
+  const identityBlockMatch = /identity:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+  const identityBlock = identityBlockMatch ? identityBlockMatch[1] : "";
+  if (!/\bid\s*:/m.test(identityBlock)) {
     errors.push("fep.yaml identity must include 'id' (unique strategy id)");
+  }
+  if (!/\bname\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'name' (strategy display name)");
+  }
+  if (!/\btype\s*:\s*strategy\b/m.test(identityBlock)) {
+    errors.push("fep.yaml identity.type must be 'strategy' for strategy packs");
+  }
+  if (!/\bversion\s*:/m.test(identityBlock)) {
+    errors.push("fep.yaml identity must include 'version' (e.g. \"1.0.0\")");
   }
   if (!/^\s*technical\s*:/m.test(fepStr)) {
     errors.push("fep.yaml must contain 'technical:' section");
-  }
-  if (!/entryPoint\s*:\s*strategy\.py/.test(fepStr)) {
-    errors.push("fep.yaml technical.entryPoint must be strategy.py (scripts/strategy.py)");
+  } else {
+    const technicalBlockMatch = /technical:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+    const technicalBlock = technicalBlockMatch ? technicalBlockMatch[1] : "";
+    if (!/\blanguage\s*:\s*python\b/m.test(technicalBlock)) {
+      errors.push('fep.yaml technical.language must be "python"');
+    }
+    if (!/entryPoint\s*:\s*strategy\.py/.test(technicalBlock)) {
+      errors.push("fep.yaml technical.entryPoint must be strategy.py (scripts/strategy.py)");
+    }
   }
   if (!/^\s*backtest\s*:/m.test(fepStr)) {
-    errors.push("fep.yaml must contain 'backtest:' section (e.g. defaultPeriod, initialCapital, benchmark)");
+    errors.push(
+      "fep.yaml must contain 'backtest:' section with defaultPeriod, initialCapital, benchmark",
+    );
+  } else {
+    const backtestBlockMatch = /backtest:\s*([\s\S]*?)(?:\n\S|$)/m.exec(fepStr);
+    const backtestBlock = backtestBlockMatch ? backtestBlockMatch[1] : "";
+    if (!/defaultPeriod\s*:/m.test(backtestBlock)) {
+      errors.push("fep.yaml backtest.defaultPeriod is required (startDate/endDate)");
+    } else {
+      const periodBlockMatch =
+        /defaultPeriod:\s*([\s\S]*?)(?:\n\s*[A-Za-z]|$)/m.exec(backtestBlock);
+      const periodBlock = periodBlockMatch ? periodBlockMatch[1] : "";
+      if (!/\bstartDate\s*:/m.test(periodBlock) || !/\bendDate\s*:/m.test(periodBlock)) {
+        errors.push("fep.yaml backtest.defaultPeriod must include startDate and endDate");
+      }
+    }
+    if (!/\binitialCapital\s*:/m.test(backtestBlock)) {
+      errors.push("fep.yaml backtest.initialCapital is required");
+    }
+    if (!/\bbenchmark\s*:/m.test(backtestBlock)) {
+      errors.push("fep.yaml backtest.benchmark is required (e.g. BTC-USD)");
+    }
+  }
+
+  // Optional: identity.tags should be an array when present (per v1.1 spec)
+  const tagsLineMatch = /^\s*tags\s*:\s*(.+)$/m.exec(identityBlock || fepStr);
+  if (tagsLineMatch) {
+    const value = tagsLineMatch[1]?.trim() ?? "";
+    if (!value.startsWith("[") && /["']/.test(value)) {
+      warnings.push(
+        "identity.tags should be a string array (e.g. tags: [dca, btc, adaptive, crypto]), not a single quoted string",
+      );
+    }
   }
 
   // ── strategy.py: compute(data) ──

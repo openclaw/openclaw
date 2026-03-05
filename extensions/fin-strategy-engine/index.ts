@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { BacktestEngine, buildIndicatorLib } from "./src/backtest-engine.js";
 import { createBollingerBands } from "./src/builtin-strategies/bollinger-bands.js";
@@ -34,7 +36,7 @@ const plugin = {
   description: "Strategy lifecycle: indicators, backtest, walk-forward, evolution",
   kind: "financial" as const,
   register(api: OpenClawPluginApi) {
-    const registryPath = api.resolvePath("state/fin-strategies.json");
+    const registryPath = join(homedir(), ".openfinclaw", "strategy", "fin-strategies.json");
     const registry = new StrategyRegistry(registryPath);
     const engine = new BacktestEngine();
 
