@@ -166,7 +166,7 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
         // Filter out MEDIA: protocol lines (container paths not meaningful in browser)
         const filtered = text
           .split("\n")
-          .filter((line) => !line.startsWith("MEDIA:"))
+          .filter((line) => !/^MEDIA:/i.test(line.trim()))
           .join("\n")
           .trim();
         if (filtered) {

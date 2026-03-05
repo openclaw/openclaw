@@ -13,7 +13,7 @@ import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
-import { normalizeMediaSource } from "../../media/parse.js";
+import { MEDIA_IMAGE_LINE_RE, normalizeMediaSource } from "../../media/parse.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -494,8 +494,6 @@ function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: 
 // the thinking toggle).
 // ---------------------------------------------------------------------------
 
-const MEDIA_IMAGE_PATH_RE = /^MEDIA:\s*`?(.+\.(?:png|jpe?g|gif|webp))`?\s*$/i;
-
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".gif": "image/gif",
@@ -507,7 +505,7 @@ const MIME_BY_EXT: Record<string, string> = {
 function extractMediaImagePaths(text: string): string[] {
   const paths: string[] = [];
   for (const line of text.split("\n")) {
-    const match = line.match(MEDIA_IMAGE_PATH_RE);
+    const match = line.match(MEDIA_IMAGE_LINE_RE);
     if (match?.[1]) {
       // Normalize file:// URIs to bare paths (mirrors TUI's getMediaPaths).
       const raw = normalizeMediaSource(match[1].trim());
