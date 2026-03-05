@@ -1,10 +1,9 @@
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
-import { hasConfiguredSecretInput, resolveSecretInputRef } from "../../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
+import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
-import { secretRefKey } from "../../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
@@ -147,44 +146,6 @@ export function sanitizeSshTarget(value: unknown): string | null {
   return trimmed.replace(/^ssh\\s+/, "");
 }
 
-async function resolveConfiguredSecretInputValue(
-  cfg: OpenClawConfig,
-  value: unknown,
-  path: string,
-): Promise<{ value?: string; unresolvedRefReason?: string }> {
-  const { ref } = resolveSecretInputRef({
-    value,
-    defaults: cfg.secrets?.defaults,
-  });
-  if (ref) {
-    try {
-      const resolved = await resolveSecretRefValues([ref], {
-        config: cfg,
-        env: process.env,
-      });
-      const resolvedValue = resolved.get(secretRefKey(ref));
-      if (typeof resolvedValue !== "string") {
-        return { unresolvedRefReason: `${path} SecretRef resolved to a non-string value.` };
-      }
-      const trimmed = resolvedValue.trim();
-      if (trimmed.length === 0) {
-        return { unresolvedRefReason: `${path} SecretRef resolved to an empty value.` };
-      }
-      return { value: trimmed };
-    } catch {
-      const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
-      return {
-        unresolvedRefReason: `${path} SecretRef is unresolved (${refLabel}).`,
-      };
-    }
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return { value: trimmed.length > 0 ? trimmed : undefined };
-  }
-  return {};
-}
-
 function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim();
   return token || undefined;
@@ -212,14 +173,26 @@ export async function resolveAuthForTarget(
   const passwordOnly = authMode === "password";
 
   const resolveToken = async (value: unknown, path: string): Promise<string | undefined> => {
-    const tokenResolution = await resolveConfiguredSecretInputValue(cfg, value, path);
+    const tokenResolution = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
     if (tokenResolution.unresolvedRefReason) {
       diagnostics.push(tokenResolution.unresolvedRefReason);
     }
     return tokenResolution.value;
   };
   const resolvePassword = async (value: unknown, path: string): Promise<string | undefined> => {
-    const passwordResolution = await resolveConfiguredSecretInputValue(cfg, value, path);
+    const passwordResolution = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
     if (passwordResolution.unresolvedRefReason) {
       diagnostics.push(passwordResolution.unresolvedRefReason);
     }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
-import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import {
   buildGatewayConnectionDetails,
@@ -16,8 +16,7 @@ import {
   type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
@@ -55,40 +54,6 @@ function trimToUndefined(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-async function resolveConfiguredSecretInputString(params: {
-  value: unknown;
-  path: string;
-  env: NodeJS.ProcessEnv;
-  config: ReturnType<typeof loadConfig>;
-}): Promise<{ value?: string; unresolvedRefReason?: string }> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.config.secrets?.defaults,
-  });
-  if (!ref) {
-    return { value: trimToUndefined(params.value) };
-  }
-
-  const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: params.config,
-      env: params.env,
-    });
-    const resolvedValue = trimToUndefined(resolved.get(secretRefKey(ref)));
-    if (!resolvedValue) {
-      return {
-        unresolvedRefReason: `${params.path} SecretRef is unresolved (${refLabel}).`,
-      };
-    }
-    return { value: resolvedValue };
-  } catch {
-    return {
-      unresolvedRefReason: `${params.path} SecretRef is unresolved (${refLabel}).`,
-    };
-  }
 }
 
 function throwGatewayAuthResolutionError(reason: string): never {
