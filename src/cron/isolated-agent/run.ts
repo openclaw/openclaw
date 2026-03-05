@@ -341,7 +341,13 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
-  const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
+  const laneTag =
+    typeof params.lane === "string" && params.lane.trim()
+      ? params.lane.trim().toLowerCase()
+      : "cron";
+  const normalizedLaneTag = laneTag.replace(/[^a-z0-9_-]/g, "") || "cron";
+  const base =
+    `[${normalizedLaneTag}:${params.job.id} ${params.job.name}] ${params.message}`.trim();
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
   // unless explicitly allowed via a dangerous config override.

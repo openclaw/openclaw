@@ -39,6 +39,7 @@ export function createGatewayHooksRequestHandler(params: {
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const notifySessionKey = sessionKey || mainSessionKey;
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -75,14 +76,14 @@ export function createGatewayHooksRequestHandler(params: {
           job,
           message: value.message,
           sessionKey,
-          lane: "cron",
+          lane: "hook",
         });
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: notifySessionKey,
           });
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
@@ -91,7 +92,7 @@ export function createGatewayHooksRequestHandler(params: {
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: notifySessionKey,
         });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });
