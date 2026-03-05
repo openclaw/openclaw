@@ -134,4 +134,65 @@ describe("resolveAuthForTarget", () => {
       },
     );
   });
+
+  it("resolves remote auth even when local auth mode is none", async () => {
+    await withEnvAsync(
+      {
+        REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
+      },
+      async () => {
+        const auth = await resolveAuthForTarget(
+          {
+            secrets: {
+              providers: {
+                default: { source: "env" },
+              },
+            },
+            gateway: {
+              auth: {
+                mode: "none",
+              },
+              remote: {
+                token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+              },
+            },
+          },
+          {
+            id: "configRemote",
+            kind: "configRemote",
+            url: "wss://remote.example:18789",
+            active: true,
+          },
+          {},
+        );
+
+        expect(auth).toEqual({ token: "resolved-remote-token", password: undefined });
+      },
+    );
+  });
+
+  it("does not force remote auth type from local auth mode", async () => {
+    const auth = await resolveAuthForTarget(
+      {
+        gateway: {
+          auth: {
+            mode: "password",
+          },
+          remote: {
+            token: "remote-token",
+            password: "remote-password",
+          },
+        },
+      },
+      {
+        id: "configRemote",
+        kind: "configRemote",
+        url: "wss://remote.example:18789",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth).toEqual({ token: "remote-token", password: undefined });
+  });
 });

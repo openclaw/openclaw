@@ -207,10 +207,6 @@ export async function resolveAuthForTarget(
   const authMode = cfg.gateway?.auth?.mode;
   const tokenOnly = authMode === "token";
   const passwordOnly = authMode === "password";
-  const authDisabled = authMode === "none" || authMode === "trusted-proxy";
-  if (authDisabled) {
-    return {};
-  }
 
   const resolveToken = async (value: unknown, path: string): Promise<string | undefined> => {
     const tokenResolution = await resolveConfiguredSecretInputValue(cfg, value, path);
@@ -231,20 +227,6 @@ export async function resolveAuthForTarget(
     const remoteTokenValue = cfg.gateway?.remote?.token;
     const remotePasswordValue = (cfg.gateway?.remote as { password?: unknown } | undefined)
       ?.password;
-    if (tokenOnly) {
-      const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
-      return {
-        token,
-        ...(diagnostics.length > 0 ? { diagnostics } : {}),
-      };
-    }
-    if (passwordOnly) {
-      const password = await resolvePassword(remotePasswordValue, "gateway.remote.password");
-      return {
-        password,
-        ...(diagnostics.length > 0 ? { diagnostics } : {}),
-      };
-    }
     const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
     const password = token
       ? undefined
@@ -254,6 +236,11 @@ export async function resolveAuthForTarget(
       password,
       ...(diagnostics.length > 0 ? { diagnostics } : {}),
     };
+  }
+
+  const authDisabled = authMode === "none" || authMode === "trusted-proxy";
+  if (authDisabled) {
+    return {};
   }
 
   const envToken = readGatewayTokenEnv();
