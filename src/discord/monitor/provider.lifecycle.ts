@@ -2,6 +2,7 @@ import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { createArmableStallWatchdog } from "../../channels/transport/stall-watchdog.js";
 import { danger } from "../../globals.js";
+import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -97,8 +98,19 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
     gatewayEmitter?.once("error", () => {});
+    // Suppress "Max reconnect attempts (0) reached" thrown as an unhandled
+    // rejection by @buape/carbon when we force-disconnect with maxAttempts: 0.
+    // The error is expected and harmless during intentional teardown (#36055).
+    const unregister = registerUnhandledRejectionHandler((reason) => {
+      if (reason instanceof Error && reason.message.includes("Max reconnect attempts")) {
+        return true;
+      }
+      return false;
+    });
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
+    // Clean up handler after a short delay to cover async rejection.
+    setTimeout(unregister, 5000);
   };
 
   if (params.abortSignal?.aborted) {
