@@ -279,7 +279,7 @@ export async function setupSearch(
 
   await prompter.note(
     [
-      "No API key stored — web_search will stay unavailable until you add one.",
+      "No API key stored — web_search won't work until a key is available.",
       `Get your key at: ${entry.signupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
@@ -295,7 +295,6 @@ export async function setupSearch(
         search: {
           ...config.tools?.web?.search,
           provider: choice,
-          enabled: false,
         },
       },
     },

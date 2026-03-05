@@ -110,7 +110,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("brave");
-    expect(result.tools?.web?.search?.enabled).toBe(false);
+    expect(result.tools?.web?.search?.enabled).toBeUndefined();
     const missingNote = notes.find((n) => n.message.includes("No API key stored"));
     expect(missingNote).toBeDefined();
   });
@@ -207,7 +207,7 @@ describe("setupSearch", () => {
     });
     expect(prompter.text).toHaveBeenCalled();
     expect(result.tools?.web?.search?.provider).toBe("grok");
-    expect(result.tools?.web?.search?.enabled).toBe(false);
+    expect(result.tools?.web?.search?.enabled).toBeUndefined();
   });
 
   it("quickstart skips key prompt when env var is available", async () => {

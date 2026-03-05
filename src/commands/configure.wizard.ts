@@ -262,10 +262,9 @@ async function promptWebToolsConfig(
     } else if (keyConfigured || envAvailable) {
       nextSearch = { ...nextSearch };
     } else {
-      nextSearch = { ...nextSearch, enabled: false };
       note(
         [
-          "No key stored yet, so web_search will stay unavailable.",
+          "No key stored yet — web_search won't work until a key is available.",
           `Store a key here or set ${envVarNames} in the Gateway environment.`,
           `Get your API key at: ${entry.signupUrl}`,
           "Docs: https://docs.openclaw.ai/tools/web",
