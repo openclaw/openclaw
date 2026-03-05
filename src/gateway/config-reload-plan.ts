@@ -69,7 +69,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
-  // Telegram: groups support hot reload without restarting the channel
+  // Telegram: account-level groups support hot reload without restarting the channel
   {
     prefix: "channels.telegram.accounts.*.groups",
     kind: "hot",
@@ -145,8 +145,18 @@ function listReloadRules(): ReloadRule[] {
 
 function matchRule(path: string): ReloadRule | null {
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+    // Support simple wildcard: replace * with regex-friendly match
+    // e.g., "channels.telegram.accounts.*.groups" matches "channels.telegram.accounts.main.groups"
+    const prefix = rule.prefix;
+    if (path === prefix || path.startsWith(`${prefix}.`)) {
       return rule;
+    }
+    // Handle wildcard prefix like "channels.telegram.accounts.*.groups"
+    if (prefix.includes("*")) {
+      const regex = "^" + prefix.replace(/\*/g, "[^.]+") + "($|\\.)";
+      if (new RegExp(regex).test(path)) {
+        return rule;
+      }
     }
   }
   return null;

@@ -138,12 +138,10 @@ export function createGatewayReloadHandlers(params: {
         const plugin = getChannelPlugin(channelId);
         if (plugin?.reload?.reloadGroups) {
           try {
-            // Get all accounts for this channel
-            const accounts = nextConfig.channels?.[channelId as keyof typeof nextConfig.channels];
-            if (accounts && typeof accounts === "object") {
-              for (const [accountId] of Object.entries(accounts)) {
-                await plugin.reload.reloadGroups({ cfg: nextConfig, accountId });
-              }
+            // Get actual account IDs for this channel (not generic keys like 'accounts')
+            const accountIds = plugin.config.listAccountIds(nextConfig);
+            for (const accountId of accountIds) {
+              await plugin.reload.reloadGroups({ cfg: nextConfig, accountId });
             }
             params.logChannels.info(`hot reloaded groups for channel: ${channelId}`);
           } catch (err) {
