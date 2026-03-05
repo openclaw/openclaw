@@ -128,6 +128,12 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
+    // In "message" mode, typing should only begin once actual renderable
+    // text has been seen.  Tool execution alone must not trigger the
+    // indicator — the agent may end the run with NO_REPLY.  #33951
+    if (shouldStartOnMessageStart && !hasRenderableText) {
+      return;
+    }
     // Start typing as soon as tools begin executing, even before the first text delta.
     if (!typing.isActive()) {
       await typing.startTypingLoop();
