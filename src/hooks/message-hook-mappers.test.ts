@@ -99,6 +99,51 @@ describe("message hook mappers", () => {
     });
   });
 
+  it("exposes reply-to context in canonical, plugin, and internal hook payloads", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        ReplyToId: "reply-msg-99",
+        ReplyToBody: "original message text",
+        ReplyToSender: "OriginalUser",
+        ReplyToIsQuote: true,
+      }),
+    );
+
+    expect(canonical.replyToId).toBe("reply-msg-99");
+    expect(canonical.replyToBody).toBe("original message text");
+    expect(canonical.replyToSender).toBe("OriginalUser");
+    expect(canonical.replyToIsQuote).toBe(true);
+
+    const pluginEvent = toPluginMessageReceivedEvent(canonical);
+    expect(pluginEvent.metadata).toEqual(
+      expect.objectContaining({
+        replyToId: "reply-msg-99",
+        replyToBody: "original message text",
+        replyToSender: "OriginalUser",
+        replyToIsQuote: true,
+      }),
+    );
+
+    const internalCtx = toInternalMessageReceivedContext(canonical);
+    expect(internalCtx.metadata).toEqual(
+      expect.objectContaining({
+        replyToId: "reply-msg-99",
+        replyToBody: "original message text",
+        replyToSender: "OriginalUser",
+        replyToIsQuote: true,
+      }),
+    );
+  });
+
+  it("omits reply-to fields when message is not a reply", () => {
+    const canonical = deriveInboundMessageHookContext(makeInboundCtx());
+
+    expect(canonical.replyToId).toBeUndefined();
+    expect(canonical.replyToBody).toBeUndefined();
+    expect(canonical.replyToSender).toBeUndefined();
+    expect(canonical.replyToIsQuote).toBeUndefined();
+  });
+
   it("maps transcribed and preprocessed internal payloads", () => {
     const cfg = {} as OpenClawConfig;
     const canonical = deriveInboundMessageHookContext(makeInboundCtx({ Transcript: undefined }));
