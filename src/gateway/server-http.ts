@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -8,9 +9,20 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+import { parseMessage as parseAskTenantMessage } from "../asktenant/gemini-parse-message.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
+import { createIdentityLookupFromEnv } from "../domain/identity/lookup.js";
+import {
+  runIdentityScopeMachine,
+  type ActionType,
+  type Channel,
+  type ExecutionMode,
+  type IdResolution,
+  type Role,
+  type SubjectCandidate,
+} from "../domain/identity/stateMachine.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
@@ -71,6 +83,243 @@ type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
+
+function isGeminiPreScopeEnabled(): boolean {
+  return process.env.OPENCLAW_GEMINI_PRE_SCOPE === "1";
+}
+
+function isIdentityScopeGateEnabled(): boolean {
+  return process.env.OPENCLAW_IDENTITY_SCOPE_GATE === "1";
+}
+
+function parseCsv(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function parseBool(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+function resolveGatewayChannel(value: string | undefined): Channel {
+  if (value === "sms" || value === "email" || value === "voice" || value === "telegram") {
+    return value;
+  }
+  return "email";
+}
+
+function resolveExecutionMode(value: string | undefined): ExecutionMode {
+  if (value === "api-first" || value === "api+light-llm" || value === "heavy-llm") {
+    return value;
+  }
+  return "api+light-llm";
+}
+
+function resolveActionType(value: string | undefined): ActionType {
+  if (value === "read" || value === "write" || value === "notify") {
+    return value;
+  }
+  return "read";
+}
+
+function resolveIdResolution(value: string | undefined): IdResolution {
+  if (value === "single_unit" || value === "prompt" || value === "infer_from_text") {
+    return value;
+  }
+  return "infer_from_text";
+}
+
+function resolveRole(value: string | undefined): Role {
+  if (value === "pm" || value === "owner" || value === "renter" || value === "vendor") {
+    return value;
+  }
+  return "unknown";
+}
+
+function maybeBuildSubjectCandidateFromHeaders(
+  headers: Record<string, string>,
+): SubjectCandidate | null {
+  const subjectId = headers["x-openclaw-subject-id"]?.trim();
+  if (!subjectId) {
+    return null;
+  }
+
+  const role = resolveRole(headers["x-openclaw-role"]?.trim().toLowerCase());
+  const allowedUnitIds = parseCsv(headers["x-openclaw-unit-ids"]);
+  const allowedPropertyIds = parseCsv(headers["x-openclaw-property-ids"]);
+  const allowedWorkOrderIds = parseCsv(headers["x-openclaw-workorder-ids"]);
+  const verifiedRaw = headers["x-openclaw-last-verified-at-ms"];
+  const verifiedAt = verifiedRaw ? Number(verifiedRaw) : undefined;
+
+  return {
+    subjectId,
+    role,
+    allowedPropertyIds,
+    allowedUnitIds,
+    allowedWorkOrderIds,
+    lastVerifiedAtMs: Number.isFinite(verifiedAt) ? verifiedAt : undefined,
+    identityConfidence: "high",
+  };
+}
+
+const hookSessionActiveUnitCache = new Map<string, string>();
+const identityLookup = createIdentityLookupFromEnv();
+
+function resolveIntentSlugFromHeaders(headers: Record<string, string>): string {
+  const explicit = headers["x-openclaw-intent-slug"]?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return "hook_message";
+}
+
+function appendScopeContextBlock(message: string, scopeContext: unknown): string {
+  return `${message}\n\n[RUNTIME_SCOPE_CONTEXT_JSON]\n${JSON.stringify(scopeContext)}\n[/RUNTIME_SCOPE_CONTEXT_JSON]`;
+}
+
+async function maybeApplyIdentityScopeGate(params: {
+  message: string;
+  headers: Record<string, string>;
+  channel?: string;
+  channelIdentity?: string;
+  logHooks: SubsystemLogger;
+}): Promise<
+  | { ok: true; message: string }
+  | {
+      ok: false;
+      status: number;
+      body: { ok: false; error: string; decision?: string; prompt?: string; requiresOtp?: boolean };
+    }
+> {
+  if (!isIdentityScopeGateEnabled()) {
+    return { ok: true, message: params.message };
+  }
+
+  const channel = resolveGatewayChannel(params.channel);
+  const channelIdentity =
+    params.channelIdentity?.trim() ||
+    params.headers["x-openclaw-channel-identity"]?.trim() ||
+    params.headers["x-openclaw-from"]?.trim() ||
+    "unknown";
+  const intentSlug = resolveIntentSlugFromHeaders(params.headers);
+  const remoteCandidates = await identityLookup({
+    channel,
+    channelIdentity,
+    intentSlug,
+  });
+  const headerCandidate = maybeBuildSubjectCandidateFromHeaders(params.headers);
+  const candidates =
+    remoteCandidates.length > 0 ? remoteCandidates : headerCandidate ? [headerCandidate] : [];
+
+  if (candidates.length === 0) {
+    params.logHooks.warn(
+      `identity scope gate: no subject candidates resolved for ${channel}:${channelIdentity}`,
+    );
+    return { ok: true, message: params.message };
+  }
+
+  const authScope = parseCsv(params.headers["x-openclaw-auth-scope"]);
+  const actionType = resolveActionType(params.headers["x-openclaw-action-type"]);
+  const isFinancial = parseBool(params.headers["x-openclaw-is-financial"]);
+  const executionMode = resolveExecutionMode(params.headers["x-openclaw-execution-mode"]);
+  const idResolution = resolveIdResolution(params.headers["x-openclaw-id-resolution"]);
+  const nowMs = Date.now();
+  const otpRecencyMs = Number(process.env.OPENCLAW_IDENTITY_OTP_RECENCY_MS ?? "2592000000");
+
+  const scopeContext = await runIdentityScopeMachine({
+    msg: {
+      channel,
+      channelIdentity,
+      messageText: params.message,
+      timestampMs: nowMs,
+      threadId:
+        params.headers["x-openclaw-thread-id"]?.trim() || params.headers["x-gm-thread-id"]?.trim(),
+      callSid: params.headers["x-openclaw-call-sid"]?.trim(),
+    },
+    intent: {
+      intentSlug,
+      executionMode,
+      actionType,
+      authScope,
+      idResolution,
+      isFinancial,
+    },
+    requestId: randomUUID(),
+    identityLookup: async () => candidates,
+    sessionGetActiveUnit: async (key: string) => hookSessionActiveUnitCache.get(key),
+    sessionSetActiveUnit: async (key: string, unitId: string) => {
+      hookSessionActiveUnitCache.set(key, unitId);
+    },
+    onboardingAllowed: parseBool(process.env.OPENCLAW_IDENTITY_ONBOARDING_ALLOWED),
+    otpRecencyMs: Number.isFinite(otpRecencyMs) && otpRecencyMs > 0 ? otpRecencyMs : 2_592_000_000,
+    nowMs,
+  });
+
+  if (scopeContext.decision === "allow") {
+    return { ok: true, message: appendScopeContextBlock(params.message, scopeContext) };
+  }
+
+  if (scopeContext.decision === "ask_clarification") {
+    return {
+      ok: false,
+      status: 200,
+      body: {
+        ok: false,
+        error: "scope_clarification_required",
+        decision: scopeContext.decision,
+        prompt: scopeContext.clarificationPrompt,
+      },
+    };
+  }
+
+  if (scopeContext.decision === "stepup") {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        ok: false,
+        error: "identity_stepup_required",
+        decision: scopeContext.decision,
+        requiresOtp: scopeContext.requiresOtp,
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    status: 403,
+    body: {
+      ok: false,
+      error: scopeContext.denyReason || "scope_denied",
+      decision: scopeContext.decision,
+    },
+  };
+}
+
+async function maybeDecorateHookMessageWithGeminiPreScope(params: {
+  subPath: string;
+  message: string;
+  logHooks: SubsystemLogger;
+}): Promise<string> {
+  if (!isGeminiPreScopeEnabled()) {
+    return params.message;
+  }
+  if (params.subPath !== "gmail") {
+    return params.message;
+  }
+  try {
+    const parsed = await parseAskTenantMessage(params.message);
+    return `${params.message}\n\n[PRE_SCOPE_JSON]\n${JSON.stringify(parsed)}\n[/PRE_SCOPE_JSON]`;
+  } catch (error) {
+    params.logHooks.warn(`gmail pre-scope parse failed: ${String(error)}`);
+    return params.message;
+  }
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -411,8 +660,21 @@ export function createHooksRequestHandler(
         return true;
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
+      const identityGate = await maybeApplyIdentityScopeGate({
+        message: normalized.value.message,
+        headers,
+        channel: normalized.value.channel,
+        channelIdentity: normalized.value.to,
+        logHooks,
+      });
+      if (!identityGate.ok) {
+        sendJson(res, identityGate.status, identityGate.body);
+        return true;
+      }
+
       const runId = dispatchAgentHook({
         ...normalized.value,
+        message: identityGate.message,
         sessionKey: normalizeHookDispatchSessionKey({
           sessionKey: sessionKey.value,
           targetAgentId,
@@ -468,8 +730,24 @@ export function createHooksRequestHandler(
             return true;
           }
           const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
-          const runId = dispatchAgentHook({
+          const decoratedMessage = await maybeDecorateHookMessageWithGeminiPreScope({
+            subPath,
             message: mapped.action.message,
+            logHooks,
+          });
+          const identityGate = await maybeApplyIdentityScopeGate({
+            message: decoratedMessage,
+            headers,
+            channel,
+            channelIdentity: mapped.action.to,
+            logHooks,
+          });
+          if (!identityGate.ok) {
+            sendJson(res, identityGate.status, identityGate.body);
+            return true;
+          }
+          const runId = dispatchAgentHook({
+            message: identityGate.message,
             name: mapped.action.name ?? "Hook",
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
