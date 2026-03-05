@@ -195,6 +195,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
+  const currentModelProvider = currentModel?.includes("/") ? currentModel.split("/")[0] : undefined;
   const currentModelId = currentModel?.includes("/")
     ? currentModel.split("/").slice(1).join("/")
     : currentModel;
@@ -206,7 +207,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel =
+      model === currentModelId && (!currentModelProvider || currentModelProvider === provider);
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

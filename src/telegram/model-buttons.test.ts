@@ -198,17 +198,25 @@ describe("buildModelsKeyboard", () => {
       {
         name: "no current model",
         currentModel: undefined,
+        provider: "anthropic",
         firstText: "claude-sonnet-4",
       },
       {
-        name: "current model marked",
+        name: "current model marked when provider matches",
         currentModel: "anthropic/claude-sonnet-4",
+        provider: "anthropic",
         firstText: "claude-sonnet-4 ✓",
+      },
+      {
+        name: "does not mark model when provider differs",
+        currentModel: "openrouter/claude-sonnet-4",
+        provider: "anthropic",
+        firstText: "claude-sonnet-4",
       },
     ] as const;
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
-        provider: "anthropic",
+        provider: testCase.provider,
         models: ["claude-sonnet-4", "claude-opus-4"],
         currentModel: testCase.currentModel,
         currentPage: 1,
@@ -217,7 +225,7 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
+      expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel_${testCase.provider}/claude-sonnet-4`);
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
