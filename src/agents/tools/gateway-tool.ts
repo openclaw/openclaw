@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { parseConfigJson5, type OpenClawConfig } from "../../config/config.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
@@ -17,6 +17,82 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const CONFIG_PATCH_OUTPUT_MODES = ["minimal-diff", "full"] as const;
+const DEFAULT_CONFIG_PATCH_OUTPUT_MODE = "minimal-diff";
+type ConfigPatchOutputMode = (typeof CONFIG_PATCH_OUTPUT_MODES)[number];
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item) => typeof item === "string");
+}
+
+function collectPatchLeafPaths(value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [prefix] : [];
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return prefix ? [prefix] : [];
+  }
+  const paths: string[] = [];
+  for (const [key, child] of entries) {
+    const childPath = prefix ? `${prefix}.${key}` : key;
+    if (!child || typeof child !== "object" || Array.isArray(child)) {
+      paths.push(childPath);
+      continue;
+    }
+    paths.push(...collectPatchLeafPaths(child, childPath));
+  }
+  return paths;
+}
+
+function summarizeConfigPatchResult(params: {
+  result: unknown;
+  raw: string;
+}): Record<string, unknown> {
+  const resultRecord =
+    params.result && typeof params.result === "object"
+      ? (params.result as Record<string, unknown>)
+      : {};
+  const changedPaths = toStringArray(resultRecord.changedPaths);
+
+  let requestedPatchPaths: string[] = [];
+  if (changedPaths.length === 0) {
+    const parsedPatch = parseConfigJson5(params.raw);
+    if (parsedPatch.ok) {
+      requestedPatchPaths = Array.from(new Set(collectPatchLeafPaths(parsedPatch.parsed)));
+    }
+  }
+
+  const summarizedPaths = changedPaths.length > 0 ? changedPaths : requestedPatchPaths;
+  return {
+    ok: resultRecord.ok !== false,
+    ...(typeof resultRecord.path === "string" ? { path: resultRecord.path } : {}),
+    changedPaths: summarizedPaths,
+    changedPathCount: summarizedPaths.length,
+    ...(resultRecord.restart !== undefined ? { restart: resultRecord.restart } : {}),
+    ...(resultRecord.sentinel !== undefined ? { sentinel: resultRecord.sentinel } : {}),
+    ...(changedPaths.length > 0 ? { changedPathsSource: "validated-config-diff" } : {}),
+    ...(changedPaths.length === 0 && requestedPatchPaths.length > 0
+      ? { changedPathsSource: "requested-patch" }
+      : {}),
+    fetchFullConfigAction: "config.fetch-full",
+    outputMode: "minimal-diff",
+  };
+}
+
+function resolveConfigPatchOutputMode(params: Record<string, unknown>): ConfigPatchOutputMode {
+  const mode = readStringParam(params, "outputMode");
+  if (!mode) {
+    return DEFAULT_CONFIG_PATCH_OUTPUT_MODE;
+  }
+  if (mode === "minimal-diff" || mode === "full") {
+    return mode;
+  }
+  throw new Error(`Invalid outputMode: ${mode}. Expected one of: minimal-diff, full.`);
+}
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -34,6 +110,7 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
 const GATEWAY_ACTIONS = [
   "restart",
   "config.get",
+  "config.fetch-full",
   "config.schema",
   "config.apply",
   "config.patch",
@@ -55,6 +132,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
+  outputMode: Type.Optional(stringEnum(CONFIG_PATCH_OUTPUT_MODES)),
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -74,7 +152,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing); by default it returns minimal changed-path diff output to reduce tokens, and you can set outputMode=full for the full payload. Use config.fetch-full to explicitly fetch the full config snapshot. Use config.apply only when replacing entire config. Config writes trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -172,6 +250,10 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
         return jsonResult({ ok: true, result });
       }
+      if (action === "config.fetch-full") {
+        const result = await callGatewayTool("config.get", gatewayOpts, {});
+        return jsonResult({ ok: true, result });
+      }
       if (action === "config.schema") {
         const result = await callGatewayTool("config.schema", gatewayOpts, {});
         return jsonResult({ ok: true, result });
@@ -191,6 +273,7 @@ export function createGatewayTool(opts?: {
       if (action === "config.patch") {
         const { raw, baseHash, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
+        const outputMode = resolveConfigPatchOutputMode(params);
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,
@@ -198,7 +281,11 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        if (outputMode === "full") {
+          return jsonResult({ ok: true, result });
+        }
+        const summarized = summarizeConfigPatchResult({ result, raw });
+        return jsonResult({ ok: true, result: summarized });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
