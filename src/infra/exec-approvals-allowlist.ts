@@ -382,6 +382,15 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    // Bug fix for #35024: When bash is followed by a script path (not -c),
+    // add the script file path to the allowlist, not the shell binary itself.
+    const scriptArg = params.segment.argv[1];
+    if (scriptArg) {
+      const scriptPath = path.isAbsolute(scriptArg)
+        ? scriptArg
+        : path.resolve(params.cwd, scriptArg);
+      params.out.add(scriptPath);
+    }
     return;
   }
   const nested = analyzeShellCommand({
