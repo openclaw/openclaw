@@ -42,7 +42,7 @@ export function emitProfilesSmt2(data: ParsedAll): string {
   w(`; Requires tools.smt2 to be loaded first.`);
   w(``);
 
-  const emitProfile = (name: string, number: number, toolIds: string[], description: string) => {
+  const emitProfile = (name: string, number: number, toolIds: string[]) => {
     w(`; --------------------------------------------------------------------------`);
     w(`; ${number}. Profile: ${name}`);
     w(`; --------------------------------------------------------------------------`);
@@ -74,10 +74,10 @@ export function emitProfilesSmt2(data: ParsedAll): string {
     w(``);
   };
 
-  emitProfile("minimal", 1, profileTools.get("minimal")!, "");
-  emitProfile("coding", 2, profileTools.get("coding")!, "");
-  emitProfile("messaging", 3, profileTools.get("messaging")!, "");
-  emitProfile("full", 4, [], "");
+  emitProfile("minimal", 1, profileTools.get("minimal")!);
+  emitProfile("coding", 2, profileTools.get("coding")!);
+  emitProfile("messaging", 3, profileTools.get("messaging")!);
+  emitProfile("full", 4, []);
 
   // 5. Resolution helper
   w(`; --------------------------------------------------------------------------`);

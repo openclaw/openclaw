@@ -19,10 +19,6 @@ export function emitToolsSmt2(data: ParsedAll): string {
   const hasWhatsappLogin = allToolIds.includes("whatsapp_login");
   const extraTools = hasWhatsappLogin ? [] : ["whatsapp_login"];
 
-  const constructors = [...allToolIds, ...extraTools]
-    .map((id) => `(${toolConstructor(id)})`)
-    .join(" ");
-
   // Build section groups
   const sectionGroups = new Map<string, string[]>();
   for (const tool of tools) {
