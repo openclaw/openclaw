@@ -76,6 +76,22 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(true);
   });
 
+  it("accepts decorated mention display names when bot open_id matches", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Bot（机器人）", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "Bot");
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("keeps name guard for clear mismatch when bot open_id matches", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Other Bot", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, "Primary Bot");
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
   it("returns mentionedBot=false when only other users are mentioned", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },

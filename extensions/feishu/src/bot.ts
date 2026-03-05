@@ -450,6 +450,19 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
+function normalizeMentionName(value?: string): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function mentionNameMatchesBotName(mentionName?: string, botName?: string): boolean {
+  const normalizedMention = normalizeMentionName(mentionName);
+  const normalizedBot = normalizeMentionName(botName);
+  if (!normalizedMention || !normalizedBot) return true;
+  if (normalizedMention === normalizedBot) return true;
+  // Feishu can include display-name decorations/suffixes in mentions depending on client locale.
+  return normalizedMention.includes(normalizedBot) || normalizedBot.includes(normalizedMention);
+}
+
 function checkBotMentioned(
   event: FeishuMessageEvent,
   botOpenId?: string,
@@ -463,10 +476,9 @@ function checkBotMentioned(
   if (mentions.length > 0) {
     return mentions.some((m) => {
       if (m.id.open_id !== botOpenId) return false;
-      // Guard against Feishu WS open_id remapping in multi-app groups:
-      // if botName is known and mention name differs, this is a false positive.
-      if (botName && m.name && m.name !== botName) return false;
-      return true;
+      // Guard against Feishu WS open_id remapping in multi-app groups, but keep
+      // mention detection resilient when Feishu decorates display names.
+      return mentionNameMatchesBotName(m.name, botName);
     });
   }
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
