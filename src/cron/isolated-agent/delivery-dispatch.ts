@@ -21,6 +21,21 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
+function normalizeDeliveryTarget(channel: string, to: string): string {
+  const channelLower = channel.trim().toLowerCase();
+  const toTrimmed = to.trim();
+  if (channelLower === "feishu" || channelLower === "lark") {
+    const lowered = toTrimmed.toLowerCase();
+    if (lowered.startsWith("user:")) {
+      return toTrimmed.slice("user:".length).trim();
+    }
+    if (lowered.startsWith("chat:")) {
+      return toTrimmed.slice("chat:".length).trim();
+    }
+  }
+  return toTrimmed;
+}
+
 export function matchesMessagingToolDeliveryTarget(
   target: { provider?: string; to?: string; accountId?: string },
   delivery: { channel?: string; to?: string; accountId?: string },
@@ -36,11 +51,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  // Strip :topic:NNN suffix from target.to before comparing — the cron delivery.to
-  // is already stripped to chatId only, but the agent's message tool may pass a
-  // topic-qualified target (e.g. "-1003597428309:topic:462").
-  const normalizedTargetTo = target.to.replace(/:topic:\d+$/, "");
-  return normalizedTargetTo === delivery.to;
+  // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
+  // both sides so cron duplicate suppression compares canonical IDs.
+  const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to.replace(/:topic:\d+$/, ""));
+  const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
+  return normalizedTargetTo === normalizedDeliveryTo;
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
