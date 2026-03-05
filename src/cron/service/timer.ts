@@ -287,7 +287,21 @@ export function applyJobResult(
     startedAt: number;
     endedAt: number;
   },
+  opts?: {
+    // Preserve recurring "every" anchors for manual force runs.
+    preserveSchedule?: boolean;
+  },
 ): boolean {
+  const prevLastRunAtMs = job.state.lastRunAtMs;
+  const computeNextWithPreservedLastRun = (nowMs: number) => {
+    const saved = job.state.lastRunAtMs;
+    job.state.lastRunAtMs = prevLastRunAtMs;
+    try {
+      return computeJobNextRunAtMs(job, nowMs);
+    } finally {
+      job.state.lastRunAtMs = saved;
+    }
+  };
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
@@ -385,7 +399,10 @@ export function applyJobResult(
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
       try {
-        normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        normalNext =
+          opts?.preserveSchedule && job.schedule.kind === "every"
+            ? computeNextWithPreservedLastRun(result.endedAt)
+            : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -408,7 +425,10 @@ export function applyJobResult(
     } else if (job.enabled) {
       let naturalNext: number | undefined;
       try {
-        naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+        naturalNext =
+          opts?.preserveSchedule && job.schedule.kind === "every"
+            ? computeNextWithPreservedLastRun(result.endedAt)
+            : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -552,13 +572,17 @@ export async function onTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const due = findDueJobs(state);
+      const dueCheckNow = state.deps.nowMs();
+      const due = collectRunnableJobs(state, dueCheckNow);
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const changed = recomputeNextRunsForMaintenance(state);
+        const changed = recomputeNextRunsForMaintenance(state, {
+          recomputeExpired: true,
+          nowMs: dueCheckNow,
+        });
         if (changed) {
           await persist(state);
         }
@@ -686,14 +710,6 @@ export async function onTimer(state: CronServiceState) {
     state.running = false;
     armTimer(state);
   }
-}
-
-function findDueJobs(state: CronServiceState): CronJob[] {
-  if (!state.store) {
-    return [];
-  }
-  const now = state.deps.nowMs();
-  return collectRunnableJobs(state, now);
 }
 
 function isRunnableJob(params: {
