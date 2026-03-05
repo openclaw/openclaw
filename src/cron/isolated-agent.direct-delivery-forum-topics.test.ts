@@ -19,7 +19,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
-      mockAgentPayloads([{ text: "forum message" }]);
+      mockAgentPayloads([{ text: "forum " }, { text: "message" }]);
 
       const res = await runTelegramAnnounceTurn({
         home,
@@ -38,7 +38,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       });
 
       vi.clearAllMocks();
-      mockAgentPayloads([{ text: "plain message" }]);
+      mockAgentPayloads([{ text: "plain " }, { text: "message" }]);
 
       const plainRes = await runTelegramAnnounceTurn({
         home,
@@ -49,6 +49,9 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
 
       expect(plainRes.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0]).toMatchObject({
+        roundOneReply: "plain message",
+      });
       const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
         | { expectsCompletionMessage?: boolean }
         | undefined;

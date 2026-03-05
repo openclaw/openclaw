@@ -10,6 +10,23 @@ type DeliveryPayload = {
   isError?: boolean;
 };
 
+export function mergeNonErrorTextPayloads(payloads: DeliveryPayload[]): string | undefined {
+  let merged = "";
+  let sawText = false;
+  for (const payload of payloads) {
+    if (payload?.isError) {
+      continue;
+    }
+    const text = typeof payload?.text === "string" ? payload.text : "";
+    if (!text) {
+      continue;
+    }
+    merged += text;
+    sawText = true;
+  }
+  return sawText ? merged : undefined;
+}
+
 export function pickSummaryFromOutput(text: string | undefined) {
   const clean = (text ?? "").trim();
   if (!clean) {

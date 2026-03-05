@@ -59,6 +59,7 @@ import {
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
+  mergeNonErrorTextPayloads,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromOutput,
@@ -620,19 +621,24 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const firstText = payloads[0]?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
-  let outputText = pickLastNonEmptyTextFromPayloads(payloads);
-  let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  const mergedTextCandidate = mergeNonErrorTextPayloads(payloads);
   const deliveryPayload = pickLastDeliverablePayload(payloads);
-  let deliveryPayloads =
-    deliveryPayload !== undefined
-      ? [deliveryPayload]
-      : synthesizedText
-        ? [{ text: synthesizedText }]
-        : [];
   const deliveryPayloadHasStructuredContent =
     Boolean(deliveryPayload?.mediaUrl) ||
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
+  const mergedText = deliveryPayloadHasStructuredContent ? undefined : mergedTextCandidate;
+
+  let outputText = mergedText ?? pickLastNonEmptyTextFromPayloads(payloads);
+  let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  let deliveryPayloads =
+    deliveryPayload !== undefined && deliveryPayloadHasStructuredContent
+      ? [deliveryPayload]
+      : mergedText
+        ? [{ text: mergedText }]
+        : synthesizedText
+          ? [{ text: synthesizedText }]
+          : [];
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
   const runLevelError = runResult.meta?.error;
