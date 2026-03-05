@@ -119,12 +119,12 @@ describe("directive behavior", () => {
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.1" },
+                model: { primary: "minimax/MiniMax-M2.5" },
                 workspace: path.join(home, "openclaw"),
                 models: {
-                  "minimax/MiniMax-M2.1": {},
-                  "minimax/MiniMax-M2.1-lightning": {},
-                  "lmstudio/minimax-m2.1-gs32": {},
+                  "minimax/MiniMax-M2.5": {},
+                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "lmstudio/minimax-m2.5-gs32": {},
                 },
               },
             },
@@ -135,29 +135,29 @@ describe("directive behavior", () => {
                   baseUrl: "https://api.minimax.io/anthropic",
                   apiKey: "sk-test",
                   api: "anthropic-messages",
-                  models: [makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1")],
+                  models: [makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5")],
                 },
                 lmstudio: {
                   baseUrl: "http://127.0.0.1:1234/v1",
                   apiKey: "lmstudio",
                   api: "openai-responses",
-                  models: [makeModelDefinition("minimax-m2.1-gs32", "MiniMax M2.1 GS32")],
+                  models: [makeModelDefinition("minimax-m2.5-gs32", "MiniMax M2.5 GS32")],
                 },
               },
             },
           },
         },
         {
-          body: "/model minimax/m2.1",
+          body: "/model minimax/m2.5",
           storePath: path.join(home, "sessions-provider-fuzzy.json"),
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.1" },
+                model: { primary: "minimax/MiniMax-M2.5" },
                 workspace: path.join(home, "openclaw"),
                 models: {
-                  "minimax/MiniMax-M2.1": {},
-                  "minimax/MiniMax-M2.1-lightning": {},
+                  "minimax/MiniMax-M2.5": {},
+                  "minimax/MiniMax-M2.5-Lightning": {},
                 },
               },
             },
@@ -169,8 +169,8 @@ describe("directive behavior", () => {
                   apiKey: "sk-test",
                   api: "anthropic-messages",
                   models: [
-                    makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1"),
-                    makeModelDefinition("MiniMax-M2.1-lightning", "MiniMax M2.1 Lightning"),
+                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
+                    makeModelDefinition("MiniMax-M2.5-Lightning", "MiniMax M2.5 Lightning"),
                   ],
                 },
               },

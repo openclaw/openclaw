@@ -16,6 +16,7 @@ import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../in
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { logWarn } from "../logger.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -23,9 +24,14 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
+import {
+  hardenApprovedExecutionPaths,
+  revalidateApprovedCwdSnapshot,
+  type ApprovedCwdSnapshot,
+} from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
+  ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
@@ -80,16 +86,19 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   segments: ExecCommandSegment[];
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
+  approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
 const safeBinTrustedDirWarningCache = new Set<string>();
+const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
     return;
   }
   safeBinTrustedDirWarningCache.add(message);
-  console.warn(message);
+  logWarn(message);
 }
 
 function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
@@ -129,19 +138,7 @@ export type HandleSystemRunInvokeOptions = {
   sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
-  sendExecFinishedEvent: (params: {
-    sessionKey: string;
-    runId: string;
-    cmdText: string;
-    result: {
-      stdout?: string;
-      stderr?: string;
-      error?: string | null;
-      exitCode?: number | null;
-      timedOut?: boolean;
-      success?: boolean;
-    };
-  }) => Promise<void>;
+  sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
 };
 
@@ -300,12 +297,21 @@ async function evaluateSystemRunPolicyPhase(
   const hardenedPaths = hardenApprovedExecutionPaths({
     approvedByAsk: policy.approvedByAsk,
     argv: parsed.argv,
+    shellCommand: parsed.shellCommand,
     cwd: parsed.cwd,
   });
   if (!hardenedPaths.ok) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: hardenedPaths.message,
+    });
+    return null;
+  }
+  const approvedCwdSnapshot = policy.approvedByAsk ? hardenedPaths.approvedCwdSnapshot : undefined;
+  if (policy.approvedByAsk && hardenedPaths.cwd && !approvedCwdSnapshot) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
     });
     return null;
   }
@@ -336,6 +342,7 @@ async function evaluateSystemRunPolicyPhase(
     segments,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
+    approvedCwdSnapshot,
   };
 }
 
@@ -343,6 +350,18 @@ async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
+  if (
+    phase.approvedCwdSnapshot &&
+    !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
+  ) {
+    logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
