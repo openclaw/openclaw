@@ -212,6 +212,17 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
+  const mirrorPayloadText = deliveryPayloads
+    .map((payload) => payload.text)
+    .filter(Boolean)
+    .join("\n");
+  const mirrorPayloadMedia = [
+    ...new Set(
+      deliveryPayloads.flatMap((payload) =>
+        (payload.mediaUrls ?? []).filter((url): url is string => url.trim().length > 0),
+      ),
+    ),
+  ];
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
@@ -232,6 +243,15 @@ export async function deliverAgentCommandResult(params: {
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
+        mirror:
+          effectiveSessionKey && effectiveSessionKey.trim()
+            ? {
+                sessionKey: effectiveSessionKey,
+                agentId: outboundSession?.agentId,
+                text: mirrorPayloadText || undefined,
+                mediaUrls: mirrorPayloadMedia.length ? mirrorPayloadMedia : undefined,
+              }
+            : undefined,
       });
     }
   }

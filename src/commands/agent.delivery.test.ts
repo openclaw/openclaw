@@ -260,6 +260,31 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("passes session key from opts to mirror when delivering direct agent responses", async () => {
+    await runDelivery({
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+        sessionKey: "agent:main:main",
+      },
+      outboundSession: {
+        agentId: "main",
+      },
+      resultText: "ok",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      }),
+    );
+  });
+
   it("prefixes nested agent outputs with context", async () => {
     const runtime = createRuntime();
     await runDelivery({
