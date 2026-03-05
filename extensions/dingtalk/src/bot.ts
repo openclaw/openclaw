@@ -12,27 +12,45 @@ import { sendTextMessage } from "./send.js";
 import type {
   DingtalkRobotMessage,
   DingtalkMessageContext,
+  DingtalkNonTextContent,
+  DingtalkAudioContent,
+  DingtalkRichTextContent,
+  DingtalkFileContent,
   ResolvedDingtalkAccount,
   DingtalkConfig,
   DingtalkGroupConfig,
 } from "./types.js";
 
 /**
- * 解析钉钉消息事件为统一上下文 / Parse DingTalk message event into unified context
+ * Safely resolve non-text content — handles both pre-parsed objects and JSON strings.
+ */
+function resolveNonTextContent(
+  raw: string | DingtalkNonTextContent | undefined,
+): DingtalkNonTextContent | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw) as DingtalkNonTextContent;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parse DingTalk message event into unified context.
+ * Handles all message types: text, picture, video, audio, richText, file.
  */
 function parseDingtalkMessageEvent(msg: DingtalkRobotMessage): DingtalkMessageContext {
-  // 提取文本内容 / Extract text content
+  const contentType = msg.msgtype ?? "text";
   let content = "";
-  let contentType = msg.msgtype ?? "text";
 
-  if (msg.msgtype === "text" && msg.text?.content) {
-    content = msg.text.content.trim();
-  } else if (msg.content) {
-    // 非文本消息（图片/富文本等），content 是 JSON 字符串 / Non-text messages, content is JSON string
-    content = msg.content;
+  if (contentType === "text") {
+    content = (msg.text?.content ?? "").trim();
+  } else {
+    const parsed = resolveNonTextContent(msg.content);
+    content = buildNonTextContent(contentType, parsed);
   }
 
-  // 判断是否 @了机器人 / Check if bot was mentioned
   const mentionedBot = msg.conversationType === "1" || msg.isInAtList === true;
 
   return {
@@ -51,6 +69,50 @@ function parseDingtalkMessageEvent(msg: DingtalkRobotMessage): DingtalkMessageCo
     chatbotUserId: msg.chatbotUserId,
     conversationTitle: msg.conversationTitle,
   };
+}
+
+/**
+ * Build a human-readable string for non-text message types.
+ */
+function buildNonTextContent(msgtype: string, parsed: DingtalkNonTextContent | undefined): string {
+  if (!parsed) return `[${msgtype} message]`;
+
+  switch (msgtype) {
+    case "picture":
+      return "[Image]";
+
+    case "audio": {
+      const audio = parsed as DingtalkAudioContent;
+      if (audio.recognition) return audio.recognition;
+      const dur = audio.duration ? ` ${audio.duration}s` : "";
+      return `[Audio${dur}]`;
+    }
+
+    case "video": {
+      return "[Video]";
+    }
+
+    case "richText": {
+      const rich = parsed as DingtalkRichTextContent;
+      if (!rich.richText?.length) return "[Rich text]";
+      const parts = rich.richText
+        .map((seg) => {
+          if (seg.text) return seg.text;
+          if (seg.pictureDownloadCode || seg.downloadCode) return "[Image]";
+          return "";
+        })
+        .filter(Boolean);
+      return parts.join(" ") || "[Rich text]";
+    }
+
+    case "file": {
+      const file = parsed as DingtalkFileContent;
+      return file.fileName ? `[File: ${file.fileName}]` : "[File]";
+    }
+
+    default:
+      return `[${msgtype} message]`;
+  }
 }
 
 /**
@@ -325,11 +387,8 @@ export async function handleDingtalkMessage(params: {
 }
 
 /**
- * 构建消息体 / Build message body for agent
+ * Build message body for agent dispatch.
  */
 function buildMessageBody(ctx: DingtalkMessageContext): string {
-  if (ctx.contentType !== "text") {
-    return `[${ctx.contentType} message] ${ctx.content}`;
-  }
-  return ctx.content;
+  return ctx.content || `[${ctx.contentType} message]`;
 }

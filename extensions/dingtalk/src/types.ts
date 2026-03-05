@@ -31,7 +31,49 @@ export type ResolvedDingtalkAccount = {
   config: DingtalkConfig;
 };
 
-// 钉钉消息回调数据结构 / DingTalk robot message callback data structure
+// Parsed content shapes for non-text message types
+export type DingtalkPictureContent = {
+  downloadCode?: string;
+  pictureDownloadCode?: string;
+};
+
+export type DingtalkVideoContent = {
+  downloadCode?: string;
+  duration?: string;
+  videoType?: string;
+};
+
+export type DingtalkAudioContent = {
+  downloadCode?: string;
+  duration?: string;
+  recognition?: string;
+};
+
+export type DingtalkRichTextContent = {
+  richText?: Array<{
+    text?: string;
+    pictureDownloadCode?: string;
+    downloadCode?: string;
+    type?: string;
+  }>;
+};
+
+export type DingtalkFileContent = {
+  downloadCode?: string;
+  fileName?: string;
+  fileId?: string;
+  fileType?: string;
+  spaceId?: string;
+};
+
+export type DingtalkNonTextContent =
+  | DingtalkPictureContent
+  | DingtalkVideoContent
+  | DingtalkAudioContent
+  | DingtalkRichTextContent
+  | DingtalkFileContent;
+
+// DingTalk robot message callback data structure
 export type DingtalkRobotMessage = {
   conversationId: string;
   chatbotCorpId: string;
@@ -43,24 +85,19 @@ export type DingtalkRobotMessage = {
   sessionWebhookExpiredTime: number;
   createAt: number;
   senderCorpId: string;
-  // "1" = 单聊, "2" = 群聊 / "1" = DM, "2" = group chat
   conversationType: "1" | "2";
   senderId: string;
   sessionWebhook: string;
   robotCode: string;
   msgtype: string;
-  // 文本消息内容 / Text message content
   text?: { content: string };
-  // 图片消息 / Image message
-  content?: string;
-  // 群聊标题 / Group chat title
+  // Non-text messages: may be a JSON string or pre-parsed object after JSON.parse
+  content?: string | DingtalkNonTextContent;
   conversationTitle?: string;
-  // @列表 / At-list
   atUsers?: Array<{
     dingtalkId: string;
     staffId?: string;
   }>;
-  // 是否在 @列表 中 / Whether the bot is in the at-list
   isInAtList?: boolean;
 };
 
