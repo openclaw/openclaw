@@ -78,14 +78,16 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       // Type.Unknown() emits schema without a "type" field, which llama.cpp
       // rejects during JSON schema-to-grammar conversion (400 Bad Request).
       input: Type.Optional(
-        Type.Unsafe<unknown>({
+        Type.Unsafe<Record<string, unknown>>({
           type: "object",
-          description: "Optional input payload for the task.",
+          additionalProperties: true,
+          description: "Optional input payload for the task. Must be a JSON object.",
         }),
       ),
       schema: Type.Optional(
-        Type.Unsafe<unknown>({
+        Type.Unsafe<Record<string, unknown>>({
           type: "object",
+          additionalProperties: true,
           description: "Optional JSON Schema to validate the returned JSON.",
         }),
       ),
@@ -171,7 +173,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       };
 
       // oxlint-disable-next-line typescript/no-explicit-any
-      const input = (params as any).input as unknown;
+      const input = (params as any).input as Record<string, unknown> | undefined;
+      if (input != null && (typeof input !== "object" || Array.isArray(input))) {
+        throw new Error("input must be a JSON object (not an array, string, or scalar)");
+      }
       let inputJson: string;
       try {
         inputJson = JSON.stringify(input ?? null, null, 2);
