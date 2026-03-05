@@ -101,6 +101,36 @@ Rules:
 - Normalize tag names to lowercase with spaces (no hyphens or underscores).`;
 
 // ============================================================================
+// Input Sanitization
+// ============================================================================
+
+/**
+ * Sanitize memory text before passing to the extraction LLM.
+ *
+ * Strips sequences that look like role injection attempts — lines beginning
+ * with "System:", "Assistant:", "User:", "SYSTEM:", "HUMAN:", "AI:", etc.
+ * These could hijack the extraction prompt and force arbitrary output
+ * (e.g. `category: "core"` to evade decay). Truncates at MAX_EXTRACTION_TEXT_CHARS
+ * to prevent prompt flooding.
+ *
+ * Exported for testing.
+ */
+export const MAX_EXTRACTION_TEXT_CHARS = 4000;
+
+// Role-marker prefixes that could be used to inject fake turns into the prompt
+const ROLE_INJECTION_PATTERN = /^(system|assistant|user|human|ai)\s*:/i;
+
+export function sanitizeMemoryText(text: string): string {
+  const truncated =
+    text.length > MAX_EXTRACTION_TEXT_CHARS ? text.slice(0, MAX_EXTRACTION_TEXT_CHARS) : text;
+  return truncated
+    .split("\n")
+    .filter((line) => !ROLE_INJECTION_PATTERN.test(line.trimStart()))
+    .join("\n")
+    .trim();
+}
+
+// ============================================================================
 // Entity Extraction
 // ============================================================================
 
@@ -133,10 +163,15 @@ export async function extractEntities(
     return { result: null, transientFailure: false };
   }
 
+  // Sanitize before sending — strips role-injection markers and caps length
+  // to prevent adversarial memory text from hijacking the extraction output
+  // (e.g. forcing category:"core" to evade decay). See Sec-5.
+  const sanitized = sanitizeMemoryText(text);
+
   // System/user separation prevents memory text from being interpreted as instructions
   const messages = [
     { role: "system", content: ENTITY_EXTRACTION_SYSTEM },
-    { role: "user", content: text },
+    { role: "user", content: sanitized },
   ];
 
   let content: string | null;

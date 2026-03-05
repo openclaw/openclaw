@@ -416,10 +416,19 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
 
               await db.ensureInitialized();
 
+              // Mirror the service path (index.ts): create an AbortController so
+              // that a mid-cycle SIGINT/SIGTERM can cancel in-flight LLM calls
+              // and phase iterations cleanly. (OP-95 gap)
+              const cliAbort = new AbortController();
+              const abortOnSignal = () => cliAbort.abort();
+              process.once("SIGINT", abortOnSignal);
+              process.once("SIGTERM", abortOnSignal);
+
               // Resolve workspace dir for task ledger cleanup
               const resolvedWorkspace = opts.workspace?.trim() || undefined;
 
               const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
+                abortSignal: cliAbort.signal,
                 agentId: opts.agent,
                 dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
                 skipSemanticDedup: opts.skipSemantic === true,
@@ -454,6 +463,10 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                   console.log(`   ${message}`);
                 },
               });
+
+              // Remove signal handlers now that the cycle is done
+              process.off("SIGINT", abortOnSignal);
+              process.off("SIGTERM", abortOnSignal);
 
               console.log("\n═════════════════════════════════════════════════════════════");
               console.log(`✅ Sleep cycle complete in ${(result.durationMs / 1000).toFixed(1)}s`);
