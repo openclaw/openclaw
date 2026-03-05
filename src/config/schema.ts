@@ -304,6 +304,9 @@ function buildMergedSchemaCacheKey(params: {
   plugins: PluginUiMetadata[];
   channels: ChannelUiMetadata[];
 }): string {
+  // Cache keys should be bounded in size. Serializing full JSON Schemas can
+  // produce multi-megabyte strings (and even throw RangeError: Invalid string
+  // length) when many plugins/channels are present.
   const plugins = params.plugins
     .map((plugin) => ({
       id: plugin.id,
@@ -322,7 +325,17 @@ function buildMergedSchemaCacheKey(params: {
       configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+
+  const json = JSON.stringify({ plugins, channels });
+  let hash = 0xcbf29ce484222325n; // FNV-1a 64-bit offset basis
+  const prime = 0x100000001b3n; // FNV-1a 64-bit prime
+  for (let i = 0; i < json.length; i++) {
+    hash ^= BigInt(json.charCodeAt(i));
+    hash = (hash * prime) & 0xffffffffffffffffn;
+  }
+  // Include lengths to reduce accidental collisions between different payload
+  // shapes that might share a hash in pathological cases.
+  return `${json.length}:${plugins.length}:${channels.length}:${hash.toString(16)}`;
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {

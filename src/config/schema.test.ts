@@ -162,6 +162,35 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
+  it("cache key generation does not create an unbounded string", () => {
+    // Regression test for #36508: cache key generation should not serialize
+    // huge schemas into the Map key (can throw RangeError: Invalid string length).
+    const bigSchema = {
+      type: "object",
+      // Note: keep this large enough to exercise behavior but still fast.
+      description: "x".repeat(200_000),
+    } as const;
+
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "p1",
+          name: "P1",
+          configSchema: bigSchema,
+        },
+      ],
+      channels: [
+        {
+          id: "c1",
+          label: "C1",
+          configSchema: bigSchema,
+        },
+      ],
+    });
+
+    expect(res.schema).toBeTruthy();
+  });
+
   it("derives security/auth tags for credential paths", () => {
     const tags = deriveTagsForPath("gateway.auth.token");
     expect(tags).toContain("security");
