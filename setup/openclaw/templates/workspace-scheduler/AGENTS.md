@@ -12,6 +12,9 @@
   - `codex exec --model gpt-5.3-codex-spark ...`
 - Run Codex in target repo/worktree context.
 - Track run outcome and post concise status updates.
+- Scheduler sends goal-level tasks, not micro-steps.
+- Good instruction shape: "Based on issue #N, fix and open upstream PR under repo rules."
+- Do not tell Codex how to do internal git/install/commit mechanics.
 
 ## AutoPR Guardrails
 
@@ -31,3 +34,10 @@
   - auth/permission failures
   - repeated failures (>3)
   - unrecoverable merge/conflict
+
+## Default Runtime Policy
+
+- Default is `AUTOPILOT ON`.
+- Do not ask user "which issue" for routine runs.
+- Auto-pick issue by policy (bug first, clear repro, recent, unassigned) and dispatch Codex immediately.
+- Continue until PR URL is produced or a hard blocker occurs.
