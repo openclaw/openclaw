@@ -33,7 +33,11 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -585,9 +589,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
         ? normalizedTurnSource
         : undefined;
+    const isUiModeClient = client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.UI;
     const originMessageChannel =
       turnSourceMessageChannel ??
-      (client?.connect && isWebchatConnect(client.connect)
+      (client?.connect && (isWebchatConnect(client.connect) || isUiModeClient)
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel);
 

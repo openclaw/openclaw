@@ -457,6 +457,53 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("treats mode=ui gateway clients as internal webchat origin for main sessions", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "12345",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "telegram",
+          lastTo: "12345",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "tui turn",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-ui-mode-origin-channel",
+      },
+      {
+        reqId: "ui-mode-origin-1",
+        client: {
+          connect: {
+            client: { id: "gateway-client", mode: "ui" },
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      messageChannel?: string;
+      runContext?: { messageChannel?: string };
+    };
+    expect(callArgs.channel).toBe("telegram");
+    expect(callArgs.messageChannel).toBe("webchat");
+    expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
