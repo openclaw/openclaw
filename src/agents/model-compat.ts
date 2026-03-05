@@ -34,7 +34,17 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
  * baseUrl for anthropic-messages models so users with either format work.
  */
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/v1\/?$/, "");
+  const stripped = baseUrl.replace(/\/v1\/?$/, "");
+  try {
+    const parsed = new URL(stripped);
+    if (parsed.pathname !== "/" && !parsed.pathname.endsWith("/")) {
+      parsed.pathname = `${parsed.pathname}/`;
+      return parsed.toString();
+    }
+  } catch {
+    return stripped;
+  }
+  return stripped;
 }
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";

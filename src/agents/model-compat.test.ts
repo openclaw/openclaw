@@ -116,7 +116,16 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
       baseUrl: "https://my-proxy.example.com/anthropic/v1",
     };
     const normalized = normalizeModelCompat(model);
-    expect(normalized.baseUrl).toBe("https://my-proxy.example.com/anthropic");
+    expect(normalized.baseUrl).toBe("https://my-proxy.example.com/anthropic/");
+  });
+
+  it("adds trailing slash for anthropic-messages baseUrl with path prefix", () => {
+    const model = {
+      ...anthropicBase(),
+      baseUrl: "https://api.kimi.com/coding",
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.baseUrl).toBe("https://api.kimi.com/coding/");
   });
 });
 
