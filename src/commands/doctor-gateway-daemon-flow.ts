@@ -15,6 +15,7 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import { isAndroidRuntime } from "../infra/android.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -148,7 +149,7 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (!loaded) {
-    if (process.platform === "linux") {
+    if (process.platform === "linux" || isAndroidRuntime()) {
       const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
       if (!systemdAvailable) {
         const wsl = await isWSL();

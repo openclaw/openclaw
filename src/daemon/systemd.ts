@@ -285,7 +285,9 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error(
+      "systemctl not available; systemd user services are required on Linux/Android.",
+    );
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }

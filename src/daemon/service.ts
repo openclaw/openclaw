@@ -1,3 +1,4 @@
+import { isAndroidRuntime } from "../infra/android.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -80,7 +81,7 @@ export function resolveGatewayService(): GatewayService {
     };
   }
 
-  if (process.platform === "linux") {
+  if (process.platform === "linux" || isAndroidRuntime()) {
     return {
       label: "systemd",
       loadedText: "enabled",

@@ -10,6 +10,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
+import { isAndroidRuntime } from "../../infra/android.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -195,7 +196,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    (process.platform === "linux" || isAndroidRuntime()) &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({ wsl: isWSLEnv() })) {
@@ -265,7 +267,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (status.lastError) {
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
-    if (process.platform === "linux") {
+    if (process.platform === "linux" || isAndroidRuntime()) {
       const env = service.command?.environment ?? process.env;
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       defaultRuntime.error(

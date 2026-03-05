@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
+import { isAndroidRuntime } from "../../../infra/android.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
@@ -20,9 +21,9 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
-  const systemdAvailable =
-    process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
-  if (process.platform === "linux" && !systemdAvailable) {
+  const linuxLike = process.platform === "linux" || isAndroidRuntime();
+  const systemdAvailable = linuxLike ? await isSystemdUserServiceAvailable() : true;
+  if (linuxLike && !systemdAvailable) {
     runtime.log("Systemd user services are unavailable; skipping service install.");
     return;
   }
