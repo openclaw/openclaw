@@ -537,6 +537,25 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(textBlock.text).toBe("Hello from assistant");
   });
 
+  it("skips malformed message content entries without throwing", () => {
+    const response = {
+      id: "resp_malformed",
+      output: [
+        {
+          type: "message",
+          content: [null, { type: "output_text", text: "ok" }],
+        },
+      ],
+      usage: {},
+    } as unknown as Parameters<typeof buildAssistantMessageFromResponse>[0];
+
+    expect(() => buildAssistantMessageFromResponse(response, modelInfo)).not.toThrow();
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const textBlock = msg.content[0] as { type: string; text: string };
+    expect(textBlock.type).toBe("text");
+    expect(textBlock.text).toBe("ok");
+  });
+
   it("sets stopReason to 'stop' for text-only responses", () => {
     const response = makeResponseObject("resp_1", "Just text");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);

@@ -290,9 +290,17 @@ export function buildAssistantMessageFromResponse(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  for (const item of response.output ?? []) {
+  for (const itemEntry of response.output ?? []) {
+    if (!itemEntry || typeof itemEntry !== "object") {
+      continue;
+    }
+    const item = itemEntry;
     if (item.type === "message") {
-      for (const part of item.content ?? []) {
+      for (const partEntry of item.content ?? []) {
+        if (!partEntry || typeof partEntry !== "object") {
+          continue;
+        }
+        const part = partEntry as { type?: string; text?: string };
         if (part.type === "output_text" && part.text) {
           content.push({ type: "text", text: part.text });
         }
