@@ -58,11 +58,13 @@ const expectSlackSendCalledWith = (
     };
   },
 ) => {
-  expect(sendMessageSlack).toHaveBeenCalledWith("C123", text, {
+  const expected = {
     threadTs: "1111.2222",
     accountId: "default",
-    ...options,
-  });
+    cfg: expect.any(Object),
+    ...(options?.identity ? { identity: expect.objectContaining(options.identity) } : {}),
+  };
+  expect(sendMessageSlack).toHaveBeenCalledWith("C123", text, expect.objectContaining(expected));
 };
 
 describe("slack outbound hook wiring", () => {
