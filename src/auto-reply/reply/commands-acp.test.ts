@@ -118,7 +118,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord";
+    channel: "discord" | "telegram";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -297,12 +297,29 @@ function createThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) 
   return params;
 }
 
+function createTelegramTopicParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:-1003841603622",
+    AccountId: "default",
+    MessageThreadId: "498",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 async function runDiscordAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createDiscordParams(commandBody, cfg), true);
 }
 
 async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createThreadParams(commandBody, cfg), true);
+}
+
+async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createTelegramTopicParams(commandBody, cfg), true);
 }
 
 describe("/acp command", () => {
@@ -448,10 +465,51 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
+  it("accepts unicode dash option prefixes in /acp spawn args", async () => {
+    const result = await runThreadAcpCommand(
+      "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
+    );
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.ensureSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "codex",
+        mode: "oneshot",
+        cwd: "/home/bob/clawd",
+      }),
+    );
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        metadata: expect.objectContaining({
+          label: "jeerreview",
+        }),
+      }),
+    );
+  });
+
+  it("binds Telegram topic ACP spawns to full conversation ids", async () => {
+    const result = await runTelegramAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1003841603622:topic:498",
+        }),
+      }),
+    );
+  });
+
   it("requires explicit ACP target when acp.defaultAgent is not configured", async () => {
     const result = await runDiscordAcpCommand("/acp spawn");
 
-    expect(result?.reply?.text).toContain("ACP target agent is required");
+    expect(result?.reply?.text).toContain("ACP target harness id is required");
     expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
   });
 
@@ -526,6 +584,42 @@ describe("/acp command", () => {
       }),
     );
     expect(result?.reply?.text).toContain("Applied steering.");
+  });
+
+  it("resolves bound Telegram topic ACP sessions for /acp steer without explicit target", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+      (ref: { channel?: string; accountId?: string; conversationId?: string }) =>
+        ref.channel === "telegram" &&
+        ref.accountId === "default" &&
+        ref.conversationId === "-1003841603622:topic:498"
+          ? createSessionBinding({
+              targetSessionKey: defaultAcpSessionKey,
+              conversation: {
+                channel: "telegram",
+                accountId: "default",
+                conversationId: "-1003841603622:topic:498",
+              },
+            })
+          : null,
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.runTurnMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: "Viewed diver package." };
+      yield { type: "done" };
+    });
+
+    const result = await runTelegramAcpCommand("/acp steer use npm to view package diver");
+
+    expect(hoisted.runTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handle: expect.objectContaining({
+          sessionKey: defaultAcpSessionKey,
+        }),
+        mode: "steer",
+        text: "use npm to view package diver",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {
