@@ -23,6 +23,7 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export type {
   BaseProbeResult,
   ChannelGroupContext,
+  ChannelMessageActionAdapter,
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";

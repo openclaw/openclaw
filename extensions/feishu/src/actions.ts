@@ -1,4 +1,4 @@
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/discord";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
 
