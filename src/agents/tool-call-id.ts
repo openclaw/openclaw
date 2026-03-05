@@ -221,18 +221,27 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
   // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
   // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
-  const map = new Map<string, string>();
+  const map = new Map<string, string[]>();
   const used = new Set<string>();
 
   const resolveAssistant = (id: string) => {
     const next = makeUniqueToolId({ id, used, mode });
-    map.set(id, next);
+    const arr = map.get(id);
+    if (arr) {
+      arr.push(next);
+    } else {
+      map.set(id, [next]);
+    }
     used.add(next);
     return next;
   };
 
   const resolveToolResult = (id: string) => {
-    return map.get(id) ?? id;
+    const arr = map.get(id);
+    if (arr && arr.length > 0) {
+      return arr.shift()!;
+    }
+    return sanitizeToolCallId(id, mode);
   };
 
   let changed = false;
