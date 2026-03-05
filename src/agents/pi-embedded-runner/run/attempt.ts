@@ -1635,19 +1635,21 @@ export async function runEmbeddedAttempt(
                     if (!params.sessionId || hookRunDisposed) {
                       return;
                     }
-                    // If hook returned no filter/block, clear any stale gate from
-                    // a previous message_end in the same turn (multi-step tool loops).
-                    if (!result || (!result.block && !result.toolCalls)) {
-                      clearAfterLlmCallGate(params.sessionId);
-                      return;
-                    }
-                    // Guard against stale results: if the iteration has advanced
-                    // since this event fired, a new turn has started and this
-                    // gate decision is no longer relevant.
+                    // Guard against stale results FIRST: if the iteration has
+                    // advanced since this event fired, a new turn has started
+                    // and this gate decision (including "no result" clears) is
+                    // no longer relevant. Without this, a slow turn-N handler
+                    // resolving with no result could erase turn-N+1's gate.
                     if (eventIteration !== hookTurnIteration) {
                       log.debug(
                         `after_llm_call: discarding stale gate (event=${eventIteration}, current=${hookTurnIteration})`,
                       );
+                      return;
+                    }
+                    // If hook returned no filter/block, clear any stale gate from
+                    // a previous message_end in the same turn (multi-step tool loops).
+                    if (!result || (!result.block && !result.toolCalls)) {
+                      clearAfterLlmCallGate(params.sessionId);
                       return;
                     }
                     const allowedIds = result.toolCalls
@@ -2010,7 +2012,7 @@ export async function runEmbeddedAttempt(
                 // the last chunk. Earlier tool-loop iterations may have added
                 // text that would otherwise escape the hook.
                 assistantTexts.splice(0, assistantTexts.length);
-              } else if (emitResult.allContent) {
+              } else if (emitResult.allContent !== undefined) {
                 // Full multi-turn modification — replace all assistant texts.
                 assistantTexts.splice(0, assistantTexts.length, ...emitResult.allContent);
               } else if (emitResult.content !== undefined) {
