@@ -602,6 +602,115 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
+  it("cleans up steer replacement skip markers after invalid wait statuses", async () => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    const originalCallGateway = callGateway.getMockImplementation();
+    let oldWaitCalls = 0;
+    callGateway.mockImplementation(async (request: unknown) => {
+      const typed = request as {
+        method?: string;
+        params?: { runId?: string };
+      };
+      if (typed.method !== "agent.wait") {
+        return {};
+      }
+      if (typed.params?.runId === "run-old") {
+        oldWaitCalls += 1;
+        if (oldWaitCalls === 1) {
+          return { status: "invalid" };
+        }
+        return { status: "error", error: "reused run" };
+      }
+      if (typed.params?.runId === "run-new") {
+        return new Promise<unknown>(() => undefined);
+      }
+      return {};
+    });
+
+    try {
+      mod.registerSubagentRun({
+        runId: "run-old",
+        childSessionKey: "agent:main:subagent:steer-old",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "old",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+
+      const previous = mod.listSubagentRunsForRequester("agent:main:main")[0];
+      expect(previous?.runId).toBe("run-old");
+
+      const replaced = mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-old",
+        nextRunId: "run-new",
+        fallback: previous,
+      });
+      expect(replaced).toBe(true);
+
+      mod.registerSubagentRun({
+        runId: "run-old",
+        childSessionKey: "agent:main:subagent:steer-old-reused",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "old reused",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+
+      mod.releaseSubagentRun("run-old");
+      await flushAnnounce();
+
+      expect(announceSpy).toHaveBeenCalledTimes(1);
+      const payload = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+        outcome?: { status?: string; error?: string };
+      };
+      expect(payload.outcome?.status).toBe("error");
+      expect(payload.outcome?.error).toBe("reused run");
+    } finally {
+      if (originalCallGateway) {
+        callGateway.mockImplementation(originalCallGateway);
+      }
+    }
+  });
+
+  it("logs warn-level context when waitForSubagentCompletion throws", async () => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    const originalCallGateway = callGateway.getMockImplementation();
+    callGateway.mockImplementation(async (request: unknown) => {
+      const typed = request as { method?: string };
+      if (typed.method === "agent.wait") {
+        throw new Error("wait exploded");
+      }
+      return {};
+    });
+
+    try {
+      mod.registerSubagentRun({
+        runId: "run-wait-throw",
+        childSessionKey: "agent:main:subagent:wait-throw",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "throw",
+        cleanup: "keep",
+      });
+
+      await flushAnnounce();
+
+      expect(runtimeLogSpy).toHaveBeenCalledWith(
+        expect.stringContaining("reason=wait_failed run=run-wait-throw"),
+      );
+      expect(runtimeLogSpy).toHaveBeenCalledWith(
+        expect.stringContaining("child=agent:main:subagent:wait-throw requester=agent:main:main"),
+      );
+      expect(runtimeLogSpy).toHaveBeenCalledWith(expect.stringContaining("error=wait exploded"));
+    } finally {
+      if (originalCallGateway) {
+        callGateway.mockImplementation(originalCallGateway);
+      }
+    }
+  });
+
   it("keeps normal completion path unchanged", async () => {
     mod.registerSubagentRun({
       runId: "run-normal-completion",

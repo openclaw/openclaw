@@ -1124,7 +1124,7 @@ async function waitForSubagentCompletion(
     }
     const entry = subagentRuns.get(runId);
     if (!entry) {
-      if (skipMissingWaitReconcileRunIds.delete(runId)) {
+      if (skipMissingWaitReconcileRunIds.has(runId)) {
         return;
       }
       if (fallbackEntry) {
@@ -1132,7 +1132,6 @@ async function waitForSubagentCompletion(
       }
       return;
     }
-    skipMissingWaitReconcileRunIds.delete(runId);
     let mutated = false;
     if (typeof wait.startedAt === "number") {
       entry.startedAt = wait.startedAt;
@@ -1170,8 +1169,18 @@ async function waitForSubagentCompletion(
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
     });
-  } catch {
-    // ignore
+  } catch (error) {
+    const liveEntry = subagentRuns.get(runId);
+    const childSessionKey =
+      liveEntry?.childSessionKey ?? fallbackEntry?.childSessionKey ?? "unknown";
+    const requesterSessionKey =
+      liveEntry?.requesterSessionKey ?? fallbackEntry?.requesterSessionKey ?? "unknown";
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    defaultRuntime.log(
+      `[warn] subagent wait reconciliation reason=wait_failed run=${runId} child=${childSessionKey} requester=${requesterSessionKey} error=${errorMessage}`,
+    );
+  } finally {
+    skipMissingWaitReconcileRunIds.delete(runId);
   }
 }
 
