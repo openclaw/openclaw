@@ -4,6 +4,7 @@ import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
+import { convertGifFirstFrameToPng } from "../../media/image-ops.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 
 let piModelDiscoveryRuntimePromise: Promise<
@@ -39,12 +40,25 @@ export async function describeImageWithModel(
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
   authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-  const base64 = params.buffer.toString("base64");
+  // Most vision APIs (Google Gemini, xAI Grok, OpenAI) reject image/gif.
+  // Extract the first frame and convert to PNG so the request succeeds.
+  let imageBuffer = params.buffer;
+  let imageMime = params.mime ?? "image/jpeg";
+  if (imageMime === "image/gif") {
+    try {
+      imageBuffer = await convertGifFirstFrameToPng(imageBuffer);
+      imageMime = "image/png";
+    } catch {
+      // Conversion failed — pass through as-is; the model error will surface normally.
+    }
+  }
+
+  const base64 = imageBuffer.toString("base64");
   if (model.provider === "minimax") {
     const text = await minimaxUnderstandImage({
       apiKey,
       prompt: params.prompt ?? "Describe the image.",
-      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${base64}`,
+      imageDataUrl: `data:${imageMime};base64,${base64}`,
       modelBaseUrl: model.baseUrl,
     });
     return { text, model: model.id };
@@ -56,7 +70,7 @@ export async function describeImageWithModel(
         role: "user",
         content: [
           { type: "text", text: params.prompt ?? "Describe the image." },
-          { type: "image", data: base64, mimeType: params.mime ?? "image/jpeg" },
+          { type: "image", data: base64, mimeType: imageMime },
         ],
         timestamp: Date.now(),
       },

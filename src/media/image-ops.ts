@@ -364,6 +364,19 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Extracts the first frame of a GIF and converts it to PNG.
+ * Most vision models (Google Gemini, xAI Grok, OpenAI) reject image/gif —
+ * this normalises animated or static GIFs to a widely-accepted format.
+ */
+export async function convertGifFirstFrameToPng(buffer: Buffer): Promise<Buffer> {
+  // Load sharp directly so we can pass `pages: 1` to restrict decoding to the
+  // first animation frame (keeps memory usage flat for large animated GIFs).
+  const mod = (await import("sharp")) as unknown as { default?: Sharp };
+  const sharp = mod.default ?? (mod as unknown as Sharp);
+  return await sharp(buffer, { pages: 1, failOnError: false }).png().toBuffer();
+}
+
+/**
  * Checks if an image has an alpha channel (transparency).
  * Returns true if the image has alpha, false otherwise.
  */
