@@ -8,10 +8,10 @@ import { ConsoleShell } from "./console-shell";
 
 describe("console shell", () => {
   it("renders primary navigation", () => {
-    render(<ConsoleShell title="Overview">x</ConsoleShell>);
-    expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Generate" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
+    render(<ConsoleShell title="总览">x</ConsoleShell>);
+    expect(screen.getByRole("link", { name: "总览" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "生成" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "任务" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
   });
 });

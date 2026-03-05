@@ -37,9 +37,9 @@ type SubmitState = "idle" | "submitting" | "success" | "error";
 const typeOptions: GenerationType[] = ["web", "api", "mobile", "desktop", "cli"];
 
 function priorityLabel(priority: ProductSpecFeature["priority"]): string {
-  if (priority === "high") return "High";
-  if (priority === "medium") return "Medium";
-  return "Low";
+  if (priority === "high") return "高";
+  if (priority === "medium") return "中";
+  return "低";
 }
 
 export function GenerateWorkspace() {
@@ -104,14 +104,20 @@ export function GenerateWorkspace() {
           required
         />
 
-        <label htmlFor="type">应用类型</label>
-        <select id="type" value={type} onChange={(event) => setType(event.target.value as GenerationType)}>
-          {typeOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+          <label htmlFor="type">应用类型</label>
+          <select id="type" value={type} onChange={(event) => setType(event.target.value as GenerationType)}>
+            {typeOptions.map((option) => (
+              <option key={option} value={option}>
+                {{
+                  web: "Web 应用",
+                  api: "API 服务",
+                  mobile: "移动应用",
+                  desktop: "桌面应用",
+                  cli: "命令行工具",
+                }[option]}
+              </option>
+            ))}
+          </select>
 
         <label htmlFor="tech-stack">技术栈（可选，逗号分隔）</label>
         <input
@@ -123,14 +129,14 @@ export function GenerateWorkspace() {
         />
 
         <button type="submit" disabled={submitState === "submitting"}>
-          {submitState === "submitting" ? "Generating..." : "Generate"}
+          {submitState === "submitting" ? "生成中..." : "开始生成"}
         </button>
       </form>
 
       {submitState === "error" ? <p className="result-error">{errorMessage}</p> : null}
 
       {productSpec ? (
-        <section className="result-panel" aria-label="Generation result">
+        <section className="result-panel" aria-label="生成结果">
           <h2>结果概览</h2>
           <div className="summary-grid">
             <div>
@@ -175,7 +181,7 @@ export function GenerateWorkspace() {
           <ul>
             {Object.entries(productSpec.non_functional_requirements).map(([key, value]) => (
               <li key={key}>
-                <strong>{key}:</strong> {value ?? "n/a"}
+                <strong>{key}:</strong> {value ?? "暂无"}
               </li>
             ))}
           </ul>

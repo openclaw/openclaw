@@ -25,11 +25,11 @@ export default function TasksPage() {
         const response = await fetch("/api/tasks");
         const payload = (await response.json()) as { items?: TaskItem[]; error?: string };
         if (!response.ok) {
-          throw new Error(payload.error || "Failed to load tasks");
+          throw new Error(payload.error || "加载任务失败");
         }
         setTasks(payload.items || []);
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : "Unknown error");
+        setError(loadError instanceof Error ? loadError.message : "未知错误");
       } finally {
         setLoading(false);
       }
@@ -40,13 +40,13 @@ export default function TasksPage() {
 
   const content = (() => {
     if (loading) {
-      return <p>Loading tasks...</p>;
+      return <p>任务加载中...</p>;
     }
     if (error) {
       return <p className="result-error">{error}</p>;
     }
     if (tasks.length === 0) {
-      return <p>No task history yet.</p>;
+      return <p>暂时还没有任务历史。</p>;
     }
     return (
       <ul className="task-list">
@@ -56,8 +56,8 @@ export default function TasksPage() {
               {task.request?.description || task.task_id}
             </a>
             <div className="task-meta">
-              <span>{task.status || "unknown"}</span>
-              <span>{task.request?.type || "n/a"}</span>
+              <span>{task.status || "未知"}</span>
+              <span>{task.request?.type || "暂无"}</span>
               <span>{task.current_stage || "-"}</span>
             </div>
           </li>
@@ -67,7 +67,7 @@ export default function TasksPage() {
   })();
 
   return (
-    <ConsoleShell title="Tasks">
+    <ConsoleShell title="任务">
       {content}
     </ConsoleShell>
   );

@@ -24,12 +24,12 @@ export default function TaskDetailPage({ params }: TaskDetailPageProps) {
         const payload = (await response.json()) as StoredTask & { error?: string };
 
         if (!response.ok) {
-          throw new Error(payload.error || "Failed to load task detail");
+          throw new Error(payload.error || "加载任务详情失败");
         }
 
         setTask(payload);
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : "Unknown error");
+        setError(loadError instanceof Error ? loadError.message : "未知错误");
       } finally {
         setLoading(false);
       }
@@ -39,19 +39,19 @@ export default function TaskDetailPage({ params }: TaskDetailPageProps) {
   }, [params]);
 
   return (
-    <ConsoleShell title={`Task ${taskId || "Detail"}`}>
-      {loading ? <p>Loading task detail...</p> : null}
+    <ConsoleShell title={`任务 ${taskId || "详情"}`}>
+      {loading ? <p>任务详情加载中...</p> : null}
       {!loading && error ? <p className="result-error">{error}</p> : null}
       {!loading && !error && task ? (
         <div className="task-detail">
           <p>
-            <strong>Status:</strong> {task.status || "unknown"}
+            <strong>状态：</strong> {task.status || "未知"}
           </p>
           <p>
-            <strong>Current stage:</strong> {task.current_stage || "-"}
+            <strong>当前阶段：</strong> {task.current_stage || "-"}
           </p>
           <p>
-            <a href="/tasks">Back to tasks</a>
+            <a href="/tasks">返回任务列表</a>
           </p>
           <pre>{JSON.stringify(task, null, 2)}</pre>
         </div>

@@ -19,7 +19,7 @@ describe("generate workspace", () => {
 
     render(<GenerateWorkspace />);
     fireEvent.change(screen.getByLabelText("需求描述"), { target: { value: "todo app" } });
-    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
     expect(await screen.findByText("用户故事")).toBeInTheDocument();
   });

@@ -3,7 +3,7 @@ import { GenerateWorkspace } from "../../components/generate-workspace";
 
 export default function GeneratePage() {
   return (
-    <ConsoleShell title="Generate">
+    <ConsoleShell title="生成">
       <GenerateWorkspace />
     </ConsoleShell>
   );
