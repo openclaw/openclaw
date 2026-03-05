@@ -65,3 +65,4 @@ const height = videoTrack.displayHeight;
 import { staticFile } from "remotion";
 
 const dimensions = await getVideoDimensions(staticFile("video.mp4"));
+```
