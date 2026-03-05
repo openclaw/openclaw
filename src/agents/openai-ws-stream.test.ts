@@ -534,6 +534,17 @@ describe("convertMessagesToInputItems", () => {
     expect(items[0]).toMatchObject({ type: "message", role: "user", content: "Hello!" });
   });
 
+  it("skips user messages whose content array becomes empty after filtering", () => {
+    const items = convertMessagesToInputItems([
+      {
+        role: "user",
+        content: [null, null],
+        timestamp: 0,
+      } as unknown as Parameters<typeof convertMessagesToInputItems>[0][number],
+    ]);
+    expect(items).toEqual([]);
+  });
+
   it("ignores malformed entries in assistant content arrays", () => {
     const items = convertMessagesToInputItems([
       {

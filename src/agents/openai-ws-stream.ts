@@ -190,6 +190,9 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
 
     if (m.role === "user") {
       const parts = contentToOpenAIParts(m.content);
+      if (parts.length === 0) {
+        continue;
+      }
       items.push({
         type: "message",
         role: "user",
