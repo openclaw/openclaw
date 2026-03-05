@@ -261,8 +261,10 @@ function resolveSlackRoutingContext(params: {
   isGroupDm: boolean;
   isRoom: boolean;
   isRoomish: boolean;
+  channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
 }): SlackRoutingContext {
-  const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish } = params;
+  const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish, channelConfig } =
+    params;
   const route = resolveAgentRoute({
     cfg: ctx.cfg,
     channel: "slack",
@@ -353,6 +355,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    channelConfig,
   });
   const {
     route,
