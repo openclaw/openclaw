@@ -250,7 +250,6 @@ type MessageContent = unknown;
 interface Message {
   role?: string;
   content?: MessageContent;
-  [key: string]: unknown;
 }
 
 function hashMessage(content: string): string {
