@@ -29,6 +29,10 @@ export type ChatSendOptions = {
   message: string;
   thinking?: string;
   deliver?: boolean;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   timeoutMs?: number;
   runId?: string;
 };
@@ -177,6 +181,10 @@ export class GatewayChatClient {
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
+      turnSourceChannel: opts.turnSourceChannel,
+      turnSourceTo: opts.turnSourceTo,
+      turnSourceAccountId: opts.turnSourceAccountId,
+      turnSourceThreadId: opts.turnSourceThreadId,
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
     });

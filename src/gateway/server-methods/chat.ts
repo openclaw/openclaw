@@ -11,13 +11,17 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { resolveSessionRouteDecision, type DeliveryIntent } from "../../infra/outbound/targets.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -72,20 +76,6 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
-const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
-  "main",
-  "direct",
-  "dm",
-  "group",
-  "channel",
-  "cron",
-  "run",
-  "subagent",
-  "acp",
-  "thread",
-  "topic",
-]);
-const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -742,6 +732,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         fileName?: string;
         content?: unknown;
       }>;
+      turnSourceChannel?: string;
+      turnSourceTo?: string;
+      turnSourceAccountId?: string;
+      turnSourceThreadId?: string | number;
       timeoutMs?: number;
       idempotencyKey: string;
     };
@@ -835,6 +829,58 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const normalizedTurnSource = normalizeMessageChannel(p.turnSourceChannel);
+    const turnSourceChannel =
+      normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
+        ? normalizedTurnSource
+        : undefined;
+    const turnSourceTo =
+      typeof p.turnSourceTo === "string" && p.turnSourceTo.trim()
+        ? p.turnSourceTo.trim()
+        : undefined;
+    const turnSourceAccountId =
+      typeof p.turnSourceAccountId === "string" && p.turnSourceAccountId.trim()
+        ? p.turnSourceAccountId.trim()
+        : undefined;
+    const turnSourceThreadId =
+      p.turnSourceThreadId != null && p.turnSourceThreadId !== ""
+        ? p.turnSourceThreadId
+        : undefined;
+    const deliveryIntent: DeliveryIntent =
+      p.deliver === false
+        ? "internal_only"
+        : p.deliver === true
+          ? "external_required"
+          : "external_preferred";
+    const originatingDecision = resolveSessionRouteDecision({
+      intent: deliveryIntent,
+      entry,
+      requestedChannel: "last",
+      turnSourceChannel,
+      turnSourceTo,
+      turnSourceAccountId,
+      turnSourceThreadId,
+      sessionKey: rawSessionKey,
+      mainKey: cfg.session?.mainKey,
+      failClosedMainSessionLastRoute: true,
+    });
+    if (deliveryIntent === "external_required" && originatingDecision.status !== "resolved") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `external delivery unavailable: ${originatingDecision.reason}`,
+        ),
+      );
+      return;
+    }
+    if (deliveryIntent === "external_preferred" && originatingDecision.status !== "resolved") {
+      context.logGateway.debug?.(
+        `chat.send: external route unresolved, using internal-only routing (${originatingDecision.reason})`,
+      );
+    }
+
     try {
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
@@ -856,51 +902,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
-      const routeChannelCandidate = normalizeMessageChannel(
-        entry?.deliveryContext?.channel ?? entry?.lastChannel,
-      );
-      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
-      const routeAccountIdCandidate =
-        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
-      const parsedSessionKey = parseAgentSessionKey(sessionKey);
-      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
-      const sessionScopeHead = sessionScopeParts[0];
-      const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-      const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-        .map((part) => (part ?? "").trim().toLowerCase())
-        .filter(Boolean);
-      const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
-        (sessionScopeHead ?? "").trim().toLowerCase(),
-      );
-      const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
-        CHANNEL_SCOPED_SESSION_SHAPES.has(part),
-      );
-      const hasLegacyChannelPeerShape =
-        !isChannelScopedSession &&
-        typeof sessionScopeParts[1] === "string" &&
-        sessionChannelHint === routeChannelCandidate;
-      // Only inherit prior external route metadata for channel-scoped sessions.
-      // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
-      // leak stale routes across surfaces.
-      const canInheritDeliverableRoute = Boolean(
-        sessionChannelHint &&
-        sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-        !isChannelAgnosticSessionScope &&
-        (isChannelScopedSession || hasLegacyChannelPeerShape),
-      );
-      const hasDeliverableRoute =
-        canInheritDeliverableRoute &&
-        routeChannelCandidate &&
-        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
-        typeof routeToCandidate === "string" &&
-        routeToCandidate.trim().length > 0;
-      const originatingChannel = hasDeliverableRoute
-        ? routeChannelCandidate
-        : INTERNAL_MESSAGE_CHANNEL;
-      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const hasOriginatingRoute = originatingDecision.status === "resolved";
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -915,10 +917,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: originatingChannel,
-        OriginatingTo: originatingTo,
-        AccountId: accountId,
-        MessageThreadId: messageThreadId,
+        OriginatingChannel: hasOriginatingRoute
+          ? originatingDecision.target.channel
+          : INTERNAL_MESSAGE_CHANNEL,
+        OriginatingTo: hasOriginatingRoute ? originatingDecision.target.to : undefined,
+        AccountId: hasOriginatingRoute ? originatingDecision.target.accountId : undefined,
+        MessageThreadId: hasOriginatingRoute ? originatingDecision.target.threadId : undefined,
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
