@@ -36,7 +36,6 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   const sessionKey = ctx.resolveSlackSystemEventSessionKey({
     channelId,
     channelType: auth.channelType,
-    senderId,
   });
   return {
     channelLabel,

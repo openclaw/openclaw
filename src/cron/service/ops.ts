@@ -398,18 +398,13 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       return;
     }
 
-    const shouldDelete = applyJobResult(
-      state,
-      job,
-      {
-        status: coreResult.status,
-        error: coreResult.error,
-        delivered: coreResult.delivered,
-        startedAt,
-        endedAt,
-      },
-      { preserveSchedule: mode === "force" },
-    );
+    const shouldDelete = applyJobResult(state, job, {
+      status: coreResult.status,
+      error: coreResult.error,
+      delivered: coreResult.delivered,
+      startedAt,
+      endedAt,
+    });
 
     emit(state, {
       jobId: job.id,
@@ -455,7 +450,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       snapshot: postRunSnapshot,
       removed: postRunRemoved,
     });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);
   });

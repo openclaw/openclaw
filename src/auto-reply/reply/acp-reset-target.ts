@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { BotConfig } from "../../config/config.js";
 import { resolveConfiguredAcpBindingRecord } from "../../acp/persistent-bindings.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
@@ -8,7 +8,7 @@ function normalizeText(value: string | undefined | null): string {
 }
 
 export function resolveEffectiveResetTargetSessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: BotConfig;
   channel?: string | null;
   accountId?: string | null;
   conversationId?: string | null;

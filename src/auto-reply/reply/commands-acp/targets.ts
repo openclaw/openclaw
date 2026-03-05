@@ -46,7 +46,6 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
-    parentConversationId: bindingContext.parentConversationId,
     activeSessionKey,
     allowNonAcpBindingSessionKey: true,
     skipConfiguredFallbackWhenActiveSessionNonAcp: false,

@@ -15,6 +15,7 @@ export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";
+export type { BotConfig as OpenClawConfig } from "./types.bot.js";
 export {
   validateConfigObject,
   validateConfigObjectRaw,

@@ -143,7 +143,7 @@ function resolveAgentLookupCache(cfg: BotConfig): AgentLookupCache {
   return next;
 }
 
-function pickFirstExistingAgentId(cfg: BotConfig, agentId: string): string {
+export function pickFirstExistingAgentId(cfg: BotConfig, agentId: string): string {
   const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {

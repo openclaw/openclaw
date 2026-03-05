@@ -39,13 +39,6 @@ function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }):
   return params.toolCallId;
 }
 
-function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
-  if (params.runId && params.runId.trim()) {
-    return `${params.runId}:${params.toolCallId}`;
-  }
-  return params.toolCallId;
-}
-
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();

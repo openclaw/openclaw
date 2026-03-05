@@ -13,7 +13,6 @@ export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
   getApiErrorPayloadFingerprint,

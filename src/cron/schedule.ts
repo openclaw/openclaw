@@ -30,6 +30,20 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
+/** Coerce a possibly non-finite or string number to a finite number, or undefined. */
+export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
