@@ -209,6 +209,22 @@ describe("legacy migrate heartbeat config", () => {
     expect((res.config as { agent?: unknown } | null)?.agent).toBeUndefined();
   });
 
+  it("drops blocked prototype keys when migrating top-level heartbeat", () => {
+    const res = migrateLegacyConfig(
+      JSON.parse(
+        '{"heartbeat":{"every":"30m","__proto__":{"polluted":true},"showOk":true}}',
+      ) as Record<string, unknown>,
+    );
+
+    const heartbeat = res.config?.agents?.defaults?.heartbeat as
+      | Record<string, unknown>
+      | undefined;
+    expect(heartbeat?.every).toBe("30m");
+    expect((heartbeat as { polluted?: unknown } | undefined)?.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(heartbeat ?? {}, "__proto__")).toBe(false);
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({ showOk: true });
+  });
+
   it("records a migration change when removing empty top-level heartbeat", () => {
     const res = migrateLegacyConfig({
       heartbeat: {},

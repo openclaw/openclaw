@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/googlechat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";

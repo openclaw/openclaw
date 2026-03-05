@@ -4,7 +4,7 @@ import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -44,6 +44,7 @@ import {
 } from "./voice-message.js";
 
 type DiscordSendOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -121,9 +122,9 @@ async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const { rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -133,7 +134,7 @@ export async function sendMessageDiscord(
   text: string,
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -149,7 +150,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
   });
   const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -310,6 +311,7 @@ export async function sendMessageDiscord(
 }
 
 type DiscordWebhookSendOpts = {
+  cfg?: OpenClawConfig;
   webhookId: string;
   webhookToken: string;
   accountId?: string;
@@ -385,7 +387,7 @@ export async function sendWebhookMessageDiscord(
   };
   try {
     const account = resolveDiscordAccount({
-      cfg: loadConfig(),
+      cfg: opts.cfg ?? loadConfig(),
       accountId: opts.accountId,
     });
     recordChannelActivity({
@@ -464,6 +466,7 @@ export async function sendPollDiscord(
 }
 
 type VoiceMessageOpts = {
+  cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -509,7 +512,7 @@ export async function sendVoiceMessageDiscord(
   let channelId: string | undefined;
 
   try {
-    const cfg = loadConfig();
+    const cfg = opts.cfg ?? loadConfig();
     const accountInfo = resolveDiscordAccount({
       cfg,
       accountId: opts.accountId,
@@ -518,7 +521,7 @@ export async function sendVoiceMessageDiscord(
     token = client.token;
     rest = client.rest;
     const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, opts.accountId);
+    const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
     // Convert to OGG/Opus if needed

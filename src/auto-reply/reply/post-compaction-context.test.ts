@@ -226,4 +226,57 @@ Read WORKFLOW.md on startup.
     expect(result).not.toBeNull();
     expect(result).toContain("Current time:");
   });
+
+  it("falls back to legacy section names (Every Session / Safety)", async () => {
+    const content = `# Rules
+
+## Every Session
+
+Read SOUL.md and USER.md.
+
+## Safety
+
+Don't exfiltrate private data.
+
+## Other
+
+Ignore this.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Every Session");
+    expect(result).toContain("Read SOUL.md");
+    expect(result).toContain("Safety");
+    expect(result).toContain("Don't exfiltrate");
+    expect(result).not.toContain("Other");
+  });
+
+  it("prefers new section names over legacy when both exist", async () => {
+    const content = `# Rules
+
+## Session Startup
+
+New startup instructions.
+
+## Every Session
+
+Old startup instructions.
+
+## Red Lines
+
+New red lines.
+
+## Safety
+
+Old safety rules.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("New startup instructions");
+    expect(result).toContain("New red lines");
+    expect(result).not.toContain("Old startup instructions");
+    expect(result).not.toContain("Old safety rules");
+  });
 });
