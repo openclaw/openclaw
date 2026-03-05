@@ -49,12 +49,19 @@ Section 06 — Soul & Memory
       v
   SessionStore.save_turn()          ← s04
 
-  ── 运行方式 ──────────────────────────────────────
+  ── 运行方式 (与 s05_gateway 完全对齐, 且增加 Soul/Memory) ──
 
-  python agents/s06_mem.py           # 默认 REPL
-  python agents/s06_mem.py --repl    # 交互式本地测试
-  python agents/s06_mem.py --chat    # (规划中) 多 Agent 路由
-  python agents/s06_mem.py --server  # (规划中) WebSocket 网关
+  1. 服务器模式 (启动带 Soul+Memory 的网关):
+     python agents/s06_mem.py
+
+  2. 测试客户端 (自动化演示路由 + Soul/Memory):
+     python agents/s06_mem.py --test-client
+
+  3. 交互式对话 (自由提问, 验证 Soul/Memory + 会话记录和工具调用):
+     python agents/s06_mem.py --chat
+
+  4. 交互式 REPL (本地测试路由 + Soul/Memory, 无需网关):
+     python agents/s06_mem.py --repl
 
   ── 依赖 ──────────────────────────────────────────
   pip install python-dotenv websockets
@@ -65,11 +72,14 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # 导入
 # ---------------------------------------------------------------------------
+import asyncio
 import json
 import math
 import os
 import re
 import sys
+import time
+import uuid
 import logging
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -77,6 +87,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import websockets
+from websockets.asyncio.server import ServerConnection
 from dotenv import load_dotenv
 
 # 导入 s05_gateway.py 的核心组件
@@ -92,13 +104,25 @@ from llm_client import (
     LLMValidationError,
 )
 
-# 从 s05 导入路由框架 (gateway/session 机制不变)
+# 从 s05 导入路由框架 + 网关基础设施 (gateway/session 机制不变)
 from s05_gateway import (
     AgentConfig,
     Binding,
     MessageRouter,
     build_session_key,
     load_routing_config,
+    # JSON-RPC 协议
+    JSONRPC_VERSION,
+    PARSE_ERROR,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    INTERNAL_ERROR,
+    AUTH_ERROR,
+    make_result,
+    make_error,
+    make_event,
+    # 客户端状态
+    ConnectedClient,
 )
 
 # 从 s04 导入工具和 session 管理
@@ -1027,12 +1051,16 @@ def run_agent_with_soul_and_memory(
 
 def create_agents_with_soul_memory(
     config_path: str | None = None,
-) -> dict[str, AgentWithSoulMemory]:
+) -> tuple[dict[str, AgentWithSoulMemory], list[Binding], str, str]:
     """从配置加载 Agent, 扩展为 AgentWithSoulMemory.
 
     每个 Agent 获得独立的 workspace 目录: WORKSPACE_DIR/{agent_id}/
+
+    返回:
+        (agents_dict, bindings, default_agent_id, dm_scope)
+        与 s05 的 load_routing_config 返回签名对齐, 但 agents 已升级为 AgentWithSoulMemory.
     """
-    agents, _, _, _ = load_routing_config(config_path)
+    agents, bindings, default_agent, dm_scope = load_routing_config(config_path)
 
     result: dict[str, AgentWithSoulMemory] = {}
     for aid, acfg in agents.items():
@@ -1044,134 +1072,16 @@ def create_agents_with_soul_memory(
         )
         result[aid] = a
         log.info("agent %s  workspace=%s", aid, a.workspace_dir)
-    return result
+
+    return result, bindings, default_agent, dm_scope
 
 
-# ---------------------------------------------------------------------------
-# Part 8: Run Modes (REPL, Chat, Server)
-# ---------------------------------------------------------------------------
+def _ensure_sample_soul(agents: dict[str, AgentWithSoulMemory]) -> None:
+    """为没有 SOUL.md 的 Agent 创建示例文件.
 
-def run_repl(agent: AgentWithSoulMemory, session_store: S04SessionStore) -> None:
+    【参考】docs/reference/templates/SOUL.md
     """
-    交互式 REPL 模式（单 Agent）。
-
-    用于本地测试 Soul 和 Memory 功能，无需网关。
-    """
-    session_key = f"repl:{agent.id}:local"
-
-    print_info("=" * 70)
-    print_info(f"  Mini-Claw REPL  |  Section 06: Soul & Memory")
-    print_info(f"  Agent: {agent.id}")
-    print_info(f"  Model: {agent.model}")
-    print_info(f"  Workspace: {agent.workspace_dir}")
-    print_info("")
-    print_info("  Commands:")
-    print_info("    /quit or /exit     - Leave REPL")
-    print_info("    /soul              - View current soul")
-    print_info("    /memory            - View memory status")
-    print_info("=" * 70)
-    print()
-
-    # 显示 Soul 状态
-    soul_path = agent.soul_path
-    if soul_path.exists():
-        soul_content = soul_path.read_text(encoding="utf-8").strip()
-        print_info(f"Soul loaded from {soul_path}")
-        first_line = soul_content.split("\n")[0].strip()
-        print_info(f"Preview: {first_line}\n")
-    else:
-        print_info(f"No soul found at {soul_path}")
-        print_info("Create one to give this agent personality!\n")
-
-    while True:
-        try:
-            user_input = input(colored_prompt()).strip()
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n{DIM}Goodbye.{RESET}")
-            break
-
-        if not user_input:
-            continue
-
-        if user_input.lower() in ("/quit", "/exit"):
-            print(f"{DIM}Goodbye.{RESET}")
-            break
-
-        # 内置命令
-        if user_input == "/soul":
-            sp = agent.soul_path
-            if sp.exists():
-                print(f"\n{MAGENTA}--- {agent.id.upper()} SOUL ---{RESET}")
-                print(sp.read_text(encoding="utf-8").strip())
-                print(f"{MAGENTA}--- end ---{RESET}\n")
-            else:
-                print_info(f"No soul file at {sp}\n")
-            continue
-
-        if user_input == "/memory":
-            mgr = get_memory_manager(agent)
-            evergreen = mgr.load_evergreen()
-            recent = mgr.get_recent_daily(days=7)
-            print(f"\n{MAGENTA}--- Memory Status ({agent.id}) ---{RESET}")
-            print(f"Workspace: {agent.workspace_dir}")
-            if evergreen:
-                print(f"MEMORY.md: {len(evergreen)} chars")
-            else:
-                print("MEMORY.md: (not found)")
-            print(f"Recent daily logs: {len(recent)} files")
-            for entry in recent:
-                lines_cnt = entry["content"].count("\n") + 1
-                print(f"  {entry['date']}: {lines_cnt} lines")
-            print(f"{MAGENTA}--- end ---{RESET}\n")
-            continue
-
-        # 处理用户输入
-        try:
-            print(f"\n{BLUE}[Agent: {agent.id}]{RESET}")
-            response = run_agent_with_soul_and_memory(
-                agent,
-                session_store,
-                session_key,
-                user_input,
-            )
-            if response:
-                print_assistant(response)
-        except Exception as e:
-            print(f"\n{YELLOW}Error: {e}{RESET}\n")
-            log.exception(f"Error in agent loop: {e}")
-
-
-def main() -> None:
-    """主入口点。"""
-    # 检查环境
-    if not os.getenv("DEEPSEEK_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
-        print(f"{YELLOW}Error: DEEPSEEK_API_KEY or ANTHROPIC_API_KEY not set.{RESET}")
-        print(f"{DIM}Please set your API key in .env file.{RESET}")
-        sys.exit(1)
-
-    # 确保 workspace 和 sessions 目录存在
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 初始化 session store（store_path 必须是索引文件路径，不能是目录）
-    session_store = S04SessionStore(
-        store_path=SESSIONS_DIR / "sessions.json",
-        transcript_dir=SESSIONS_DIR / "transcripts",
-    )
-
-    # 创建 Agent（带 Soul 和 Memory）
-    agents = create_agents_with_soul_memory()
-    if not agents:
-        print(f"{YELLOW}Error: No agents found in config.{RESET}")
-        sys.exit(1)
-
-    # 默认使用第一个 Agent
-    default_agent = next(iter(agents.values()))
-
-    # 创建示例 SOUL 文件 (使用原始 OpenClaw 的模板)
-    # 【参考】docs/reference/templates/SOUL.md
-    if not default_agent.soul_path.exists():
-        sample_soul = """\
+    sample_soul = """\
 # SOUL.md - Who You Are
 
 _You're not a chatbot. You're becoming someone._
@@ -1202,29 +1112,921 @@ when it matters. Not a corporate drone. Not a sycophant. Just... good.
 Each session, you wake up fresh. These files _are_ your memory. Read them. \
 Update them. They're how you persist.
 """
-        default_agent.soul_path.write_text(sample_soul, encoding="utf-8")
-        print_info(f"Created sample SOUL.md at {default_agent.soul_path}")
+    for agent in agents.values():
+        if not agent.soul_path.exists():
+            agent.soul_path.write_text(sample_soul, encoding="utf-8")
+            print_info(f"Created sample SOUL.md at {agent.soul_path}")
 
-    # 解析命令行参数
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--repl":
-            run_repl(default_agent, session_store)
-        elif sys.argv[1] == "--chat":
-            # TODO: 交互式聊天模式（多 Agent）
-            print("Chat mode not yet implemented. Using REPL instead.")
-            run_repl(default_agent, session_store)
-        elif sys.argv[1] == "--server":
-            # TODO: WebSocket 网关服务器模式
-            print("Server mode not yet implemented. Using REPL instead.")
-            run_repl(default_agent, session_store)
-        else:
-            print(f"Usage: {sys.argv[0]} [--repl|--chat|--server]")
-            sys.exit(1)
+
+# ============================================================================
+# Part 8: SoulMemoryGateway — 带 Soul+Memory 的 WebSocket 网关服务器
+# ============================================================================
+#
+# 对标 s05_gateway.py 的 RoutingGateway, 但使用 run_agent_with_soul_and_memory
+# 替代 run_agent_with_tools, 从而在 WebSocket 网关层集成 Soul 和 Memory.
+#
+# 与 s05 的 RoutingGateway 相比:
+#   - chat.send 使用 run_agent_with_soul_and_memory (带 Soul/Memory)
+#   - 新增 memory.status 方法: 查询 Agent 的 Memory 状态
+#   - 新增 soul.get 方法: 查看 Agent 的 SOUL.md
+#   - 路由解析后自动将 AgentConfig 升级为 AgentWithSoulMemory
+#   - 其他所有方法 (health, identify, chat.history, routing.*, sessions.*)
+#     与 s05 完全一致
+# ============================================================================
+
+
+class SoulMemoryGateway:
+    """
+    【参考】OpenClaw src/gateway/server.impl.ts
+
+    带 Soul+Memory 功能的网关服务器.
+    在 s05 RoutingGateway 的基础上增加:
+    - Soul system prompt 注入
+    - Memory 工具支持 (memory_search / memory_get / memory_write)
+    - Memory 状态查询和 Soul 查看方法
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        router: MessageRouter,
+        sessions: S04SessionStore,
+        soul_agents: dict[str, AgentWithSoulMemory],
+        token: str = "",
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.router = router
+        self.sessions = sessions
+        self.soul_agents = soul_agents
+        self.token = token
+        self.clients: dict[str, ConnectedClient] = {}
+        self._start_time = time.time()
+
+        # JSON-RPC 方法路由表
+        # 与 s05 一致 + Soul/Memory 扩展
+        self._methods: dict[str, Any] = {
+            "health": self._handle_health,
+            "chat.send": self._handle_chat_send,
+            "chat.history": self._handle_chat_history,
+            "routing.resolve": self._handle_routing_resolve,
+            "routing.bindings": self._handle_routing_bindings,
+            "sessions.list": self._handle_sessions_list,
+            "identify": self._handle_identify,
+            # s06 新增
+            "memory.status": self._handle_memory_status,
+            "soul.get": self._handle_soul_get,
+        }
+
+    def _get_soul_agent(self, agent_id: str) -> AgentWithSoulMemory:
+        """根据 agent_id 获取 AgentWithSoulMemory."""
+        if agent_id in self.soul_agents:
+            return self.soul_agents[agent_id]
+        # fallback: 从 router.agents 构建
+        acfg = self.router.agents.get(agent_id)
+        if acfg is None:
+            acfg = self.router.agents[self.router.default_agent]
+        a = AgentWithSoulMemory(
+            id=acfg.id,
+            model=acfg.model,
+            system_prompt=acfg.system_prompt,
+            tools=acfg.tools,
+        )
+        self.soul_agents[a.id] = a
+        return a
+
+    # -- 认证 (与 s05 一致) -----
+
+    def _authenticate(self, headers: Any) -> bool:
+        """验证 Bearer Token 认证."""
+        if not self.token:
+            return True
+        auth_header = headers.get("Authorization", "")
+        parts = auth_header.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return False
+        return parts[1].strip() == self.token
+
+    # -- WebSocket 连接处理 (与 s05 一致) -----
+
+    async def _handle_connection(self, ws: ServerConnection) -> None:
+        """处理单个 WebSocket 连接的完整生命周期."""
+        client_id = str(uuid.uuid4())[:8]
+
+        # 认证检查
+        if not self._authenticate(ws.request.headers if ws.request else {}):
+            await ws.send(make_error(None, AUTH_ERROR, "Authentication failed"))
+            await ws.close(4001, "Unauthorized")
+            return
+
+        # 注册客户端
+        client = ConnectedClient(ws=ws, client_id=client_id)
+        self.clients[client_id] = client
+        log.info("client %s: connected (total: %d)", client_id, len(self.clients))
+
+        # 发送欢迎事件
+        await ws.send(make_event("connect.welcome", {"client_id": client_id}))
+
+        # 消息循环
+        try:
+            async for raw_message in ws:
+                if isinstance(raw_message, bytes):
+                    raw_message = raw_message.decode("utf-8")
+                await self._dispatch(client, raw_message)
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        finally:
+            del self.clients[client_id]
+            log.info("client %s: disconnected", client_id)
+
+    async def _dispatch(self, client: ConnectedClient, raw: str) -> None:
+        """JSON-RPC 请求分发器 (与 s05 一致)."""
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await client.ws.send(make_error(None, PARSE_ERROR, "Invalid JSON"))
+            return
+
+        if not isinstance(msg, dict) or msg.get("jsonrpc") != JSONRPC_VERSION:
+            await client.ws.send(make_error(msg.get("id"), INVALID_REQUEST, "Invalid JSON-RPC"))
+            return
+
+        req_id = msg.get("id")
+        method = msg.get("method", "")
+        params = msg.get("params", {})
+
+        log.info("client %s: -> %s (id=%s)", client.client_id, method, req_id)
+
+        handler = self._methods.get(method)
+        if handler is None:
+            await client.ws.send(make_error(req_id, METHOD_NOT_FOUND, f"Unknown: {method}"))
+            return
+
+        try:
+            result = await handler(client, params)
+            await client.ws.send(make_result(req_id, result))
+        except Exception as exc:
+            log.exception("method %s error", method)
+            await client.ws.send(make_error(req_id, INTERNAL_ERROR, str(exc)))
+
+    # -- RPC 方法实现 (与 s05 一致的方法) -----
+
+    async def _handle_health(self, client: ConnectedClient, params: dict) -> dict:
+        """health -- 健康检查."""
+        return {
+            "status": "ok",
+            "uptime_seconds": round(time.time() - self._start_time, 1),
+            "connected_clients": len(self.clients),
+            "agents": list(self.router.agents.keys()),
+            "features": ["soul", "memory"],
+        }
+
+    async def _handle_identify(self, client: ConnectedClient, params: dict) -> dict:
+        """identify -- 客户端声明自己的通道和身份信息 (与 s05 一致)."""
+        client.channel = params.get("channel", "websocket")
+        client.sender = params.get("sender", client.client_id)
+        client.peer_kind = params.get("peer_kind", "direct")
+        client.guild_id = params.get("guild_id", "")
+        client.account_id = params.get("account_id", "")
+        log.info(
+            "client %s: identified as channel=%s sender=%s kind=%s",
+            client.client_id, client.channel, client.sender, client.peer_kind,
+        )
+        return {"identified": True, "channel": client.channel, "sender": client.sender}
+
+    async def _handle_chat_send(self, client: ConnectedClient, params: dict) -> dict:
+        """
+        chat.send -- 通过路由器自动解析 Agent 和 session, 然后调用带 Soul+Memory 的 LLM.
+
+        【核心流程】与 s05 一致, 但使用 run_agent_with_soul_and_memory 替代 run_agent_with_tools.
+        1. 参数验证
+        2. 路由解析 (决定由哪个 Agent 处理)
+        3. 发送 typing 事件
+        4. 调用 Agent (带 Soul+Memory)
+        5. 返回结果 + session 元数据
+        """
+        text = params.get("text", "").strip()
+        if not text:
+            raise ValueError("'text' is required")
+
+        # 允许 params 覆盖客户端 identify 的值 (与 s05 一致)
+        channel = params.get("channel", client.channel)
+        sender = params.get("sender", client.sender)
+        peer_kind = params.get("peer_kind", client.peer_kind)
+        guild_id = params.get("guild_id", client.guild_id) or None
+        account_id = params.get("account_id", client.account_id) or None
+
+        # 【关键】路由解析: 确定 Agent 和 session key (与 s05 一致)
+        agent_config, session_key = self.router.resolve(
+            channel=channel,
+            sender=sender,
+            peer_kind=peer_kind,
+            guild_id=guild_id,
+            account_id=account_id,
+        )
+
+        log.info(
+            "chat.send: routed to agent=%s session=%s",
+            agent_config.id, session_key,
+        )
+
+        # 推送 typing 事件 (与 s05 一致)
+        await client.ws.send(make_event("chat.typing", {
+            "session_key": session_key,
+            "agent_id": agent_config.id,
+        }))
+
+        # 获取 AgentWithSoulMemory
+        soul_agent = self._get_soul_agent(agent_config.id)
+
+        # 调用 Agent (带 Soul+Memory, 替代 s05 的 run_agent_with_tools)
+        try:
+            assistant_text = await asyncio.to_thread(
+                run_agent_with_soul_and_memory,
+                soul_agent,
+                self.sessions,
+                session_key,
+                text,
+            )
+        except LLMClientError as e:
+            log.warning("LLM 请求失败 agent=%s: %s", soul_agent.id, e)
+            raise ValueError(f"LLM 请求失败: {e}") from e
+
+        session_data = self.sessions.load_session(session_key)
+        message_count = len(session_data["history"])
+
+        return {
+            "text": assistant_text,
+            "agent_id": soul_agent.id,
+            "session_key": session_key,
+            "message_count": message_count,
+        }
+
+    async def _handle_chat_history(self, client: ConnectedClient, params: dict) -> dict:
+        """chat.history -- 获取会话的消息历史 (与 s05 一致)."""
+        session_key = params.get("session_key", "")
+        if not session_key:
+            raise ValueError("'session_key' is required")
+        session_data = self.sessions.load_session(session_key)
+        messages = session_data["history"]
+        limit = params.get("limit", 50)
+        if len(messages) > limit:
+            messages = messages[-limit:]
+        return {"session_key": session_key, "messages": messages, "total": len(session_data["history"])}
+
+    async def _handle_routing_resolve(self, client: ConnectedClient, params: dict) -> dict:
+        """
+        routing.resolve -- 诊断方法 (与 s05 一致).
+        不实际调用 LLM, 只返回路由解析结果 + Soul/Memory 状态.
+        """
+        channel = params.get("channel", "websocket")
+        sender = params.get("sender", "anonymous")
+        peer_kind = params.get("peer_kind", "direct")
+        guild_id = params.get("guild_id")
+        account_id = params.get("account_id")
+
+        agent_config, session_key = self.router.resolve(
+            channel=channel,
+            sender=sender,
+            peer_kind=peer_kind,
+            guild_id=guild_id,
+            account_id=account_id,
+        )
+
+        # s06 增强: 附带 Soul/Memory 信息
+        soul_agent = self._get_soul_agent(agent_config.id)
+        has_soul = soul_agent.soul_path.exists()
+        mgr = get_memory_manager(soul_agent)
+        has_memory = bool(mgr.load_evergreen())
+
+        return {
+            "agent_id": agent_config.id,
+            "agent_model": agent_config.model,
+            "session_key": session_key,
+            "system_prompt_preview": (
+                agent_config.system_prompt[:100] + "..."
+                if len(agent_config.system_prompt) > 100
+                else agent_config.system_prompt
+            ),
+            "has_soul": has_soul,
+            "has_memory": has_memory,
+            "workspace": str(soul_agent.workspace_dir),
+        }
+
+    async def _handle_routing_bindings(self, client: ConnectedClient, params: dict) -> dict:
+        """routing.bindings -- 列出所有绑定规则 (与 s05 一致)."""
+        return {
+            "bindings": [
+                {
+                    "channel": b.channel,
+                    "account_id": b.account_id,
+                    "peer_id": b.peer_id,
+                    "peer_kind": b.peer_kind,
+                    "guild_id": b.guild_id,
+                    "agent_id": b.agent_id,
+                    "priority": b.priority,
+                }
+                for b in self.router.bindings
+            ],
+            "default_agent": self.router.default_agent,
+            "dm_scope": self.router.dm_scope,
+        }
+
+    async def _handle_sessions_list(self, client: ConnectedClient, params: dict) -> dict:
+        """sessions.list -- 列出所有活跃会话 (与 s05 一致)."""
+        raw = self.sessions.list_sessions()
+        sessions = []
+        for m in raw:
+            sk = m.get("session_key", "")
+            parts = sk.split(":") if sk else []
+            agent_id = parts[1] if len(parts) > 1 else "main"
+            sessions.append({
+                "session_key": sk,
+                "agent_id": agent_id,
+                "message_count": m.get("message_count", 0),
+                "last_active": m.get("updated_at", ""),
+            })
+        return {"sessions": sessions}
+
+    # -- s06 新增 RPC 方法 -----
+
+    async def _handle_memory_status(self, client: ConnectedClient, params: dict) -> dict:
+        """memory.status -- 查询 Agent 的 Memory 状态 (s06 新增)."""
+        agent_id = params.get("agent_id", self.router.default_agent)
+        soul_agent = self._get_soul_agent(agent_id)
+        mgr = get_memory_manager(soul_agent)
+
+        evergreen = mgr.load_evergreen()
+        recent = mgr.get_recent_daily(days=7)
+
+        return {
+            "agent_id": agent_id,
+            "workspace": str(soul_agent.workspace_dir),
+            "memory_md_chars": len(evergreen),
+            "recent_daily_count": len(recent),
+            "recent_daily": [
+                {"date": e["date"], "lines": e["content"].count("\n") + 1}
+                for e in recent
+            ],
+        }
+
+    async def _handle_soul_get(self, client: ConnectedClient, params: dict) -> dict:
+        """soul.get -- 查看 Agent 的 SOUL.md (s06 新增)."""
+        agent_id = params.get("agent_id", self.router.default_agent)
+        soul_agent = self._get_soul_agent(agent_id)
+
+        if soul_agent.soul_path.exists():
+            content = soul_agent.soul_path.read_text(encoding="utf-8").strip()
+            return {"agent_id": agent_id, "soul": content, "exists": True}
+        return {"agent_id": agent_id, "soul": "", "exists": False}
+
+    # -- 服务器启动 (与 s05 一致) -----
+
+    async def start(self) -> None:
+        """启动 WebSocket 服务器并进入事件循环."""
+        log.info("Gateway (Soul+Memory) starting on ws://%s:%d", self.host, self.port)
+        log.info("\n%s", self.router.describe_bindings())
+
+        async with websockets.serve(
+            self._handle_connection,
+            self.host,
+            self.port,
+        ):
+            log.info("Gateway ready. Waiting for connections...")
+            await asyncio.Future()
+
+
+# ============================================================================
+# Part 9: 测试客户端 -- 演示 Soul+Memory 路由行为
+# ============================================================================
+#
+# 与 s05 的 test_client 对齐, 增加 Soul/Memory 相关测试.
+# ============================================================================
+
+async def test_client() -> None:
+    """
+    测试客户端: 模拟来自不同通道和用户的消息, 观察路由结果 + Soul/Memory.
+    启动: python agents/s06_mem.py --test-client
+    """
+    uri = f"ws://{GATEWAY_HOST}:{GATEWAY_PORT}"
+    headers = {}
+    if GATEWAY_TOKEN:
+        headers["Authorization"] = f"Bearer {GATEWAY_TOKEN}"
+
+    print(f"[test] connecting to {uri} ...")
+
+    async with websockets.connect(uri, additional_headers=headers) as ws:
+        # 接收欢迎
+        welcome = json.loads(await ws.recv())
+        client_id = welcome.get("params", {}).get("client_id", "?")
+        print(f"[test] connected as {client_id}\n")
+
+        req_counter = 0
+
+        async def rpc(method: str, params: dict) -> dict:
+            nonlocal req_counter
+            req_counter += 1
+            rid = f"r-{req_counter}"
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0",
+                "id": rid,
+                "method": method,
+                "params": params,
+            }))
+            while True:
+                raw = await ws.recv()
+                msg = json.loads(raw)
+                if msg.get("id") == rid:
+                    return msg.get("result", msg.get("error", {}))
+                else:
+                    event_type = msg.get("params", {}).get("type", "?")
+                    print(f"  [event] {event_type}")
+
+        # -- 测试 1: 健康检查 (验证 Soul/Memory 特性标记) ---
+        print("--- Health Check ---")
+        result = await rpc("health", {})
+        print(f"  status={result.get('status')} features={result.get('features')}")
+        print(f"  agents={result.get('agents')}")
+
+        # -- 测试 2: 路由诊断 (与 s05 一致 + Soul/Memory 状态) ---
+        print("\n--- Routing Diagnostics (with Soul/Memory status) ---")
+
+        scenarios = [
+            {"channel": "telegram", "sender": "random-user", "peer_kind": "direct"},
+            {"channel": "telegram", "sender": "user-alice-fan", "peer_kind": "direct"},
+            {"channel": "discord", "sender": "dev-person", "peer_kind": "group", "guild_id": "dev-server"},
+            {"channel": "slack", "sender": "someone", "peer_kind": "direct"},
+        ]
+
+        for s in scenarios:
+            result = await rpc("routing.resolve", s)
+            print(
+                f"  {s.get('channel'):>10} | sender={s.get('sender'):<16} "
+                f"| kind={s.get('peer_kind'):<7} "
+                f"-> agent={result.get('agent_id'):<6} "
+                f"soul={'Y' if result.get('has_soul') else 'N'} "
+                f"mem={'Y' if result.get('has_memory') else 'N'} "
+                f"session={result.get('session_key')}"
+            )
+
+        # -- 测试 3: Soul 查看 ---
+        print("\n--- Soul Status ---")
+        for agent_id in result.get("agent_id", "main"), "main":
+            soul_result = await rpc("soul.get", {"agent_id": agent_id})
+            soul_preview = soul_result.get("soul", "")[:80]
+            print(f"  [{agent_id}] exists={soul_result.get('exists')} preview={soul_preview}...")
+
+        # -- 测试 4: Memory 状态 ---
+        print("\n--- Memory Status ---")
+        mem_result = await rpc("memory.status", {"agent_id": "main"})
+        print(f"  [main] MEMORY.md={mem_result.get('memory_md_chars')} chars, "
+              f"daily_logs={mem_result.get('recent_daily_count')}")
+
+        # -- 测试 5: 实际对话 (与 s05 一致, 但 Agent 带 Soul+Memory) ---
+        print("\n--- Routed Chat (with Soul+Memory) ---")
+
+        # 普通用户 -> main agent
+        result = await rpc("chat.send", {
+            "text": "Hello! Who are you?",
+            "channel": "telegram",
+            "sender": "normal-user",
+        })
+        print(f"  [main]  {result.get('text', '')[:120]}...")
+
+        # alice 的粉丝 -> alice agent
+        result = await rpc("chat.send", {
+            "text": "Hello! Who are you?",
+            "channel": "telegram",
+            "sender": "user-alice-fan",
+        })
+        print(f"  [alice] {result.get('text', '')[:120]}...")
+
+        # dev-server 群组 -> bob agent
+        result = await rpc("chat.send", {
+            "text": "Hello! Who are you?",
+            "channel": "discord",
+            "sender": "dev-person",
+            "peer_kind": "group",
+            "guild_id": "dev-server",
+        })
+        print(f"  [bob]   {result.get('text', '')[:120]}...")
+
+        # -- 测试 6: 列出所有会话 (与 s05 一致) ---
+        print("\n--- Active Sessions ---")
+        result = await rpc("sessions.list", {})
+        for s in result.get("sessions", []):
+            print(
+                f"  agent={s['agent_id']:<6} "
+                f"msgs={s['message_count']:<3} "
+                f"key={s['session_key']}"
+            )
+
+        # -- 测试 7: 列出绑定规则 (与 s05 一致) ---
+        print("\n--- Bindings ---")
+        result = await rpc("routing.bindings", {})
+        for b in result.get("bindings", []):
+            parts = []
+            if b.get("channel"):
+                parts.append(f"channel={b['channel']}")
+            if b.get("peer_id"):
+                parts.append(f"peer={b['peer_id']}")
+            if b.get("guild_id"):
+                parts.append(f"guild={b['guild_id']}")
+            cond = ", ".join(parts) if parts else "(default)"
+            print(f"  p={b['priority']:<3} {cond:<40} -> {b['agent_id']}")
+        print(f"  default -> {result.get('default_agent')}")
+        print(f"  dm_scope = {result.get('dm_scope')}")
+
+    print("\n[test] done")
+
+
+# ============================================================================
+# Part 10: 交互式对话客户端 -- 可自由提问以验证 Soul/Memory + 会话和工具
+# ============================================================================
+#
+# 与 s05 的 interactive_chat 对齐, 增加 Soul/Memory 命令.
+# ============================================================================
+
+async def interactive_chat() -> None:
+    """
+    交互式对话客户端: 连接网关后可持续输入问题, 验证 Soul/Memory + 会话记录和工具调用.
+    启动: python agents/s06_mem.py --chat
+
+    命令:
+      /quit       退出
+      /sessions   列出会话
+      /history    查看当前会话历史
+      /soul       查看当前 Agent 的 Soul
+      /memory     查看当前 Agent 的 Memory 状态
+    """
+    uri = f"ws://{GATEWAY_HOST}:{GATEWAY_PORT}"
+    headers = {}
+    if GATEWAY_TOKEN:
+        headers["Authorization"] = f"Bearer {GATEWAY_TOKEN}"
+
+    print(f"[chat] connecting to {uri} ...")
+    try:
+        ws = await websockets.connect(uri, additional_headers=headers)
+    except Exception as e:
+        print(f"[chat] Failed to connect. Is the gateway running? {e}")
+        return
+
+    welcome = json.loads(await ws.recv())
+    client_id = welcome.get("params", {}).get("client_id", "?")
+    print(f"[chat] connected as {client_id}\n")
+
+    req_counter = 0
+    current_session_key: str | None = None
+    current_agent_id: str | None = None
+
+    async def rpc(method: str, params: dict) -> dict:
+        nonlocal req_counter
+        req_counter += 1
+        rid = f"r-{req_counter}"
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0",
+            "id": rid,
+            "method": method,
+            "params": params,
+        }))
+        while True:
+            raw = await ws.recv()
+            msg = json.loads(raw)
+            if msg.get("id") == rid:
+                return msg.get("result", msg.get("error", {}))
+            event_type = msg.get("params", {}).get("type", "?")
+            if event_type == "chat.typing":
+                print("  ... ", end="", flush=True)
+
+    print("=" * 60)
+    print("  交互式对话 - Soul & Memory + 会话记录与工具调用")
+    print("  输入问题后回车发送，/quit 退出")
+    print("  命令:")
+    print("    /sessions   列出会话")
+    print("    /history    查看当前会话历史")
+    print("    /soul       查看当前 Agent 的 Soul")
+    print("    /memory     查看当前 Agent 的 Memory 状态")
+    print("=" * 60)
+
+    chat_params = {"channel": "websocket", "sender": "chat-user"}
+
+    try:
+        while True:
+            try:
+                user_input = await asyncio.to_thread(input, "\nYou> ")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            text = user_input.strip()
+            if not text:
+                continue
+
+            if text.lower() in ("/quit", "/exit", "q", "quit", "exit"):
+                print("Bye.")
+                break
+            if text.lower() == "/sessions":
+                result = await rpc("sessions.list", {})
+                for s in result.get("sessions", []):
+                    print(f"  {s['agent_id']:<8} msgs={s['message_count']:<3} {s['session_key']}")
+                continue
+            if text.lower() == "/history":
+                if current_session_key:
+                    result = await rpc("chat.history", {"session_key": current_session_key})
+                    for m in result.get("messages", []):
+                        role = m.get("role", "?")
+                        content = (m.get("content") or "")[:200]
+                        print(f"  [{role}] {content}{'...' if len(m.get('content',''))>200 else ''}")
+                else:
+                    print("  (先发送一条消息以建立会话)")
+                continue
+            if text.lower() == "/soul":
+                aid = current_agent_id or "main"
+                result = await rpc("soul.get", {"agent_id": aid})
+                if result.get("exists"):
+                    print(f"\n{MAGENTA}--- {aid.upper()} SOUL ---{RESET}")
+                    print(result.get("soul", ""))
+                    print(f"{MAGENTA}--- end ---{RESET}")
+                else:
+                    print(f"  [{aid}] No soul file found.")
+                continue
+            if text.lower() == "/memory":
+                aid = current_agent_id or "main"
+                result = await rpc("memory.status", {"agent_id": aid})
+                print(f"\n{MAGENTA}--- Memory Status ({aid}) ---{RESET}")
+                print(f"  Workspace: {result.get('workspace')}")
+                print(f"  MEMORY.md: {result.get('memory_md_chars', 0)} chars")
+                print(f"  Daily logs: {result.get('recent_daily_count', 0)} files")
+                for d in result.get("recent_daily", []):
+                    print(f"    {d['date']}: {d['lines']} lines")
+                print(f"{MAGENTA}--- end ---{RESET}")
+                continue
+
+            result = await rpc("chat.send", {**chat_params, "text": text})
+            if isinstance(result, dict) and "text" in result:
+                current_session_key = result.get("session_key") or current_session_key
+                current_agent_id = result.get("agent_id") or current_agent_id
+                print(f"\nAgent> {result['text']}")
+            else:
+                err = result.get("message", str(result)) if isinstance(result, dict) else str(result)
+                print(f"\nAgent> [Error] {err}")
+
+    finally:
+        await ws.close()
+    print("\n[chat] disconnected")
+
+
+# ============================================================================
+# Part 11: 交互式 REPL -- 本地路由调试 + Soul/Memory 测试
+# ============================================================================
+#
+# 对标 s05 的 repl (路由测试), 但增加 Soul/Memory 对话能力.
+# 合并了原 s06 的 run_repl (Agent 对话) 和 s05 的 repl (路由诊断).
+# ============================================================================
+
+def run_repl(
+    router: MessageRouter,
+    soul_agents: dict[str, AgentWithSoulMemory],
+    session_store: S04SessionStore,
+) -> None:
+    """
+    交互式 REPL 模式: 路由测试 + Soul/Memory 对话, 无需网关.
+
+    支持两种操作:
+    1. 路由测试: 输入 "<channel> <sender> [kind] [guild_id]" 查看路由结果
+    2. Agent 对话: 输入普通文本直接与当前 Agent 对话 (带 Soul+Memory)
+    """
+    default_agent_id = router.default_agent
+    current_agent = soul_agents.get(default_agent_id)
+    if current_agent is None:
+        current_agent = next(iter(soul_agents.values()))
+    session_key = f"repl:{current_agent.id}:local"
+
+    print_info("=" * 70)
+    print_info(f"  Mini-Claw REPL  |  Section 06: Soul & Memory")
+    print_info(f"  Agent: {current_agent.id}")
+    print_info(f"  Model: {current_agent.model}")
+    print_info(f"  Workspace: {current_agent.workspace_dir}")
+    print_info("")
+    print_info("  Commands:")
+    print_info("    /quit or /exit     - Leave REPL")
+    print_info("    /soul              - View current agent's soul")
+    print_info("    /memory            - View memory status")
+    print_info("    /bindings          - List all routing bindings")
+    print_info("    /route <ch> <sender> [kind] [guild]  - Test routing")
+    print_info("    /switch <agent_id> - Switch to a different agent")
+    print_info("    /agents            - List all agents")
+    print_info("    (anything else)    - Chat with current agent")
+    print_info("=" * 70)
+    print()
+
+    # 显示 Soul 状态
+    soul_path = current_agent.soul_path
+    if soul_path.exists():
+        soul_content = soul_path.read_text(encoding="utf-8").strip()
+        print_info(f"Soul loaded from {soul_path}")
+        first_line = soul_content.split("\n")[0].strip()
+        print_info(f"Preview: {first_line}\n")
     else:
-        # 默认使用 REPL 模式
-        run_repl(default_agent, session_store)
+        print_info(f"No soul found at {soul_path}")
+        print_info("Create one to give this agent personality!\n")
+
+    while True:
+        try:
+            user_input = input(colored_prompt()).strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Goodbye.{RESET}")
+            break
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in ("/quit", "/exit"):
+            print(f"{DIM}Goodbye.{RESET}")
+            break
+
+        # -- 内置命令 --
+
+        if user_input == "/soul":
+            sp = current_agent.soul_path
+            if sp.exists():
+                print(f"\n{MAGENTA}--- {current_agent.id.upper()} SOUL ---{RESET}")
+                print(sp.read_text(encoding="utf-8").strip())
+                print(f"{MAGENTA}--- end ---{RESET}\n")
+            else:
+                print_info(f"No soul file at {sp}\n")
+            continue
+
+        if user_input == "/memory":
+            mgr = get_memory_manager(current_agent)
+            evergreen = mgr.load_evergreen()
+            recent = mgr.get_recent_daily(days=7)
+            print(f"\n{MAGENTA}--- Memory Status ({current_agent.id}) ---{RESET}")
+            print(f"Workspace: {current_agent.workspace_dir}")
+            if evergreen:
+                print(f"MEMORY.md: {len(evergreen)} chars")
+            else:
+                print("MEMORY.md: (not found)")
+            print(f"Recent daily logs: {len(recent)} files")
+            for entry in recent:
+                lines_cnt = entry["content"].count("\n") + 1
+                print(f"  {entry['date']}: {lines_cnt} lines")
+            print(f"{MAGENTA}--- end ---{RESET}\n")
+            continue
+
+        if user_input == "/bindings":
+            print(router.describe_bindings())
+            continue
+
+        if user_input == "/agents":
+            for aid, a in soul_agents.items():
+                marker = " <--" if aid == current_agent.id else ""
+                has_soul = "soul" if a.soul_path.exists() else "    "
+                print(f"  {aid:<12} model={a.model:<16} [{has_soul}] workspace={a.workspace_dir}{marker}")
+            continue
+
+        if user_input.startswith("/route "):
+            parts = user_input[7:].split()
+            if len(parts) < 2:
+                print("  Usage: /route <channel> <sender> [kind] [guild_id]")
+                continue
+            channel = parts[0]
+            sender = parts[1]
+            peer_kind = parts[2] if len(parts) > 2 else "direct"
+            guild_id = parts[3] if len(parts) > 3 else None
+
+            agent_cfg, sk = router.resolve(
+                channel=channel,
+                sender=sender,
+                peer_kind=peer_kind,
+                guild_id=guild_id,
+            )
+            sa = soul_agents.get(agent_cfg.id)
+            has_soul = sa and sa.soul_path.exists()
+            print(f"  Agent:       {agent_cfg.id} ({agent_cfg.model})")
+            print(f"  Session Key: {sk}")
+            print(f"  Prompt:      {agent_cfg.system_prompt[:80]}...")
+            print(f"  Soul:        {'Yes' if has_soul else 'No'}")
+            continue
+
+        if user_input.startswith("/switch "):
+            new_id = user_input[8:].strip()
+            if new_id in soul_agents:
+                current_agent = soul_agents[new_id]
+                session_key = f"repl:{current_agent.id}:local"
+                print_info(f"Switched to agent: {current_agent.id}")
+                print_info(f"Workspace: {current_agent.workspace_dir}")
+                if current_agent.soul_path.exists():
+                    first_line = current_agent.soul_path.read_text(encoding="utf-8").strip().split("\n")[0]
+                    print_info(f"Soul preview: {first_line}")
+            else:
+                print(f"  Unknown agent: {new_id}. Available: {', '.join(soul_agents.keys())}")
+            continue
+
+        # -- 普通对话: 调用 Agent (带 Soul+Memory) --
+        try:
+            print(f"\n{BLUE}[Agent: {current_agent.id}]{RESET}")
+            response = run_agent_with_soul_and_memory(
+                current_agent,
+                session_store,
+                session_key,
+                user_input,
+            )
+            if response:
+                print_assistant(response)
+        except Exception as e:
+            print(f"\n{YELLOW}Error: {e}{RESET}\n")
+            log.exception("Error in agent loop: %s", e)
+
+
+# ============================================================================
+# Part 12: Main 程序入口 (与 s05 对齐)
+# ============================================================================
+
+def main() -> None:
+    """程序入口: 根据命令行参数启动网关或测试客户端."""
+
+    # 检查 API 密钥（与 s05 一致使用 LLMClientConfig）
+    try:
+        LLMClientConfig().require_api_key()
+    except LLMValidationError as e:
+        print(f"Error: {e}")
+        print("Set DEEPSEEK_API_KEY in .env file or environment variable.")
+        sys.exit(1)
+
+    # 解析 --config 参数 (与 s05 一致)
+    config_path = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            config_path = sys.argv[i + 1]
+            break
+
+    # 确保 workspace 和 sessions 目录存在
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 加载配置, 创建 Agent (带 Soul+Memory)
+    soul_agents, bindings, default_agent, dm_scope = create_agents_with_soul_memory(config_path)
+    if not soul_agents:
+        print(f"{YELLOW}Error: No agents found in config.{RESET}")
+        sys.exit(1)
+
+    # 为所有 Agent 创建示例 Soul 文件
+    _ensure_sample_soul(soul_agents)
+
+    # 构建路由器 (使用原始 AgentConfig, 因为 AgentWithSoulMemory 继承自 AgentConfig)
+    router = MessageRouter(soul_agents, bindings, default_agent, dm_scope)
+
+    if "--test-client" in sys.argv:
+        # 测试客户端 (自动化测试套件, 与 s05 对齐)
+        asyncio.run(test_client())
+    elif "--chat" in sys.argv:
+        # 交互式对话 (可自由提问, 验证 Soul/Memory + 会话和工具, 与 s05 对齐)
+        asyncio.run(interactive_chat())
+    elif "--repl" in sys.argv:
+        # 交互式 REPL (路由测试 + Soul/Memory 对话)
+        # 初始化 session store
+        session_store = S04SessionStore(
+            store_path=SESSIONS_DIR / "sessions.json",
+            transcript_dir=SESSIONS_DIR / "transcripts",
+        )
+        run_repl(router, soul_agents, session_store)
+    else:
+        # 默认: 启动网关服务器 (与 s05 对齐, 但带 Soul+Memory)
+        print("=" * 60)
+        print("  OpenClaw Gateway — Soul & Memory Edition")
+        print("  (s06: s05 WebSocket Gateway + Soul + Memory)")
+        print("=" * 60)
+        print(f"  Host:     {GATEWAY_HOST}")
+        print(f"  Port:     {GATEWAY_PORT}")
+        print(f"  Agents:   {', '.join(soul_agents.keys())}")
+        print(f"  Bindings: {len(bindings)} rules")
+        print(f"  DM Scope: {dm_scope}")
+        print()
+        print("  Commands:")
+        print("    python agents/s06_mem.py                   # start gateway (Soul+Memory)")
+        print("    python agents/s06_mem.py --test-client     # run test suite")
+        print("    python agents/s06_mem.py --chat            # interactive chat")
+        print("    python agents/s06_mem.py --repl            # local REPL (routing + chat)")
+        print("    python agents/s06_mem.py --config cfg.json # custom config")
+        print("=" * 60)
+
+        sessions = S04SessionStore(
+            store_path=SESSIONS_DIR / "sessions.json",
+            transcript_dir=SESSIONS_DIR / "transcripts",
+        )
+        gateway = SoulMemoryGateway(
+            host=GATEWAY_HOST,
+            port=GATEWAY_PORT,
+            router=router,
+            sessions=sessions,
+            soul_agents=soul_agents,
+            token=GATEWAY_TOKEN,
+        )
+        asyncio.run(gateway.start())
 
 
 if __name__ == "__main__":
     main()
- 
+
