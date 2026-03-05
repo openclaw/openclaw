@@ -469,6 +469,8 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let accumulatedThinking = "";
+        let accumulatedReasoning = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
@@ -477,10 +479,10 @@ export function createOllamaStreamFn(
             accumulatedContent += chunk.message.content;
           } else if (chunk.message?.thinking) {
             // Ollama native thinking models may emit text in `thinking`.
-            accumulatedContent += chunk.message.thinking;
+            accumulatedThinking += chunk.message.thinking;
           } else if (chunk.message?.reasoning) {
             // Backward compatibility for models that emit `reasoning`.
-            accumulatedContent += chunk.message.reasoning;
+            accumulatedReasoning += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -499,7 +501,8 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
+        finalResponse.message.content =
+          accumulatedContent || accumulatedThinking || accumulatedReasoning;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }

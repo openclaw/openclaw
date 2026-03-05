@@ -455,4 +455,26 @@ describe("createOllamaStreamFn", () => {
       },
     );
   });
+
+  it("prefers content over earlier thinking and reasoning chunks", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"hidden thinking"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"hidden reasoning"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"visible answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.content).toEqual([{ type: "text", text: "visible answer" }]);
+      },
+    );
+  });
 });
