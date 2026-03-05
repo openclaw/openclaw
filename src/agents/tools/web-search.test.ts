@@ -317,7 +317,7 @@ describe("web_search ark config resolution", () => {
           },
         },
       },
-    };
+    } as unknown as undefined;
     expect(resolveArkApiKey({}, fullConfig)).toBe("from-volcengine-provider");
   });
 
