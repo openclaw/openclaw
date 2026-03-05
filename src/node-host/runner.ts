@@ -191,25 +191,39 @@ export async function resolveNodeHostGatewayCredentials(params: {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
+  const existingConfig = await loadNodeHostConfig();
+  const config = existingConfig ?? (await ensureNodeHostConfig());
+  let shouldPersistConfig = existingConfig == null;
+  const cfg = loadConfig();
+
   const nodeId = opts.nodeId?.trim() || config.nodeId;
   if (nodeId !== config.nodeId) {
     config.nodeId = nodeId;
+    shouldPersistConfig = true;
   }
   const displayName =
     opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
+  if (displayName !== config.displayName) {
+    config.displayName = displayName;
+    shouldPersistConfig = true;
+  }
 
   const gateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? cfg.gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  if (
+    config.gateway?.host !== gateway.host ||
+    config.gateway?.port !== gateway.port ||
+    config.gateway?.tls !== gateway.tls ||
+    config.gateway?.tlsFingerprint !== gateway.tlsFingerprint
+  ) {
+    config.gateway = gateway;
+    shouldPersistConfig = true;
+  }
 
-  const cfg = loadConfig();
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
@@ -217,6 +231,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
   });
+  if (token !== undefined && token !== config.token) {
+    config.token = token;
+    shouldPersistConfig = true;
+  }
+  if (shouldPersistConfig) {
+    await saveNodeHostConfig(config);
+  }
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
@@ -264,8 +285,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       console.error(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
+      const reasonText = String(reason ?? "");
       // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      console.error(`node host gateway closed (${code}): ${reasonText}`);
+      if (/pairing required/i.test(reasonText)) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "Pairing required. Run `openclaw devices list` to check pending requests, then approve from that output.",
+        );
+      }
+      if (/gateway token mismatch/i.test(reasonText)) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "Hint: verify OPENCLAW_GATEWAY_TOKEN / --token passed to openclaw node install and restart the node host.",
+        );
+      }
     },
   });
 

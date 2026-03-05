@@ -375,6 +375,26 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
+  it("prefers explicit token over OPENCLAW_GATEWAY_TOKEN for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      token: "explicit-token",
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("explicit-token");
+  });
+
+  it("falls back to OPENCLAW_GATEWAY_TOKEN when explicit token is empty", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
+      },
+      token: "   ",
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("env-token");
+  });
+
   it("forwards proxy environment variables for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: {

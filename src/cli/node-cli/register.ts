@@ -43,6 +43,7 @@ export function registerNodeCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
+    .option("--token <token>", "Gateway token override for service auth")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {

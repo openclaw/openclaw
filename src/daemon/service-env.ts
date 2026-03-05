@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { trimToUndefined } from "../gateway/credentials.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -270,13 +271,16 @@ export function buildServiceEnvironment(params: {
 
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
+  token?: string;
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env } = params;
+  const { env, token } = params;
   const platform = params.platform ?? process.platform;
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const gatewayToken =
-    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
+    trimToUndefined(token) ??
+    trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ??
+    trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,

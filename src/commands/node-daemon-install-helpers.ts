@@ -25,6 +25,7 @@ export async function buildNodeInstallPlan(params: {
   nodeId?: string;
   displayName?: string;
   runtime: NodeDaemonRuntime;
+  token?: string;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
@@ -56,7 +57,7 @@ export async function buildNodeInstallPlan(params: {
     title: "Node daemon runtime",
   });
 
-  const environment = buildNodeServiceEnvironment({ env: params.env });
+  const environment = buildNodeServiceEnvironment({ env: params.env, token: params.token });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });

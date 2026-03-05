@@ -12,6 +12,7 @@ import {
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import { trimToUndefined } from "../../gateway/credentials.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
@@ -41,6 +42,7 @@ type NodeDaemonInstallOptions = {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  token?: string;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -150,6 +152,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+  const token =
+    trimToUndefined(opts.token) ??
+    trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+    trimToUndefined(process.env.CLAWDBOT_GATEWAY_TOKEN);
   const { programArguments, workingDirectory, environment, description } =
     await buildNodeInstallPlan({
       env: process.env,
@@ -159,6 +165,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      token,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {

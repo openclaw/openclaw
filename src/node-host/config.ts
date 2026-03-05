@@ -60,6 +60,9 @@ export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> 
 
 export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {
   const existing = await loadNodeHostConfig();
+  if (existing) {
+    return existing;
+  }
   const normalized = normalizeConfig(existing);
   await saveNodeHostConfig(normalized);
   return normalized;
