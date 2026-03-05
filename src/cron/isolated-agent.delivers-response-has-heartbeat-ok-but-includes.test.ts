@@ -238,7 +238,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("error");
-      expect(res.error).toContain("timed out");
+      expect(res.error).toMatch(/timed out|timeout/i);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     });

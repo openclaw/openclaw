@@ -70,11 +70,13 @@ describe("cleanup path removals", () => {
   it("removes state and only linked paths outside state", async () => {
     const runtime = createRuntimeMock();
     const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup");
+    const statePath = path.join(tmpRoot, "state");
+    const oauthPath = path.join(tmpRoot, "oauth");
     await removeStateAndLinkedPaths(
       {
-        stateDir: path.join(tmpRoot, "state"),
-        configPath: path.join(tmpRoot, "state", "openclaw.json"),
-        oauthDir: path.join(tmpRoot, "oauth"),
+        stateDir: statePath,
+        configPath: path.join(statePath, "openclaw.json"),
+        oauthDir: oauthPath,
         configInsideState: true,
         oauthInsideState: false,
       },
@@ -82,22 +84,24 @@ describe("cleanup path removals", () => {
       { dryRun: true },
     );
 
-    const joinedLogs = runtime.log.mock.calls
-      .map(([line]) => line.replaceAll("\\", "/"))
-      .join("\n");
-    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/state");
-    expect(joinedLogs).toContain("/tmp/openclaw-cleanup/oauth");
+    const joinedLogs = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(joinedLogs).toContain(`[dry-run] remove ${statePath}`);
+    expect(joinedLogs).toContain(`[dry-run] remove ${oauthPath}`);
     expect(joinedLogs).not.toContain("openclaw.json");
   });
 
   it("removes every workspace directory", async () => {
     const runtime = createRuntimeMock();
-    const workspaces = ["/tmp/openclaw-workspace-1", "/tmp/openclaw-workspace-2"];
+    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp");
+    const workspaces = [
+      path.join(tmpRoot, "openclaw-workspace-1"),
+      path.join(tmpRoot, "openclaw-workspace-2"),
+    ];
 
     await removeWorkspaceDirs(workspaces, runtime, { dryRun: true });
 
     const logs = runtime.log.mock.calls.map(([line]) => line);
-    expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-1");
-    expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-2");
+    expect(logs).toContain(`[dry-run] remove ${workspaces[0]}`);
+    expect(logs).toContain(`[dry-run] remove ${workspaces[1]}`);
   });
 });
