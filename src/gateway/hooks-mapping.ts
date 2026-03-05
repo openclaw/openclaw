@@ -77,6 +77,18 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
         "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
     },
   ],
+  "workspace-events": [
+    {
+      id: "workspace-events",
+      match: { path: "workspace-events" },
+      action: "agent",
+      wakeMode: "now",
+      name: "Workspace Event",
+      sessionKey: "hook:ws-event:{{events[0].type}}:{{events[0].time}}",
+      messageTemplate:
+        "Google Workspace event:\nType: {{events[0].type}}\nSource: {{events[0].source}}\nTime: {{events[0].time}}\n{{events[0].summary}}",
+    },
+  ],
 };
 
 const transformCache = new Map<string, HookTransformFn>();
@@ -109,6 +121,7 @@ export function resolveHookMappings(
 ): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
+  const wsEventsAllowUnsafe = hooks?.workspaceEvents?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
   if (hooks?.mappings) {
     mappings.push(...hooks.mappings);
@@ -123,6 +136,15 @@ export function resolveHookMappings(
         ...presetMappings.map((mapping) => ({
           ...mapping,
           allowUnsafeExternalContent: gmailAllowUnsafe,
+        })),
+      );
+      continue;
+    }
+    if (preset === "workspace-events" && typeof wsEventsAllowUnsafe === "boolean") {
+      mappings.push(
+        ...presetMappings.map((mapping) => ({
+          ...mapping,
+          allowUnsafeExternalContent: wsEventsAllowUnsafe,
         })),
       );
       continue;

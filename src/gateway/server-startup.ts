@@ -19,6 +19,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
+import { startWsEventsWatcherWithLogs } from "../hooks/ws-events-watcher-lifecycle.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
@@ -71,6 +72,12 @@ export async function startGatewaySidecars(params: {
 
   // Start Gmail watcher if configured (hooks.gmail.account).
   await startGmailWatcherWithLogs({
+    cfg: params.cfg,
+    log: params.logHooks,
+  });
+
+  // Start workspace events watcher if configured (hooks.workspaceEvents.target).
+  await startWsEventsWatcherWithLogs({
     cfg: params.cfg,
     log: params.logHooks,
   });
