@@ -372,6 +372,21 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
 
     if (infoKind === "final") {
+      if (
+        params.finalizedPreviewByLane[laneName] &&
+        !hasMedia &&
+        !payload.isError &&
+        text.length > 0 &&
+        text === lane.lastPartialText
+      ) {
+        // Some providers can duplicate final callbacks with the same payload text.
+        // If this lane already finalized that preview text, suppress the duplicate send.
+        params.log(
+          `telegram: ${laneName} preview already finalized for identical final text; skipping duplicate final send`,
+        );
+        params.markDelivered();
+        return "preview-finalized";
+      }
       if (laneName === "answer") {
         const archivedResult = await consumeArchivedAnswerPreviewForFinal({
           lane,

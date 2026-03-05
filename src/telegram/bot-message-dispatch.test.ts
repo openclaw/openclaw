@@ -343,6 +343,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("suppresses duplicate identical final payloads after preview finalization", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Primary result" });
+        await dispatcherOptions.deliver({ text: "Primary result" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Primary result" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Primary result",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps streamed preview visible when final text regresses after a tool warning", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
