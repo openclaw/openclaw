@@ -50,9 +50,19 @@ export function createDocumentInjectionWrapper(
     }
     injected = true;
 
-    // Check if this is an Anthropic-compatible provider
+    // Check if this is an Anthropic-compatible provider.
+    // For amazon-bedrock, only Claude models support Anthropic document blocks
+    // and the anthropic-beta header. Non-Claude Bedrock models (e.g. amazon.nova-*)
+    // must use the non-Anthropic fallback path to avoid invalid payloads/headers.
     const provider = (model as { provider?: string }).provider ?? "";
-    const isAnthropic = provider === "anthropic" || provider === "amazon-bedrock";
+    const modelId = (model as { id?: string; model?: string }).id ?? (model as { model?: string }).model ?? "";
+    const isAnthropicBedrockModel = (id: string) => {
+      const normalized = id.toLowerCase();
+      return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+    };
+    const isAnthropic =
+      provider === "anthropic" ||
+      (provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId));
 
     if (!isAnthropic) {
       // For non-Anthropic providers (OpenAI, Gemini, etc.), inject document
