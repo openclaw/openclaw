@@ -6,6 +6,7 @@
  */
 
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { NormalizedPluginsConfig } from "./config-state.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./types.js";
@@ -19,8 +20,15 @@ let globalRegistry: PluginRegistry | null = null;
  * Initialize the global hook runner with a plugin registry.
  * Called once when plugins are loaded during gateway startup.
  */
-export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+export function initializeGlobalHookRunner(
+  registry: PluginRegistry,
+  config?: NormalizedPluginsConfig,
+): void {
   globalRegistry = registry;
+
+  // Extract plugin config entries for allowedAgents filtering
+  const pluginConfigEntries = config?.entries ?? {};
+
   globalHookRunner = createHookRunner(registry, {
     logger: {
       debug: (msg) => log.debug(msg),
@@ -28,6 +36,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
       error: (msg) => log.error(msg),
     },
     catchErrors: true,
+    pluginConfigEntries,
   });
 
   const hookCount = registry.hooks.length;

@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
@@ -22,7 +22,6 @@ import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
   OpenClawPluginDefinition,
@@ -50,25 +49,20 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
-  modulePath?: string;
 }): string | null => {
   try {
-    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+    const modulePath = fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
-    const normalizedModulePath = modulePath.replace(/\\/g, "/");
-    const isDistRuntime = normalizedModulePath.includes("/dist/");
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates = isDistRuntime
-        ? [distCandidate, srcCandidate]
-        : isProduction
-          ? isTest
-            ? [distCandidate, srcCandidate]
-            : [distCandidate]
-          : [srcCandidate, distCandidate];
+      const orderedCandidates = isProduction
+        ? isTest
+          ? [distCandidate, srcCandidate]
+          : [distCandidate]
+        : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;
@@ -87,114 +81,10 @@ const resolvePluginSdkAliasFile = (params: {
 };
 
 const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
+  resolvePluginSdkAliasFile({ srcFile: "index.ts", distFile: "index.js" });
 
-const pluginSdkScopedAliasEntries = [
-  { subpath: "core", srcFile: "core.ts", distFile: "core.js" },
-  { subpath: "compat", srcFile: "compat.ts", distFile: "compat.js" },
-  { subpath: "telegram", srcFile: "telegram.ts", distFile: "telegram.js" },
-  { subpath: "discord", srcFile: "discord.ts", distFile: "discord.js" },
-  { subpath: "slack", srcFile: "slack.ts", distFile: "slack.js" },
-  { subpath: "signal", srcFile: "signal.ts", distFile: "signal.js" },
-  { subpath: "imessage", srcFile: "imessage.ts", distFile: "imessage.js" },
-  { subpath: "whatsapp", srcFile: "whatsapp.ts", distFile: "whatsapp.js" },
-  { subpath: "line", srcFile: "line.ts", distFile: "line.js" },
-  { subpath: "msteams", srcFile: "msteams.ts", distFile: "msteams.js" },
-  { subpath: "acpx", srcFile: "acpx.ts", distFile: "acpx.js" },
-  { subpath: "bluebubbles", srcFile: "bluebubbles.ts", distFile: "bluebubbles.js" },
-  {
-    subpath: "copilot-proxy",
-    srcFile: "copilot-proxy.ts",
-    distFile: "copilot-proxy.js",
-  },
-  { subpath: "device-pair", srcFile: "device-pair.ts", distFile: "device-pair.js" },
-  {
-    subpath: "diagnostics-otel",
-    srcFile: "diagnostics-otel.ts",
-    distFile: "diagnostics-otel.js",
-  },
-  { subpath: "diffs", srcFile: "diffs.ts", distFile: "diffs.js" },
-  { subpath: "feishu", srcFile: "feishu.ts", distFile: "feishu.js" },
-  {
-    subpath: "google-gemini-cli-auth",
-    srcFile: "google-gemini-cli-auth.ts",
-    distFile: "google-gemini-cli-auth.js",
-  },
-  { subpath: "googlechat", srcFile: "googlechat.ts", distFile: "googlechat.js" },
-  { subpath: "irc", srcFile: "irc.ts", distFile: "irc.js" },
-  { subpath: "llm-task", srcFile: "llm-task.ts", distFile: "llm-task.js" },
-  { subpath: "lobster", srcFile: "lobster.ts", distFile: "lobster.js" },
-  { subpath: "matrix", srcFile: "matrix.ts", distFile: "matrix.js" },
-  { subpath: "mattermost", srcFile: "mattermost.ts", distFile: "mattermost.js" },
-  { subpath: "memory-core", srcFile: "memory-core.ts", distFile: "memory-core.js" },
-  {
-    subpath: "memory-lancedb",
-    srcFile: "memory-lancedb.ts",
-    distFile: "memory-lancedb.js",
-  },
-  {
-    subpath: "minimax-portal-auth",
-    srcFile: "minimax-portal-auth.ts",
-    distFile: "minimax-portal-auth.js",
-  },
-  {
-    subpath: "nextcloud-talk",
-    srcFile: "nextcloud-talk.ts",
-    distFile: "nextcloud-talk.js",
-  },
-  { subpath: "nostr", srcFile: "nostr.ts", distFile: "nostr.js" },
-  { subpath: "open-prose", srcFile: "open-prose.ts", distFile: "open-prose.js" },
-  {
-    subpath: "phone-control",
-    srcFile: "phone-control.ts",
-    distFile: "phone-control.js",
-  },
-  {
-    subpath: "qwen-portal-auth",
-    srcFile: "qwen-portal-auth.ts",
-    distFile: "qwen-portal-auth.js",
-  },
-  {
-    subpath: "synology-chat",
-    srcFile: "synology-chat.ts",
-    distFile: "synology-chat.js",
-  },
-  { subpath: "talk-voice", srcFile: "talk-voice.ts", distFile: "talk-voice.js" },
-  { subpath: "test-utils", srcFile: "test-utils.ts", distFile: "test-utils.js" },
-  {
-    subpath: "thread-ownership",
-    srcFile: "thread-ownership.ts",
-    distFile: "thread-ownership.js",
-  },
-  { subpath: "tlon", srcFile: "tlon.ts", distFile: "tlon.js" },
-  { subpath: "twitch", srcFile: "twitch.ts", distFile: "twitch.js" },
-  { subpath: "voice-call", srcFile: "voice-call.ts", distFile: "voice-call.js" },
-  { subpath: "zalo", srcFile: "zalo.ts", distFile: "zalo.js" },
-  { subpath: "zalouser", srcFile: "zalouser.ts", distFile: "zalouser.js" },
-  { subpath: "account-id", srcFile: "account-id.ts", distFile: "account-id.js" },
-  {
-    subpath: "keyed-async-queue",
-    srcFile: "keyed-async-queue.ts",
-    distFile: "keyed-async-queue.js",
-  },
-] as const;
-
-const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
-  const aliasMap: Record<string, string> = {};
-  for (const entry of pluginSdkScopedAliasEntries) {
-    const resolved = resolvePluginSdkAliasFile({
-      srcFile: entry.srcFile,
-      distFile: entry.distFile,
-    });
-    if (resolved) {
-      aliasMap[`openclaw/plugin-sdk/${entry.subpath}`] = resolved;
-    }
-  }
-  return aliasMap;
-};
-
-export const __testing = {
-  resolvePluginSdkAliasFile,
+const resolvePluginSdkAccountIdAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
 function buildCacheKey(params: {
@@ -223,7 +113,7 @@ function validatePluginConfig(params: {
   if (result.ok) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
-  return { ok: false, errors: result.errors.map((error) => error.text) };
+  return { ok: false, errors: result.errors };
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -278,7 +168,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpRoutes: 0,
+    httpHandlers: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
@@ -467,11 +357,6 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
-}
-
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -487,7 +372,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      setActivePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -495,39 +380,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Clear previously registered plugin commands before reloading
   clearPluginCommands();
 
-  // Lazily initialize the runtime so startup paths that discover/skip plugins do
-  // not eagerly load every channel runtime dependency.
-  let resolvedRuntime: PluginRuntime | null = null;
-  const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime();
-    return resolvedRuntime;
-  };
-  const runtime = new Proxy({} as PluginRuntime, {
-    get(_target, prop, receiver) {
-      return Reflect.get(resolveRuntime(), prop, receiver);
-    },
-    set(_target, prop, value, receiver) {
-      return Reflect.set(resolveRuntime(), prop, value, receiver);
-    },
-    has(_target, prop) {
-      return Reflect.has(resolveRuntime(), prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(resolveRuntime() as object);
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
-    },
-    defineProperty(_target, prop, attributes) {
-      return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
-    },
-    deleteProperty(_target, prop) {
-      return Reflect.deleteProperty(resolveRuntime() as object, prop);
-    },
-    getPrototypeOf() {
-      return Reflect.getPrototypeOf(resolveRuntime() as object);
-    },
-  });
+  const runtime = createPluginRuntime();
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,
@@ -537,7 +390,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
-    cache: options.cache,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
@@ -569,16 +421,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return jitiLoader;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
-    const aliasMap = {
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
-    };
+    const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(Object.keys(aliasMap).length > 0
+      ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
-            alias: aliasMap,
+            alias: {
+              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+              ...(pluginSdkAccountIdAlias
+                ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+                : {}),
+            },
           }
         : {}),
     });
@@ -645,18 +499,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
-    const pushPluginLoadError = (message: string) => {
-      record.status = "error";
-      record.error = message;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
-    };
 
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -666,48 +508,41 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
-    // This avoids opening/importing heavy memory plugin modules that will never register.
-    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
-      const earlyMemoryDecision = resolveMemorySlotDecision({
-        id: record.id,
-        kind: "memory",
-        slot: memorySlot,
-        selectedId: selectedMemoryPluginId,
-      });
-      if (!earlyMemoryDecision.enabled) {
-        record.enabled = false;
-        record.status = "disabled";
-        record.error = earlyMemoryDecision.reason;
-        registry.plugins.push(record);
-        seenIds.set(pluginId, candidate.origin);
-        continue;
-      }
-    }
-
     if (!manifestRecord.configSchema) {
-      pushPluginLoadError("missing config schema");
+      record.status = "error";
+      record.error = "missing config schema";
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
       continue;
     }
 
-    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-    const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
-      rootPath: pluginRoot,
-      boundaryLabel: "plugin root",
-      rejectHardlinks: candidate.origin !== "bundled",
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+    if (
+      !isPathInsideWithRealpath(candidate.rootDir, candidate.source, {
+        requireRealpath: true,
+      })
+    ) {
+      record.status = "error";
+      record.error = "plugin entry path escapes plugin root";
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
       continue;
     }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(safeSource) as OpenClawPluginModule;
+      mod = getJiti()(candidate.source) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -783,7 +618,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+      record.status = "error";
+      record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
       continue;
     }
 
@@ -795,7 +639,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (typeof register !== "function") {
       logger.error(`[plugins] ${record.id} missing register/activate export`);
-      pushPluginLoadError("plugin export missing register/activate");
+      record.status = "error";
+      record.error = "plugin export missing register/activate";
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
       continue;
     }
 
@@ -847,14 +700,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry, normalized);
   return registry;
-}
-
-function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
 }

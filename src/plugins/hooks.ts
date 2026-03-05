@@ -105,6 +105,8 @@ export type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
+  /** Plugin config entries for allowedAgents filtering */
+  pluginConfigEntries?: Record<string, { allowedAgents?: string[] }>;
 };
 
 /**
@@ -125,6 +127,19 @@ function getHooksForName<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const pluginConfigEntries = options.pluginConfigEntries;
+
+  // Check if a hook should run based on allowedAgents config
+  const shouldRunHook = (pluginId: string, agentId?: string): boolean => {
+    if (!agentId) {
+      return true;
+    }
+    const entry = pluginConfigEntries?.[pluginId];
+    if (!entry?.allowedAgents) {
+      return true;
+    } // No restriction configured
+    return entry.allowedAgents.includes(agentId);
+  };
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -196,7 +211,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const allHooks = getHooksForName(registry, hookName);
+    // Filter by allowedAgents
+    const agentId = (ctx as { agentId?: string })?.agentId;
+    const hooks = allHooks.filter((h) => shouldRunHook(h.pluginId, agentId));
     if (hooks.length === 0) {
       return;
     }
@@ -224,7 +242,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const allHooks = getHooksForName(registry, hookName);
+    // Filter by allowedAgents
+    const agentId = (ctx as { agentId?: string })?.agentId;
+    const hooks = allHooks.filter((h) => shouldRunHook(h.pluginId, agentId));
     if (hooks.length === 0) {
       return undefined;
     }

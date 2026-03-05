@@ -18,6 +18,11 @@ type SessionDefaultsSnapshot = {
 };
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
+  // 优先使用用户上次活跃的 session
+  const lastActive = state.settings.lastActiveSessionKey?.trim();
+  if (lastActive) {
+    return lastActive;
+  }
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
