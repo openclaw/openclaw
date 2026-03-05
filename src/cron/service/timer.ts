@@ -901,6 +901,23 @@ export async function executeJobCore(
       sessionKey: targetMainSessionKey,
       contextKey: `cron:${job.id}`,
     });
+    // Resolve heartbeat delivery target from the job's delivery config.
+    // When --channel/--to are specified on the cron job, use those explicitly
+    // so the agent's response routes to the intended destination (#34572).
+    // Fall back to "last" (the previous default) when no delivery config is set.
+    const heartbeatDeliveryOverride: { target?: string; to?: string; accountId?: string } = {};
+    if (job.delivery?.channel && job.delivery.channel !== "last") {
+      heartbeatDeliveryOverride.target = job.delivery.channel;
+    } else {
+      heartbeatDeliveryOverride.target = "last";
+    }
+    if (job.delivery?.to) {
+      heartbeatDeliveryOverride.to = job.delivery.to;
+    }
+    if (job.delivery?.accountId) {
+      heartbeatDeliveryOverride.accountId = job.delivery.accountId;
+    }
+
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
       const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
@@ -916,11 +933,9 @@ export async function executeJobCore(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
-          // Cron-triggered heartbeats should deliver to the last active channel.
-          // Without this override, heartbeat target defaults to "none" (since
-          // e2362d35) and cron main-session responses are silently swallowed.
-          // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
+          // Use explicit delivery config from the cron job when available,
+          // otherwise fall back to "last" to avoid silent swallowing (#28508).
+          heartbeat: heartbeatDeliveryOverride,
         });
         if (
           heartbeatResult.status !== "skipped" ||

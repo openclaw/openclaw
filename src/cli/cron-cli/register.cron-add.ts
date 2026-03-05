@@ -218,9 +218,38 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.account.trim()
               : undefined;
 
+          // Check if the user explicitly provided --channel (not just the
+          // default "last") or --to, indicating intent to set delivery context.
+          const hasExplicitDeliveryTarget =
+            (typeof opts.channel === "string" &&
+              opts.channel.trim() &&
+              opts.channel.trim() !== "last") ||
+            (typeof opts.to === "string" && opts.to.trim());
+
           if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
-            throw new Error("--account requires an isolated agentTurn job with delivery.");
+            // Allow --account for main+systemEvent+wake-now when --channel/--to
+            // are explicitly set, so delivery context threads through (#34572).
+            if (
+              !(
+                sessionTarget === "main" &&
+                payload.kind === "systemEvent" &&
+                wakeMode === "now" &&
+                hasExplicitDeliveryTarget
+              )
+            ) {
+              throw new Error("--account requires an isolated agentTurn job with delivery.");
+            }
           }
+
+          // Allow delivery config for main+systemEvent+wake-now when explicit
+          // --channel or --to is provided.  This threads delivery context
+          // through to the heartbeat runner so the agent's response routes to
+          // the intended destination (#34572).
+          const hasMainWakeDelivery =
+            sessionTarget === "main" &&
+            payload.kind === "systemEvent" &&
+            wakeMode === "now" &&
+            hasExplicitDeliveryTarget;
 
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
@@ -229,7 +258,9 @@ export function registerCronAddCommand(cron: Command) {
                 : hasNoDeliver
                   ? "none"
                   : "announce"
-              : undefined;
+              : hasMainWakeDelivery
+                ? "none"
+                : undefined;
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
           const name = nameRaw.trim();
