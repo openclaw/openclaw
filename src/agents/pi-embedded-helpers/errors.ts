@@ -551,10 +551,14 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
-  if (/missing scopes?:/i.test(raw)) {
+  const missingScopesMatch = raw.match(/missing scopes?:\s*([^\n]+)/i);
+  if (missingScopesMatch) {
+    const scopes = missingScopesMatch[1]?.trim();
+    const suffix = scopes ? ` Missing: ${scopes}.` : "";
     return (
-      "Authentication succeeded but the token is missing required API scopes. " +
-      "Re-authenticate with the provider and ensure the required scopes are granted."
+      "Authentication succeeded but the token is missing required API scopes." +
+      suffix +
+      " Re-authenticate with the provider and ensure the required scopes are granted."
     );
   }
 

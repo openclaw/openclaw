@@ -117,6 +117,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("401 Unauthorized - Missing scopes: api.responses.write");
     const text = formatAssistantErrorText(msg);
     expect(text).toContain("missing required API scopes");
+    expect(text).toContain("Missing: api.responses.write");
     expect(text).toContain("Re-authenticate");
   });
 
