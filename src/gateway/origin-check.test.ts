@@ -49,6 +49,24 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts allowlisted origins with path", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "192.168.1.10:18789",
+      origin: "http://192.168.1.10:18789",
+      allowedOrigins: ["http://192.168.1.10:18789/"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts scheme-less allowlist host values", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "192.168.1.10:18789",
+      origin: "http://192.168.1.10:18789",
+      allowedOrigins: ["192.168.1.10:18789"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts wildcard allowedOrigins", () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.example.com:18789",

@@ -26,6 +26,25 @@ function parseOrigin(
   }
 }
 
+function normalizeAllowedOrigin(rawValue: string): string | null {
+  const value = rawValue.trim().toLowerCase();
+  if (value === "") {
+    return null;
+  }
+  if (value === "*") {
+    return "*";
+  }
+  try {
+    return new URL(value).origin;
+  } catch {
+    try {
+      return new URL(`http://${value}`).origin;
+    } catch {
+      return null;
+    }
+  }
+}
+
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
@@ -39,7 +58,9 @@ export function checkBrowserOrigin(params: {
   }
 
   const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
+    (params.allowedOrigins ?? [])
+      .map((value) => normalizeAllowedOrigin(value))
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
