@@ -462,11 +462,16 @@ function checkBotMentioned(
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((m) => {
-      if (m.id.open_id !== botOpenId) return false;
-      // Guard against Feishu WS open_id remapping in multi-app groups:
-      // if botName is known and mention name differs, this is a false positive.
-      if (botName && m.name && m.name !== botName) return false;
-      return true;
+      // In group chats, bot display names can vary (alias/localized name/card name),
+      // so mention-name equality is not reliable.
+      // open_id is the stable identifier and should be the source of truth.
+      if (m.id.open_id === botOpenId) return true;
+
+      // Backward-compatible fallback: if Feishu omits open_id in a mention payload,
+      // allow matching by exact bot name to avoid false negatives.
+      if (!m.id.open_id && botName && m.name && m.name === botName) return true;
+
+      return false;
     });
   }
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
