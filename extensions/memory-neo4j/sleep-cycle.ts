@@ -1090,59 +1090,41 @@ export async function runSleepCycle(
     logger.info("memory-neo4j: [sleep] Phase 3c: Retroactive Conflict Scan");
 
     try {
-      // Fetch a batch of recently-added memories that haven't been conflict-checked
+      // Fetch a batch of memories that haven't been conflict-checked
       // (i.e., they predate this feature or were stored with detection disabled)
-      const session = db["driver"]?.session();
-      if (session) {
+      const candidates = await db.fetchMemoriesForRetroactiveConflictScan(
+        0,
+        retroactiveConflictBatchSize,
+        agentId,
+      );
+
+      result.retroactiveConflictScan.memoriesScanned = candidates.length;
+
+      for (const mem of candidates) {
+        if (abortSignal?.aborted) break;
+        if (!mem.embedding?.length) continue;
+
         try {
-          // Find memories with no supersededBy and no validUntil, ordered oldest first
-          const batchResult = await session.run(
-            `MATCH (m:Memory {agentId: $agentId})
-             WHERE m.validUntil IS NULL AND m.supersededBy IS NULL
-             AND m.validFrom IS NOT NULL
-             RETURN m.id AS id, m.text AS text, m.embedding AS embedding
-             ORDER BY m.validFrom ASC
-             LIMIT $limit`,
-            { agentId: agentId ?? "default", limit: retroactiveConflictBatchSize },
+          const superseded = await db.detectConflicts(
+            mem.id,
+            mem.text,
+            mem.embedding,
+            agentId ?? "default",
+            config,
+            {
+              similarityThreshold: conflictSimilarityThreshold,
+              maxCandidates: conflictMaxCandidates,
+            },
           );
-
-          const candidates = batchResult.records.map((r) => ({
-            id: r.get("id") as string,
-            text: r.get("text") as string,
-            embedding: r.get("embedding") as number[],
-          }));
-
-          result.retroactiveConflictScan.memoriesScanned = candidates.length;
-
-          for (const mem of candidates) {
-            if (abortSignal?.aborted) break;
-            if (!mem.embedding?.length) continue;
-
-            try {
-              const superseded = await db.detectConflicts(
-                mem.id,
-                mem.text,
-                mem.embedding,
-                agentId ?? "default",
-                config,
-                {
-                  similarityThreshold: conflictSimilarityThreshold,
-                  maxCandidates: conflictMaxCandidates,
-                },
-              );
-              result.retroactiveConflictScan.memoriesSuperseded += superseded;
-            } catch {
-              // Non-fatal
-            }
-          }
-
-          logger.info(
-            `memory-neo4j: [sleep] Phase 3c complete — ${result.retroactiveConflictScan.memoriesScanned} scanned, ${result.retroactiveConflictScan.memoriesSuperseded} superseded`,
-          );
-        } finally {
-          await session.close();
+          result.retroactiveConflictScan.memoriesSuperseded += superseded;
+        } catch {
+          // Non-fatal
         }
       }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 3c complete — ${result.retroactiveConflictScan.memoriesScanned} scanned, ${result.retroactiveConflictScan.memoriesSuperseded} superseded`,
+      );
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 3c error: ${String(err)}`);
     }

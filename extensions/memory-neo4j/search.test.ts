@@ -411,8 +411,8 @@ describe("hybridSearch", () => {
     );
 
     // limit=5, multiplier=8 => candidateLimit = 40
-    expect(mockDb.vectorSearch).toHaveBeenCalledWith(expect.any(Array), 40, 0.1, "agent-1");
-    expect(mockDb.bm25Search).toHaveBeenCalledWith("test query", 40, "agent-1");
+    expect(mockDb.vectorSearch).toHaveBeenCalledWith(expect.any(Array), 40, 0.1, "agent-1", false);
+    expect(mockDb.bm25Search).toHaveBeenCalledWith("test query", 40, "agent-1", false);
   });
 
   it("should pass default agentId when not specified", async () => {
@@ -430,6 +430,73 @@ describe("hybridSearch", () => {
       expect.any(Number),
       0.1,
       "default",
+      false,
+    );
+  });
+
+  it("should pass includeExpired=false to all signals by default", async () => {
+    mockDb.vectorSearch.mockResolvedValue([]);
+    mockDb.bm25Search.mockResolvedValue([]);
+
+    await hybridSearch(
+      mockDb as unknown as Neo4jMemoryClient,
+      mockEmbeddings as unknown as Embeddings,
+      "test query",
+      5,
+      "agent-1",
+      false,
+    );
+
+    expect(mockDb.vectorSearch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      0.1,
+      "agent-1",
+      false,
+    );
+    expect(mockDb.bm25Search).toHaveBeenCalledWith(
+      "test query",
+      expect.any(Number),
+      "agent-1",
+      false,
+    );
+  });
+
+  it("should pass includeExpired=true to all signals when option is set", async () => {
+    mockDb.vectorSearch.mockResolvedValue([]);
+    mockDb.bm25Search.mockResolvedValue([]);
+    mockDb.graphSearch.mockResolvedValue([]);
+
+    await hybridSearch(
+      mockDb as unknown as Neo4jMemoryClient,
+      mockEmbeddings as unknown as Embeddings,
+      "tell me about Tarun",
+      5,
+      "agent-1",
+      true,
+      { includeExpired: true },
+    );
+
+    expect(mockDb.vectorSearch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      0.1,
+      "agent-1",
+      true,
+    );
+    expect(mockDb.bm25Search).toHaveBeenCalledWith(
+      "tell me about Tarun",
+      expect.any(Number),
+      "agent-1",
+      true,
+    );
+    expect(mockDb.graphSearch).toHaveBeenCalledWith(
+      "tell me about Tarun",
+      expect.any(Number),
+      expect.any(Number),
+      "agent-1",
+      expect.any(Number),
+      true,
     );
   });
 });

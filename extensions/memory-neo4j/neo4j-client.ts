@@ -90,6 +90,9 @@ export class Neo4jMemoryClient {
     // Create indexes
     await this.ensureIndexes();
     this.indexesReady = true;
+
+    // Backfill temporal fields for pre-existing memories (idempotent)
+    await this.migrateTemporalFields();
   }
 
   private async ensureIndexes(): Promise<void> {
@@ -170,7 +173,7 @@ export class Neo4jMemoryClient {
       // Temporal index for efficient filtering of active vs. expired memories
       await this.runSafe(
         session,
-        "CREATE INDEX memory_temporal_index IF NOT EXISTS FOR (m:Memory) ON (m.validUntil)",
+        "CREATE INDEX memory_temporal IF NOT EXISTS FOR (m:Memory) ON (m.validUntil, m.validFrom)",
       );
 
       this.logger.info("memory-neo4j: indexes ensured");

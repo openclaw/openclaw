@@ -432,7 +432,7 @@ export const memoryNeo4jConfigSchema = {
       ["enabled", "model", "similarityThreshold", "maxCandidates", "sleepScanBatchSize"],
       "conflictDetection config",
     );
-    const cdEnabled = cdRaw?.enabled === true; // off by default
+    const cdEnabled = cdRaw?.enabled !== false; // enabled by default
     const cdModel = typeof cdRaw?.model === "string" && cdRaw.model ? cdRaw.model : undefined;
     const cdThreshold =
       typeof cdRaw?.similarityThreshold === "number" ? cdRaw.similarityThreshold : 0.82;
