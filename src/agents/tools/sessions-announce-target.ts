@@ -1,8 +1,11 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+
+const log = createSubsystemLogger("agents/sessions-announce-target");
 
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
@@ -47,11 +50,25 @@ export async function resolveAnnounceTarget(params: {
     const accountId =
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
+    const rawThreadId = deliveryContext?.threadId ?? match?.lastThreadId;
+    const threadId =
+      typeof rawThreadId === "number" && Number.isFinite(rawThreadId)
+        ? String(Math.trunc(rawThreadId))
+        : typeof rawThreadId === "string" && rawThreadId
+          ? rawThreadId
+          : undefined;
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, ...(threadId !== undefined ? { threadId } : {}) };
     }
   } catch {
-    // ignore
+    // ignore — gateway may be unavailable; fall through to fallback
+  }
+
+  if (!fallback) {
+    log.warn("resolveAnnounceTarget: could not resolve announce target; announcement may be lost", {
+      sessionKey: params.sessionKey,
+      displayKey: params.displayKey,
+    });
   }
 
   return fallback;

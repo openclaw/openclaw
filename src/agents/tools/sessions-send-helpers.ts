@@ -24,7 +24,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
   const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
+  if (kind !== "group" && kind !== "channel" && kind !== "direct" && kind !== "dm") {
     return null;
   }
 
@@ -51,7 +51,14 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
   const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
+  const isDmKind = kind === "direct" || kind === "dm";
   const kindTarget = (() => {
+    if (isDmKind) {
+      // DM session keys (per-channel-peer / per-account-channel-peer scopes).
+      // The `id` is the raw peer ID (e.g., Telegram chatId). Return it as-is so
+      // the channel's send function can resolve it without further wrapping.
+      return id;
+    }
     if (!normalizedChannel) {
       return id;
     }
