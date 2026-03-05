@@ -14,6 +14,7 @@ import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-actio
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { getMessageFeishu } from "./send.js";
+import { createFeishuThreadBindingManager } from "./thread-bindings.manager.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorFeishuOpts = {
@@ -620,6 +621,26 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
   }
+
+  const threadBindingManager = createFeishuThreadBindingManager({
+    accountId,
+    cfg,
+    persist: true,
+    enableSweeper: true,
+  });
+  log(`feishu[${accountId}]: thread binding adapter registered`);
+
+  if (abortSignal) {
+    abortSignal.addEventListener(
+      "abort",
+      () => {
+        threadBindingManager.stop();
+        log(`feishu[${accountId}]: thread binding adapter stopped`);
+      },
+      { once: true },
+    );
+  }
+
   const eventDispatcher = createEventDispatcher(account);
   const chatHistories = new Map<string, HistoryEntry[]>();
 

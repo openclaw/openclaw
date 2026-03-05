@@ -25,6 +25,7 @@ import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
+import { createFeishuThreadBindingManager } from "./thread-bindings.manager.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
@@ -721,6 +722,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const warmupCount = await warmupDedupFromDisk(accountId, log);
   if (warmupCount > 0) {
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
+  }
+
+  const threadBindingManager = createFeishuThreadBindingManager({
+    accountId,
+    cfg,
+    persist: true,
+    enableSweeper: true,
+  });
+  log(`feishu[${accountId}]: thread binding adapter registered`);
+
+  if (abortSignal) {
+    abortSignal.addEventListener(
+      "abort",
+      () => {
+        threadBindingManager.stop();
+        log(`feishu[${accountId}]: thread binding adapter stopped`);
+      },
+      { once: true },
+    );
   }
 
   const eventDispatcher = createEventDispatcher(account);

@@ -187,12 +187,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
+  const TOOL_DISPLAY_NAMES: Record<string, string> = {
+    feishu_chat_history: "聊天记录",
+    feishu_chat_info: "群信息",
+    feishu_chat_members: "群成员",
+    feishu_member_chats: "成员群列表",
+  };
+
   const normalizeToolName = (name: string | undefined): string | undefined => {
     const trimmed = name?.trim();
     if (!trimmed) {
       return undefined;
     }
-    return trimmed.replace(/\s+/g, " ");
+    const stripped = trimmed.replace("mcp__openclaw__", "");
+    return TOOL_DISPLAY_NAMES[stripped] ?? stripped.replace(/\s+/g, " ");
   };
 
   const resolveStatusLine = (): string | undefined => {

@@ -5,6 +5,7 @@ import {
   clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  getSessionBindingService,
   type HistoryEntry,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
@@ -1058,6 +1059,7 @@ export async function handleFeishuMessage(params: {
     : null;
 
   let requireMention = false; // DMs never require mention; groups may override below
+  let boundSessionKey: string | undefined;
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -1117,6 +1119,24 @@ export async function handleFeishuMessage(params: {
       globalConfig: feishuCfg,
       groupConfig,
     }));
+
+    // Check if message is in a topic thread bound to an ACP/subagent session
+    const inboundRootId = ctx.rootId?.trim() || ctx.threadId?.trim();
+    if (inboundRootId) {
+      const binding = getSessionBindingService().resolveByConversation({
+        channel: "feishu",
+        accountId: account.accountId,
+        conversationId: `${ctx.chatId}:${inboundRootId}`,
+      });
+      if (binding?.targetSessionKey) {
+        boundSessionKey = binding.targetSessionKey;
+        getSessionBindingService().touch(binding.bindingId);
+        requireMention = false;
+        log(
+          `feishu[${account.accountId}]: bound thread detected root=${inboundRootId}, routing to session ${boundSessionKey}`,
+        );
+      }
+    }
 
     if (dispatchMode !== "plugin" && requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
@@ -1434,7 +1454,9 @@ export async function handleFeishuMessage(params: {
     const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
-    if (broadcastAgents) {
+    if (broadcastAgents && !boundSessionKey) {
+      // Note: bound thread sessions (ACP/subagent) bypass broadcast dispatch —
+      // bound threads route directly to the single-agent path below.
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
@@ -1569,7 +1591,7 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: broadcast dispatch complete for ${broadcastAgents.length} agents`,
       );
-    } else if (isGroup && dispatchMode === "plugin") {
+    } else if (isGroup && dispatchMode === "plugin" && !boundSessionKey) {
       // --- Plugin dispatch mode: run hooks but suppress reply generation ---
       const ctxPayload = buildCtxPayloadForAgent(
         route.sessionKey,
@@ -1624,8 +1646,9 @@ export async function handleFeishuMessage(params: {
       }
     } else {
       // --- Single-agent dispatch (existing behavior) ---
+      const effectiveSessionKey = boundSessionKey ?? route.sessionKey;
       const ctxPayload = buildCtxPayloadForAgent(
-        route.sessionKey,
+        effectiveSessionKey,
         route.accountId,
         ctx.mentionedBot,
       );
@@ -1635,19 +1658,21 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
+        replyToMessageId: boundSessionKey
+          ? (ctx.rootId ?? replyTargetMessageId)
+          : replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
-        replyInThread,
-        streamingInThread,
-        rootId: replyInThread ? ctx.rootId : undefined,
-        threadReply: replyInThread && threadReply,
+        replyInThread: boundSessionKey ? true : replyInThread,
+        streamingInThread: boundSessionKey ? true : streamingInThread,
+        rootId: boundSessionKey ? ctx.rootId : replyInThread ? ctx.rootId : undefined,
+        threadReply: boundSessionKey ? true : replyInThread && threadReply,
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         botOpenId,
         messageCreateTimeMs,
       });
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+      log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveSessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
         onSettled: () => {
