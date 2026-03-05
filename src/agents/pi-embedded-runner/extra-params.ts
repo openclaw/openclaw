@@ -1029,7 +1029,7 @@ function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefin
           const payloadObj = payload as Record<string, unknown>;
           normalizeSub2apiGpt52Payload(payloadObj);
 
-          if (!Array.isArray(payloadObj.input)) {
+          if (payloadObj.input == null) {
             const contextMessages = Array.isArray((context as { messages?: unknown[] }).messages)
               ? ((context as { messages?: PayloadMessage[] }).messages ?? [])
               : [];
