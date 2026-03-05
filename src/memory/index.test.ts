@@ -41,6 +41,7 @@ describe("memory index", () => {
   let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
+  let indexJournalPath = "";
   let sourceChangeStateDir = "";
   const sourceChangeSessionLogLines = [
     JSON.stringify({
@@ -74,6 +75,7 @@ describe("memory index", () => {
     indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    indexJournalPath = path.join(workspaceDir, "index-journal.sqlite");
     sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
@@ -215,6 +217,21 @@ describe("memory index", () => {
         }),
       ]),
     );
+  });
+
+  it("uses WAL journal mode for memory sqlite stores", async () => {
+    const cfg = createCfg({ storePath: indexJournalPath });
+    const manager = await getPersistentManager(cfg);
+    const journalMode = (
+      (
+        manager as unknown as {
+          db: { prepare: (sql: string) => { get: () => { journal_mode: string } } };
+        }
+      ).db
+        .prepare("PRAGMA journal_mode")
+        .get() as { journal_mode: string }
+    ).journal_mode;
+    expect(journalMode.toLowerCase()).toBe("wal");
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
