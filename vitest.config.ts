@@ -86,6 +86,7 @@ export default defineConfig({
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/chat/copy-as-markdown.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
