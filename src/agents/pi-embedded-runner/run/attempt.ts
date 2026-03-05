@@ -270,7 +270,7 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
         continue;
       }
       if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-        return trimmed;
+        return candidate;
       }
       caseInsensitiveMatch = name;
     }

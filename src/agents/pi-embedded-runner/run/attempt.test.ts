@@ -226,14 +226,16 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
   it("maps provider-prefixed function tool names to allowed canonical tools", async () => {
     const partialToolCall = { type: "toolCall", name: " functions.read " };
+    const messageToolCall = { type: "toolCall", name: " functions.write " };
     const finalToolCall = { type: "toolCall", name: " tools/exec " };
     const event = {
       type: "toolcall_delta",
       partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
     };
     const { baseFn } = createEventStream({ event, finalToolCall });
 
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "exec"]));
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
     for await (const _item of stream) {
       // drain
@@ -241,6 +243,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("write");
     expect(finalToolCall.name).toBe("exec");
   });
 
