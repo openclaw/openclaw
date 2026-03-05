@@ -4,6 +4,7 @@
  */
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_MESSAGES_PER_CHAT = 5000;
 
 type CacheEntry = {
   timestamps: Map<number, number>;
@@ -24,6 +25,16 @@ function cleanupExpired(entry: CacheEntry): void {
   }
 }
 
+function enforceMaxMessages(entry: CacheEntry): void {
+  while (entry.timestamps.size > MAX_MESSAGES_PER_CHAT) {
+    const oldest = entry.timestamps.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    entry.timestamps.delete(oldest);
+  }
+}
+
 /**
  * Record a message ID as sent by the bot.
  */
@@ -39,6 +50,7 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   if (entry.timestamps.size > 100) {
     cleanupExpired(entry);
   }
+  enforceMaxMessages(entry);
 }
 
 /**
@@ -52,6 +64,10 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   }
   // Clean up expired entries on read
   cleanupExpired(entry);
+  if (entry.timestamps.size === 0) {
+    sentMessages.delete(key);
+    return false;
+  }
   return entry.timestamps.has(messageId);
 }
 

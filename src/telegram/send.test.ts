@@ -87,6 +87,16 @@ describe("sent-message-cache", () => {
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
   });
+
+  it("evicts oldest entries when per-chat cache exceeds hard limit", () => {
+    for (let i = 1; i <= 5001; i += 1) {
+      recordSentMessage(123, i);
+    }
+
+    expect(wasSentByBot(123, 1)).toBe(false);
+    expect(wasSentByBot(123, 2)).toBe(true);
+    expect(wasSentByBot(123, 5001)).toBe(true);
+  });
 });
 
 describe("buildInlineKeyboard", () => {
