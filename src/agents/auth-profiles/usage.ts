@@ -283,7 +283,7 @@ export function calculateAuthProfileCooldownMs(
       : DEFAULT_PROFILE_COOLDOWN_BASE_MS;
   return Math.min(
     60 * 60 * 1000, // 1 hour max
-    baseMs * 5 ** Math.min(normalized - 1, 3),
+    baseMs * 5 ** Math.max(normalized - 1, 0),
   );
 }
 

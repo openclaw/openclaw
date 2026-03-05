@@ -62,7 +62,7 @@ describe("calculateAuthProfileCooldownMs", () => {
     expect(defaultBackoff).toBe(60_000);
   });
 
-  it("applies full exponential backoff progression for google-gemini-cli oauth failures", () => {
+  it("applies exponential backoff for google-gemini-cli oauth failures and reaches max cooldown", () => {
     expect(
       calculateAuthProfileCooldownMs(1, {
         providerId: "google-gemini-cli",
@@ -92,7 +92,13 @@ describe("calculateAuthProfileCooldownMs", () => {
         providerId: "google-gemini-cli",
         reason: "auth",
       }),
-    ).toBe(1_250_000);
+    ).toBe(3_600_000);
+    expect(
+      calculateAuthProfileCooldownMs(7, {
+        providerId: "google-gemini-cli",
+        reason: "auth",
+      }),
+    ).toBe(3_600_000);
   });
 
   it("keeps default cooldown for google-gemini-cli non-oauth failures", () => {
