@@ -68,8 +68,75 @@ describe("resolvePromptBuildHookResult", () => {
     });
 
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith(
+      { prompt: "hello", messages, systemPrompt: undefined },
+      {},
+    );
     expect(result.prependContext).toBe("from-hook");
+  });
+
+  it("passes systemPrompt to before_prompt_build hook event", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: "before_prompt_build" | "before_agent_start") =>
+          hookName === "before_prompt_build",
+      ),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+    await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      systemPrompt: "You are a helpful assistant.",
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
+      { prompt: "hello", messages: [], systemPrompt: "You are a helpful assistant." },
+      {},
+    );
+  });
+
+  it("passes systemPrompt to legacy before_agent_start hook event", async () => {
+    const hookRunner = createLegacyOnlyHookRunner();
+    const messages = [{ role: "user", content: "ctx" }];
+    await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages,
+      systemPrompt: "base system prompt",
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith(
+      { prompt: "hello", messages, systemPrompt: "base system prompt" },
+      {},
+    );
+  });
+
+  it("plugin can read systemPrompt and return modified version", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: "before_prompt_build" | "before_agent_start") =>
+          hookName === "before_prompt_build",
+      ),
+      runBeforePromptBuild: vi.fn(async (event: { systemPrompt?: string }) => ({
+        systemPrompt: `${event.systemPrompt ?? ""}\n\n## My Plugin Rules\nAlways respond in Korean.`,
+      })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      systemPrompt: "You are a helpful assistant.",
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.systemPrompt).toBe(
+      "You are a helpful assistant.\n\n## My Plugin Rules\nAlways respond in Korean.",
+    );
   });
 });
 

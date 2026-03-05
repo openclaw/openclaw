@@ -364,6 +364,9 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /** The current system prompt built by OpenClaw for this run (read-only context).
+   *  Plugins can read this, append their content, and return the result via `systemPrompt`. */
+  systemPrompt?: string;
 };
 
 export type PluginHookBeforePromptBuildResult = {
@@ -376,6 +379,8 @@ export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /** The current system prompt built by OpenClaw for this run (read-only context). */
+  systemPrompt?: string;
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
