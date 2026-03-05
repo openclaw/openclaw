@@ -165,6 +165,53 @@ describe("slack thread-bindings manager", () => {
     expect(touched!.lastActivityAt).toBe(before + 5000);
   });
 
+  it("requires channelId when thread_ts collides across channels", async () => {
+    const manager = createSlackThreadBindingManager({
+      accountId: "test",
+      token: "xoxb-test",
+      persist: false,
+      enableSweeper: false,
+    });
+    const threadTs = "1234567890.123456";
+    await manager.bindTarget({
+      threadId: threadTs,
+      channelId: "C111",
+      targetKind: "acp",
+      targetSessionKey: "agent:test:acp:session1",
+    });
+    await manager.bindTarget({
+      threadId: threadTs,
+      channelId: "C222",
+      targetKind: "acp",
+      targetSessionKey: "agent:test:acp:session2",
+    });
+
+    expect(manager.getByThreadId(threadTs)).toBeUndefined();
+    expect(
+      manager.touchThread({
+        threadId: threadTs,
+        at: Date.now() + 1_000,
+      }),
+    ).toBeNull();
+
+    const touched = manager.touchThread({
+      channelId: "C111",
+      threadId: threadTs,
+      at: Date.now() + 2_000,
+    });
+    expect(touched).not.toBeNull();
+    expect(touched!.channelId).toBe("C111");
+
+    const removed = manager.unbindThread({
+      channelId: "C222",
+      threadId: threadTs,
+      sendFarewell: false,
+    });
+    expect(removed).not.toBeNull();
+    expect(removed!.channelId).toBe("C222");
+    expect(manager.listBindings()).toHaveLength(1);
+  });
+
   it("registers session binding adapter", async () => {
     createSlackThreadBindingManager({
       accountId: "test",
