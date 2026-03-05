@@ -342,10 +342,11 @@ export async function handleAcpSpawnAction(
   if (binding) {
     const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
+    const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
     if (currentConversationId && boundConversationId === currentConversationId) {
-      parts.push(`Bound this thread to ${sessionKey}.`);
+      parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {
-      parts.push(`Created thread ${boundConversationId} and bound it to ${sessionKey}.`);
+      parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
   } else {
     parts.push("Session is unbound (use /focus <session-key> to bind this thread/conversation).");

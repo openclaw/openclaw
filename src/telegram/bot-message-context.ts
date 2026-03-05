@@ -280,6 +280,7 @@ export const buildTelegramMessageContext = async ({
         ...route,
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+        matchedBy: "binding.channel",
       };
       configuredBinding = null;
       configuredBindingSessionKey = "";

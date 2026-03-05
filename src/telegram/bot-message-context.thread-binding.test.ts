@@ -62,6 +62,33 @@ describe("buildTelegramMessageContext bound conversation override", () => {
     expect(hoisted.touchMock).toHaveBeenCalledWith("default:-100200300:topic:77", undefined);
   });
 
+  it("treats named-account bound conversations as explicit route matches", async () => {
+    hoisted.resolveByConversationMock.mockReturnValue({
+      bindingId: "work:-100200300:topic:77",
+      targetSessionKey: "agent:codex-acp:session-2",
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      accountId: "work",
+      message: {
+        message_id: 1,
+        chat: { id: -100200300, type: "supergroup", is_forum: true },
+        message_thread_id: 77,
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.route.accountId).toBe("work");
+    expect(ctx?.route.matchedBy).toBe("binding.channel");
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-2");
+    expect(hoisted.touchMock).toHaveBeenCalledWith("work:-100200300:topic:77", undefined);
+  });
+
   it("routes dm messages to the bound session", async () => {
     hoisted.resolveByConversationMock.mockReturnValue({
       bindingId: "default:1234",

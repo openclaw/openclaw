@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import {
   __testing,
@@ -10,6 +10,10 @@ import {
 describe("telegram thread bindings", () => {
   beforeEach(() => {
     __testing.resetTelegramThreadBindingsForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("registers a telegram binding adapter and binds current conversations", async () => {
@@ -65,6 +69,8 @@ describe("telegram thread bindings", () => {
   });
 
   it("updates lifecycle windows by session key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     const manager = createTelegramThreadBindingManager({
       accountId: "work",
       persist: false,
@@ -80,12 +86,15 @@ describe("telegram thread bindings", () => {
         conversationId: "1234",
       },
     });
+    const original = manager.listBySessionKey("agent:main:subagent:child-1")[0];
+    expect(original).toBeDefined();
 
     const idleUpdated = setTelegramThreadBindingIdleTimeoutBySessionKey({
       accountId: "work",
       targetSessionKey: "agent:main:subagent:child-1",
       idleTimeoutMs: 2 * 60 * 60 * 1000,
     });
+    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
     const maxAgeUpdated = setTelegramThreadBindingMaxAgeBySessionKey({
       accountId: "work",
       targetSessionKey: "agent:main:subagent:child-1",
@@ -96,6 +105,8 @@ describe("telegram thread bindings", () => {
     expect(idleUpdated[0]?.idleTimeoutMs).toBe(2 * 60 * 60 * 1000);
     expect(maxAgeUpdated).toHaveLength(1);
     expect(maxAgeUpdated[0]?.maxAgeMs).toBe(6 * 60 * 60 * 1000);
+    expect(maxAgeUpdated[0]?.boundAt).toBe(original?.boundAt);
+    expect(maxAgeUpdated[0]?.lastActivityAt).toBe(Date.parse("2026-03-06T12:00:00.000Z"));
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
