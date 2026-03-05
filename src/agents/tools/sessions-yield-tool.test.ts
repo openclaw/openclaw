@@ -32,7 +32,7 @@ describe("sessions_yield tool", () => {
     const result = await tool.execute("call-1", {});
     expect(result.details).toMatchObject({
       status: "error",
-      error: "Session not active or not streaming",
+      error: "Session not active, not streaming, or compacting",
     });
   });
 
