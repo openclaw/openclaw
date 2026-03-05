@@ -30,14 +30,6 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   return normalizeMessageChannel(head);
 }
 
-function isMainSessionKey(sessionKey?: string): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return (sessionKey ?? "").trim().toLowerCase() === "main";
-  }
-  return parsed.rest.trim().toLowerCase() === "main";
-}
-
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
     channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
