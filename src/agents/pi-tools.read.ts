@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -14,10 +13,26 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
+import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+
+export {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to normalize payloads and sanitize oversized images before they hit providers.
@@ -335,230 +350,6 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
-type RequiredParamGroup = {
-  keys: readonly string[];
-  allowEmpty?: boolean;
-  label?: string;
-};
-
-const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
-
-function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
-}
-
-export const CLAUDE_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
-  write: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    { keys: ["content"], label: "content" },
-  ],
-  edit: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    {
-      keys: ["oldText", "old_string"],
-      label: "oldText (oldText or old_string)",
-    },
-    {
-      keys: ["newText", "new_string"],
-      label: "newText (newText or new_string)",
-      allowEmpty: true,
-    },
-  ],
-} as const;
-
-function extractStructuredText(value: unknown, depth = 0): string | undefined {
-  if (depth > 6) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((entry) => extractStructuredText(entry, depth + 1))
-      .filter((entry): entry is string => typeof entry === "string");
-    return parts.length > 0 ? parts.join("") : undefined;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.text === "string") {
-    return record.text;
-  }
-  if (typeof record.content === "string") {
-    return record.content;
-  }
-  if (Array.isArray(record.content)) {
-    return extractStructuredText(record.content, depth + 1);
-  }
-  if (Array.isArray(record.parts)) {
-    return extractStructuredText(record.parts, depth + 1);
-  }
-  if (typeof record.value === "string" && record.value.length > 0) {
-    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
-    const kind = typeof record.kind === "string" ? record.kind.toLowerCase() : "";
-    if (type.includes("text") || kind === "text") {
-      return record.value;
-    }
-  }
-  return undefined;
-}
-
-function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
-  const value = record[key];
-  if (typeof value === "string") {
-    return;
-  }
-  const extracted = extractStructuredText(value);
-  if (typeof extracted === "string") {
-    record[key] = extracted;
-  }
-}
-
-// Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
-// Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
-// This prevents models trained on Claude Code from getting stuck in tool-call loops.
-export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
-  if (!params || typeof params !== "object") {
-    return undefined;
-  }
-  const record = params as Record<string, unknown>;
-  const normalized = { ...record };
-  // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
-    delete normalized.file_path;
-  }
-  // old_string → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.old_string;
-    delete normalized.old_string;
-  }
-  // new_string → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.new_string;
-    delete normalized.new_string;
-  }
-  // Some providers/models emit text payloads as structured blocks instead of raw strings.
-  // Normalize these for write/edit so content matching and writes stay deterministic.
-  normalizeTextLikeParam(normalized, "content");
-  normalizeTextLikeParam(normalized, "oldText");
-  normalizeTextLikeParam(normalized, "newText");
-  return normalized;
-}
-
-export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAgentTool {
-  const schema =
-    tool.parameters && typeof tool.parameters === "object"
-      ? (tool.parameters as Record<string, unknown>)
-      : undefined;
-
-  if (!schema || !schema.properties || typeof schema.properties !== "object") {
-    return tool;
-  }
-
-  const properties = { ...(schema.properties as Record<string, unknown>) };
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((key): key is string => typeof key === "string")
-    : [];
-  let changed = false;
-
-  const aliasPairs: Array<{ original: string; alias: string }> = [
-    { original: "path", alias: "file_path" },
-    { original: "oldText", alias: "old_string" },
-    { original: "newText", alias: "new_string" },
-  ];
-
-  for (const { original, alias } of aliasPairs) {
-    if (!(original in properties)) {
-      continue;
-    }
-    if (!(alias in properties)) {
-      properties[alias] = properties[original];
-      changed = true;
-    }
-    const idx = required.indexOf(original);
-    if (idx !== -1) {
-      required.splice(idx, 1);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return tool;
-  }
-
-  return {
-    ...tool,
-    parameters: {
-      ...schema,
-      properties,
-      required,
-    },
-  };
-}
-
-export function assertRequiredParams(
-  record: Record<string, unknown> | undefined,
-  groups: readonly RequiredParamGroup[],
-  toolName: string,
-): void {
-  if (!record || typeof record !== "object") {
-    throw parameterValidationError(`Missing parameters for ${toolName}`);
-  }
-
-  const missingLabels: string[] = [];
-  for (const group of groups) {
-    const satisfied = group.keys.some((key) => {
-      if (!(key in record)) {
-        return false;
-      }
-      const value = record[key];
-      if (typeof value !== "string") {
-        return false;
-      }
-      if (group.allowEmpty) {
-        return true;
-      }
-      return value.trim().length > 0;
-    });
-
-    if (!satisfied) {
-      const label = group.label ?? group.keys.join(" or ");
-      missingLabels.push(label);
-    }
-  }
-
-  if (missingLabels.length > 0) {
-    const joined = missingLabels.join(", ");
-    const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
-  }
-}
-
-// Generic wrapper to normalize parameters for any tool
-export function wrapToolParamNormalization(
-  tool: AnyAgentTool,
-  requiredParamGroups?: readonly RequiredParamGroup[],
-): AnyAgentTool {
-  const patched = patchToolSchemaForClaudeCompatibility(tool);
-  return {
-    ...patched,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      const normalized = normalizeToolParams(params);
-      const record =
-        normalized ??
-        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(record, requiredParamGroups, tool.name);
-      }
-      return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
-    },
-  };
-}
-
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
@@ -679,80 +470,6 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
-}
-
-/** Resolve path for host edit: expand ~ and resolve relative paths against root. */
-function resolveHostEditPath(root: string, pathParam: string): string {
-  const expanded =
-    pathParam.startsWith("~/") || pathParam === "~"
-      ? pathParam.replace(/^~/, os.homedir())
-      : pathParam;
-  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
-}
-
-/**
- * When the upstream edit tool throws after having already written (e.g. generateDiffString fails),
- * the file may be correctly updated but the tool reports failure. This wrapper catches errors and
- * if the target file on disk contains the intended newText, returns success so we don't surface
- * a false "edit failed" to the user (fixes #32333, same pattern as #30773 for write).
- */
-function wrapHostEditToolWithPostWriteRecovery(base: AnyAgentTool, root: string): AnyAgentTool {
-  return {
-    ...base,
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-      signal: AbortSignal | undefined,
-      onUpdate?: (update: unknown) => void,
-    ) => {
-      try {
-        return await base.execute(toolCallId, params, signal, onUpdate);
-      } catch (err) {
-        const record =
-          params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-        const pathParam = record && typeof record.path === "string" ? record.path : undefined;
-        const newText =
-          record && typeof record.newText === "string"
-            ? record.newText
-            : record && typeof record.new_string === "string"
-              ? record.new_string
-              : undefined;
-        const oldText =
-          record && typeof record.oldText === "string"
-            ? record.oldText
-            : record && typeof record.old_string === "string"
-              ? record.old_string
-              : undefined;
-        if (!pathParam || !newText) {
-          throw err;
-        }
-        try {
-          const absolutePath = resolveHostEditPath(root, pathParam);
-          const content = await fs.readFile(absolutePath, "utf-8");
-          // Only recover when the replacement likely occurred: newText is present and oldText
-          // is no longer present. This avoids false success when upstream threw before writing
-          // (e.g. oldText not found) but the file already contained newText (review feedback).
-          const hasNew = content.includes(newText);
-          const stillHasOld =
-            oldText !== undefined && oldText.length > 0 && content.includes(oldText);
-          if (hasNew && !stillHasOld) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Successfully replaced text in ${pathParam}.`,
-                },
-              ],
-              details: { diff: "", firstChangedLine: undefined },
-            } as AgentToolResult<unknown>;
-          }
-        } catch {
-          // File read failed or path invalid; rethrow original error.
-        }
-        throw err;
-      }
-    },
-  };
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {

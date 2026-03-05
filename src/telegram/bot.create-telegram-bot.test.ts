@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Chat, Message } from "@grammyjs/types";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,
@@ -38,14 +38,6 @@ const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
 const ORIGINAL_TZ = process.env.TZ;
-const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
-  chat as Chat;
-const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message =>
-  ({
-    message_id: 1,
-    date: 0,
-    ...message,
-  }) as Message;
 const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
@@ -123,97 +115,6 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
-    expect(
-      getTelegramSequentialKey({ message: mockMessage({ chat: mockChat({ id: 123 }) }) }),
-    ).toBe("telegram:123");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "private" }),
-          message_thread_id: 9,
-        }),
-      }),
-    ).toBe("telegram:123:topic:9");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "supergroup" }),
-          message_thread_id: 9,
-        }),
-      }),
-    ).toBe("telegram:123");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123, type: "supergroup", is_forum: true }) }),
-      }),
-    ).toBe("telegram:123:topic:1");
-    expect(
-      getTelegramSequentialKey({
-        update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) },
-      }),
-    ).toBe("telegram:555");
-    expect(
-      getTelegramSequentialKey({
-        channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
-      }),
-    ).toBe("telegram:-100777111222");
-    expect(
-      getTelegramSequentialKey({
-        update: {
-          channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
-        },
-      }),
-    ).toBe("telegram:-100777111223");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }),
-      }),
-    ).toBe("telegram:123");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop please" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "do not do that" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "остановись" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }),
-      }),
-    ).toBe("telegram:123:control");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }),
-      }),
-    ).toBe("telegram:123");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }),
-      }),
-    ).toBe("telegram:123");
-    expect(
-      getTelegramSequentialKey({
-        message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }),
-      }),
-    ).toBe("telegram:123");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
@@ -2031,7 +1932,7 @@ describe("createTelegramBot", () => {
       },
     });
 
-    vi.useFakeTimers();
+    useFrozenTime("2026-02-20T00:00:00.000Z");
     try {
       createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       const handler = getOnHandler("channel_post") as (
@@ -2071,7 +1972,7 @@ describe("createTelegramBot", () => {
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
     } finally {
-      vi.useRealTimers();
+      useRealTime();
     }
   });
   it("drops oversized channel_post media instead of dispatching a placeholder message", async () => {

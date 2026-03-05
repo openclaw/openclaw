@@ -10,7 +10,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type { ResolvedLineAccount } from "./types.js";
+import type { ResolvedLineAccount, LineGroupConfig } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -206,6 +206,20 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
+function resolveLineGroupSystemPrompt(
+  groups: Record<string, LineGroupConfig | undefined> | undefined,
+  source: LineSourceInfoWithPeerId,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const entry =
+    (source.groupId ? (groups[source.groupId] ?? groups[`group:${source.groupId}`]) : undefined) ??
+    (source.roomId ? (groups[source.roomId] ?? groups[`room:${source.roomId}`]) : undefined) ??
+    groups["*"];
+  return entry?.systemPrompt?.trim() || undefined;
+}
+
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -288,6 +302,9 @@ async function finalizeLineInboundContext(params: {
     ...params.locationContext,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
+    GroupSystemPrompt: params.source.isGroup
+      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      : undefined,
   });
 
   const pinnedMainDmOwner = !params.source.isGroup
