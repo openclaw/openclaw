@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
-  it("accepts same-origin host matches only with legacy host-header fallback", () => {
+  it("accepts same-origin host matches only with legacy host-header fallback for local clients", () => {
     const result = checkBrowserOrigin({
       requestHost: "127.0.0.1:18789",
       origin: "http://127.0.0.1:18789",
       allowHostHeaderOriginFallback: true,
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -49,13 +50,24 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts wildcard allowedOrigins", () => {
+  it("accepts wildcard allowedOrigins for local clients only", () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.example.com:18789",
       origin: "https://any-origin.example.com",
       allowedOrigins: ["*"],
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects wildcard allowedOrigins for remote clients (security)", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://any-origin.example.com",
+      allowedOrigins: ["*"],
+      isLocalClient: false,
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("rejects missing origin", () => {
@@ -74,29 +86,32 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(false);
   });
 
-  it('accepts any origin when allowedOrigins includes "*" (regression: #30990)', () => {
+  it('accepts any origin when allowedOrigins includes "*" for local clients only (regression: #30990)', () => {
     const result = checkBrowserOrigin({
       requestHost: "100.86.79.37:18789",
       origin: "https://100.86.79.37:18789",
       allowedOrigins: ["*"],
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
   });
 
-  it('accepts any origin when allowedOrigins includes "*" alongside specific entries', () => {
+  it('accepts any origin when allowedOrigins includes "*" alongside specific entries for local clients', () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.tailnet.ts.net:18789",
       origin: "https://gateway.tailnet.ts.net:18789",
       allowedOrigins: ["https://control.example.com", "*"],
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
   });
 
-  it("accepts wildcard entries with surrounding whitespace", () => {
+  it("accepts wildcard entries with surrounding whitespace for local clients", () => {
     const result = checkBrowserOrigin({
       requestHost: "100.86.79.37:18789",
       origin: "https://100.86.79.37:18789",
       allowedOrigins: [" * "],
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
   });

@@ -81,6 +81,11 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+/**
+ * Maximum number of pending lifecycle errors to track.
+ * Prevents unbounded memory growth if tasks crash/hang and timers never fire.
+ */
+const MAX_PENDING_LIFECYCLE_ERRORS = 100;
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -246,6 +251,21 @@ function clearAllPendingLifecycleErrors() {
 
 function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
   clearPendingLifecycleError(params.runId);
+  // Enforce maximum size limit to prevent unbounded memory growth (C-1 fix)
+  if (pendingLifecycleErrorByRunId.size >= MAX_PENDING_LIFECYCLE_ERRORS) {
+    // Evict oldest entries (LRU-style) to make room
+    const entriesToEvict = Math.min(
+      pendingLifecycleErrorByRunId.size - MAX_PENDING_LIFECYCLE_ERRORS + 1,
+      pendingLifecycleErrorByRunId.size
+    );
+    const entriesArray = Array.from(pendingLifecycleErrorByRunId.entries());
+    // Sort by endedAt (oldest first) and evict oldest
+    entriesArray.sort((a, b) => a[1].endedAt - b[1].endedAt);
+    for (let i = 0; i < entriesToEvict && i < entriesArray.length; i++) {
+      const [oldestRunId] = entriesArray[i];
+      clearPendingLifecycleError(oldestRunId);
+    }
+  }
   const timer = setTimeout(() => {
     const pending = pendingLifecycleErrorByRunId.get(params.runId);
     if (!pending || pending.timer !== timer) {
