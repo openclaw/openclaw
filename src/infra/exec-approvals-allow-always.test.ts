@@ -350,4 +350,127 @@ describe("resolveAllowAlwaysPatterns", () => {
       }),
     ).toBe(false);
   });
+
+  it("persists script path when shell wrapper uses -- separator", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const env = makePathEnv(dir);
+
+    const analysis = evaluateShellAllowlist({
+      command: "bash -- scripts/save_crystal.sh",
+      allowlist: [],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([scriptPath]);
+  });
+
+  it("does not persist script path when wrapper options appear before script token", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const env = makePathEnv(dir);
+
+    const analysis = evaluateShellAllowlist({
+      command: "bash -e scripts/save_crystal.sh",
+      allowlist: [],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([]);
+  });
+
+  it("persists script path when wrapper command uses tilde", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const env = { ...makePathEnv(dir), HOME: dir };
+
+    const analysis = evaluateShellAllowlist({
+      command: "bash ~/scripts/save_crystal.sh",
+      allowlist: [],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const expectedHomePath = path.join(process.env.HOME ?? "~", "scripts", "save_crystal.sh");
+    expect(persisted).toEqual([expectedHomePath]);
+  });
+
+  it("does not allowlist bypass with path-scoped shell wrapper binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const fakeBash = path.join(dir, "bash");
+    fs.writeFileSync(fakeBash, "#!/usr/bin/env bash\necho fake\n");
+    fs.chmodSync(fakeBash, 0o755);
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const second = evaluateShellAllowlist({
+      command: "./bash scripts/save_crystal.sh",
+      allowlist: [{ pattern: scriptPath }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
 });

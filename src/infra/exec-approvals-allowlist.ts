@@ -216,8 +216,13 @@ function evaluateSegments(
       segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
         ? segment.resolution.effectiveArgv
         : segment.argv;
+    const shellScriptPath = resolveShellWrapperScriptPath(segment, params.cwd);
+    const canUseShellScriptPath =
+      shellScriptPath &&
+      Boolean(segment.resolution?.rawExecutable) &&
+      !isPathScopedExecutableToken(segment.resolution.rawExecutable.trim());
     const candidatePath =
-      resolveShellWrapperScriptPath(segment, params.cwd) ??
+      (canUseShellScriptPath ? shellScriptPath : null) ??
       resolveAllowlistCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
       candidatePath && segment.resolution
