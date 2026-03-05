@@ -255,6 +255,12 @@ export const CREDENTIAL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
 
   // GitHub/GitLab tokens
   { pattern: /\b(?:ghp|gho|ghu|ghs|ghr|glpat)[_-][a-zA-Z0-9]{16,}/i, label: "GitHub/GitLab token" },
+
+  // Anthropic API keys
+  { pattern: /\bsk-ant-api\d+-[A-Za-z0-9_-]{20,}/i, label: "Anthropic API key" },
+
+  // OpenAI project keys
+  { pattern: /\bsk-proj-[A-Za-z0-9_-]{20,}/i, label: "OpenAI project key" },
 ];
 
 /**

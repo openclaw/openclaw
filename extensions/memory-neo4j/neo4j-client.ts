@@ -106,90 +106,81 @@ export class Neo4jMemoryClient {
   }
 
   private async ensureIndexes(): Promise<void> {
-    const session = this.driver!.session();
-    try {
+    // Each DDL runs in its own session so they can be issued in parallel (OP-109).
+    await Promise.all([
       // Uniqueness constraints (also create indexes implicitly)
-      await this.runSafe(
-        session,
+      this.runSafeOwn(
         "CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE CONSTRAINT tag_name_unique IF NOT EXISTS FOR (t:Tag) REQUIRE t.name IS UNIQUE",
-      );
+      ),
 
       // Vector indexes
-      await this.runSafe(
-        session,
-        `
-        CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
+      this.runSafeOwn(
+        `CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
         FOR (m:Memory) ON m.embedding
         OPTIONS {indexConfig: {
           \`vector.dimensions\`: ${this.dimensions},
           \`vector.similarity_function\`: 'cosine'
-        }}
-      `,
-      );
+        }}`,
+      ),
+
       // Full-text indexes (Lucene BM25)
-      await this.runSafe(
-        session,
+      this.runSafeOwn(
         "CREATE FULLTEXT INDEX memory_fulltext_index IF NOT EXISTS FOR (m:Memory) ON EACH [m.text]",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE FULLTEXT INDEX entity_fulltext_index IF NOT EXISTS FOR (e:Entity) ON EACH [e.name]",
-      );
+      ),
 
       // Property indexes for filtering
-      await this.runSafe(
-        session,
+      this.runSafeOwn(
         "CREATE INDEX memory_agent_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId)",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE INDEX memory_category_index IF NOT EXISTS FOR (m:Memory) ON (m.category)",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE INDEX memory_created_index IF NOT EXISTS FOR (m:Memory) ON (m.createdAt)",
-      );
-      await this.runSafe(
-        session,
+      ),
+      this.runSafeOwn(
         "CREATE INDEX memory_retrieved_index IF NOT EXISTS FOR (m:Memory) ON (m.lastRetrievedAt)",
-      );
-      await this.runSafe(
-        session,
-        "CREATE INDEX entity_type_index IF NOT EXISTS FOR (e:Entity) ON (e.type)",
-      );
-      await this.runSafe(
-        session,
-        "CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)",
-      );
+      ),
+      this.runSafeOwn("CREATE INDEX entity_type_index IF NOT EXISTS FOR (e:Entity) ON (e.type)"),
+      this.runSafeOwn("CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)"),
+
       // Composite index for queries that filter by both agentId and category
       // (e.g. listByCategory)
-      await this.runSafe(
-        session,
+      this.runSafeOwn(
         "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
-      );
-      // Extraction status index for listPendingExtractions (sleep cycle)
-      await this.runSafe(
-        session,
-        "CREATE INDEX memory_extraction_status_index IF NOT EXISTS FOR (m:Memory) ON (m.extractionStatus)",
-      );
-      // Temporal index for efficient filtering of active vs. expired memories
-      await this.runSafe(
-        session,
-        "CREATE INDEX memory_temporal IF NOT EXISTS FOR (m:Memory) ON (m.validUntil, m.validFrom)",
-      );
+      ),
 
-      this.logger.info("memory-neo4j: indexes ensured");
-    } finally {
-      await session.close();
-    }
+      // Extraction status index for listPendingExtractions (sleep cycle)
+      this.runSafeOwn(
+        "CREATE INDEX memory_extraction_status_index IF NOT EXISTS FOR (m:Memory) ON (m.extractionStatus)",
+      ),
+
+      // Temporal index for efficient filtering of active vs. expired memories
+      this.runSafeOwn(
+        "CREATE INDEX memory_temporal IF NOT EXISTS FOR (m:Memory) ON (m.validUntil, m.validFrom)",
+      ),
+
+      // Index for task-scoped memory lookups (OP-108)
+      this.runSafeOwn(
+        "CREATE INDEX memory_task_id_index IF NOT EXISTS FOR (m:Memory) ON (m.taskId)",
+      ),
+
+      // Composite index for conflict/importance queries (OP-108/Perf-5)
+      this.runSafeOwn(
+        "CREATE INDEX memory_agent_category_importance IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category, m.importance)",
+      ),
+    ]);
+
+    this.logger.info("memory-neo4j: indexes ensured");
   }
 
   /**
@@ -201,6 +192,19 @@ export class Neo4jMemoryClient {
       await session.run(query);
     } catch (err) {
       this.logger.debug?.(`memory-neo4j: index/constraint statement skipped: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Open a dedicated session, run a DDL statement safely, then close the session.
+   * Used by ensureIndexes to run statements in parallel (each needs its own session).
+   */
+  private async runSafeOwn(query: string): Promise<void> {
+    const session = this.driver!.session();
+    try {
+      await this.runSafe(session, query);
+    } finally {
+      await session.close();
     }
   }
 
@@ -1046,6 +1050,7 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.extractionStatus IN ['pending', 'skipped'] ${agentFilter}
+         AND m.validUntil IS NULL
          RETURN m.id AS id, m.text AS text, m.agentId AS agentId,
                 coalesce(m.extractionRetries, 0) AS extractionRetries
          ORDER BY m.createdAt ASC
@@ -1763,6 +1768,7 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m1:Memory)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Memory)
          WHERE m1.id < m2.id ${agentFilter}
+         AND m1.validUntil IS NULL AND m2.validUntil IS NULL
          AND m1.category <> 'core' AND m2.category <> 'core'
          WITH m1, m2, count(e) AS sharedEntities
          WHERE sharedEntities >= 1
