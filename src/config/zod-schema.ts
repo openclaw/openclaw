@@ -149,6 +149,12 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    hooks: z
+      .object({
+        allowPromptInjection: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();

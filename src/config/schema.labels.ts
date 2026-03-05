@@ -797,6 +797,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
+  "plugins.entries.*.hooks": "Plugin Hook Policy",
+  "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
   "plugins.entries.*.apiKey": "Plugin API Key",
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
