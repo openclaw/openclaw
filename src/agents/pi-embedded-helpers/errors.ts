@@ -271,8 +271,13 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 408) {
     return "timeout";
   }
-  if (TRANSIENT_HTTP_ERROR_CODES.has(status)) {
+  // Keep the status-only path conservative and behavior-preserving.
+  // Message-path HTTP heuristics are broader and should not leak in here.
+  if (status === 502 || status === 503 || status === 504) {
     return "timeout";
+  }
+  if (status === 529) {
+    return "rate_limit";
   }
   if (status === 400) {
     return "format";
