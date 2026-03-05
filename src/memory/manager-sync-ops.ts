@@ -418,7 +418,7 @@ export abstract class MemoryManagerSyncOps {
       ignoreInitial: true,
       ignored: (watchPath: string, stats?: import("fs").Stats) =>
         shouldIgnoreMemoryWatchPath(String(watchPath)) ||
-        (stats?.isFile() === true && !String(watchPath).endsWith(".md")),
+        (stats?.isFile() === true && !String(watchPath).toLowerCase().endsWith(".md")),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
