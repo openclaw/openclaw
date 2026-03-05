@@ -216,7 +216,9 @@ function evaluateSegments(
       segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
         ? segment.resolution.effectiveArgv
         : segment.argv;
-    const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+    const candidatePath =
+      resolveShellWrapperScriptPath(segment, params.cwd) ??
+      resolveAllowlistCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
@@ -327,6 +329,35 @@ function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
 }
 
+function resolveShellWrapperScriptPath(segment: ExecCommandSegment, cwd?: string): string | null {
+  if (!isShellWrapperSegment(segment)) {
+    return null;
+  }
+  if (extractShellWrapperInlineCommand(segment.argv)) {
+    return null;
+  }
+
+  const argv = segment.argv;
+  if (argv.length < 2) {
+    return null;
+  }
+
+  const start = argv[1]?.trim() === "--" ? 2 : 1;
+  const scriptToken = argv[start]?.trim();
+  if (!scriptToken || scriptToken === "-" || scriptToken.startsWith("-")) {
+    return null;
+  }
+
+  const normalized = scriptToken.startsWith("~")
+    ? scriptToken.replace(/^~(?=$|[\\/])/, process.env.HOME ?? "~")
+    : scriptToken;
+  if (path.isAbsolute(normalized)) {
+    return normalized;
+  }
+  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
+  return path.resolve(base, normalized);
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -372,16 +403,20 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
-  if (!candidatePath) {
-    return;
-  }
   if (!isShellWrapperSegment(params.segment)) {
+    const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+    if (!candidatePath) {
+      return;
+    }
     params.out.add(candidatePath);
     return;
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    const scriptPath = resolveShellWrapperScriptPath(params.segment, params.cwd);
+    if (scriptPath) {
+      params.out.add(scriptPath);
+    }
     return;
   }
   const nested = analyzeShellCommand({

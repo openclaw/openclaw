@@ -302,4 +302,52 @@ describe("resolveAllowAlwaysPatterns", () => {
       persistedPattern: echo,
     });
   });
+
+  it("persists shell script path for bash script invocations", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const scriptPath = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\necho ok\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const first = evaluateShellAllowlist({
+      command: "bash scripts/save_crystal.sh",
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([scriptPath]);
+
+    const second = evaluateShellAllowlist({
+      command: "bash scripts/save_crystal.sh",
+      allowlist: [{ pattern: scriptPath }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(false);
+  });
 });
