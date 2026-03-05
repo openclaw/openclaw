@@ -139,24 +139,23 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
   }
   const parts: ContentPart[] = [];
   for (const part of content as Array<{
-    type?: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>) {
+    type?: unknown;
+    text?: unknown;
+    data?: unknown;
+    mimeType?: unknown;
+  } | null>) {
     if (!part || typeof part !== "object") {
       continue;
     }
-    const rec = part as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push({ type: "input_text", text: rec.text });
-    } else if (rec.type === "image" && typeof rec.data === "string") {
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push({ type: "input_text", text: part.text });
+    } else if (part.type === "image" && typeof part.data === "string") {
       parts.push({
         type: "input_image",
         source: {
           type: "base64",
-          media_type: typeof rec.mimeType === "string" ? rec.mimeType : "image/jpeg",
-          data: rec.data,
+          media_type: typeof part.mimeType === "string" ? part.mimeType : "image/jpeg",
+          data: part.data,
         },
       });
     }
