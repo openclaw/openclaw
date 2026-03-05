@@ -527,6 +527,36 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes Cloudflare auth header in provider override for registry-found models", () => {
+    mockDiscoveredModel({
+      provider: "openai-chat",
+      modelId: "gpt-5-mini",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini",
+        provider: "openai-chat",
+        api: "openai",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/test/openai",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-chat": {
+            headers: { "cf-aig-authorization": "Bearer: test-token" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-chat", "gpt-5-mini", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "cf-aig-authorization": "Bearer test-token",
+    });
+  });
+
   it("does not override when no provider config exists", () => {
     mockDiscoveredModel({
       provider: "anthropic",
