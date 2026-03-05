@@ -6,6 +6,7 @@ import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
+import { classifyPortListener, inspectPortUsage } from "../../infra/ports.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -25,6 +26,12 @@ type RestartPostCheckContext = {
   stdout: Writable;
   warnings: string[];
   fail: (message: string, hints?: string[]) => void;
+};
+
+type NotLoadedPortSignalFallback = {
+  port: number;
+  signal: "SIGTERM" | "SIGUSR1";
+  result: "stopped" | "restarted";
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -92,6 +99,39 @@ async function resolveServiceLoadedOrFail(params: {
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
   }
+}
+
+async function signalGatewayProcessesOnPort(params: {
+  port: number;
+  signal: "SIGTERM" | "SIGUSR1";
+}): Promise<number[]> {
+  let usage = await inspectPortUsage(params.port).catch(() => null);
+  if (!usage || usage.status !== "busy") {
+    return [];
+  }
+
+  const gatewayPids = Array.from(
+    new Set(
+      usage.listeners
+        .filter((listener) => classifyPortListener(listener, params.port) === "gateway")
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+    ),
+  );
+  if (gatewayPids.length === 0) {
+    return [];
+  }
+
+  const signaled: number[] = [];
+  for (const pid of gatewayPids) {
+    try {
+      process.kill(pid, params.signal);
+      signaled.push(pid);
+    } catch {
+      // Ignore races where a process exits between inspect and signal.
+    }
+  }
+  return signaled;
 }
 
 export async function runServiceUninstall(params: {
@@ -199,6 +239,7 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
+  notLoadedPortSignalFallback?: NotLoadedPortSignalFallback;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
@@ -212,6 +253,28 @@ export async function runServiceStop(params: {
     return;
   }
   if (!loaded) {
+    if (params.notLoadedPortSignalFallback) {
+      const signaledPids = await signalGatewayProcessesOnPort({
+        port: params.notLoadedPortSignalFallback.port,
+        signal: params.notLoadedPortSignalFallback.signal,
+      });
+      if (signaledPids.length > 0) {
+        const message =
+          `${params.serviceNoun} service ${params.service.notLoadedText}; ` +
+          `signaled gateway process(es) on port ${params.notLoadedPortSignalFallback.port} ` +
+          `with ${params.notLoadedPortSignalFallback.signal}: ${signaledPids.join(", ")}`;
+        emit({
+          ok: true,
+          result: params.notLoadedPortSignalFallback.result,
+          message,
+          service: buildDaemonServiceSnapshot(params.service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(message);
+        }
+        return;
+      }
+    }
     emit({
       ok: true,
       result: "not-loaded",
@@ -250,6 +313,7 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  notLoadedPortSignalFallback?: NotLoadedPortSignalFallback;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
@@ -263,6 +327,28 @@ export async function runServiceRestart(params: {
     return false;
   }
   if (!loaded) {
+    if (params.notLoadedPortSignalFallback) {
+      const signaledPids = await signalGatewayProcessesOnPort({
+        port: params.notLoadedPortSignalFallback.port,
+        signal: params.notLoadedPortSignalFallback.signal,
+      });
+      if (signaledPids.length > 0) {
+        const message =
+          `${params.serviceNoun} service ${params.service.notLoadedText}; ` +
+          `signaled gateway process(es) on port ${params.notLoadedPortSignalFallback.port} ` +
+          `with ${params.notLoadedPortSignalFallback.signal}: ${signaledPids.join(", ")}`;
+        emit({
+          ok: true,
+          result: params.notLoadedPortSignalFallback.result,
+          message,
+          service: buildDaemonServiceSnapshot(params.service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(message);
+        }
+        return true;
+      }
+    }
     await handleServiceNotLoaded({
       serviceNoun: params.serviceNoun,
       service: params.service,

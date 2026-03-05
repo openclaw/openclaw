@@ -22,7 +22,7 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-async function resolveGatewayRestartPort() {
+async function resolveGatewayServicePort() {
   const service = resolveGatewayService();
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
@@ -55,10 +55,18 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  const stopPort = await resolveGatewayServicePort().catch(() =>
+    resolveGatewayPort(loadConfig(), process.env),
+  );
   return await runServiceStop({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     opts,
+    notLoadedPortSignalFallback: {
+      port: stopPort,
+      signal: "SIGTERM",
+      result: "stopped",
+    },
   });
 }
 
@@ -70,7 +78,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
-  const restartPort = await resolveGatewayRestartPort().catch(() =>
+  const restartPort = await resolveGatewayServicePort().catch(() =>
     resolveGatewayPort(loadConfig(), process.env),
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
@@ -82,6 +90,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
+    notLoadedPortSignalFallback: {
+      port: restartPort,
+      signal: "SIGUSR1",
+      result: "restarted",
+    },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       let health = await waitForGatewayHealthyRestart({
         service,

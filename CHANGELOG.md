@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/daemon lifecycle in containers: when no system service is loaded, `openclaw gateway stop` and `openclaw gateway restart` now attempt port-based gateway PID signaling (`SIGTERM`/`SIGUSR1`) instead of exiting early as not-loaded. (related to #36137)
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Security/audit Windows ACL locale handling: recognize Russian `NT AUTHORITY\\СИСТЕМА` principal as trusted SYSTEM so localized Windows installs no longer report false-positive `perms_writable` findings for SYSTEM-only ACL entries. (#35834)
