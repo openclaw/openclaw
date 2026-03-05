@@ -84,10 +84,19 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
     cwdStat = fs.statSync(requestedCwd);
     cwdReal = fs.realpathSync(requestedCwd);
     cwdRealStat = fs.statSync(cwdReal);
-  } catch {
+  } catch (err: unknown) {
+    // Distinguish ENOENT (path doesn't exist) from other fs errors (EACCES, ELOOP, etc.)
+    // Only ENOENT should trigger cross-platform cwd fallback; other errors are security-relevant
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined;
+    if (code === "ENOENT") {
+      return {
+        ok: false,
+        message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      };
+    }
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      message: `SYSTEM_RUN_DENIED: cwd access error (${code ?? "unknown"})`,
     };
   }
   if (!cwdStat.isDirectory()) {
