@@ -61,7 +61,9 @@ function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean
   const code = resolveGatewayErrorDetailCode(error);
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
   );
 }
