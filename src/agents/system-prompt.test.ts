@@ -105,6 +105,14 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
+      // No runtime channel → no channel-specific messageToolHints to include.
+      runtimeInfo: {
+        host: "test",
+        os: "test",
+        arch: "x64",
+        node: "v0.0.0",
+        model: "test/test",
+      },
     });
 
     expect(prompt).not.toContain("## Authorized Senders");
@@ -113,11 +121,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
+    // Minimal mode suppresses the full Messaging section but may still include
+    // channel-specific formatting hints when provided.
     expect(prompt).not.toContain("## Messaging");
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
+    expect(prompt).not.toContain("## Channel Formatting");
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
@@ -144,6 +155,28 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills (mandatory)");
     expect(prompt).toContain("<available_skills>");
+  });
+
+  it("includes channel formatting hints in minimal prompt mode when messageToolHints are provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["message"],
+      messageToolHints: ["", "### Synology Chat Formatting", "- No markdown"],
+      runtimeInfo: {
+        host: "test",
+        os: "test",
+        arch: "x64",
+        node: "v0.0.0",
+        model: "test/test",
+        channel: "synology-chat",
+      },
+    });
+
+    expect(prompt).toContain("## Channel Formatting");
+    expect(prompt).toContain("### Synology Chat Formatting");
+    expect(prompt).toContain("- No markdown");
+    expect(prompt).not.toContain("## Messaging");
   });
 
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {

@@ -124,9 +124,17 @@ function buildMessagingSection(params: {
   runtimeChannel?: string;
   messageToolHints?: string[];
 }) {
+  // Minimal prompts (subagents + some cron sessions) still need channel-specific
+  // formatting guidance; otherwise completion messages may be delivered with the
+  // wrong markup for the channel.
   if (params.isMinimal) {
-    return [];
+    const hints = (params.messageToolHints ?? []).map((line) => line.trim()).filter(Boolean);
+    if (hints.length === 0) {
+      return [];
+    }
+    return ["## Channel Formatting", ...hints, ""];
   }
+
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
