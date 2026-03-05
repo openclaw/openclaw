@@ -278,6 +278,118 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("prefers configured provider api metadata over discovered registry model", () => {
+    mockDiscoveredModel({
+      provider: "onehub",
+      modelId: "glm-5",
+      templateModel: {
+        id: "glm-5",
+        name: "GLM-5 (cached)",
+        provider: "onehub",
+        api: "anthropic-messages",
+        baseUrl: "https://old-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          onehub: {
+            baseUrl: "http://new-provider.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("glm-5"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 198000,
+                maxTokens: 16000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("onehub", "glm-5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "onehub",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "http://new-provider.example.com/v1",
+      reasoning: true,
+      contextWindow: 198000,
+      maxTokens: 16000,
+    });
+  });
+
+  it("prefers exact provider config over normalized alias match when both keys exist", () => {
+    mockDiscoveredModel({
+      provider: "qwen",
+      modelId: "qwen3-coder-plus",
+      templateModel: {
+        id: "qwen3-coder-plus",
+        name: "Qwen3 Coder Plus",
+        provider: "qwen",
+        api: "openai-completions",
+        baseUrl: "https://default-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "qwen-portal": {
+            baseUrl: "https://canonical-provider.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Provider": "canonical" },
+            models: [{ ...makeModel("qwen3-coder-plus"), reasoning: false }],
+          },
+          qwen: {
+            baseUrl: "https://alias-provider.example.com/v1",
+            api: "anthropic-messages",
+            headers: { "X-Provider": "alias" },
+            models: [
+              {
+                ...makeModel("qwen3-coder-plus"),
+                api: "anthropic-messages",
+                reasoning: true,
+                contextWindow: 262144,
+                maxTokens: 32768,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen",
+      id: "qwen3-coder-plus",
+      api: "anthropic-messages",
+      baseUrl: "https://alias-provider.example.com",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 32768,
+      headers: { "X-Provider": "alias" },
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 

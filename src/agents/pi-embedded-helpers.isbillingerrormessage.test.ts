@@ -269,6 +269,21 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches model_context_window_exceeded stop reason surfaced by pi-ai", () => {
+    // Anthropic API (and some OpenAI-compatible providers like ZhipuAI/GLM) return
+    // stop_reason: "model_context_window_exceeded" when the context window is hit.
+    // The pi-ai library surfaces this as "Unhandled stop reason: model_context_window_exceeded".
+    const samples = [
+      "Unhandled stop reason: model_context_window_exceeded",
+      "model_context_window_exceeded",
+      "context_window_exceeded",
+      "Unhandled stop reason: context_window_exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Chinese context overflow error messages from proxy providers", () => {
     const samples = [
       "上下文过长",
