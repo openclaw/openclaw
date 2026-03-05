@@ -45,6 +45,95 @@ JSON examples:
 }
 ```
 
+## Delete sessions
+
+Delete one or many stored sessions:
+
+```bash
+openclaw sessions rm "agent:main:main"
+openclaw sessions rm --agent work "agent:work:main"
+openclaw sessions clear --all
+openclaw sessions clear --older-than 7d
+openclaw sessions clear --all --dry-run
+openclaw sessions clear --older-than 1h --json
+```
+
+## `openclaw sessions rm`
+
+Delete one session by key and all aliases that point at the same transcript:
+
+```bash
+openclaw sessions rm "agent:main:main"
+openclaw sessions rm --agent work "agent:work:main"
+openclaw sessions rm --dry-run "agent:main:main"
+openclaw sessions rm --json "agent:main:main"
+```
+
+`openclaw sessions rm` is case-insensitive for key match and removes:
+- the requested key
+- any key sharing the same `sessionId` as the requested key
+
+If the key is not found, the command exits with code 1.
+
+Example JSON output:
+
+```json
+{
+  "agentId": "main",
+  "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
+  "mode": "rm",
+  "dryRun": false,
+  "beforeCount": 3,
+  "afterCount": 1,
+  "deletedCount": 2,
+  "deletedKeys": ["agent:main:alias", "agent:main:main"],
+  "deletedSessionIds": ["sid-1"]
+}
+```
+
+## `openclaw sessions clear`
+
+Delete many sessions by age or remove all entries from the selected scope:
+
+```bash
+openclaw sessions clear --all
+openclaw sessions clear --all --agent work
+openclaw sessions clear --all --dry-run
+openclaw sessions clear --older-than 30d
+openclaw sessions clear --older-than 7d --json
+openclaw sessions clear --older-than 1h --all-agents
+```
+
+Notes:
+- `--all` and `--older-than` are mutually exclusive.
+- `--all`: remove all entries in the selected store(s).
+- `--older-than <duration>`: remove entries whose `updatedAt` is older than the duration.
+- Transcript files are archived before removal when they can be resolved and removed safely.
+- Use `--dry-run` to preview deletions.
+
+JSON output for all-agent clear:
+
+```json
+{
+  "allAgents": true,
+  "dryRun": false,
+  "mode": "clear-older-than",
+  "stores": [
+    {
+      "agentId": "main",
+      "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
+      "mode": "clear-older-than",
+      "dryRun": false,
+      "beforeCount": 128,
+      "afterCount": 12,
+      "deletedCount": 116,
+      "deletedKeys": ["agent:main:abc", "agent:main:def"],
+      "deletedSessionIds": ["sid-1", "sid-2"]
+    }
+  ]
+}
+```
+
 ## Cleanup maintenance
 
 Run maintenance now (instead of waiting for the next write cycle):

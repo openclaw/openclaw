@@ -5,6 +5,8 @@ const statusCommand = vi.fn();
 const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
+const sessionsRmCommand = vi.fn();
+const sessionsClearCommand = vi.fn();
 const setVerbose = vi.fn();
 
 const runtime = {
@@ -27,6 +29,10 @@ vi.mock("../../commands/sessions.js", () => ({
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand,
+}));
+vi.mock("../../commands/sessions-delete.js", () => ({
+  sessionsRmCommand,
+  sessionsClearCommand,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -56,6 +62,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsRmCommand.mockResolvedValue(undefined);
+    sessionsClearCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -198,6 +206,59 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCleanupCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions rm subcommand with parent-level store/agent forwarding", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/sessions.json",
+      "rm",
+      "--json",
+      "agent:main:main",
+    ]);
+
+    expect(sessionsRmCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "agent:main:main",
+        store: "/tmp/sessions.json",
+        agent: undefined,
+        allAgents: false,
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions clear subcommand with parent-level all-agents forwarding", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "clear",
+      "--all",
+      "--dry-run",
+    ]);
+
+    expect(sessionsClearCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allAgents: true,
+        all: true,
+        dryRun: true,
+        json: false,
+      }),
+      runtime,
+    );
+  });
+
+  it("prefers parent-level --json for sessions clear", async () => {
+    await runCli(["sessions", "--json", "clear", "--all"]);
+
+    expect(sessionsClearCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
       }),
       runtime,
     );
