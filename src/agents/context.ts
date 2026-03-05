@@ -57,17 +57,21 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
-    if (!Array.isArray(provider?.models)) {
+  for (const [provider, providerConfig] of Object.entries(providers)) {
+    if (!Array.isArray(providerConfig?.models)) {
       continue;
     }
-    for (const model of provider.models) {
+    for (const model of providerConfig.models) {
       const modelId = typeof model?.id === "string" ? model.id : undefined;
       const contextWindow =
         typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
+      // Store with provider-qualified key for accurate lookups
+      const providerKey = `${provider}/${modelId}`;
+      params.cache.set(providerKey, contextWindow);
+      // Also store bare modelId for backward compatibility
       params.cache.set(modelId, contextWindow);
     }
   }
@@ -178,12 +182,23 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+export function lookupContextTokens(modelId?: string, provider?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
+
+  // If provider is available, check provider-qualified key first
+  if (provider) {
+    const providerKey = `${provider}/${modelId}`;
+    const providerValue = MODEL_CACHE.get(providerKey);
+    if (providerValue !== undefined) {
+      return providerValue;
+    }
+  }
+
+  // Fall back to bare modelId lookup for backward compatibility
   return MODEL_CACHE.get(modelId);
 }
 
@@ -269,5 +284,5 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
+  return lookupContextTokens(params.model, ref?.provider) ?? params.fallbackContextTokens;
 }
