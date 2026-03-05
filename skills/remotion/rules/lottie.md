@@ -36,8 +36,7 @@ import { cancelRender, continueRender, delayRender } from "remotion";
 export const MyAnimation = () => {
   const [handle] = useState(() => delayRender("Loading Lottie animation"));
 
-  const [animationData, setAnimationData] =
-    useState<LottieAnimationData | null>(null);
+  const [animationData, setAnimationData] = useState<LottieAnimationData | null>(null);
 
   useEffect(() => {
     fetch("https://assets4.lottiefiles.com/packages/lf20_zy.json")
