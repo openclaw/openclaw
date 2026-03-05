@@ -20,8 +20,21 @@ const ONE_HOUR_MS = 60 * 60_000;
  * the health monitor treats it as a "stale socket" and triggers a restart.
  * This catches the half-dead WebSocket scenario where the connection appears
  * alive (health checks pass) but Slack silently stops delivering events.
+ *
+ * Default is 30 minutes for high-traffic channels (Slack, Discord, Telegram).
+ * Low-traffic channels like iMessage use longer thresholds to avoid false positives.
  */
 const DEFAULT_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+
+/**
+ * Per-channel stale event thresholds for channels with different traffic patterns.
+ * iMessage can legitimately go hours without messages, so we use a 4-hour threshold
+ * to avoid unnecessary restarts during normal idle periods.
+ */
+const CHANNEL_STALE_EVENT_THRESHOLDS: Partial<Record<string, number>> = {
+  imessage: 4 * 60 * 60_000, // 4 hours for iMessage (low-traffic channel)
+};
+
 const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
 export type ChannelHealthTimingPolicy = {
@@ -122,9 +135,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          // Use channel-specific stale event threshold if available, otherwise use default
+          const channelStaleThreshold =
+            CHANNEL_STALE_EVENT_THRESHOLDS[channelId] ?? timing.staleEventThresholdMs;
           const healthPolicy: ChannelHealthPolicy = {
             now,
-            staleEventThresholdMs: timing.staleEventThresholdMs,
+            staleEventThresholdMs: channelStaleThreshold,
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };
           const health = evaluateChannelHealth(status, healthPolicy);

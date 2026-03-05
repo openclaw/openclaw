@@ -516,4 +516,64 @@ describe("channel-health-monitor", () => {
       monitor.stop();
     });
   });
+
+  describe("per-channel stale event thresholds (#35072)", () => {
+    it("iMessage uses 4-hour threshold to avoid false positive restarts", async () => {
+      const now = Date.now();
+      const idleFor31Minutes = now - 31 * 60 * 1000;
+
+      // iMessage channel idle for 31 minutes (would trigger restart with 30-min threshold)
+      const manager = createSnapshotManager({
+        imessage: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: idleFor31Minutes,
+            lastEventAt: idleFor31Minutes,
+          },
+        },
+      });
+
+      // Should NOT restart because iMessage uses 4-hour threshold
+      await expectNoRestart(manager);
+    });
+
+    it("iMessage restarts after 4+ hours of idle (legitimately stale)", async () => {
+      const now = Date.now();
+      const idleFor4HoursPlus = now - (4 * 60 * 60 * 1000 + 60 * 1000);
+
+      const manager = createSnapshotManager({
+        imessage: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: idleFor4HoursPlus,
+            lastEventAt: idleFor4HoursPlus,
+          },
+        },
+      });
+
+      // Should restart after 4+ hours
+      await expectRestartedChannel(manager, "imessage");
+    });
+
+    it("high-traffic channels (Slack) still use 30-minute threshold", async () => {
+      const now = Date.now();
+      const idleFor31Minutes = now - 31 * 60 * 1000;
+
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: idleFor31Minutes,
+          lastEventAt: idleFor31Minutes,
+        }),
+      );
+
+      // Slack should restart after 30 minutes (unchanged behavior)
+      await expectRestartedChannel(manager, "slack");
+    });
+  });
 });
