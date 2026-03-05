@@ -1,7 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { deduplicateMessages, serializeRefTable, cleanOrphanedRefs, buildRefTableExplanation } from "./deduper.js";
+import {
+  deduplicateMessages,
+  serializeRefTable,
+  cleanOrphanedRefs,
+  buildRefTableExplanation,
+} from "./deduper.js";
 import { getContextDedupRuntime, setContextDedupRuntime } from "./runtime.js";
 
 function extractText(value: unknown): string {
@@ -333,7 +339,7 @@ function tryBuildReadDeltaNote(params: {
     `[Read delta from earlier chunk]\nPath: ${params.path}\n` +
     `${sourceHint}\n` +
     `Same as earlier chunk lines ${formatRange(params.startLine, params.endLine)}, except:\n` +
-    `${hunkLines.join("\n")}`;
+    hunkLines.join("\n");
 
   if (note.length >= params.originalTextLength) {
     return null;
@@ -361,7 +367,7 @@ function collapseReadChunkAgainstSeen(params: {
   const start = Math.max(1, Math.floor(params.startLine));
   const end = start + lines.length - 1;
 
-  const repeated = new Array<boolean>(lines.length).fill(false);
+  const repeated = Array.from({ length: lines.length }, () => false);
   let repeatedCount = 0;
   let sourceMessageIndex: number | undefined;
   let sourceToolCallId: string | undefined;
@@ -372,10 +378,7 @@ function collapseReadChunkAgainstSeen(params: {
     if (seen && seen.text === lines[i]) {
       repeated[i] = true;
       repeatedCount++;
-      if (
-        sourceMessageIndex === undefined ||
-        seen.firstSeenMessageIndex < sourceMessageIndex
-      ) {
+      if (sourceMessageIndex === undefined || seen.firstSeenMessageIndex < sourceMessageIndex) {
         sourceMessageIndex = seen.firstSeenMessageIndex;
         sourceToolCallId = seen.firstSeenToolCallId;
       }
@@ -669,7 +672,9 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
 }
 
 function parseDedupPointerTargetMessageIndex(text: string): number | undefined {
-  const match = text.match(/Same as context message #(\d+), block #\d+(?: \(toolCallId [^)]+\))?\./);
+  const match = text.match(
+    /Same as context message #(\d+), block #\d+(?: \(toolCallId [^)]+\))?\./,
+  );
   if (!match) {
     return undefined;
   }
@@ -701,8 +706,7 @@ function isSyntheticPointerOrLineageNote(text: string): boolean {
   }
 
   return (
-    text.includes("Same as context message #") ||
-    text.includes("Earlier chunk: context message #")
+    text.includes("Same as context message #") || text.includes("Earlier chunk: context message #")
   );
 }
 
@@ -802,7 +806,10 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
         continue;
       }
 
-      const rewritten = rewriteDedupPointerSourceHint(rewriteLineageSourceHint(content, messages), messages);
+      const rewritten = rewriteDedupPointerSourceHint(
+        rewriteLineageSourceHint(content, messages),
+        messages,
+      );
       if (rewritten !== content) {
         if (!nextMessages) {
           nextMessages = messages.slice();
@@ -826,7 +833,10 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
         return block;
       }
 
-      const rewritten = rewriteDedupPointerSourceHint(rewriteLineageSourceHint(text, messages), messages);
+      const rewritten = rewriteDedupPointerSourceHint(
+        rewriteLineageSourceHint(text, messages),
+        messages,
+      );
       if (rewritten === text) {
         return block;
       }

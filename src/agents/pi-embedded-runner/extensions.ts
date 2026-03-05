@@ -5,14 +5,18 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import { getRefTagSize } from "../pi-extensions/context-dedup/deduper.js";
+import contextDedupExtension from "../pi-extensions/context-dedup/extension.js";
+import { setContextDedupRuntime } from "../pi-extensions/context-dedup/runtime.js";
+import {
+  resolveDedupConfig,
+  resolveEffectiveDedupSettings,
+  resolveLCSSettings,
+} from "../pi-extensions/context-dedup/settings.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
-import contextDedupExtension from "../pi-extensions/context-dedup/extension.js";
-import { getRefTagSize } from "../pi-extensions/context-dedup/deduper.js";
-import { setContextDedupRuntime } from "../pi-extensions/context-dedup/runtime.js";
-import { resolveDedupConfig, resolveEffectiveDedupSettings, resolveLCSSettings } from "../pi-extensions/context-dedup/settings.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 

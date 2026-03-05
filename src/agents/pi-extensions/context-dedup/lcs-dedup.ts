@@ -1,9 +1,9 @@
 /**
  * Longest Common Substring (LCS) based deduplication.
- * 
+ *
  * This algorithm finds repeated subsequences between messages and replaces
  * them with reference tags, enabling dedup even when messages aren't identical.
- * 
+ *
  * Approach:
  * 1. For each pair of messages, find LCS using dynamic programming
  * 2. Only deduplicate substrings longer than minSubstringSize
@@ -15,10 +15,10 @@ import { createHash } from "node:crypto";
 
 export interface LCSConfig {
   mode: "off" | "on";
-  minSubstringSize: number;    // Minimum LCS length to consider
-  maxSubstringSize: number;    // Starting window size (e.g., half context)
-  refTagSize: number;          // Size of reference tag replacement
-  maxIterations: number;       // Max sliding window iterations
+  minSubstringSize: number; // Minimum LCS length to consider
+  maxSubstringSize: number; // Starting window size (e.g., half context)
+  refTagSize: number; // Size of reference tag replacement
+  maxIterations: number; // Max sliding window iterations
 }
 
 /**
@@ -33,21 +33,28 @@ function subHash(content: string): string {
  * Uses dynamic programming with O(mn) time and O(mn) space.
  * For very long strings, falls back to a greedy approximation.
  */
-function findLCS(str1: string, str2: string, minLen: number): { substring: string; start1: number; start2: number } | null {
+// eslint-disable-next-line no-unused-vars
+function findLCS(
+  str1: string,
+  str2: string,
+  minLen: number,
+): { substring: string; start1: number; start2: number } | null {
   const m = str1.length;
   const n = str2.length;
-  
+
   // For very long strings, use greedy approach to avoid memory issues
   if (m * n > 10_000_000) {
     return findLCSGreedy(str1, str2, minLen);
   }
-  
+
   // DP table
-  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  const dp: number[][] = Array(m + 1)
+    .fill(null)
+    .map(() => Array(n + 1).fill(0));
   let maxLen = 0;
   let endIdx1 = 0;
   let endIdx2 = 0;
-  
+
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       if (str1[i - 1] === str2[j - 1]) {
@@ -60,11 +67,11 @@ function findLCS(str1: string, str2: string, minLen: number): { substring: strin
       }
     }
   }
-  
+
   if (maxLen < minLen) {
     return null;
   }
-  
+
   return {
     substring: str1.slice(endIdx1 - maxLen, endIdx1),
     start1: endIdx1 - maxLen,
@@ -75,11 +82,15 @@ function findLCS(str1: string, str2: string, minLen: number): { substring: strin
 /**
  * Greedy LCS for very long strings - finds longest match at start/end first.
  */
-function findLCSGreedy(str1: string, str2: string, minLen: number): { substring: string; start1: number; start2: number } | null {
+function findLCSGreedy(
+  str1: string,
+  str2: string,
+  minLen: number,
+): { substring: string; start1: number; start2: number } | null {
   // Try matching from start
   let commonLen = 0;
   const maxCheck = Math.min(str1.length, str2.length, 10000); // Limit check length
-  
+
   for (let i = 0; i < maxCheck; i++) {
     if (str1[i] === str2[i]) {
       commonLen++;
@@ -87,11 +98,11 @@ function findLCSGreedy(str1: string, str2: string, minLen: number): { substring:
       break;
     }
   }
-  
+
   if (commonLen >= minLen) {
     return { substring: str1.slice(0, commonLen), start1: 0, start2: 0 };
   }
-  
+
   // Try matching from end
   commonLen = 0;
   for (let i = 0; i < maxCheck; i++) {
@@ -103,13 +114,13 @@ function findLCSGreedy(str1: string, str2: string, minLen: number): { substring:
       break;
     }
   }
-  
+
   if (commonLen >= minLen) {
     const start1 = str1.length - commonLen;
     const start2 = str2.length - commonLen;
     return { substring: str1.slice(start1), start1, start2 };
   }
-  
+
   return null;
 }
 
@@ -119,43 +130,47 @@ function findLCSGreedy(str1: string, str2: string, minLen: number): { substring:
  */
 export function findRepeatedSubstrings(
   messages: string[],
-  config: LCSConfig
+  config: LCSConfig,
 ): Map<string, { occurrences: number; totalSavings: number }> {
   if (config.mode === "off" || messages.length < 2) {
     return new Map();
   }
-  
+
   const substringCounts = new Map<string, { occurrences: number; totalSavings: number }>();
   const refTagSize = config.refTagSize;
-  
+
   // Start with max window size and decrease
-  for (let windowSize = config.maxSubstringSize; windowSize >= config.minSubstringSize; windowSize -= Math.floor(windowSize / 4)) {
+  for (
+    let windowSize = config.maxSubstringSize;
+    windowSize >= config.minSubstringSize;
+    windowSize -= Math.floor(windowSize / 4)
+  ) {
     // For each message pair
     for (let i = 0; i < messages.length; i++) {
       for (let j = i + 1; j < messages.length; j++) {
         const str1 = messages[i];
         const str2 = messages[j];
-        
+
         if (str1.length < windowSize || str2.length < windowSize) {
           continue;
         }
-        
+
         // Slide through str1 with this window size
         for (let pos1 = 0; pos1 <= str1.length - windowSize; pos1 += Math.floor(windowSize / 2)) {
           const window = str1.slice(pos1, pos1 + windowSize);
-          
+
           // Check if this window exists in str2
           const pos2 = str2.indexOf(window);
           if (pos2 === -1) {
             continue;
           }
-          
+
           // Found a match! Calculate savings
           const savings = window.length - refTagSize;
           if (savings <= 0) {
             continue;
           }
-          
+
           const existing = substringCounts.get(window);
 
           if (existing) {
@@ -168,7 +183,7 @@ export function findRepeatedSubstrings(
       }
     }
   }
-  
+
   // Filter to only substrings that save space
   const result = new Map<string, { occurrences: number; totalSavings: number }>();
   for (const [hash, data] of substringCounts) {
@@ -176,7 +191,7 @@ export function findRepeatedSubstrings(
       result.set(hash, data);
     }
   }
-  
+
   return result;
 }
 
@@ -186,13 +201,15 @@ export function findRepeatedSubstrings(
  */
 export function applyLCSDedup(
   messages: { content: string }[],
-  config: LCSConfig
+  config: LCSConfig,
 ): { messages: { content: string }[]; refTable: Record<string, string>; totalSavings: number } {
   if (config.mode === "off" || messages.length < 2) {
     return { messages, refTable: {}, totalSavings: 0 };
   }
 
-  const rawContents = messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
+  const rawContents = messages.map((m) =>
+    typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+  );
   const repeatedSubs = findRepeatedSubstrings(rawContents, config);
 
   if (repeatedSubs.size === 0) {
@@ -293,21 +310,21 @@ export function applyLCSDedup(
  */
 export function findCommonEdges(
   messages: string[],
-  minSize: number = 50
+  minSize: number = 50,
 ): { prefix?: string; suffix?: string; fromMsg: number; toMsg: number }[] {
   const results: { prefix?: string; suffix?: string; fromMsg: number; toMsg: number }[] = [];
-  
+
   for (let i = 0; i < messages.length - 1; i++) {
     const curr = messages[i];
     const next = messages[i + 1];
-    
+
     // Find common prefix
     let prefixLen = 0;
     const maxPrefix = Math.min(curr.length, next.length);
     while (prefixLen < maxPrefix && curr[prefixLen] === next[prefixLen]) {
       prefixLen++;
     }
-    
+
     if (prefixLen >= minSize) {
       results.push({
         prefix: curr.slice(0, prefixLen),
@@ -315,14 +332,17 @@ export function findCommonEdges(
         toMsg: i + 1,
       });
     }
-    
+
     // Find common suffix
     let suffixLen = 0;
     const maxSuffix = Math.min(curr.length, next.length);
-    while (suffixLen < maxSuffix && curr[curr.length - 1 - suffixLen] === next[next.length - 1 - suffixLen]) {
+    while (
+      suffixLen < maxSuffix &&
+      curr[curr.length - 1 - suffixLen] === next[next.length - 1 - suffixLen]
+    ) {
       suffixLen++;
     }
-    
+
     if (suffixLen >= minSize) {
       results.push({
         suffix: curr.slice(-suffixLen),
@@ -331,6 +351,6 @@ export function findCommonEdges(
       });
     }
   }
-  
+
   return results;
 }

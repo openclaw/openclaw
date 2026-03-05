@@ -1,6 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from "vitest";
 import { deduplicateMessages } from "./context-dedup/deduper.js";
-import { applyReadLineageCompaction, rewriteReadLineageSourcePointers } from "./context-dedup/extension.js";
+import {
+  applyReadLineageCompaction,
+  rewriteReadLineageSourcePointers,
+} from "./context-dedup/extension.js";
 
 const DEDUP_ON = {
   mode: "on",
@@ -59,7 +63,8 @@ describe("context-dedup", () => {
   });
 
   it("deduplicates timestamped non-tool messages by normalized body", () => {
-    const body = "This is the stable message body that should dedup despite timestamp drift.".repeat(3);
+    const body =
+      "This is the stable message body that should dedup despite timestamp drift.".repeat(3);
 
     const result = deduplicateMessages(
       [
@@ -76,7 +81,7 @@ describe("context-dedup", () => {
   });
 
   it("normalizes trailing newlines when matching duplicate payloads", () => {
-    const base = `${"line payload xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n".repeat(20)}`;
+    const base = "line payload xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n".repeat(20);
     const withExtraTrailing = `${base}\n\n`;
 
     const result = deduplicateMessages(
@@ -317,10 +322,7 @@ describe("context-dedup", () => {
   });
 
   it("rewrites nested lineage source pointers to original dedup source", () => {
-    const original = Array.from(
-      { length: 40 },
-      (_, idx) => `line ${idx + 1} :: ${"z".repeat(48)}`,
-    );
+    const original = Array.from({ length: 40 }, (_, idx) => `line ${idx + 1} :: ${"z".repeat(48)}`);
     const variant = Array.from(
       { length: 40 },
       (_, idx) => `variant ${idx + 1} :: ${"q".repeat(48)}`,

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from "node:crypto";
 
 export type RefTagFormat = "unicode" | "angle";
@@ -93,13 +94,15 @@ function isDedupEligibleMessage(msg: any): boolean {
   return role === "user" || role === "assistant" || role === "tool" || role === "toolresult";
 }
 
-type TextLikeBlock = string | {
-  type?: string;
-  text?: string;
-  content?: string;
-  parts?: unknown[];
-  [key: string]: unknown;
-};
+type TextLikeBlock =
+  | string
+  | {
+      type?: string;
+      text?: string;
+      content?: string;
+      parts?: unknown[];
+      [key: string]: unknown;
+    };
 
 function extractTextValue(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -185,8 +188,8 @@ function replaceBlockText(block: TextLikeBlock, nextText: string): TextLikeBlock
 
 function stripLeadingTimestampPrefix(text: string): string {
   const patterns = [
-    /^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+[A-Za-z_\/+\-]{2,12}\]\s*/,
-    /^\[\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s+[A-Za-z_\/+\-]{2,12})?\]\s*/,
+    /^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\s+[A-Za-z_/+-]{2,12}\]\s*/,
+    /^\[\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s+[A-Za-z_/+-]{2,12})?\]\s*/,
   ];
 
   let normalized = text;
@@ -417,7 +420,11 @@ export function deduplicateMessages(
  * Clean orphaned refs from table - remove entries no longer referenced in messages.
  * Used during context compaction when old content is pruned.
  */
-export function cleanOrphanedRefs(messages: any[], refTable: RefTable, config: DedupConfig): RefTable {
+export function cleanOrphanedRefs(
+  messages: any[],
+  refTable: RefTable,
+  config: DedupConfig,
+): RefTable {
   // Find all ref IDs used in messages
   const usedRefs = new Set<string>();
   const { start, end } = getRefDelimiters(config.refTagFormat);

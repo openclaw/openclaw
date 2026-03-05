@@ -2,7 +2,9 @@ import type { AgentContextDedupConfig } from "../../../config/types.agent-defaul
 import type { DedupConfig, EffectiveDedupSettings } from "./deduper.js";
 import type { LCSConfig } from "./lcs-dedup.js";
 
-export function resolveDedupConfig(config: AgentContextDedupConfig | undefined): DedupConfig | undefined {
+export function resolveDedupConfig(
+  config: AgentContextDedupConfig | undefined,
+): DedupConfig | undefined {
   if (!config) {
     return undefined;
   }
@@ -22,12 +24,14 @@ export function resolveEffectiveDedupSettings(
   config: AgentContextDedupConfig | undefined,
 ): EffectiveDedupSettings {
   const resolved = resolveDedupConfig(config);
-  return resolved ?? {
-    mode: "off",
-    debugDump: false,
-    minContentSize: 100,
-    refTagFormat: "unicode",
-  };
+  return (
+    resolved ?? {
+      mode: "off",
+      debugDump: false,
+      minContentSize: 100,
+      refTagFormat: "unicode",
+    }
+  );
 }
 
 /**
