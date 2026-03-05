@@ -42,7 +42,9 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0 && !params.ctx.buffer) {
     return { channel: params.channel, messageId: "" };
   }
-  // Handle direct buffer attachment upload
+  // Handle direct buffer attachment upload.
+  // Note: In the current pipeline, buffer uploads and mediaUrl(s) are mutually exclusive.
+  // If both are ever present, we intentionally prioritize the explicit buffer upload.
   if (params.ctx.buffer) {
     return await params.adapter.sendMedia!({
       ...params.ctx,
