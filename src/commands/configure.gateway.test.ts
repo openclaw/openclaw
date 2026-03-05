@@ -254,7 +254,7 @@ describe("promptGatewayConfig", () => {
         provider: "default",
         id: "OPENCLAW_GATEWAY_TOKEN",
       });
-      expect(result.token).toBe("env-gateway-token");
+      expect(result.token).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;

@@ -5,6 +5,21 @@ import type { RuntimeEnv } from "../runtime.js";
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const buildGatewayInstallPlan = vi.hoisted(() =>
+  vi.fn(async () => ({
+    programArguments: [],
+    workingDirectory: "/tmp",
+    environment: {},
+  })),
+);
+const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
+const resolveGatewayInstallToken = vi.hoisted(() =>
+  vi.fn(async () => ({
+    token: undefined,
+    tokenRefConfigured: true,
+    warnings: [],
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -19,12 +34,12 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
-  buildGatewayInstallPlan: vi.fn(async () => ({
-    programArguments: [],
-    workingDirectory: "/tmp",
-    environment: {},
-  })),
+  buildGatewayInstallPlan,
   gatewayInstallErrorHint: vi.fn(() => "hint"),
+}));
+
+vi.mock("../commands/gateway-install-token.js", () => ({
+  resolveGatewayInstallToken,
 }));
 
 vi.mock("../commands/daemon-runtime.js", () => ({
@@ -45,7 +60,7 @@ vi.mock("../daemon/service.js", () => ({
     isLoaded: vi.fn(async () => false),
     restart: vi.fn(async () => {}),
     uninstall: vi.fn(async () => {}),
-    install: vi.fn(async () => {}),
+    install: gatewayServiceInstall,
   })),
 }));
 
@@ -84,6 +99,9 @@ describe("finalizeOnboardingWizard", () => {
     runTui.mockClear();
     probeGatewayReachable.mockClear();
     setupOnboardingShellCompletion.mockClear();
+    buildGatewayInstallPlan.mockClear();
+    gatewayServiceInstall.mockClear();
+    resolveGatewayInstallToken.mockClear();
   });
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
@@ -163,5 +181,56 @@ describe("finalizeOnboardingWizard", () => {
         password: "resolved-gateway-password",
       }),
     );
+  });
+
+  it("does not persist resolved SecretRef token in daemon install plan", async () => {
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+    const runtime = createRuntime();
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+      }),
+    );
+    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,6 +10,7 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
+import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
@@ -165,23 +166,40 @@ export async function finalizeOnboardingWizard(
       let installError: string | null = null;
       try {
         progress.update("Preparing Gateway service…");
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: settings.port,
-          token: settings.gatewayToken,
-          runtime: daemonRuntime,
-          warn: (message, title) => prompter.note(message, title),
+        const tokenResolution = await resolveGatewayInstallToken({
           config: nextConfig,
-        });
-
-        progress.update("Installing Gateway service…");
-        await service.install({
           env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
         });
+        for (const warning of tokenResolution.warnings) {
+          await prompter.note(warning, "Gateway service");
+        }
+        if (tokenResolution.unavailableReason) {
+          installError = [
+            "Gateway install blocked:",
+            tokenResolution.unavailableReason,
+            "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun onboarding.",
+          ].join(" ");
+        } else {
+          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
+            {
+              env: process.env,
+              port: settings.port,
+              token: tokenResolution.token,
+              runtime: daemonRuntime,
+              warn: (message, title) => prompter.note(message, title),
+              config: nextConfig,
+            },
+          );
+
+          progress.update("Installing Gateway service…");
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+        }
       } catch (err) {
         installError = err instanceof Error ? err.message : String(err);
       } finally {

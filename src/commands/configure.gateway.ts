@@ -209,7 +209,6 @@ export async function promptGatewayConfig(
         runtime,
       );
       const envVarName = String(envVar ?? "").trim();
-      gatewayTokenForCalls = process.env[envVarName]?.trim();
       gatewayToken = {
         source: "env",
         provider: resolveDefaultSecretProviderAlias(cfg, "env", {
