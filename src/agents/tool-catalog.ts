@@ -138,6 +138,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "sessions_send_concurrent",
+    label: "sessions_send_concurrent",
+    description: "Send to multiple sessions concurrently",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_spawn",
     label: "sessions_spawn",
     description: "Spawn sub-agent",
