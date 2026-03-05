@@ -8,7 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
-import { buildQueuedSystemPrompt } from "./session-updates.js";
+import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
@@ -1137,7 +1137,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 });
 
-describe("buildQueuedSystemPrompt", () => {
+describe("drainFormattedSystemEvents", () => {
   it("adds a local timestamp to queued system events by default", async () => {
     vi.useFakeTimers();
     try {
@@ -1147,16 +1147,15 @@ describe("buildQueuedSystemPrompt", () => {
 
       enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
 
-      const result = await buildQueuedSystemPrompt({
+      const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
         sessionKey: "agent:main:main",
-        isMainSession: false,
+        isMainSession: true,
         isNewSession: false,
       });
 
       expect(expectedTimestamp).toBeDefined();
-      expect(result).toContain("Runtime System Events (gateway-generated)");
-      expect(result).toContain(`- [${expectedTimestamp}] Model switched.`);
+      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();
