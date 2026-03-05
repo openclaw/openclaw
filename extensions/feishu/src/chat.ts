@@ -71,6 +71,109 @@ async function getChatMembers(
   };
 }
 
+/**
+ * Parse Feishu message body content into a plain-text string.
+ * Feishu stores message body as a JSON string whose structure depends on msg_type.
+ * For text messages, the JSON has a `text` field. For post (rich text), we extract
+ * inline text. For other types we return a summary.
+ */
+function parseMessageContent(msgType: string | undefined, bodyContent: string | undefined): string {
+  if (!bodyContent) return "";
+  try {
+    const parsed = JSON.parse(bodyContent);
+    if (msgType === "text") {
+      return typeof parsed.text === "string" ? parsed.text : bodyContent;
+    }
+    if (msgType === "post") {
+      // Rich-text post: extract text from content arrays
+      const lines: string[] = [];
+      const locales = Object.values(parsed) as Array<{
+        title?: string;
+        content?: Array<Array<{ tag: string; text?: string }>>;
+      }>;
+      for (const locale of locales) {
+        if (locale?.title) lines.push(locale.title);
+        if (Array.isArray(locale?.content)) {
+          for (const paragraph of locale.content) {
+            if (!Array.isArray(paragraph)) continue;
+            const texts = paragraph
+              .filter(
+                (el): el is { tag: string; text: string } =>
+                  el.tag === "text" && typeof el.text === "string",
+              )
+              .map((el) => el.text);
+            if (texts.length > 0) lines.push(texts.join(""));
+          }
+        }
+      }
+      return lines.join("\n") || bodyContent;
+    }
+    if (msgType === "image") return "[image]";
+    if (msgType === "audio") return "[audio]";
+    if (msgType === "video") return "[video]";
+    if (msgType === "file") return "[file]";
+    if (msgType === "sticker") return "[sticker]";
+    if (msgType === "interactive") return "[interactive card]";
+    if (msgType === "share_chat" || msgType === "share_user") return `[${msgType}]`;
+    return bodyContent;
+  } catch {
+    return bodyContent;
+  }
+}
+
+async function getChatHistory(
+  client: Lark.Client,
+  chatId: string,
+  options?: {
+    startTime?: string;
+    endTime?: string;
+    sortType?: "ByCreateTimeAsc" | "ByCreateTimeDesc";
+    pageSize?: number;
+    pageToken?: string;
+  },
+) {
+  const pageSize = options?.pageSize ? Math.max(1, Math.min(50, options.pageSize)) : 20;
+  const res = await client.im.message.list({
+    params: {
+      container_id_type: "chat",
+      container_id: chatId,
+      start_time: options?.startTime,
+      end_time: options?.endTime,
+      sort_type: options?.sortType ?? "ByCreateTimeDesc",
+      page_size: pageSize,
+      page_token: options?.pageToken,
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg ?? `Feishu API error (code ${res.code})`);
+  }
+
+  const messages =
+    res.data?.items?.map((item) => ({
+      message_id: item.message_id,
+      msg_type: item.msg_type,
+      create_time: item.create_time,
+      sender: item.sender
+        ? {
+            id: item.sender.id,
+            id_type: item.sender.id_type,
+            sender_type: item.sender.sender_type,
+          }
+        : undefined,
+      content: parseMessageContent(item.msg_type, item.body?.content),
+      deleted: item.deleted,
+      updated: item.updated,
+    })) ?? [];
+
+  return {
+    chat_id: chatId,
+    has_more: res.data?.has_more,
+    page_token: res.data?.page_token,
+    messages,
+  };
+}
+
 export function registerFeishuChatTools(api: OpenClawPluginApi) {
   if (!api.config) {
     api.logger.debug?.("feishu_chat: No config available, skipping chat tools");
@@ -96,7 +199,7 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     {
       name: "feishu_chat",
       label: "Feishu Chat",
-      description: "Feishu chat operations. Actions: members, info",
+      description: "Feishu chat operations. Actions: members, info, history",
       parameters: FeishuChatSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuChatParams;
@@ -115,6 +218,16 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               );
             case "info":
               return json(await getChatInfo(client, p.chat_id));
+            case "history":
+              return json(
+                await getChatHistory(client, p.chat_id, {
+                  startTime: p.start_time,
+                  endTime: p.end_time,
+                  sortType: p.sort_type,
+                  pageSize: p.page_size,
+                  pageToken: p.page_token,
+                }),
+              );
             default:
               return json({ error: `Unknown action: ${String(p.action)}` });
           }
