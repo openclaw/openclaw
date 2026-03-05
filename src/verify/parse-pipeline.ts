@@ -128,7 +128,10 @@ export function parsePipeline(srcDir: string): ParsedPipeline {
   }
 
   if (steps.length !== 7) {
-    console.warn(`[parse-pipeline] Warning: expected 7 pipeline steps, got ${steps.length}`);
+    throw new Error(
+      `[parse-pipeline] Expected 7 pipeline steps, got ${steps.length}. ` +
+        `If buildDefaultToolPolicyPipelineSteps was intentionally changed, update the expected count.`,
+    );
   }
 
   console.log(`[parse-pipeline] Parsed ${steps.length} pipeline steps`);

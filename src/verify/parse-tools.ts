@@ -150,9 +150,14 @@ export function parseToolCatalog(srcDir: string): ParsedToolCatalog {
   const tools: ToolDefinition[] = [];
   for (const element of defDecl.initializer.elements) {
     const tool = parseToolDefinition(element, sourceFile);
-    if (tool) {
-      tools.push(tool);
+    if (!tool) {
+      const { line, character } = sourceFile.getLineAndCharacterOfPosition(element.getStart());
+      throw new Error(
+        `[parse-tools] Failed to parse CORE_TOOL_DEFINITIONS element at ${filePath}:${line + 1}:${character + 1}. ` +
+          `All tool definitions must be parseable for verification to be sound.`,
+      );
     }
+    tools.push(tool);
   }
   if (tools.length === 0) {
     throw new Error(`[parse-tools] No tool definitions parsed from ${filePath}`);

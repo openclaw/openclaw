@@ -152,6 +152,7 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`; Smoke test 1: gateway denied at orchestrator depth (no override)`);
   w(`; --------------------------------------------------------------------------`);
   w(`(push 1)`);
+  w(`(assert (not allowlist_active))`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (not (explicit_allow gateway_)))`);
@@ -161,6 +162,7 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(``);
   w(`; Smoke test 2: sessions_spawn allowed at orchestrator depth (leaf-only deny)`);
   w(`(push 1)`);
+  w(`(assert (not allowlist_active))`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (not (explicit_allow sessions_spawn_)))`);
@@ -170,6 +172,7 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(``);
   w(`; Smoke test 3: sessions_spawn denied at leaf depth`);
   w(`(push 1)`);
+  w(`(assert (not allowlist_active))`);
   w(`(assert (= depth 2))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (not (explicit_allow sessions_spawn_)))`);
@@ -179,6 +182,7 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(``);
   w(`; Smoke test 4: explicit_allow overrides a deny`);
   w(`(push 1)`);
+  w(`(assert (not allowlist_active))`);
   w(`(assert (= depth 1))`);
   w(`(assert (= max_spawn_depth 2))`);
   w(`(assert (explicit_allow memory_search_))`);

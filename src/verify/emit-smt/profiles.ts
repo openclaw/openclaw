@@ -91,7 +91,7 @@ export function emitProfilesSmt2(data: ParsedAll): string {
   w(`(assert (or (= current_profile 0)`);
   w(`          (= current_profile 1)`);
   w(`          (= current_profile 2)`);
-  w(`          (= current_profile 3))))`);
+  w(`          (= current_profile 3)))`);
   w(``);
   w(`(define-fun profile_allows ((t Tool)) Bool`);
   w(`  (ite (= current_profile 0) (profile_minimal_allows t)`);

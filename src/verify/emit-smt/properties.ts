@@ -22,14 +22,14 @@ export function emitAllSmt2(): string {
 ; --- 1. Tool Universe ---
 (include "tools.smt2")
 
-; --- 2. Pipeline Semantics ---
+; --- 2. Owner-Only Gate ---
+(include "owner-only.smt2")
+
+; --- 3. Pipeline Semantics ---
 (include "pipeline.smt2")
 
-; --- 3. Profile Presets ---
+; --- 4. Profile Presets ---
 (include "profiles.smt2")
-
-; --- 4. Owner-Only Gate ---
-(include "owner-only.smt2")
 
 ; --- 5. Subagent Deny Lists ---
 (include "subagent.smt2")

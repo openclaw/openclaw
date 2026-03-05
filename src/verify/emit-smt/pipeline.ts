@@ -130,7 +130,9 @@ export function emitPipelineSmt2(data: ParsedAll): string {
     const step = data.pipeline.steps[i - 1];
     if (step.stripPluginOnlyAllowlist) {
       w(`; Step ${i} stripping constraint`);
-      w(`(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (is_core_tool t))))`);
+      w(
+        `(assert (=> (forall ((t Tool)) (=> (step${i}_allow t) (not (and (is_core_tool t) (passes_owner_gate t))))))`,
+      );
       w(`            step${i}_allow_empty))`);
     }
   }

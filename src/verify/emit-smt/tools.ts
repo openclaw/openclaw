@@ -102,12 +102,7 @@ export function emitToolsSmt2(data: ParsedAll): string {
   w(`; --------------------------------------------------------------------------`);
   w(``);
   w(`(define-fun is_core_tool ((t Tool)) Bool`);
-  if (extraTools.length === 0) {
-    w(`  (not (= t PLUGIN)))`);
-  } else {
-    const exclusions = ["PLUGIN", ...extraTools.map((id) => toolConstructor(id))];
-    w(`  (and ${exclusions.map((e) => `(not (= t ${e}))`).join("\n       ")}))`);
-  }
+  w(`  (not (= t PLUGIN)))`);
   w(``);
 
   // 4. Section groups
