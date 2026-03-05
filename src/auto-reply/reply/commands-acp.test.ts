@@ -242,7 +242,11 @@ function createSessionBindingCapabilities() {
 
 type AcpBindInput = {
   targetSessionKey: string;
-  conversation: { accountId: string; conversationId: string };
+  conversation: {
+    channel?: "discord" | "telegram";
+    accountId: string;
+    conversationId: string;
+  };
   placement: "current" | "child";
   metadata?: Record<string, unknown>;
 };
@@ -251,14 +255,22 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
   const nextConversationId =
     input.placement === "child" ? "thread-created" : input.conversation.conversationId;
   const boundBy = typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1";
+  const channel = input.conversation.channel ?? "discord";
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
-    conversation: {
-      channel: "discord",
-      accountId: input.conversation.accountId,
-      conversationId: nextConversationId,
-      parentConversationId: "parent-1",
-    },
+    conversation:
+      channel === "discord"
+        ? {
+            channel: "discord",
+            accountId: input.conversation.accountId,
+            conversationId: nextConversationId,
+            parentConversationId: "parent-1",
+          }
+        : {
+            channel: "telegram",
+            accountId: input.conversation.accountId,
+            conversationId: nextConversationId,
+          },
     metadata: { boundBy, webhookId: "wh-1" },
   });
 }
@@ -494,6 +506,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(result?.reply?.channelData).toEqual({ telegram: { pin: true } });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
