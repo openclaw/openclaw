@@ -153,7 +153,7 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   let latestCompactionTimestamp: number | null = null;
   for (let i = 0; i < messages.length; i += 1) {
     const entry = messages[i];
-    if (entry?.role !== "compactionSummary") {
+    if ((entry?.role as string) !== "compactionSummary") {
       continue;
     }
     latestCompactionSummaryIndex = i;

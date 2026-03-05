@@ -21,13 +21,13 @@ type ToolExecuteArgsCurrent = [
   string,
   unknown,
   AbortSignal | undefined,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
 ];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
   AbortSignal | undefined,
 ];
@@ -113,7 +113,7 @@ function normalizeToolExecutionResult(params: {
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   toolCallId: string;
   params: unknown;
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined;
+  onUpdate: AgentToolUpdateCallback | undefined;
   signal: AbortSignal | undefined;
 } {
   if (isLegacyToolExecuteArgs(args)) {
@@ -159,7 +159,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const rawResult = await tool.execute(
+            toolCallId,
+            executeParams as never,
+            signal,
+            onUpdate,
+          );
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,

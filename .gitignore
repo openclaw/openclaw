@@ -3,6 +3,7 @@ node_modules
 .env
 docker-compose.extra.yml
 dist
+!packages/iris-agent-core/dist/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -36,9 +37,9 @@ apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
-bin/
-bin/clawdbot-mac
-bin/docs-list
+/bin/
+/bin/clawdbot-mac
+/bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/

@@ -284,6 +284,28 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Iris parallel engine options. */
+  parallel?: AgentParallelConfig;
+};
+
+export type AgentParallelConfig = {
+  /** Per-tool execution timeout in ms. 0 = no timeout (default). */
+  toolTimeoutMs?: number;
+  /** Tool result cache TTL in ms. -1 = session-scoped (never evict). 0 = disabled (default). */
+  toolCacheMs?: number;
+  /** Max tools executed simultaneously. Default: 5. */
+  maxParallelTools?: number;
+  /** Age-based tool result compression. false = disabled. */
+  compression?:
+    | {
+        /** How many user-turns from the end to keep uncompressed. Default: 2. */
+        ageTurns?: number;
+        /** Max characters per tool result before truncation. Default: 100. */
+        maxChars?: number;
+        /** Max characters per assistant text block. 0 = skip. Default: 300. */
+        maxAssistantChars?: number;
+      }
+    | false;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
