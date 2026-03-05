@@ -33,7 +33,6 @@ import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
 import {
   isStrictModelResolutionEnabled,
   resolveGatewayAgentModelState,

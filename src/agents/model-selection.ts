@@ -452,6 +452,11 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
     }
   }
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    // Ignore non-model keys (for example policy/allowlist keys) so strict
+    // provider inference only considers explicit model refs.
+    if (!key.includes("/")) {
+      continue;
+    }
     const parsed = parseModelRef(key, DEFAULT_PROVIDER);
     if (parsed?.provider) {
       out.add(parsed.provider);

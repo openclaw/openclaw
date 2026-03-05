@@ -776,6 +776,44 @@ describe("strict model resolution", () => {
       ref: { provider: "anthropic", model: "claude-opus-4-6" },
     });
   });
+
+  it("ignores non-model allowlist keys when inferring configured providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [strictTestModelDefinition("claude-opus-4-6")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+          models: {
+            key: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
+  });
+
   it("keeps resolution isolated across multiple agents", () => {
     const cfg = {
       models: {
