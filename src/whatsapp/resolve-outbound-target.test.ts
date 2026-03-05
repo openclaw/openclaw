@@ -139,6 +139,21 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
     });
 
+    it("allowFrom denial error references the target and allowFrom policy, not format hint", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("allowFrom");
+        expect(result.error.message).toContain(PRIMARY_TARGET);
+        expect(result.error.message).not.toContain("E.164");
+      }
+    });
+
     it("handles mixed numeric and string allowList entries", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
         .mockReturnValueOnce("+11234567890") // for 'to' param
