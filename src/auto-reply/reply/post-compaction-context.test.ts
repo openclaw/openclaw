@@ -203,7 +203,7 @@ Never modify memory/YYYY-MM-DD.md destructively.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
     const cfg = {
-      agents: { defaults: { userTimezone: "America/New_York" } },
+      agents: { defaults: { userTimezone: "America/New_York", timeFormat: "12" } },
     } as OpenClawConfig;
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
