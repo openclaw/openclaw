@@ -322,7 +322,7 @@ export class VoiceCallWebhookServer {
     req: http.IncomingMessage,
     webhookPath: string,
   ): Promise<WebhookResponsePayload> {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname === "/voice/hold-music") {
       return {
@@ -360,7 +360,7 @@ export class VoiceCallWebhookServer {
     const ctx: WebhookContext = {
       headers: req.headers as Record<string, string | string[] | undefined>,
       rawBody: body,
-      url: `http://${req.headers.host}${req.url}`,
+      url: `http://${req.headers.host || "localhost"}${req.url}`,
       method: "POST",
       query: Object.fromEntries(url.searchParams),
       remoteAddress: req.socket.remoteAddress ?? undefined,
