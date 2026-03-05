@@ -389,7 +389,7 @@ upsert_env "$ENV_FILE" \
 if [[ -n "${OPENCLAW_SKIP_BUILD:-}" ]]; then
   echo "==> Skipping image build/pull (OPENCLAW_SKIP_BUILD is set)"
   if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    fail "Image '$IMAGE_NAME' not found locally. Run 'bastion openclaw build' first."
+    fail "Image '$IMAGE_NAME' not found locally. Build it first with: docker build -t $IMAGE_NAME -f Dockerfile ."
   fi
 elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
