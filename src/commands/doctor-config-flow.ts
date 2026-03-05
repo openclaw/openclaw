@@ -1349,6 +1349,14 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     parent?: Record<string, unknown>,
     channelName?: string,
   ) => {
+    // Match runtime account resolution: a disabled channel disables all child accounts.
+    const effectiveEnabled =
+      ((parent?.enabled as boolean | undefined) ?? true) &&
+      ((account.enabled as boolean | undefined) ?? true);
+    if (!effectiveEnabled) {
+      return;
+    }
+
     const dmEntry = account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
