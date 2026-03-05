@@ -380,7 +380,10 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  const effectiveThreadImplicitMention =
+    channelConfig?.threadImplicitMention ?? ctx.threadImplicitMention;
   const implicitMention = Boolean(
+    effectiveThreadImplicitMention &&
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&

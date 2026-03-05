@@ -193,6 +193,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
     Per-channel controls (`channels.slack.channels.<id|name>`):
 
     - `requireMention`
+    - `threadImplicitMention` — set to `false` to disable implicit thread participation triggers for this channel (overrides global `thread.implicitMention`)
     - `users` (allowlist)
     - `allowBots`
     - `skills`
@@ -239,6 +240,7 @@ and still route command execution against the target conversation session (`Comm
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
+- `channels.slack.thread.implicitMention` (default `true`) controls whether bot thread participation implicitly bypasses `requireMention`; set to `false` to require an explicit `@mention` even in threads the bot has posted in. Override per-channel with `channels.slack.channels.<id>.threadImplicitMention`.
 
 Reply threading controls:
 
@@ -541,7 +543,7 @@ Primary reference:
   - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
-  - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+  - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*` (incl. `thread.implicitMention`), `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
   - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 

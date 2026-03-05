@@ -13,6 +13,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
+import { DEFAULT_THREAD_IMPLICIT_MENTION } from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
@@ -72,6 +73,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode: params.replyToMode ?? "off",
       threadHistoryScope: "thread",
       threadInheritParent: false,
+      threadImplicitMention: DEFAULT_THREAD_IMPLICIT_MENTION,
       slashCommand: {
         enabled: false,
         name: "openclaw",
@@ -629,6 +631,72 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("drops thread reply when threadImplicitMention is false globally (no explicit mention)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.threadImplicitMention = false;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      thread_ts: "100.000",
+      parent_user_id: "B1",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, createSlackAccount(), message);
+
+    expect(prepared).toBeNull();
+  });
+
+  it("allows thread reply when threadImplicitMention is false but bot is explicitly @mentioned", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.threadImplicitMention = false;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      text: "<@B1> what do you think?",
+      thread_ts: "100.000",
+      parent_user_id: "B1",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, createSlackAccount(), message);
+
+    expect(prepared).toBeTruthy();
+  });
+
+  it("drops thread reply when per-channel threadImplicitMention is false", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+      channelsConfig: {
+        C123: { requireMention: true, threadImplicitMention: false } as never,
+      },
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const message = createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      thread_ts: "100.000",
+      parent_user_id: "B1",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, createSlackAccount(), message);
+
+    expect(prepared).toBeNull();
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {
@@ -673,6 +741,7 @@ describe("prepareSlackMessage sender prefix", () => {
       replyToMode: "off",
       threadHistoryScope: "channel",
       threadInheritParent: false,
+      threadImplicitMention: DEFAULT_THREAD_IMPLICIT_MENTION,
       slashCommand: params.slashCommand,
       textLimit: 2000,
       ackReactionScope: "off",

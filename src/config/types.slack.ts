@@ -31,6 +31,12 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * Per-channel override for thread implicit mention behaviour.
+   * When false, the bot will not auto-trigger in threads it has participated in for this channel.
+   * Overrides channels.slack.thread.implicitMention for this specific channel.
+   */
+  threadImplicitMention?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -77,6 +83,11 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /**
+   * If false, the bot will NOT auto-trigger in threads it has previously participated in.
+   * Requires an explicit @mention even inside threads. Default: true.
+   */
+  implicitMention?: boolean;
 };
 
 export type SlackAccountConfig = {

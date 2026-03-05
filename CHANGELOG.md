@@ -495,6 +495,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs/Contributing: require before/after screenshots for UI or visual PRs in the pre-PR checklist. (#32206) Thanks @hydro13.
+- Slack/Thread implicit mention: add `channels.slack.thread.implicitMention` (global) and `channels.slack.channels.<id>.threadImplicitMention` (per-channel) config options to disable implicit thread participation triggers; agents only respond to explicit `@mentions` in threads when set to `false` (default `true` preserves existing behavior).
 
 ### Fixes
 

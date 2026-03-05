@@ -4,6 +4,9 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { createSlackMonitorContext } from "../context.js";
 
+/** Default value used across test context factories — mirrors the runtime default of `true`. */
+export const DEFAULT_THREAD_IMPLICIT_MENTION = true;
+
 export function createInboundSlackTestContext(params: {
   cfg: OpenClawConfig;
   appClient?: App["client"];
@@ -38,6 +41,7 @@ export function createInboundSlackTestContext(params: {
     replyToMode: params.replyToMode ?? "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
+    threadImplicitMention: DEFAULT_THREAD_IMPLICIT_MENTION,
     slashCommand: {
       enabled: false,
       name: "openclaw",

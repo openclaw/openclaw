@@ -34,6 +34,7 @@ function createTestContext() {
     replyToMode: "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
+    threadImplicitMention: true,
     slashCommand: {
       enabled: true,
       name: "openclaw",
