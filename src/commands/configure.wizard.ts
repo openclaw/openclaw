@@ -565,52 +565,60 @@ export async function runConfigureWizard(
         }
         ranSection = true;
 
-        if (choice === "workspace") {
-          await configureWorkspace();
-          await persistConfig();
-        }
-
-        if (choice === "model") {
-          nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
-          await persistConfig();
-        }
-
-        if (choice === "gateway") {
-          const gateway = await promptGatewayConfig(nextConfig, runtime);
-          nextConfig = gateway.config;
-          gatewayPort = gateway.port;
-          didConfigureGateway = true;
-          await persistConfig();
-        }
-
-        if (choice === "channels") {
-          await configureChannelsSection();
-          await persistConfig();
-        }
-
-        if (choice === "skills") {
-          const wsDir = resolveUserPath(workspaceDir);
-          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "daemon") {
-          if (!didConfigureGateway) {
-            await promptDaemonPort();
+        try {
+          if (choice === "workspace") {
+            await configureWorkspace();
+            await persistConfig();
           }
-          await maybeInstallDaemon({
-            runtime,
-            port: gatewayPort,
-          });
-        }
 
-        if (choice === "health") {
-          await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
+          if (choice === "model") {
+            nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+            await persistConfig();
+          }
+
+          if (choice === "web") {
+            nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+            await persistConfig();
+          }
+
+          if (choice === "gateway") {
+            const gateway = await promptGatewayConfig(nextConfig, runtime);
+            nextConfig = gateway.config;
+            gatewayPort = gateway.port;
+            didConfigureGateway = true;
+            await persistConfig();
+          }
+
+          if (choice === "channels") {
+            await configureChannelsSection();
+            await persistConfig();
+          }
+
+          if (choice === "skills") {
+            const wsDir = resolveUserPath(workspaceDir);
+            nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+            await persistConfig();
+          }
+
+          if (choice === "daemon") {
+            if (!didConfigureGateway) {
+              await promptDaemonPort();
+            }
+            await maybeInstallDaemon({
+              runtime,
+              port: gatewayPort,
+            });
+          }
+
+          if (choice === "health") {
+            await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
+          }
+        } catch (sectionErr) {
+          if (sectionErr instanceof WizardCancelledError) {
+            // ESC inside a sub-section: cancel the section and return to the section menu
+            continue;
+          }
+          throw sectionErr;
         }
       }
 

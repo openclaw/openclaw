@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   waitForGatewayReachable: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   summarizeExistingConfig: vi.fn(),
+  promptGatewayConfig: vi.fn(),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -68,7 +69,7 @@ vi.mock("./health-format.js", () => ({
 }));
 
 vi.mock("./configure.gateway.js", () => ({
-  promptGatewayConfig: vi.fn(),
+  promptGatewayConfig: mocks.promptGatewayConfig,
 }));
 
 vi.mock("./configure.gateway-auth.js", () => ({
@@ -133,6 +134,45 @@ describe("runConfigureWizard", () => {
         gateway: expect.objectContaining({ mode: "local" }),
       }),
     );
+  });
+
+  it("returns to section menu instead of exiting when ESC pressed inside a section", async () => {
+    // Regression test for #20495: pressing ESC inside a sub-section (e.g. gateway config)
+    // should cancel that section and return to the section selection menu, not quit the wizard.
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+
+    // Section picker: local mode → gateway section → user ESCs inside gateway → back to picker → continue
+    const selectQueue = ["local", "gateway", "__continue"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+
+    // Simulate user pressing ESC inside the gateway section
+    mocks.promptGatewayConfig.mockRejectedValue(new WizardCancelledError());
+
+    await runConfigureWizard({ command: "configure" }, runtime);
+
+    // The wizard should NOT have exited — it should have returned to section menu
+    expect(runtime.exit).not.toHaveBeenCalledWith(1);
+    // The wizard should have completed normally and persisted config
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
