@@ -201,6 +201,141 @@ function formatRange(start: number, end: number): string {
   return start === end ? `${start}` : `${start}-${end}`;
 }
 
+const READ_DELTA_MAX_HUNKS = 3;
+const READ_DELTA_MIN_TOTAL_LINES = 12;
+const READ_DELTA_MIN_REPEATED_LINES = 8;
+const READ_DELTA_MAX_COVERAGE_RATIO = 0.3;
+
+type LineSpan = {
+  start: number;
+  end: number;
+};
+
+function spanLength(span: LineSpan): number {
+  return span.end - span.start + 1;
+}
+
+function buildChangedSpans(repeated: boolean[]): LineSpan[] {
+  const spans: LineSpan[] = [];
+  let idx = 0;
+
+  while (idx < repeated.length) {
+    if (repeated[idx]) {
+      idx++;
+      continue;
+    }
+
+    const start = idx;
+    while (idx + 1 < repeated.length && !repeated[idx + 1]) {
+      idx++;
+    }
+
+    spans.push({ start, end: idx });
+    idx++;
+  }
+
+  return spans;
+}
+
+function mergeSpansToLimit(spans: LineSpan[], limit: number): LineSpan[] {
+  const merged = spans.map((span) => ({ ...span }));
+
+  while (merged.length > limit) {
+    let bestMergeIndex = -1;
+    let smallestGap = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < merged.length - 1; i++) {
+      const left = merged[i];
+      const right = merged[i + 1];
+      const gap = Math.max(0, right.start - left.end - 1);
+      if (gap < smallestGap) {
+        smallestGap = gap;
+        bestMergeIndex = i;
+      }
+    }
+
+    if (bestMergeIndex < 0) {
+      break;
+    }
+
+    const left = merged[bestMergeIndex];
+    const right = merged[bestMergeIndex + 1];
+    merged.splice(bestMergeIndex, 2, {
+      start: left.start,
+      end: right.end,
+    });
+  }
+
+  return merged;
+}
+
+function buildSourceHint(sourceMessageIndex?: number, sourceToolCallId?: string): string {
+  if (typeof sourceMessageIndex === "number") {
+    return `Earlier chunk: context message #${sourceMessageIndex}${sourceToolCallId ? ` (toolCallId ${sourceToolCallId})` : ""}`;
+  }
+  if (sourceToolCallId) {
+    return `Earlier chunk toolCallId: ${sourceToolCallId}`;
+  }
+  return "Earlier chunk: prior read output";
+}
+
+function tryBuildReadDeltaNote(params: {
+  lines: string[];
+  repeated: boolean[];
+  path: string;
+  startLine: number;
+  endLine: number;
+  sourceMessageIndex?: number;
+  sourceToolCallId?: string;
+  originalTextLength: number;
+}): string | null {
+  if (params.lines.length < READ_DELTA_MIN_TOTAL_LINES) {
+    return null;
+  }
+
+  const repeatedCount = params.repeated.filter(Boolean).length;
+  if (repeatedCount < READ_DELTA_MIN_REPEATED_LINES) {
+    return null;
+  }
+
+  const changedSpans = buildChangedSpans(params.repeated);
+  if (changedSpans.length === 0) {
+    return null;
+  }
+
+  const mergedSpans =
+    changedSpans.length <= READ_DELTA_MAX_HUNKS
+      ? changedSpans
+      : mergeSpansToLimit(changedSpans, READ_DELTA_MAX_HUNKS);
+
+  const coveredLines = mergedSpans.reduce((sum, span) => sum + spanLength(span), 0);
+  const coveredRatio = coveredLines / Math.max(1, params.lines.length);
+  if (coveredRatio > READ_DELTA_MAX_COVERAGE_RATIO) {
+    return null;
+  }
+
+  const sourceHint = buildSourceHint(params.sourceMessageIndex, params.sourceToolCallId);
+  const hunkLines = mergedSpans.map((span) => {
+    const absStart = params.startLine + span.start;
+    const absEnd = params.startLine + span.end;
+    const nextText = params.lines.slice(span.start, span.end + 1).join("\n");
+
+    return `- lines ${formatRange(absStart, absEnd)} now read:\n${nextText}`;
+  });
+
+  const note =
+    `[Read delta from earlier chunk]\nPath: ${params.path}\n` +
+    `${sourceHint}\n` +
+    `Same as earlier chunk lines ${formatRange(params.startLine, params.endLine)}, except:\n` +
+    `${hunkLines.join("\n")}`;
+
+  if (note.length >= params.originalTextLength) {
+    return null;
+  }
+
+  return note;
+}
+
 function collapseReadChunkAgainstSeen(params: {
   text: string;
   path: string;
@@ -264,12 +399,7 @@ function collapseReadChunkAgainstSeen(params: {
   }
 
   if (repeatedCount === lines.length && lines.length >= 8) {
-    const sourceHint =
-      typeof sourceMessageIndex === "number"
-        ? `Earlier chunk: context message #${sourceMessageIndex}${sourceToolCallId ? ` (toolCallId ${sourceToolCallId})` : ""}`
-        : sourceToolCallId
-          ? `Earlier chunk toolCallId: ${sourceToolCallId}`
-          : "Earlier chunk: prior read output";
+    const sourceHint = buildSourceHint(sourceMessageIndex, sourceToolCallId);
 
     const note =
       `[Same file chunk already shown earlier]\nPath: ${params.path}\n` +
@@ -291,6 +421,27 @@ function collapseReadChunkAgainstSeen(params: {
       omittedChars: 0,
       fullOmit: false,
       partialTrim: false,
+    };
+  }
+
+  const deltaNote = tryBuildReadDeltaNote({
+    lines,
+    repeated,
+    path: params.path,
+    startLine: start,
+    endLine: end,
+    sourceMessageIndex,
+    sourceToolCallId,
+    originalTextLength: params.text.length,
+  });
+
+  if (deltaNote) {
+    return {
+      nextText: deltaNote,
+      changed: true,
+      omittedChars: params.text.length - deltaNote.length,
+      fullOmit: false,
+      partialTrim: true,
     };
   }
 
@@ -332,12 +483,7 @@ function collapseReadChunkAgainstSeen(params: {
     omittedRanges.push(formatRange(keptEnd + 1, end));
   }
 
-  const sourceHint =
-    typeof sourceMessageIndex === "number"
-      ? `Earlier chunk: context message #${sourceMessageIndex}${sourceToolCallId ? ` (toolCallId ${sourceToolCallId})` : ""}`
-      : sourceToolCallId
-        ? `Earlier chunk toolCallId: ${sourceToolCallId}`
-        : "Earlier chunk: prior read output";
+  const sourceHint = buildSourceHint(sourceMessageIndex, sourceToolCallId);
 
   const note =
     `[Read overlap trimmed]\nPath: ${params.path}\n` +
@@ -364,7 +510,7 @@ function collapseReadChunkAgainstSeen(params: {
   };
 }
 
-function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: ReadLineageStats } {
+export function applyReadLineageCompaction(messages: any[]): { messages: any[]; stats: ReadLineageStats } {
   const toolCallMeta = collectReadToolCallMeta(messages);
   if (toolCallMeta.size === 0) {
     return {
