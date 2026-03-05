@@ -290,7 +290,9 @@ export async function runCliAgent(params: {
           const next: NodeJS.ProcessEnv = { ...process.env };
           const configEnv = collectConfigRuntimeEnvVars(params.config);
           for (const [key, value] of Object.entries(configEnv)) {
-            if (next[key]?.trim()) continue;
+            if (next[key]?.trim()) {
+              continue;
+            }
             next[key] = value;
           }
           Object.assign(next, backend.env);
