@@ -105,8 +105,8 @@ describe("evaluateChannelHealth", () => {
         connected: true,
         enabled: true,
         configured: true,
-        lastStartAt: 0,
-        lastEventAt: null,
+        lastStartAt: 10_000,
+        lastEventAt: 40_000,
       },
       {
         now: 100_000,
@@ -115,6 +115,45 @@ describe("evaluateChannelHealth", () => {
       },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("ignores activity timestamps from prior lifecycle when determining stale sockets", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 40_000,
+        lastEventAt: now - 120_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not flag stale when no lifecycle-safe activity is available", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 120_000,
+      },
+      {
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 });
 

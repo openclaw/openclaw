@@ -3,11 +3,14 @@ export type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  lastMessageAt?: number | null;
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
   reconnectAttempts?: number;
 };
 
@@ -39,6 +42,29 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+
+function toTimestamp(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function latestActivityAt(snapshot: ChannelHealthSnapshot): number | null {
+  const candidates = [
+    toTimestamp(snapshot.lastEventAt),
+    toTimestamp(snapshot.lastInboundAt),
+    toTimestamp(snapshot.lastOutboundAt),
+    toTimestamp(snapshot.lastMessageAt),
+  ];
+  let latest: number | null = null;
+  for (const candidate of candidates) {
+    if (candidate == null) {
+      continue;
+    }
+    if (latest == null || candidate > latest) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -83,8 +109,9 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
-  if (snapshot.lastStartAt != null) {
-    const upDuration = policy.now - snapshot.lastStartAt;
+  const currentStartAt = toTimestamp(snapshot.lastStartAt);
+  if (currentStartAt != null) {
+    const upDuration = policy.now - currentStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }
@@ -92,15 +119,19 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
-    const upDuration = policy.now - upSince;
-    if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
-      if (eventAge > policy.staleEventThresholdMs) {
-        return { healthy: false, reason: "stale-socket" };
-      }
+  const lastActivityAt = latestActivityAt(snapshot);
+  if (lastActivityAt == null) {
+    return { healthy: true, reason: "healthy" };
+  }
+  if (currentStartAt != null && lastActivityAt < currentStartAt) {
+    return { healthy: true, reason: "healthy" };
+  }
+  const upDuration =
+    currentStartAt == null ? Number.POSITIVE_INFINITY : policy.now - currentStartAt;
+  if (upDuration > policy.staleEventThresholdMs) {
+    const eventAge = policy.now - lastActivityAt;
+    if (eventAge > policy.staleEventThresholdMs) {
+      return { healthy: false, reason: "stale-socket" };
     }
   }
   return { healthy: true, reason: "healthy" };

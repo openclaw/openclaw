@@ -494,9 +494,21 @@ describe("channel-health-monitor", () => {
       const manager = createSlackSnapshotManager(
         runningConnectedSlackAccount({
           lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 30_000,
         }),
       );
       await expectRestartedChannel(manager, "slack");
+    });
+
+    it("skips stale-socket restarts when only pre-lifecycle activity is known", async () => {
+      const now = Date.now();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 120_000,
+        }),
+      );
+      await expectNoRestart(manager);
     });
 
     it("respects custom staleEventThresholdMs", async () => {
