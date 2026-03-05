@@ -147,11 +147,15 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
+      const mimeType =
+        typeof part.mimeType === "string" && part.mimeType.trim().length > 0
+          ? part.mimeType
+          : "image/jpeg";
       parts.push({
         type: "input_image",
         source: {
           type: "base64",
-          media_type: part.mimeType ?? "image/jpeg",
+          media_type: mimeType,
           data: part.data,
         },
       });
