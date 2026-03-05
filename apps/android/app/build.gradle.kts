@@ -21,8 +21,8 @@ android {
         applicationId = "ai.hanzo.bot.android"
         minSdk = 31
         targetSdk = 36
-        versionCode = 202602270
-        versionName = "2026.2.27"
+        versionCode = 202603050
+        versionName = "2026.3.5"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
