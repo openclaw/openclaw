@@ -900,6 +900,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // stale routes across surfaces. Allow configured main sessions from
       // non-Webchat/UI clients (e.g., CLI, backend) to keep the last external route.
       const canInheritDeliverableRoute = Boolean(
+        p.deliver === true &&
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
         ((!isChannelAgnosticSessionScope &&

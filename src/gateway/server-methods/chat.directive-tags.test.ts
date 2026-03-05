@@ -384,8 +384,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-origin-routing",
-      sessionKey: "agent:main:telegram:direct:6812765697",
       deliver: true,
+      sessionKey: "agent:main:telegram:direct:6812765697",
+
       expectBroadcast: false,
     });
 
@@ -395,6 +396,42 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         OriginatingTo: "telegram:6812765697",
         AccountId: "default",
         MessageThreadId: 42,
+      }),
+    );
+  });
+
+  it("chat.send keeps webchat origin when deliver is not enabled", async () => {
+    createTranscriptFixture("openclaw-chat-send-no-deliver-no-route-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:6812765697",
+        accountId: "default",
+        threadId: 42,
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:6812765697",
+      lastAccountId: "default",
+      lastThreadId: 42,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-no-deliver-no-route",
+      sessionKey: "agent:main:telegram:direct:6812765697",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+        MessageThreadId: undefined,
       }),
     );
   });
@@ -419,8 +456,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-feishu-origin-routing",
-      sessionKey: "agent:main:feishu:direct:ou_feishu_direct_123",
       deliver: true,
+      sessionKey: "agent:main:feishu:direct:ou_feishu_direct_123",
+
       expectBroadcast: false,
     });
 
@@ -453,8 +491,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-per-account-channel-peer-routing",
-      sessionKey: "agent:main:telegram:account-a:direct:6812765697",
       deliver: true,
+      sessionKey: "agent:main:telegram:account-a:direct:6812765697",
+
       expectBroadcast: false,
     });
 
@@ -487,8 +526,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-legacy-channel-peer-routing",
-      sessionKey: "agent:main:telegram:6812765697",
       deliver: true,
+      sessionKey: "agent:main:telegram:6812765697",
+
       expectBroadcast: false,
     });
 
@@ -523,8 +563,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-legacy-thread-channel-peer-routing",
-      sessionKey: "agent:main:telegram:6812765697:thread:42",
       deliver: true,
+      sessionKey: "agent:main:telegram:6812765697:thread:42",
+
       expectBroadcast: false,
     });
 
