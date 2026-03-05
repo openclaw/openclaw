@@ -23,4 +23,13 @@ describe("joinPresentTextSegments", () => {
   it("trims segments when requested", () => {
     expect(joinPresentTextSegments(["  A  ", "  B  "], { trim: true })).toBe("A\n\nB");
   });
+
+  it("uses custom separator and skips whitespace-only segments after trim", () => {
+    expect(
+      joinPresentTextSegments(["  keep  ", "   ", "next"], {
+        trim: true,
+        separator: " | ",
+      }),
+    ).toBe("keep | next");
+  });
 });

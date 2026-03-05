@@ -19,7 +19,7 @@ export function joinPresentTextSegments(
 ): string | undefined {
   const separator = options?.separator ?? "\n\n";
   const trim = options?.trim ?? false;
-  const values: string[] = [];
+  let result: string | undefined;
   for (const segment of segments) {
     if (typeof segment !== "string") {
       continue;
@@ -28,7 +28,11 @@ export function joinPresentTextSegments(
     if (!normalized) {
       continue;
     }
-    values.push(normalized);
+    if (result === undefined) {
+      result = normalized;
+      continue;
+    }
+    result += `${separator}${normalized}`;
   }
-  return values.length > 0 ? values.join(separator) : undefined;
+  return result;
 }
