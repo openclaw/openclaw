@@ -636,6 +636,42 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
+  it("accepts cmd as a legacy alias for exec command", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        deny: ["process"],
+        exec: {
+          security: "full",
+          ask: "off",
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main",
+      agentDir: "/tmp/agent-main",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const parameters = execTool?.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(parameters.properties?.cmd).toEqual(parameters.properties?.command);
+    expect(parameters.required ?? []).not.toContain("command");
+
+    const result = await execTool?.execute("call2", {
+      cmd: "echo done",
+      yieldMs: 10,
+    });
+
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
+  });
+
   it("keeps sandbox as the implicit exec host default without forcing gateway approvals", async () => {
     const tools = createOpenClawCodingTools({
       config: {},

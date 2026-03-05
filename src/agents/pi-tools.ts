@@ -27,6 +27,7 @@ import {
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 import {
+  CLAUDE_PARAM_GROUPS,
   assertRequiredParams,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -376,41 +377,44 @@ export function createOpenClawCodingTools(options?: {
     return [tool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const execTool = createExecTool({
-    ...execDefaults,
-    host: options?.exec?.host ?? execConfig.host,
-    security: options?.exec?.security ?? execConfig.security,
-    ask: options?.exec?.ask ?? execConfig.ask,
-    node: options?.exec?.node ?? execConfig.node,
-    pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
-    safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
-    safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
-    safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
-    agentId,
-    cwd: workspaceRoot,
-    allowBackground,
-    scopeKey,
-    sessionKey: options?.sessionKey,
-    messageProvider: options?.messageProvider,
-    currentChannelId: options?.currentChannelId,
-    currentThreadTs: options?.currentThreadTs,
-    accountId: options?.agentAccountId,
-    backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
-    timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
-    approvalRunningNoticeMs:
-      options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-    notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
-    notifyOnExitEmptySuccess:
-      options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
-    sandbox: sandbox
-      ? {
-          containerName: sandbox.containerName,
-          workspaceDir: sandbox.workspaceDir,
-          containerWorkdir: sandbox.containerWorkdir,
-          env: sandbox.docker.env,
-        }
-      : undefined,
-  });
+  const execTool = wrapToolParamNormalization(
+    createExecTool({
+      ...execDefaults,
+      host: options?.exec?.host ?? execConfig.host,
+      security: options?.exec?.security ?? execConfig.security,
+      ask: options?.exec?.ask ?? execConfig.ask,
+      node: options?.exec?.node ?? execConfig.node,
+      pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
+      safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+      safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
+      safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
+      agentId,
+      cwd: workspaceRoot,
+      allowBackground,
+      scopeKey,
+      sessionKey: options?.sessionKey,
+      messageProvider: options?.messageProvider,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
+      accountId: options?.agentAccountId,
+      backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
+      timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
+      approvalRunningNoticeMs:
+        options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
+      notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+      notifyOnExitEmptySuccess:
+        options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+      sandbox: sandbox
+        ? {
+            containerName: sandbox.containerName,
+            workspaceDir: sandbox.workspaceDir,
+            containerWorkdir: sandbox.containerWorkdir,
+            env: sandbox.docker.env,
+          }
+        : undefined,
+    }),
+    CLAUDE_PARAM_GROUPS.exec,
+  );
   const processTool = createProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
