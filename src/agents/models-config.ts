@@ -162,7 +162,14 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    // Kimi Coding users commonly override the endpoint path in config; prefer
+    // that explicit baseUrl over stale agent-side merged values.
+    const preservesAgentBaseUrl = !(
+      key === "kimi-coding" &&
+      typeof newEntry.baseUrl === "string" &&
+      newEntry.baseUrl.trim()
+    );
+    if (preservesAgentBaseUrl && typeof existing.baseUrl === "string" && existing.baseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
