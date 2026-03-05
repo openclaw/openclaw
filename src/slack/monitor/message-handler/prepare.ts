@@ -21,7 +21,7 @@ import {
 } from "../../../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
-import { escapeQuotedLogValue, logInboundDrop } from "../../../channels/logging.js";
+import { logInboundDrop } from "../../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
@@ -779,9 +779,7 @@ export async function prepareSlackMessage(params: {
   }
 
   if (shouldLogVerbose()) {
-    logVerbose(
-      `slack inbound: channel=${message.channel} from=${slackFrom} preview="${escapeQuotedLogValue(preview)}"`,
-    );
+    logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
   }
 
   return {

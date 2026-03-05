@@ -20,7 +20,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import { escapeQuotedLogValue, logInboundDrop } from "../channels/logging.js";
+import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
 import {
@@ -857,13 +857,13 @@ export const buildTelegramMessageContext = async ({
   if (replyTarget && shouldLogVerbose()) {
     const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
-      `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${escapeQuotedLogValue(preview)}"`,
+      `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${preview}"`,
     );
   }
 
   if (forwardOrigin && shouldLogVerbose()) {
     logVerbose(
-      `telegram forward-context: forwardedFrom="${escapeQuotedLogValue(forwardOrigin.from)}" type=${forwardOrigin.fromType}`,
+      `telegram forward-context: forwardedFrom="${forwardOrigin.from}" type=${forwardOrigin.fromType}`,
     );
   }
 
@@ -872,7 +872,7 @@ export const buildTelegramMessageContext = async ({
     const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
     const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
     logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${escapeQuotedLogValue(preview)}"`,
+      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
     );
   }
 

@@ -2,7 +2,6 @@ import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } fr
 import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import { escapeQuotedLogValue } from "../channels/logging.js";
 import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 import { recordInboundSession } from "../channels/session.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -355,7 +354,7 @@ async function finalizeLineInboundContext(params: {
         : "";
     const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
     logVerbose(
-      `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${escapeQuotedLogValue(preview)}"`,
+      `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
     );
   }
 

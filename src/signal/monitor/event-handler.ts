@@ -19,7 +19,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
-import { escapeQuotedLogValue, logInboundDrop, logTypingFailure } from "../../channels/logging.js";
+import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -214,9 +214,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     if (shouldLogVerbose()) {
       const preview = body.slice(0, 200).replace(/\\n/g, "\\\\n");
-      logVerbose(
-        `signal inbound: from=${ctxPayload.From} len=${body.length} preview="${escapeQuotedLogValue(preview)}"`,
-      );
+      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
     const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({

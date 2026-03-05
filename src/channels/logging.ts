@@ -1,9 +1,5 @@
 export type LogFn = (message: string) => void;
 
-export function escapeQuotedLogValue(value: string): string {
-  return value.replace(/"/g, '\\"');
-}
-
 export function logInboundDrop(params: {
   log: LogFn;
   channel: string;
