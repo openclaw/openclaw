@@ -38,6 +38,7 @@ import {
   resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
+  shouldDenyDiscordChannelByAllowedFlag,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -519,7 +520,13 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (isGuildMessage && channelConfig?.allowed === false) {
+  if (
+    isGuildMessage &&
+    shouldDenyDiscordChannelByAllowedFlag({
+      groupPolicy: params.groupPolicy,
+      channelConfig,
+    })
+  ) {
     logDebug(`[discord-preflight] drop: channelConfig.allowed===false`);
     logVerbose(
       `Blocked discord channel ${messageChannelId} not in guild channel allowlist (${channelMatchMeta})`,

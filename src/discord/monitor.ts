@@ -14,6 +14,7 @@ export {
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
+  shouldDenyDiscordChannelByAllowedFlag,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
 export type { DiscordMessageEvent, DiscordMessageHandler } from "./monitor/listeners.js";

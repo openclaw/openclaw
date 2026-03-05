@@ -22,6 +22,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  shouldDenyDiscordChannelByAllowedFlag,
 } from "../monitor/allow-list.js";
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
@@ -137,7 +138,10 @@ async function authorizeVoiceCommand(
       channelAllowlistConfigured,
       channelAllowed,
     }) ||
-    channelConfig?.allowed === false
+    shouldDenyDiscordChannelByAllowedFlag({
+      groupPolicy: params.groupPolicy,
+      channelConfig,
+    })
   ) {
     const channelId = channelOverride?.id ?? channel?.id;
     const channelLabel = channelId ? formatMention({ channelId }) : "This channel";

@@ -62,6 +62,7 @@ import {
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
+  shouldDenyDiscordChannelByAllowedFlag,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -1329,11 +1330,22 @@ async function dispatchDiscordCommandInteraction(params: {
         scope: isThreadChannel ? "thread" : "channel",
       })
     : null;
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.discord !== undefined,
+    groupPolicy: discordConfig?.groupPolicy,
+    defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+  });
   if (channelConfig?.enabled === false) {
     await respond("This channel is disabled.");
     return;
   }
-  if (interaction.guild && channelConfig?.allowed === false) {
+  if (
+    interaction.guild &&
+    shouldDenyDiscordChannelByAllowedFlag({
+      groupPolicy,
+      channelConfig,
+    })
+  ) {
     await respond("This channel is not allowed.");
     return;
   }
@@ -1341,11 +1353,6 @@ async function dispatchDiscordCommandInteraction(params: {
     const channelAllowlistConfigured =
       Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
       groupPolicy,
       guildAllowlisted: Boolean(guildInfo),

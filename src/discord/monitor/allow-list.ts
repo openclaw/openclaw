@@ -528,6 +528,22 @@ export function isDiscordGroupAllowedByPolicy(params: {
   return channelAllowed;
 }
 
+export function shouldDenyDiscordChannelByAllowedFlag(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelConfig?: DiscordChannelConfigResolved | null;
+}): boolean {
+  const { groupPolicy, channelConfig } = params;
+  if (channelConfig?.allowed !== false) {
+    return false;
+  }
+  if (groupPolicy !== "open") {
+    return true;
+  }
+  // In open policy, unmatched channels fall back to { allowed: false } without match metadata.
+  // Only explicit channel entries (direct/parent/wildcard) should still deny.
+  return Boolean(channelConfig.matchSource);
+}
+
 export function resolveGroupDmAllow(params: {
   channels?: string[];
   channelId: string;

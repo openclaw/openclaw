@@ -16,6 +16,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   sanitizeDiscordThreadName,
+  shouldDenyDiscordChannelByAllowedFlag,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
@@ -607,6 +608,35 @@ describe("discord groupPolicy gating", () => {
     for (const testCase of cases) {
       expect(isDiscordGroupAllowedByPolicy(testCase.input), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("discord channel deny gating", () => {
+  it("allows fallback channel misses in open policy", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowedFlag({
+        groupPolicy: "open",
+        channelConfig: { allowed: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("still denies explicit allow=false entries in open policy", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowedFlag({
+        groupPolicy: "open",
+        channelConfig: { allowed: false, matchKey: "123", matchSource: "direct" },
+      }),
+    ).toBe(true);
+  });
+
+  it("denies channel allow=false under allowlist policy", () => {
+    expect(
+      shouldDenyDiscordChannelByAllowedFlag({
+        groupPolicy: "allowlist",
+        channelConfig: { allowed: false },
+      }),
+    ).toBe(true);
   });
 });
 

@@ -27,6 +27,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveGroupDmAllow,
   resolveDiscordGuildEntry,
+  shouldDenyDiscordChannelByAllowedFlag,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
@@ -421,7 +422,12 @@ async function authorizeDiscordReactionIngress(
   ) {
     return { allowed: false, reason: "guild-policy" };
   }
-  if (params.channelConfig?.allowed === false) {
+  if (
+    shouldDenyDiscordChannelByAllowedFlag({
+      groupPolicy: params.groupPolicy,
+      channelConfig: params.channelConfig,
+    })
+  ) {
     return { allowed: false, reason: "guild-channel-denied" };
   }
   return { allowed: true };
