@@ -181,6 +181,12 @@ function readFileAsAttachment(file: File): Promise<ChatAttachment | null> {
   });
 }
 
+// NOTE: Singleton module-level state — assumes exactly one renderChat() call per document.
+// This is true for the current app (app-render.ts calls renderChat once).
+// If renderChat is ever called multiple times in the same document (multi-session panel,
+// test harness, docs embed), these vars must be refactored into a per-instance closure or
+// factory to avoid cross-instance state clobbering.
+//
 // Mutable refs to the latest attachments state, updated on every render.
 // Async callbacks read from these refs instead of stale props closures.
 let latestAttachments: ChatAttachment[] = [];
