@@ -128,6 +128,11 @@ Current migrations:
   → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
+Doctor warnings also include account-default guidance for multi-account channels:
+
+- If two or more `channels.<channel>.accounts` entries are configured without `channels.<channel>.defaultAccount` or `accounts.default`, doctor warns that fallback routing can pick an unexpected account.
+- If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
+
 ### 2b) OpenCode Zen provider overrides
 
 If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it

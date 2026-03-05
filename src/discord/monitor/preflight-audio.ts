@@ -24,6 +24,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   shouldRequireMention: boolean;
   mentionRegexes: RegExp[];
   cfg: OpenClawConfig;
+  abortSignal?: AbortSignal;
 }): Promise<{
   hasAudioAttachment: boolean;
   hasTypedText: boolean;
@@ -42,8 +43,20 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
 
   let transcript: string | undefined;
   if (needsPreflightTranscription) {
+    if (params.abortSignal?.aborted) {
+      return {
+        hasAudioAttachment,
+        hasTypedText,
+      };
+    }
     try {
       const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+      if (params.abortSignal?.aborted) {
+        return {
+          hasAudioAttachment,
+          hasTypedText,
+        };
+      }
       const audioUrls = audioAttachments
         .map((att) => att.url)
         .filter((url): url is string => typeof url === "string" && url.length > 0);
@@ -58,6 +71,9 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           cfg: params.cfg,
           agentDir: undefined,
         });
+        if (params.abortSignal?.aborted) {
+          transcript = undefined;
+        }
       }
     } catch (err) {
       logVerbose(`discord: audio preflight transcription failed: ${String(err)}`);

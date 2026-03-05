@@ -103,7 +103,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       if (key && buffers.has(key)) {
         await flushKey(key);
       }
-      await params.onFlush([item]);
+      try {
+        await params.onFlush([item]);
+      } catch (err) {
+        params.onError?.(err, [item]);
+      }
       return;
     }
 
