@@ -27,12 +27,14 @@ const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
-// google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
-// don't get "Unknown model" errors when Google releases a new minor version.
+// google-gemini-cli / google provider catalogs. Clone the gemini-3-pro/flash-preview
+// template so users don't get "Unknown model" errors when Google releases new
+// minor-version models.
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GOOGLE_PROVIDER_IDS = new Set(["google-gemini-cli", "google"]);
 
 function resolveOpenAIGpt54ForwardCompatModel(
   provider: string,
@@ -241,15 +243,17 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
-// gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
-// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
-// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
-function resolveGoogleGeminiCli31ForwardCompatModel(
+// Gemini 3.1 series models (pro / flash / flash-lite) are not yet present in pi-ai's
+// built-in google-gemini-cli or google provider catalogs.  Clone the nearest gemini-3
+// template so users don't get "Unknown model" errors when Google releases new
+// minor-version models.  Both the google-gemini-cli and google providers are supported.
+function resolveGoogle31ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!GOOGLE_PROVIDER_IDS.has(normalizedProvider)) {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -265,7 +269,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   }
 
   return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
+    normalizedProvider,
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
@@ -326,6 +330,6 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogle31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
