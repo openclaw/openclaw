@@ -182,6 +182,84 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("applies model override from transform result", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xform-model-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "model-transform.mjs");
+    fs.writeFileSync(
+      modPath,
+      'export default () => ({ model: "openai/gpt-4.1-mini", message: "Transform model override" });',
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "model-override" },
+            action: "agent",
+            messageTemplate: "Base message",
+            model: "anthropic/claude-sonnet-4-6",
+            transform: { module: "model-transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/model-override"),
+      path: "model-override",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Transform model override");
+      expect(result.action.model).toBe("openai/gpt-4.1-mini");
+    }
+  });
+
+  it("keeps base model when transform returns non-string model override", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xform-model-type-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "model-type-transform.mjs");
+    fs.writeFileSync(
+      modPath,
+      'export default () => ({ model: { id: "openai/gpt-4.1-mini" }, message: "Invalid type override" });',
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "model-type" },
+            action: "agent",
+            messageTemplate: "Base message",
+            model: "anthropic/claude-sonnet-4-6",
+            transform: { module: "model-type-transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/model-type"),
+      path: "model-type",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Invalid type override");
+      expect(result.action.model).toBe("anthropic/claude-sonnet-4-6");
+    }
+  });
+
   it("rejects transform module traversal outside transformsDir", () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-traversal-"));
     const transformsRoot = path.join(configDir, "hooks", "transforms");

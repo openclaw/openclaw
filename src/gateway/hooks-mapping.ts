@@ -292,6 +292,7 @@ function mergeAction(
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
     override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+  const overrideModel = normalizeTransformOptionalString(override.model);
   return validateAction({
     kind: "agent",
     message,
@@ -306,7 +307,7 @@ function mergeAction(
         : baseAgent?.allowUnsafeExternalContent,
     channel: override.channel ?? baseAgent?.channel,
     to: override.to ?? baseAgent?.to,
-    model: override.model ?? baseAgent?.model,
+    model: overrideModel ?? baseAgent?.model,
     thinking: override.thinking ?? baseAgent?.thinking,
     timeoutSeconds: override.timeoutSeconds ?? baseAgent?.timeoutSeconds,
   });
@@ -439,6 +440,18 @@ function renderOptional(value: string | undefined, ctx: HookMappingContext) {
   }
   const rendered = renderTemplate(value, ctx).trim();
   return rendered ? rendered : undefined;
+}
+
+function normalizeTransformOptionalString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (Object.prototype.toString.call(value) === "[object String]") {
+    const trimmed = String(value).trim();
+    return trimmed ? trimmed : undefined;
+  }
+  return undefined;
 }
 
 function renderTemplate(template: string, ctx: HookMappingContext) {
