@@ -1149,7 +1149,10 @@ export async function resolveImplicitProviders(params: {
     if (cred?.type !== "api_key") {
       continue;
     }
-    const baseUrl = cred.metadata?.baseUrl?.trim() || process.env.LITELLM_BASE_URL?.trim();
+    const baseUrl =
+      cred.metadata?.baseUrl?.trim() ||
+      process.env.LITELLM_BASE_URL?.trim() ||
+      LITELLM_DEFAULT_BASE_URL;
     if (!baseUrl) {
       continue;
     }
