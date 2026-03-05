@@ -302,6 +302,65 @@ describe("command-queue", () => {
     });
   });
 
+  describe("executeFn override", () => {
+    it("should prefer executeFn over registered handler", async () => {
+      registerCommandHandler("FN_TASK", async () => "from-handler");
+      const result = await enqueueCommandInLane("fn-lane", "FN_TASK", {}, {
+        executeFn: async () => "from-executeFn",
+      });
+      expect(result).toBe("from-executeFn");
+    });
+
+    it("should fall back to handler when executeFn is not provided", async () => {
+      registerCommandHandler("FALLBACK_TASK", async () => "handler-result");
+      const result = await enqueueCommandInLane("fb-lane", "FALLBACK_TASK", {});
+      expect(result).toBe("handler-result");
+    });
+
+    it("should propagate executeFn errors correctly", async () => {
+      registerCommandHandler("ERR_FN_TASK", async () => "handler");
+      await expect(
+        enqueueCommandInLane("err-fn-lane", "ERR_FN_TASK", {}, {
+          executeFn: async () => {
+            throw new Error("executeFn failed");
+          },
+        }),
+      ).rejects.toThrow("executeFn failed");
+    });
+
+    it("should support nested executeFn (session + global lane pattern)", async () => {
+      registerCommandHandler("SESSION_LOCK", async () => undefined);
+      registerCommandHandler("WORK_TASK", async () => "handler-work");
+      const result = await enqueueCommandInLane("session-lane", "SESSION_LOCK", {}, {
+        executeFn: () =>
+          enqueueCommandInLane("global-lane", "WORK_TASK", {}, {
+            executeFn: async () => "closure-work",
+          }),
+      });
+      expect(result).toBe("closure-work");
+    });
+  });
+
+  describe("waitForActiveTasks snapshot semantics", () => {
+    it("should only wait for tasks active at call time", async () => {
+      registerCommandHandler("SNAPSHOT_TASK", async () => {
+        await new Promise((r) => setTimeout(r, 100));
+        return "done";
+      });
+      void enqueueCommandInLane("snap-lane", "SNAPSHOT_TASK", {});
+      await new Promise((r) => setTimeout(r, 10));
+      const drainPromise = waitForActiveTasks(500);
+      void enqueueCommandInLane("snap-lane", "SNAPSHOT_TASK", {});
+      const result = await drainPromise;
+      expect(result.drained).toBe(true);
+    });
+
+    it("should resolve immediately when no tasks are active", async () => {
+      const result = await waitForActiveTasks(100);
+      expect(result.drained).toBe(true);
+    });
+  });
+
   describe("CommandLane enum usage", () => {
     it("should work with CommandLane.Main", async () => {
       registerCommandHandler("MAIN_TASK", async (p) => p);

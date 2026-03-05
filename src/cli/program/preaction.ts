@@ -173,8 +173,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
           resetAllLanes();
         }
       }
-    } catch {
-      // better-sqlite3 is an optional dependency; silently ignore if not available
+    } catch (err) {
+      if (err instanceof Error && /better-sqlite3|Cannot find module/.test(err.message)) {
+        // Optional native dependency not available — silently continue with in-memory queue
+      } else {
+        console.warn("[queue] Unexpected initialization error:", err);
+      }
     }
   });
 }

@@ -765,15 +765,12 @@ export async function compactEmbeddedPiSession(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
 
-  const enqueueGlobal =
-    params.enqueue ??
-    ((taskType, payload, opts) => enqueueCommandInLane(globalLane, taskType, payload, opts));
-
-  // @ts-ignore
-  return enqueueCommandInLane(sessionLane, "EMBEDDED_PI_COMPACT", params, {
+  return enqueueCommandInLane<EmbeddedPiCompactResult>(sessionLane, "SESSION_LOCK", {}, {
     onWait: params.onWait,
-  }).then(
-    // @ts-ignore
-    () => enqueueGlobal("EMBEDDED_PI_COMPACT", params, { onWait: params.onWait }),
-  );
+    executeFn: () =>
+      enqueueCommandInLane<EmbeddedPiCompactResult>(globalLane, "EMBEDDED_PI_COMPACT", {}, {
+        onWait: params.onWait,
+        executeFn: () => compactEmbeddedPiSessionDirect(params),
+      }),
+  });
 }

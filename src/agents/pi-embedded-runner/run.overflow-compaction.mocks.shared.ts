@@ -138,7 +138,10 @@ vi.mock("../context-window-guard.js", () => ({
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
-  enqueueCommandInLane: vi.fn((_lane: string, _taskType: string, _payload: any) => {
+  enqueueCommandInLane: vi.fn((_lane: string, _taskType: string, _payload: any, opts?: any) => {
+    if (opts?.executeFn) {
+      return opts.executeFn();
+    }
     return Promise.resolve();
   }),
 }));
