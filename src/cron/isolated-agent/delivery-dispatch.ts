@@ -147,7 +147,6 @@ type DispatchCronDeliveryParams = {
   runEndedAt: number;
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
-  deliveryRequested: boolean;
   deliveryIntent: DeliveryIntent;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery: boolean;

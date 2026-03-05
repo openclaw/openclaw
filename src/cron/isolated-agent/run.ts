@@ -699,7 +699,6 @@ export async function runCronIsolatedAgentTurn(params: {
     runEndedAt,
     timeoutMs,
     resolvedDelivery,
-    deliveryRequested,
     deliveryIntent,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,

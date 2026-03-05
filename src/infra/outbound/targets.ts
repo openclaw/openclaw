@@ -91,6 +91,8 @@ export type SessionRouteDecision =
       target: undefined;
     };
 
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
+
 function isMainSessionAlias(params: {
   sessionKey?: string;
   mainKey?: string | undefined;
@@ -113,6 +115,36 @@ function isMainSessionAlias(params: {
     return false;
   }
   return isMainRest(parsed.rest, "main") || isMainRest(parsed.rest, configuredMainKey);
+}
+
+function canInheritSessionLastRoute(params: {
+  sessionKey?: string;
+  lastChannel?: DeliverableMessageChannel;
+}): boolean {
+  const raw = params.sessionKey?.trim().toLowerCase();
+  if (!raw || !params.lastChannel) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const sessionScopeParts = (parsed?.rest ?? raw).split(":").filter(Boolean);
+  const sessionChannelHint = normalizeMessageChannel(sessionScopeParts[0]);
+  if (!sessionChannelHint || !isDeliverableMessageChannel(sessionChannelHint)) {
+    return false;
+  }
+  if (sessionChannelHint !== params.lastChannel) {
+    return false;
+  }
+  const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+    .map((part) => (part ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+    CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+  );
+  const hasLegacyChannelPeerShape =
+    !isChannelScopedSession &&
+    typeof sessionScopeParts[1] === "string" &&
+    sessionScopeParts[1].trim().length > 0;
+  return isChannelScopedSession || hasLegacyChannelPeerShape;
 }
 
 export function resolveSessionDeliveryTarget(params: {
@@ -157,13 +189,21 @@ export function resolveSessionDeliveryTarget(params: {
   failClosedMainSessionLastRoute?: boolean;
 }): SessionDeliveryTarget {
   const context = deliveryContextFromSession(params.entry);
-  const blockSessionLastRoute =
-    params.failClosedMainSessionLastRoute === true &&
+  const failClosedEnabled = params.failClosedMainSessionLastRoute === true;
+  const blockMainAliasRoute =
+    failClosedEnabled &&
     isMainSessionAlias({ sessionKey: params.sessionKey, mainKey: params.mainKey });
-  const sessionLastChannel =
-    !blockSessionLastRoute && context?.channel && isDeliverableMessageChannel(context.channel)
-      ? context.channel
-      : undefined;
+  const sessionLastChannelCandidate =
+    context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
+  const blockNonChannelScopedRoute =
+    failClosedEnabled &&
+    !blockMainAliasRoute &&
+    !canInheritSessionLastRoute({
+      sessionKey: params.sessionKey,
+      lastChannel: sessionLastChannelCandidate,
+    });
+  const blockSessionLastRoute = blockMainAliasRoute || blockNonChannelScopedRoute;
+  const sessionLastChannel = blockSessionLastRoute ? undefined : sessionLastChannelCandidate;
 
   // When a turn-source channel is provided, use only turn-scoped metadata.
   // Falling back to mutable session fields would re-introduce routing races.

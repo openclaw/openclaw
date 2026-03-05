@@ -84,6 +84,23 @@ describe("resolveSessionDeliveryTarget main-session fail-closed mode", () => {
     );
   });
 
+  it("fails closed for channel-agnostic non-main sessions when enabled", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: sessionEntry,
+      requestedChannel: "last",
+      sessionKey: "agent:main:direct:peer-123",
+      failClosedMainSessionLastRoute: true,
+    });
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        channel: undefined,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+      }),
+    );
+  });
+
   it("treats configured mainKey aliases as main sessions", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: sessionEntry,
@@ -204,6 +221,21 @@ describe("resolveSessionRouteDecision", () => {
         accountId: "default",
         threadId: 11,
       }),
+    });
+  });
+
+  it("returns missing for channel-agnostic non-main sessions when fail-closed mode blocks inheritance", () => {
+    const decision = resolveSessionRouteDecision({
+      intent: "external_preferred",
+      entry: sessionEntry,
+      requestedChannel: "last",
+      sessionKey: "agent:main:direct:peer-123",
+      failClosedMainSessionLastRoute: true,
+    });
+    expect(decision).toEqual({
+      status: "missing",
+      reason: "missing_to",
+      target: undefined,
     });
   });
 

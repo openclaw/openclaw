@@ -548,6 +548,42 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send keeps internal routing for channel-agnostic non-main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-agnostic-non-main-no-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:6812765697",
+        accountId: "default",
+        threadId: 42,
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:6812765697",
+      lastAccountId: "default",
+      lastThreadId: 42,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:direct:peer-123",
+      idempotencyKey: "idem-agnostic-non-main-no-inherit",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+        MessageThreadId: undefined,
+      }),
+    );
+  });
+
   it("chat.send inherits Feishu routing metadata from session delivery context", async () => {
     createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
