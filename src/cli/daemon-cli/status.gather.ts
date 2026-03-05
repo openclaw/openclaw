@@ -144,8 +144,8 @@ async function resolveDaemonProbePassword(params: {
   if (authMode !== "password") {
     const tokenCandidate =
       trimToUndefined(params.explicitToken) ||
-      readGatewayTokenEnv(params.mergedDaemonEnv) ||
-      trimToUndefined(params.daemonCfg.gateway?.auth?.token);
+      trimToUndefined(params.daemonCfg.gateway?.auth?.token) ||
+      readGatewayTokenEnv(params.mergedDaemonEnv);
     if (tokenCandidate) {
       return undefined;
     }
@@ -282,6 +282,7 @@ export async function gatherDaemonStatus(
   const tlsRuntime = shouldUseLocalTlsRuntime
     ? await loadGatewayTlsRuntime(daemonCfg.gateway?.tls)
     : undefined;
+  const daemonConfigToken = trimToUndefined(daemonCfg.gateway?.auth?.token);
   const daemonProbePassword = opts.probe
     ? await resolveDaemonProbePassword({
         daemonCfg,
@@ -295,9 +296,9 @@ export async function gatherDaemonStatus(
     ? await probeGatewayStatus({
         url: probeUrl,
         token:
-          opts.rpc.token ||
-          mergedDaemonEnv.OPENCLAW_GATEWAY_TOKEN ||
-          daemonCfg.gateway?.auth?.token,
+          trimToUndefined(opts.rpc.token) ||
+          daemonConfigToken ||
+          readGatewayTokenEnv(mergedDaemonEnv),
         password: daemonProbePassword,
         tlsFingerprint:
           shouldUseLocalTlsRuntime && tlsRuntime?.enabled
