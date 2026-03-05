@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -304,13 +306,14 @@ function buildMergedSchemaCacheKey(params: {
   plugins: PluginUiMetadata[];
   channels: ChannelUiMetadata[];
 }): string {
+  // Cache keys must stay small. Serializing full JSON schemas/UI hints can
+  // explode in size with many plugins/channels and crash with
+  // `RangeError: Invalid string length`.
   const plugins = params.plugins
     .map((plugin) => ({
       id: plugin.id,
       name: plugin.name,
       description: plugin.description,
-      configSchema: plugin.configSchema ?? null,
-      configUiHints: plugin.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   const channels = params.channels
@@ -318,11 +321,12 @@ function buildMergedSchemaCacheKey(params: {
       id: channel.id,
       label: channel.label,
       description: channel.description,
-      configSchema: channel.configSchema ?? null,
-      configUiHints: channel.configUiHints ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-  return JSON.stringify({ plugins, channels });
+
+  const json = JSON.stringify({ plugins, channels });
+  // Use a digest to avoid holding extremely long strings in-memory as map keys.
+  return createHash("sha256").update(json).digest("hex");
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {

@@ -162,6 +162,45 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
+  it("does not blow up cache key size when schemas are large", () => {
+    const big = "x".repeat(250_000);
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "big-plugin",
+          name: "Big Plugin",
+          configSchema: {
+            type: "object",
+            description: big,
+            properties: {
+              foo: { type: "string", description: big },
+            },
+          },
+          configUiHints: {
+            foo: { label: big },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "big-channel",
+          label: "Big Channel",
+          configSchema: {
+            type: "object",
+            description: big,
+            properties: {
+              token: { type: "string", description: big },
+            },
+          },
+          configUiHints: {
+            token: { label: big },
+          },
+        },
+      ],
+    });
+    expect(res.schema).toBeTruthy();
+  });
+
   it("derives security/auth tags for credential paths", () => {
     const tags = deriveTagsForPath("gateway.auth.token");
     expect(tags).toContain("security");
