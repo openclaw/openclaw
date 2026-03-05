@@ -65,6 +65,15 @@ describe("version resolution", () => {
     });
   });
 
+  it("accepts openclaw-cli package metadata for Homebrew/npm wrapper installs", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw-cli", version: "3.4.5" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("3.4.5");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("3.4.5");
+    });
+  });
+
   it("falls back to build-info when package metadata is unavailable", async () => {
     await withTempDir(async (root) => {
       await writeJsonFixture(root, "build-info.json", { version: "4.5.6" });
