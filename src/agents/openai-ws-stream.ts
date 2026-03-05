@@ -109,6 +109,13 @@ function toNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
 function contentToText(content: unknown): string {
   if (typeof content === "string") {
@@ -132,12 +139,11 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
     return [];
   }
   const parts: ContentPart[] = [];
-  for (const part of content as Array<{
-    type?: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>) {
+  for (const partEntry of content as unknown[]) {
+    const part = toRecord(partEntry);
+    if (!part) {
+      continue;
+    }
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
@@ -197,14 +203,11 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
       if (Array.isArray(content)) {
         // Collect text blocks and tool calls separately
         const textParts: string[] = [];
-        for (const block of content as Array<{
-          type?: string;
-          text?: string;
-          id?: string;
-          name?: string;
-          arguments?: Record<string, unknown>;
-          thinking?: string;
-        }>) {
+        for (const blockEntry of content as unknown[]) {
+          const block = toRecord(blockEntry);
+          if (!block) {
+            continue;
+          }
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
           } else if (block.type === "thinking" && typeof block.thinking === "string") {

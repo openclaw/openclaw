@@ -518,6 +518,37 @@ describe("convertMessagesToInputItems", () => {
     expect((items[0] as { content?: unknown }).content).toBe("Here is my answer.");
   });
 
+  it("skips malformed user content entries without throwing", () => {
+    const msg = {
+      role: "user" as const,
+      content: [null, { type: "text", text: "hello" }],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect((items[0] as { content?: unknown }).content).toBe("hello");
+  });
+
+  it("skips malformed assistant content entries without throwing", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [null, { type: "text", text: "ok" }],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect((items[0] as { content?: unknown }).content).toBe("ok");
+  });
+
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
