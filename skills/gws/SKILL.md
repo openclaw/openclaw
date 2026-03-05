@@ -140,11 +140,11 @@ gws gmail users labels list --params '{"userId": "me"}'
 
 ```bash
 # List upcoming events
-gws calendar events list --params '{"calendarId": "primary", "maxResults": 10, "timeMin": "2025-01-01T00:00:00Z", "orderBy": "startTime", "singleEvents": true}'
+gws calendar events list --params '{"calendarId": "primary", "maxResults": 10, "timeMin": "2026-01-01T00:00:00Z", "orderBy": "startTime", "singleEvents": true}'
 
 # Create an event
 gws calendar events insert --params '{"calendarId": "primary"}' \
-  --json '{"summary": "Team standup", "start": {"dateTime": "2025-01-15T09:00:00-08:00"}, "end": {"dateTime": "2025-01-15T09:30:00-08:00"}}'
+  --json '{"summary": "Team standup", "start": {"dateTime": "2026-06-15T09:00:00-08:00"}, "end": {"dateTime": "2026-06-15T09:30:00-08:00"}}'
 
 # List calendars
 gws calendar calendarList list
