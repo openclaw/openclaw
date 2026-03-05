@@ -21,9 +21,9 @@ const diff = execFileSync('git', ['diff', '--name-only', `${base}...${head}`], {
 
 const blocked = [];
 const binaryExt = /\.(tgz|zip|7z|rar|dmg|exe|msi|bin)$/i;
+const distDir = /(?:^|\/)dist\//;
 for (const p of diff) {
-  if (binaryExt.test(p)) blocked.push(p);
-  if (p.startsWith('dist/')) blocked.push(p);
+  if (binaryExt.test(p) || distDir.test(p)) blocked.push(p);
 }
 
 if (blocked.length > 0) {
