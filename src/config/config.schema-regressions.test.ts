@@ -184,4 +184,18 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts channels.discord.agentComponents.enabled in strict schema validation", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          agentComponents: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

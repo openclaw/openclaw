@@ -463,6 +463,12 @@ export const DiscordAccountSchema = z
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     execApprovals: z
       .object({
         enabled: z.boolean().optional(),

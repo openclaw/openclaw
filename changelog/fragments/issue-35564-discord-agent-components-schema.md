@@ -1,0 +1,1 @@
+- Config/Discord: strict config validation now accepts `channels.discord.agentComponents.enabled`, matching existing Discord runtime support for agent-controlled components. Fixes #35564. Thanks @ingyukoh.
