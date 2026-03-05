@@ -8,7 +8,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -27,6 +27,27 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
+function setSmallerContextWindow(
+  cache: Map<string, number>,
+  key: string,
+  contextWindow: number,
+): void {
+  const existing = cache.get(key);
+  // Prefer the smaller window so token budgeting stays fail-safe.
+  if (existing === undefined || contextWindow < existing) {
+    cache.set(key, contextWindow);
+  }
+}
+
+function toProviderQualifiedModelKey(model: ModelEntry): string | undefined {
+  const provider = model.provider?.trim().toLowerCase();
+  const id = model.id?.trim();
+  if (!provider || !id || id.includes("/")) {
+    return undefined;
+  }
+  return `${provider}/${id}`;
+}
+
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
@@ -35,16 +56,24 @@ export function applyDiscoveredContextWindows(params: {
     if (!model?.id) {
       continue;
     }
+    const modelId = model.id.trim();
+    if (!modelId) {
+      continue;
+    }
     const contextWindow =
       typeof model.contextWindow === "number" ? Math.trunc(model.contextWindow) : undefined;
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
-    // When multiple providers expose the same model id with different limits,
-    // prefer the smaller window so token budgeting is fail-safe (no overestimation).
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+
+    // Keep legacy bare-id lookup for callers that only have model ids.
+    setSmallerContextWindow(params.cache, modelId, contextWindow);
+
+    // Also cache provider-qualified keys so status reporting can resolve the
+    // correct provider-specific context window when ids overlap.
+    const qualifiedKey = toProviderQualifiedModelKey(model);
+    if (qualifiedKey) {
+      setSmallerContextWindow(params.cache, qualifiedKey, contextWindow);
     }
   }
 }
@@ -266,6 +295,14 @@ export function resolveContextTokensForModel(params: {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+  }
+
+  const providerQualifiedModel = ref ? `${ref.provider}/${ref.model}` : undefined;
+  if (providerQualifiedModel) {
+    const providerScoped = lookupContextTokens(providerQualifiedModel);
+    if (providerScoped !== undefined) {
+      return providerScoped;
     }
   }
 

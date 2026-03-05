@@ -8,16 +8,19 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+  it("stores provider-qualified windows when duplicate ids exist across providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
+        { provider: "openrouter", id: "claude-sonnet-4-5", contextWindow: 200_000 },
       ],
     });
 
+    expect(cache.get("anthropic/claude-sonnet-4-5")).toBe(1_000_000);
+    expect(cache.get("openrouter/claude-sonnet-4-5")).toBe(200_000);
+    // Bare-id fallback remains fail-safe for callers that only have model id.
     expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
   });
 });

@@ -34,6 +34,48 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
+  it("prefers provider-qualified discovered context windows when provider is known", async () => {
+    vi.doMock("../config/config.js", () => ({
+      loadConfig: () => ({ models: {} }),
+    }));
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn(async () => {}),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("./pi-model-discovery.js", () => ({
+      discoverAuthStorage: vi.fn(() => ({})),
+      discoverModels: vi.fn(() => ({
+        getAll: () => [
+          { provider: "anthropic", id: "claude-sonnet", contextWindow: 1_000_000 },
+          { provider: "openrouter", id: "claude-sonnet", contextWindow: 200_000 },
+        ],
+      })),
+    }));
+
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    await vi.waitFor(() => {
+      expect(lookupContextTokens("anthropic/claude-sonnet")).toBe(1_000_000);
+      expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(200_000);
+    });
+
+    expect(
+      resolveContextTokensForModel({
+        provider: "anthropic",
+        model: "claude-sonnet",
+        fallbackContextTokens: 128_000,
+      }),
+    ).toBe(1_000_000);
+    expect(
+      resolveContextTokensForModel({
+        provider: "openrouter",
+        model: "claude-sonnet",
+        fallbackContextTokens: 128_000,
+      }),
+    ).toBe(200_000);
+  });
+
   it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
     const loadConfigMock = vi.fn(() => ({ models: {} }));
     vi.doMock("../config/config.js", () => ({
