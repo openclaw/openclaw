@@ -499,8 +499,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     if (requireMention) {
       const mentionRegexes = buildMentionRegexes(cfg, messageContext.route.agentId);
       const canDetectMention = mentionRegexes.length > 0;
+      const rawText = resolveEventRawText(event);
+      const shouldBypassMentionGate = decision.commandAuthorized && hasControlCommand(rawText, cfg);
       const wasMentioned = matchesMentionWithExplicit({
-        text: resolveEventRawText(event),
+        text: rawText,
         mentionRegexes,
       });
       const historyMap = context.groupHistories;
@@ -509,7 +511,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         contextLimit: context.groupHistoryLimit,
       });
       const historyKey = messageContext.route.sessionKey;
-      if (canDetectMention && !wasMentioned) {
+      if (canDetectMention && !wasMentioned && !shouldBypassMentionGate) {
         if (historyMap) {
           recordPendingHistoryEntryIfEnabled({
             historyMap,

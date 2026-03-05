@@ -708,6 +708,63 @@ describe("handleLineWebhookEvents", () => {
     expect(entries[0]?.body).toBe("hello team");
   });
 
+  it("allows control commands in mention-gated LINE groups without storing pending history", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    buildLineMessageContextMock.mockResolvedValueOnce({
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+      },
+      replyToken: "reply-token",
+      route: { agentId: "default", sessionKey: "line:group:group-1" },
+      isGroup: true,
+      userId: "user-1",
+      groupId: "group-1",
+      accountId: "default",
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-mention-command", type: "text", text: "/status" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-1" },
+      mode: "active",
+      webhookEventId: "evt-mention-command",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: {
+          line: {
+            groupPolicy: "open",
+            groups: { "group-1": { requireMention: true } },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open", groups: { "group-1": { requireMention: true } } },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+      groupHistoryLimit: 5,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get("line:group:group-1")).toBeUndefined();
+  });
+
   it("injects pending LINE group history into context when mention matches", async () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
