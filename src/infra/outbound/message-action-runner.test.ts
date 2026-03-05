@@ -268,6 +268,23 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
 
+  it("rejects send actions that include snake_case poll params", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+          poll_question: "Ready?",
+          poll_option: ["Yes", "No"],
+          poll_public: "true",
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
   it("allows send when poll booleans are explicitly false", async () => {
     const result = await runDrySend({
       cfg: slackConfig,

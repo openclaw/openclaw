@@ -40,6 +40,13 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ pollOption: "Yes" })).toBe(true);
   });
 
+  it("detects snake_case poll fields as poll creation intent", () => {
+    expect(hasPollCreationParams({ poll_question: "Lunch?" })).toBe(true);
+    expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
+    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
+    expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
+  });
+
   it("resolves telegram poll visibility flags", () => {
     expect(resolveTelegramPollVisibility({ pollAnonymous: true })).toBe(true);
     expect(resolveTelegramPollVisibility({ pollPublic: true })).toBe(false);

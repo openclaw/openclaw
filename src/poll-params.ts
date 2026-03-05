@@ -19,6 +19,24 @@ export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
 
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+    return params[snakeKey];
+  }
+  return undefined;
+}
+
 export function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;
@@ -32,7 +50,7 @@ export function resolveTelegramPollVisibility(params: {
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {
   for (const key of POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[key];
-    const value = params[key];
+    const value = readPollParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;
     }
