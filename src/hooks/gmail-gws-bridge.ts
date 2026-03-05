@@ -99,8 +99,8 @@ export function transformGmailApiMessage(
   if (opts?.includeBody !== false) {
     body = findTextBody(payload);
     const maxBytes = opts?.maxBytes;
-    if (maxBytes && maxBytes > 0 && body.length > maxBytes) {
-      body = body.slice(0, maxBytes);
+    if (maxBytes && maxBytes > 0 && Buffer.byteLength(body, "utf8") > maxBytes) {
+      body = Buffer.from(body, "utf8").subarray(0, maxBytes).toString("utf8");
     }
   }
 

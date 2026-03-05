@@ -80,6 +80,48 @@ describe("transformGmailApiMessage", () => {
     expect(result.messages[0]?.body).toBe("a".repeat(10));
   });
 
+  it("truncates multi-byte body by bytes, not characters", () => {
+    // Each emoji is 4 bytes in UTF-8; maxBytes=8 should yield exactly 2 emoji
+    const emojiText = "\u{1F600}\u{1F601}\u{1F602}"; // 12 bytes total
+    const body = Buffer.from(emojiText).toString("base64url");
+    const msg = {
+      id: "msg-mb",
+      snippet: "",
+      payload: {
+        mimeType: "text/plain",
+        headers: [],
+        body: { data: body },
+      },
+    };
+    const result = transformGmailApiMessage(msg, { includeBody: true, maxBytes: 8 });
+    const resultBody = result.messages[0]?.body ?? "";
+    // Exactly 2 emoji (8 bytes) — the 3rd is fully excluded at the byte boundary
+    expect(resultBody).toBe("\u{1F600}\u{1F601}");
+    expect(Buffer.byteLength(resultBody, "utf8")).toBe(8);
+  });
+
+  it("does not over-count non-ASCII with string length", () => {
+    // CJK characters are 3 bytes each in UTF-8; "abc" prefix is 3 bytes
+    // "abc\u4e16\u754c" = 3 + 3 + 3 = 9 bytes, but only 5 chars
+    // With maxBytes=6 (old code would pass since 5 chars < 6), but 9 bytes > 6
+    const text = "abc\u4e16\u754c";
+    const body = Buffer.from(text).toString("base64url");
+    const msg = {
+      id: "msg-cjk",
+      snippet: "",
+      payload: {
+        mimeType: "text/plain",
+        headers: [],
+        body: { data: body },
+      },
+    };
+    const result = transformGmailApiMessage(msg, { includeBody: true, maxBytes: 6 });
+    const resultBody = result.messages[0]?.body ?? "";
+    // Should truncate: "abc" (3 bytes) + first CJK char (3 bytes) = 6 bytes
+    expect(resultBody).toBe("abc\u4e16");
+    expect(Buffer.byteLength(resultBody, "utf8")).toBe(6);
+  });
+
   it("skips body when includeBody is false", () => {
     const body = Buffer.from("secret").toString("base64url");
     const msg = {
