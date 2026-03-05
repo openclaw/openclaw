@@ -338,7 +338,6 @@ function sendToRelay(payload) {
 
 function ensureGatewayHandshakeStarted(payload) {
   if (relayConnectRequestId) return
-  const nonce = typeof payload?.nonce === 'string' ? payload.nonce.trim() : ''
   relayConnectRequestId = `ext-connect-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   sendToRelay({
     type: 'req',
@@ -348,7 +347,8 @@ function ensureGatewayHandshakeStarted(payload) {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: 'chrome-relay-extension',
+        // Must remain a gateway-validated client id.
+        id: 'webchat-ui',
         version: '1.0.0',
         platform: 'chrome-extension',
         mode: 'webchat',
@@ -357,7 +357,6 @@ function ensureGatewayHandshakeStarted(payload) {
       scopes: ['operator.read', 'operator.write'],
       caps: [],
       commands: [],
-      nonce: nonce || undefined,
       auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
     },
   })
