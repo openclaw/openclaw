@@ -141,6 +141,7 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 export function renderApp(state: AppViewState) {
   const openClawVersion =
     (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
+    (typeof state.serverVersion === "string" && state.serverVersion.trim()) ||
     state.updateAvailable?.currentVersion ||
     t("common.na");
   const availableUpdate =
