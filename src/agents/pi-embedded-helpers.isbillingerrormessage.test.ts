@@ -28,6 +28,12 @@ const ANTHROPIC_OVERLOADED_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Together AI error code examples: https://docs.together.ai/docs/error-codes
+const TOGETHER_PAYMENT_REQUIRED_MESSAGE = "Payment Required";
+const TOGETHER_ENGINE_OVERLOADED_MESSAGE = "Engine Overloaded";
+// Groq error code examples: https://console.groq.com/docs/errors
+const GROQ_TOO_MANY_REQUESTS_MESSAGE = "Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE = "Service Unavailable";
 
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
@@ -497,6 +503,10 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("rate_limit");
     expect(classifyFailoverReason(OPENROUTER_CREDITS_MESSAGE)).toBe("billing");
+    expect(classifyFailoverReason(TOGETHER_PAYMENT_REQUIRED_MESSAGE)).toBe("billing");
+    expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
+    expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("rate_limit");
   });
 
   it("classifies internal and compatibility error messages", () => {

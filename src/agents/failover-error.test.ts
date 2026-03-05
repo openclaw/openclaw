@@ -18,6 +18,13 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// AWS Bedrock 429 ThrottlingException / 503 ServiceUnavailable:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+const BEDROCK_THROTTLING_EXCEPTION_MESSAGE = "ThrottlingException";
+const BEDROCK_SERVICE_UNAVAILABLE_MESSAGE = "ServiceUnavailable";
+// Groq error codes examples: https://console.groq.com/docs/errors
+const GROQ_TOO_MANY_REQUESTS_MESSAGE = "Too many requests were sent in a given timeframe.";
+const GROQ_SERVICE_UNAVAILABLE_MESSAGE = "Service Unavailable";
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
@@ -63,6 +70,30 @@ describe("failover-error", () => {
         message: OPENROUTER_CREDITS_MESSAGE,
       }),
     ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: BEDROCK_THROTTLING_EXCEPTION_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: BEDROCK_SERVICE_UNAVAILABLE_MESSAGE,
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: GROQ_TOO_MANY_REQUESTS_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 503,
+        message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
+      }),
+    ).toBe("timeout");
   });
 
   it("infers format errors from error messages", () => {
