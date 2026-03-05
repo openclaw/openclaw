@@ -62,6 +62,52 @@ pnpm test:fast
 
 If either command fails, do not finalize the sync.
 
+## Gateway 세션 블로킹 대응 (2026-03-05)
+
+### 증상
+
+- 전체 Discord 봇 응답 불능 (11개 모두)
+- health-monitor 로그에 반복적인 "stuck" 재시작
+- 특정 에이전트의 세션 파일이 비대 (예: 11MB)
+- compaction 타임아웃 반복 → CommandLane.Main 점유 → 무한 루프
+
+### 즉시 조치
+
+```bash
+# 1. 비대한 세션 파일 식별
+ssh mac-mini "du -sh /Users/server/.openclaw/agents/*/sessions/*.jsonl | sort -rh | head -10"
+
+# 2. 문제 세션 파일 백업 (삭제가 아닌 백업)
+ssh mac-mini "mv /Users/server/.openclaw/agents/{agent}/sessions/{session-id}.jsonl /Users/server/.openclaw/agents/{agent}/sessions/{session-id}.jsonl.bak"
+
+# 3. 게이트웨이 재시작
+ssh mac-mini "launchctl stop ai.openclaw.gateway && sleep 3 && launchctl start ai.openclaw.gateway"
+
+# 4. 복구 확인
+ssh mac-mini "tail -30 /Users/server/.openclaw/logs/gateway.log"
+```
+
+### 방어 계층 (구현 완료)
+
+| 계층                         | 메커니즘                          | 설정             | 파일                                |
+| ---------------------------- | --------------------------------- | ---------------- | ----------------------------------- |
+| 1. 디스크 상한               | `maxDiskBytes` / `highWaterBytes` | 100MB / 80MB     | `openclaw.json` session.maintenance |
+| 2. Compaction 타임아웃       | `EMBEDDED_COMPACTION_TIMEOUT_MS`  | 600s (설정 가능) | `compaction-safety-timeout.ts`      |
+| 3. Lane Task 타임아웃        | `setCommandLaneTaskTimeout`       | 660s             | `server-lanes.ts`                   |
+| 4. Health Monitor Lane Reset | 과반수 stuck 시 `resetAllLanes()` | 자동             | `channel-health-monitor.ts`         |
+
+### 모니터링
+
+```bash
+# 에이전트별 세션 디스크 사용량
+ssh mac-mini "du -sh /Users/server/.openclaw/agents/*/sessions/"
+
+# 현재 게이트웨이 상태 확인
+ssh mac-mini "tail -50 /Users/server/.openclaw/logs/gateway.log | grep -E 'stuck|timeout|reset|compaction'"
+```
+
+---
+
 ## Source of truth
 
 - Primary operational tracker: `../PRONTOLAB.md`

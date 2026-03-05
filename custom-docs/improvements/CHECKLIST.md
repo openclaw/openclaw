@@ -291,26 +291,28 @@
 
 ## 변경 이력
 
-| 날짜       | 변경                                                                                                                                                                 |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-02-19 | 체크리스트 초기 작성                                                                                                                                                 |
-| 2026-02-19 | 각 개선안에 설계 문서 링크 + 문서화 항목 추가                                                                                                                        |
-| 2026-02-19 | #12 Task Enforcement Bypass 추가 (Phase 1)                                                                                                                           |
-| 2026-02-19 | #7 Phase 1-2 완료 (a2a-concurrency.ts + A2A 플로우 통합, 14 tests)                                                                                                   |
-| 2026-02-19 | #5 Phase 1 완료 (server-init-config/diagnostics/control-ui 추출, 737→632 LOC, 80→57 imports)                                                                         |
-| 2026-02-19 | #3 Phase 1-3 완료 (task-file-io.ts + task-stop-guard.ts 추출, 147 tests)                                                                                             |
-| 2026-02-19 | #9 기본 완료 (coordination-invariants.test.ts — TC-01~04, 12 tests)                                                                                                  |
-| 2026-02-19 | #12 완료 (createdBySessionKey + session-scoped disk check + A2A prompt fix + cleanupStaleTasks)                                                                      |
-| 2026-02-19 | #2 완료 (A2AJobManager + Reaper + Orchestrator + fire-and-forget 교체 + gateway startup, 43 tests)                                                                   |
-| 2026-02-19 | #4 Phase 1 완료 (continuation-state-machine.ts — 순수 결정 함수 + 56 tests)                                                                                          |
-| 2026-02-19 | #6 N/A 처리 (설계 문서 전제 불일치 — GatewayRequestContext가 이미 DI 패턴 구현)                                                                                      |
-| 2026-02-19 | #8 완료 (a2a-payload-types + parser + sessions_send payloadJson + A2A flow 통합, 42 tests)                                                                           |
-| 2026-02-19 | #10 N/A 처리 (#2에서 createAndStartFlow 도입으로 두 경로 이미 통합)                                                                                                  |
-| 2026-02-19 | #11 Phase 1 완료 (task-delegation-types + manager + 110 tests)                                                                                                       |
-| 2026-02-19 | #11 Phase 2-5 완료 (persistence + spawn/announce integration + task_verify + system prompt, 216 tests)                                                               |
-| 2026-02-19 | #9 Phase 3 완료 (TC-05~07 추가: task persistence, A2A job durability, concurrency gate, 31 tests 전체 통과)                                                          |
-| 2026-02-19 | #12 Follow-up: cleanupStaleTasks() 를 server-startup.ts에 연결 (게이트웨이 시작 시 전 에이전트 stale task 자동 정리)                                                 |
-| 2026-02-19 | #7 Follow-up: agents.defaults.a2aConcurrency 설정 스키마 + resolver + server-startup 연결 (7 tests)                                                                  |
-| 2026-02-19 | #3 Phase 4-5 완료 (task-crud.ts 932 LOC + task-blocking.ts 603 LOC + task-steps.ts 21 LOC + task-tool.ts → 45 LOC facade, 72 tests 통과)                             |
-| 2026-02-20 | #5 Phase 2-4 완료 (server-init-registry 51 LOC + server-init-events 139 LOC + server-init-cron 30 LOC, server.impl.ts 737→565 LOC, ~80→48 imports, 46/47 tests pass) |
-| 2026-02-20 | 전체 완료 게이트 업데이트: 10/13 구현 완료, 2 N/A, 1 Phase 1만 (Phase 2-5 보류). 1,514 tests pass, 0 regressions.                                                    |
+| 날짜       | 변경                                                                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-02-19 | 체크리스트 초기 작성                                                                                                                                                                      |
+| 2026-02-19 | 각 개선안에 설계 문서 링크 + 문서화 항목 추가                                                                                                                                             |
+| 2026-02-19 | #12 Task Enforcement Bypass 추가 (Phase 1)                                                                                                                                                |
+| 2026-02-19 | #7 Phase 1-2 완료 (a2a-concurrency.ts + A2A 플로우 통합, 14 tests)                                                                                                                        |
+| 2026-02-19 | #5 Phase 1 완료 (server-init-config/diagnostics/control-ui 추출, 737→632 LOC, 80→57 imports)                                                                                              |
+| 2026-02-19 | #3 Phase 1-3 완료 (task-file-io.ts + task-stop-guard.ts 추출, 147 tests)                                                                                                                  |
+| 2026-02-19 | #9 기본 완료 (coordination-invariants.test.ts — TC-01~04, 12 tests)                                                                                                                       |
+| 2026-02-19 | #12 완료 (createdBySessionKey + session-scoped disk check + A2A prompt fix + cleanupStaleTasks)                                                                                           |
+| 2026-02-19 | #2 완료 (A2AJobManager + Reaper + Orchestrator + fire-and-forget 교체 + gateway startup, 43 tests)                                                                                        |
+| 2026-02-19 | #4 Phase 1 완료 (continuation-state-machine.ts — 순수 결정 함수 + 56 tests)                                                                                                               |
+| 2026-02-19 | #6 N/A 처리 (설계 문서 전제 불일치 — GatewayRequestContext가 이미 DI 패턴 구현)                                                                                                           |
+| 2026-02-19 | #8 완료 (a2a-payload-types + parser + sessions_send payloadJson + A2A flow 통합, 42 tests)                                                                                                |
+| 2026-02-19 | #10 N/A 처리 (#2에서 createAndStartFlow 도입으로 두 경로 이미 통합)                                                                                                                       |
+| 2026-02-19 | #11 Phase 1 완료 (task-delegation-types + manager + 110 tests)                                                                                                                            |
+| 2026-02-19 | #11 Phase 2-5 완료 (persistence + spawn/announce integration + task_verify + system prompt, 216 tests)                                                                                    |
+| 2026-02-19 | #9 Phase 3 완료 (TC-05~07 추가: task persistence, A2A job durability, concurrency gate, 31 tests 전체 통과)                                                                               |
+| 2026-02-19 | #12 Follow-up: cleanupStaleTasks() 를 server-startup.ts에 연결 (게이트웨이 시작 시 전 에이전트 stale task 자동 정리)                                                                      |
+| 2026-02-19 | #7 Follow-up: agents.defaults.a2aConcurrency 설정 스키마 + resolver + server-startup 연결 (7 tests)                                                                                       |
+| 2026-02-19 | #3 Phase 4-5 완료 (task-crud.ts 932 LOC + task-blocking.ts 603 LOC + task-steps.ts 21 LOC + task-tool.ts → 45 LOC facade, 72 tests 통과)                                                  |
+| 2026-02-20 | #5 Phase 2-4 완료 (server-init-registry 51 LOC + server-init-events 139 LOC + server-init-cron 30 LOC, server.impl.ts 737→565 LOC, ~80→48 imports, 46/47 tests pass)                      |
+| 2026-02-20 | 전체 완료 게이트 업데이트: 10/13 구현 완료, 2 N/A, 1 Phase 1만 (Phase 2-5 보류). 1,514 tests pass, 0 regressions.                                                                         |
+| 2026-03-05 | #12 Follow-up: registerTaskEnforcerHook()이 server-startup.ts에서 호출되지 않던 버그 수정 (hook 미등록 → enforcer 완전 비활성 상태였음)                                                   |
+| 2026-03-05 | 인시던트 대응: 세션 블로킹 근본 해결 — compaction timeout 10분, health monitor lane reset, task-level timeout guard 660s, session disk budget 100MB. SYSTEM-ARCHITECTURE.md §12-16 문서화 |

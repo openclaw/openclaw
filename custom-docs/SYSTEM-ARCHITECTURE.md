@@ -649,31 +649,264 @@ flowchart TD
 
 ---
 
-## 12. 소스 코드 참조
+## 12. Command Lane 시스템
 
-| 기능                   | 파일                                            | 핵심 함수                                                      |
-| ---------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
-| A2A 전송 도구          | `src/agents/tools/sessions-send-tool.ts`        | `createSessionsSendTool()`                                     |
-| A2A 백그라운드 플로우  | `src/agents/tools/sessions-send-tool.a2a.ts`    | `runSessionsSendA2AFlow()`                                     |
-| 에이전트 단계 실행     | `src/agents/tools/agent-step.ts`                | `runAgentStep()`, `readLatestAssistantReply()`                 |
-| 전송 헬퍼              | `src/agents/tools/sessions-send-helpers.ts`     | `buildAgentToAgentMessageContext()`, `resolvePingPongTurns()`  |
-| 이벤트 버스            | `src/infra/events/bus.ts`                       | `emit()`, `subscribe()`                                        |
-| 이벤트 로그            | `src/infra/events/event-log.ts`                 | `startEventLog()`                                              |
-| 이벤트 스키마          | `src/infra/events/schemas.ts`                   | `EVENT_TYPES`                                                  |
-| 세션 키 관리           | `src/routing/session-key.ts`                    | `resolveAgentIdFromSessionKey()`, `buildAgentMainSessionKey()` |
-| Gateway 서버           | `src/gateway/server.impl.ts`                    | `startGatewayServer()`                                         |
-| Gateway 메서드         | `src/gateway/server-methods.ts`                 | 메서드 등록                                                    |
-| Gateway 세션           | `src/gateway/server-methods/sessions.ts`        | `sessionsHandlers`                                             |
-| Gateway 호출           | `src/gateway/call.ts`                           | `callGateway()`                                                |
-| Task-Monitor           | `scripts/task-monitor-server.ts`                | `buildWorkSessionsFromEvents()`, `enrichCoordinationEvent()`   |
-| Task-Hub 프록시        | `task-hub/src/app/api/proxy/[...path]/route.ts` | `forwardRequest()`                                             |
-| Task-Hub Conversations | `task-hub/src/app/conversations/page.tsx`       | 1,967줄 모놀리식 페이지                                        |
+### 12.1 개요
+
+Gateway는 **Command Lane**이라는 직렬 실행 큐를 통해 에이전트 작업을 관리한다. 각 lane은 독립적인 FIFO 큐로, 한 번에 하나의 task만 실행한다.
+
+```mermaid
+graph TB
+    subgraph LANES["Command Lane 구조"]
+        MAIN["CommandLane.Main<br/>메인 에이전트 실행<br/>concurrency: 1<br/>taskTimeout: 660s"]
+        ADMIN["CommandLane.Admin<br/>관리 명령<br/>concurrency: 1"]
+        OTHER_L["기타 Lane<br/>(설정에 따라)"]
+    end
+
+    subgraph QUEUE["Main Lane 실행 큐"]
+        direction LR
+        T1["Task A<br/>실행 중"]
+        T2["Task B<br/>대기"]
+        T3["Task C<br/>대기"]
+        T1 --> T2 --> T3
+    end
+
+    MAIN --> QUEUE
+```
+
+### 12.2 핵심 개념
+
+| 개념             | 설명                                                                           |
+| ---------------- | ------------------------------------------------------------------------------ |
+| **Lane**         | 이름 기반의 직렬 실행 큐. `CommandLane.Main`이 핵심.                           |
+| **Generation**   | Lane별 세대 카운터. `resetAllLanes()` 시 bump → 이전 세대 task 완료 무시.      |
+| **Task Timeout** | Lane별 단일 task 최대 실행 시간. 초과 시 `CommandLaneTaskTimeoutError` reject. |
+| **Concurrency**  | Lane별 동시 실행 수. Main은 기본 1 (순차 실행).                                |
+
+### 12.3 Task Timeout Guard
+
+단일 작업이 lane을 무기한 점유하지 못하도록 타임아웃 가드가 존재한다.
+
+```typescript
+// server-lanes.ts
+const MAIN_LANE_TASK_TIMEOUT_MS = 660_000; // 11분
+setCommandLaneTaskTimeout(CommandLane.Main, MAIN_LANE_TASK_TIMEOUT_MS);
+```
+
+타임아웃 시:
+
+1. `completeTask()` 호출 → generation 체크로 정상 완료와 구분
+2. `CommandLaneTaskTimeoutError` reject
+3. `pump()` 호출 → 다음 대기 task 즉시 실행
+
+### 12.4 Lane Reset
+
+`resetAllLanes()`는 모든 lane의 generation을 bump하고 activeTaskIds를 클리어한다.
+
+- Stuck 작업이 나중에 완료되어도 이전 generation이므로 무시됨
+- 대기 중인 작업은 즉시 재개됨
+- Health monitor에서 과반수 채널 stuck 감지 시 자동 호출
+
+### 12.5 소스 코드 참조
+
+| 파일                           | 핵심 함수                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `src/process/command-queue.ts` | `drainLane()`, `pump()`, `resetAllLanes()`, `setCommandLaneTaskTimeout()` |
+| `src/gateway/server-lanes.ts`  | `applyGatewayLaneConcurrency()`                                           |
 
 ---
 
-## 13. 알려진 이슈
+## 13. 세션 Compaction 시스템
 
-### 13.1 시스템 수준
+### 13.1 개요
+
+에이전트 세션 히스토리가 커지면 LLM 기반 compaction(요약 압축)을 실행한다. 대화 내용을 요약하여 토큰 사용량을 줄인다.
+
+### 13.2 Safety Timeout
+
+Compaction이 무한 실행되는 것을 방지하는 안전 타임아웃이 존재한다.
+
+```typescript
+// compaction-safety-timeout.ts
+export const EMBEDDED_COMPACTION_TIMEOUT_MS = 600_000; // 10분 (기본값)
+```
+
+설정 가능:
+
+```json
+// openclaw.json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "timeoutMs": 600000
+      }
+    }
+  }
+}
+```
+
+타임아웃 체인:
+
+1. `compactWithSafetyTimeout()` — compaction 자체의 타임아웃
+2. `acquireSessionWriteLock()` — 세션 쓰기 락 최대 보유 시간 (타임아웃의 1.5배)
+3. Main lane task timeout (660s) — 전체 embedded run의 상한
+
+### 13.3 소스 코드 참조
+
+| 파일                                                         | 핵심 함수                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------- |
+| `src/agents/pi-embedded-runner/compaction-safety-timeout.ts` | `EMBEDDED_COMPACTION_TIMEOUT_MS`, `compactWithSafetyTimeout()` |
+| `src/agents/pi-embedded-runner/compact.ts`                   | `compactEmbeddedSession()`                                     |
+| `src/config/zod-schema.agent-defaults.ts`                    | `compaction.timeoutMs` 스키마                                  |
+
+---
+
+## 14. Channel Health Monitor
+
+### 14.1 개요
+
+`channel-health-monitor.ts`는 Discord 채널의 건강 상태를 주기적으로 점검하고, stuck 상태의 채널을 자동으로 재시작한다.
+
+### 14.2 동작 흐름
+
+```mermaid
+flowchart TD
+    CHECK["runCheck() 주기 실행"] --> SCAN["관리 대상 채널 순회"]
+    SCAN --> STUCK{"채널 stuck?"}
+    STUCK -->|"아니오"| NEXT["다음 채널"]
+    STUCK -->|"예"| RESTART["채널 재시작<br/>restartedCount++"]
+    RESTART --> NEXT
+    NEXT --> MAJORITY{"restartedCount >= <br/>ceil(managedCount / 2)?"}
+    MAJORITY -->|"아니오"| DONE["검사 완료"]
+    MAJORITY -->|"예"| RESET["resetAllLanes()<br/>전체 lane 리셋"]
+    RESET --> DONE
+```
+
+### 14.3 과반수 Stuck 감지
+
+관리 대상 채널의 50% 이상이 stuck으로 감지되면, 단일 채널이 아닌 **시스템 전체** 문제로 판단하여 `resetAllLanes()`를 호출한다. 이는 특정 task가 CommandLane.Main을 점유하여 전체 봇 응답이 불가능해지는 시나리오를 해결한다.
+
+### 14.4 소스 코드 참조
+
+| 파일                                    | 핵심 함수                                    |
+| --------------------------------------- | -------------------------------------------- |
+| `src/gateway/channel-health-monitor.ts` | `createChannelHealthMonitor()`, `runCheck()` |
+
+---
+
+## 15. 세션 유지보수 (Session Maintenance)
+
+### 15.1 개요
+
+세션 파일이 무한 증가하는 것을 방지하는 유지보수 시스템이다. `openclaw.json`의 `session.maintenance` 섹션으로 설정한다.
+
+### 15.2 설정
+
+```json
+{
+  "session": {
+    "maintenance": {
+      "mode": "enforce",
+      "pruneAfter": "14d",
+      "maxEntries": 300,
+      "rotateBytes": "8mb",
+      "maxDiskBytes": "100mb",
+      "highWaterBytes": "80mb"
+    }
+  }
+}
+```
+
+| 설정             | 설명                                                                |
+| ---------------- | ------------------------------------------------------------------- |
+| `mode`           | `"enforce"` = 활성 적용, `"off"` = 비활성                           |
+| `pruneAfter`     | 세션 파일 보존 기간 (기본 14일)                                     |
+| `maxEntries`     | 세션당 최대 엔트리 수                                               |
+| `rotateBytes`    | 단일 세션 파일 로테이션 크기 (기본 8MB)                             |
+| `maxDiskBytes`   | 에이전트당 세션 디렉토리 디스크 상한 (초과 시 오래된 세션부터 삭제) |
+| `highWaterBytes` | 디스크 정리 시작 기준 (maxDiskBytes 도달 전 미리 정리)              |
+
+### 15.3 디스크 예산 (`enforceSessionDiskBudget`)
+
+에이전트별 세션 디렉토리가 `maxDiskBytes`를 초과하면 오래된 세션 파일부터 자동 삭제한다. `highWaterBytes`에 도달하면 미리 정리를 시작하여 갑작스러운 디스크 부족을 방지한다.
+
+---
+
+## 16. Gateway Startup Sidecars
+
+### 16.1 개요
+
+`startGatewaySidecars()` (server-startup.ts)는 게이트웨이 시작 시 모든 부가 서비스를 초기화한다.
+
+### 16.2 초기화 순서
+
+```
+1. 세션 lock 파일 정리 (stale lock 제거)
+2. Stale task 파일 정리 (24h+ in_progress/pending → abandoned)
+3. Task Enforcer 훅 등록 (registerTaskEnforcerHook)
+4. A2A 서브시스템 (인덱스, 이벤트 로그, 동시성 게이트, Job Manager, Reaper)
+5. Conversation Sink (DiscordConversationSink)
+6. Browser Control 서버
+7. Gmail Watcher
+8. DM Retry / A2A Retry 스케줄러
+9. Thread Participant Maintenance
+10. Task Tracker (CURRENT_TASK.md 자동 갱신)
+11. Internal Hooks 로딩
+12. 채널 시작 (Discord 봇 연결)
+13. Plugin Services
+14. ACP Session Identity Reconcile
+15. Memory Backend
+16. Restart Sentinel / Task Continuation
+17. Task Continuation Runner / Self-Driving / Step Continuation
+```
+
+### 16.3 Task Enforcer 훅 등록
+
+`registerTaskEnforcerHook()`는 `before_tool_call` 훅을 등록하여, 에이전트가 `task_start()` 없이 `write`/`edit`/`bash`/`exec` 도구를 사용하지 못하도록 차단한다. 이 호출이 누락되면 Task Enforcement가 완전히 비활성화된다.
+
+> **인시던트 (2026-03-05)**: `registerTaskEnforcerHook()`이 export만 되고 `startGatewaySidecars()`에서 호출되지 않아, 모든 에이전트가 task_start 없이 작업 도구를 자유롭게 사용할 수 있었음. 수정: `server-startup.ts`에 호출 추가.
+
+### 16.4 소스 코드 참조
+
+| 파일                                      | 핵심 함수                                           |
+| ----------------------------------------- | --------------------------------------------------- |
+| `src/gateway/server-startup.ts`           | `startGatewaySidecars()`                            |
+| `src/plugins/core-hooks/task-enforcer.ts` | `registerTaskEnforcerHook()`, `cleanupStaleTasks()` |
+
+---
+
+## 17. 소스 코드 참조
+
+| 기능                   | 파일                                            | 핵심 함수                                                       |
+| ---------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
+| A2A 전송 도구          | `src/agents/tools/sessions-send-tool.ts`        | `createSessionsSendTool()`                                      |
+| A2A 백그라운드 플로우  | `src/agents/tools/sessions-send-tool.a2a.ts`    | `runSessionsSendA2AFlow()`                                      |
+| 에이전트 단계 실행     | `src/agents/tools/agent-step.ts`                | `runAgentStep()`, `readLatestAssistantReply()`                  |
+| 전송 헬퍼              | `src/agents/tools/sessions-send-helpers.ts`     | `buildAgentToAgentMessageContext()`, `resolvePingPongTurns()`   |
+| 이벤트 버스            | `src/infra/events/bus.ts`                       | `emit()`, `subscribe()`                                         |
+| 이벤트 로그            | `src/infra/events/event-log.ts`                 | `startEventLog()`                                               |
+| 이벤트 스키마          | `src/infra/events/schemas.ts`                   | `EVENT_TYPES`                                                   |
+| 세션 키 관리           | `src/routing/session-key.ts`                    | `resolveAgentIdFromSessionKey()`, `buildAgentMainSessionKey()`  |
+| Gateway 서버           | `src/gateway/server.impl.ts`                    | `startGatewayServer()`                                          |
+| Gateway 메서드         | `src/gateway/server-methods.ts`                 | 메서드 등록                                                     |
+| Gateway 세션           | `src/gateway/server-methods/sessions.ts`        | `sessionsHandlers`                                              |
+| Gateway 호출           | `src/gateway/call.ts`                           | `callGateway()`                                                 |
+| Command Lane           | `src/process/command-queue.ts`                  | `drainLane()`, `resetAllLanes()`, `setCommandLaneTaskTimeout()` |
+| Lane 설정              | `src/gateway/server-lanes.ts`                   | `applyGatewayLaneConcurrency()`                                 |
+| Gateway Startup        | `src/gateway/server-startup.ts`                 | `startGatewaySidecars()`                                        |
+| Health Monitor         | `src/gateway/channel-health-monitor.ts`         | `createChannelHealthMonitor()`, `runCheck()`                    |
+| Compaction             | `src/agents/pi-embedded-runner/compact.ts`      | `compactEmbeddedSession()`                                      |
+| Task Enforcer          | `src/plugins/core-hooks/task-enforcer.ts`       | `registerTaskEnforcerHook()`, `cleanupStaleTasks()`             |
+| Task-Monitor           | `scripts/task-monitor-server.ts`                | `buildWorkSessionsFromEvents()`, `enrichCoordinationEvent()`    |
+| Task-Hub 프록시        | `task-hub/src/app/api/proxy/[...path]/route.ts` | `forwardRequest()`                                              |
+| Task-Hub Conversations | `task-hub/src/app/conversations/page.tsx`       | 1,967줄 모놀리식 페이지                                         |
+
+---
+
+## 18. 알려진 이슈
+
+### 18.1 시스템 수준
 
 | #   | 이슈                                  | 영향                                             | 참조                        |
 | --- | ------------------------------------- | ------------------------------------------------ | --------------------------- |
@@ -683,7 +916,7 @@ flowchart TD
 | 4   | A2A 재시도 로직 없음                  | LLM 일시적 에러도 영구 blocked                   | sessions-send-tool.a2a.ts   |
 | 5   | ndjson 월별 로테이션만                | 한 달 내 대량 이벤트 시 파일 커짐 (10MB 캡 있음) | event-log.ts                |
 
-### 13.2 UI 수준 (Task-Hub Conversations)
+### 18.2 UI 수준 (Task-Hub Conversations)
 
 | #   | 이슈                                          | 심각도   |
 | --- | --------------------------------------------- | -------- |

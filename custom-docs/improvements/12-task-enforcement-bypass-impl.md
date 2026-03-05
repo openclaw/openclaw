@@ -113,6 +113,42 @@ const promptMode = isSubagentSessionKey(params.sessionKey) ? "minimal" : "full";
 - 레거시 task 파일 마이그레이션 (기존 파일에 session 메타데이터 없어도 24시간 후 자동 abandoned)
 - 정리 임계값을 config로 설정 가능하게 (현재 하드코딩 24h)
 
+## Follow-up: Hook Registration Bug Fix (2026-03-05)
+
+### 근본 원인
+
+`registerTaskEnforcerHook()` 함수가 `task-enforcer.ts`에서 export되고 있었지만, **어디에서도 호출되지 않았다**. 즉 `before_tool_call` 훅이 등록되지 않아 Task Enforcer가 완전히 비활성화된 상태였다.
+
+이는 Phase 1-3 구현 당시 함수를 만들고 export했지만 `server-startup.ts`에서 호출하는 것을 누락한 버그였다.
+
+### 영향
+
+- **모든 에이전트**가 `task_start()` 없이 `write`/`edit`/`bash`/`exec` 도구를 자유롭게 사용 가능
+- Task 추적이 soft enforcement(시스템 프롬프트 지시)에만 의존
+- Stale task cleanup은 동작하고 있었으나 (gateway startup에서 호출됨), enforcer 자체가 미등록
+
+### 수정 내용
+
+| 파일                            | 변경                                                        |
+| ------------------------------- | ----------------------------------------------------------- |
+| `src/gateway/server-startup.ts` | `registerTaskEnforcerHook(params.pluginRegistry)` 호출 추가 |
+
+호출 위치: stale task cleanup 직후, A2A 서브시스템 초기화 직전.
+
+```typescript
+// server-startup.ts — startGatewaySidecars() 내부
+// Clean up stale task files → 직후
+registerTaskEnforcerHook(params.pluginRegistry);
+```
+
+### 검증
+
+- 게이트웨이 재시작 후 로그에 `"Task enforcer hook registered"` 출력 확인
+- 빌드 (`npx tsdown`) 성공
+- 서버 배포 + 재시작 완료
+
+---
+
 ## Follow-up: Gateway Startup Wiring (2026-02-19)
 
 ### 변경 파일
