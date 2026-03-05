@@ -40,8 +40,8 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
 }
 
 /**
- * Tools always denied for sub-agents regardless of depth.
- * These are system-level or interactive tools that sub-agents should never use.
+ * Default tools denied for sub-agents regardless of depth.
+ * Operators can replace this list with `tools.subagents.tools.deny`.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -89,15 +89,15 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
   const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
+  const configuredDeny = Array.isArray(configured?.deny) ? configured.deny : undefined;
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
     [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
   );
-  const deny = [
-    ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
-    ...(Array.isArray(configured?.deny) ? configured.deny : []),
-  ];
+  const deny =
+    configuredDeny ??
+    baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName)));
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
   return { allow: mergedAllow, deny };
 }

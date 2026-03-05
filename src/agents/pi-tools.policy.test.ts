@@ -62,6 +62,17 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
   });
 
+  it("treats subagent tools.deny as an explicit override list", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: { subagents: { tools: { deny: ["gateway"] } } },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("cron", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
+  });
+
   it("merges subagent tools.alsoAllow into tools.allow when both are set", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
