@@ -352,8 +352,10 @@
                   <th>Symbol</th>
                   <th>Side</th>
                   <th style="text-align: right">Qty</th>
+                  <th style="text-align: right">Entry</th>
                   <th style="text-align: right">P&amp;L</th>
                   <th style="text-align: right">P&amp;L%</th>
+                  <th style="text-align: right">Weight%</th>
                 </tr>
               </thead>
               <tbody id="holdingsBody"></tbody>
@@ -938,15 +940,15 @@
         }
 
         // ── Render: Top Holdings ──
-        function renderHoldings(positions) {
+        function renderHoldings(positions, totalEquity) {
           var body = $("holdingsBody");
           if (!positions || !positions.length) {
             body.innerHTML =
-              '<tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No open positions</td></tr>';
+              '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No open positions</td></tr>';
             $("holdCount").textContent = "";
             return;
           }
-          // Sort by abs PnL, top 5
+          // Sort by abs PnL descending, top 5
           var sorted = positions.slice().sort(function (a, b) {
             return (
               Math.abs(b.unrealizedPnl || b.pnl || 0) - Math.abs(a.unrealizedPnl || a.pnl || 0)
@@ -954,6 +956,7 @@
           });
           var top = sorted.slice(0, 5);
           $("holdCount").textContent = positions.length + " total";
+          var eq = totalEquity || 0;
 
           var html = "";
           top.forEach(function (p) {
@@ -961,6 +964,10 @@
             var pnlPct = p.pnlPct || p.unrealizedPnlPct || 0;
             var side = (p.side || "long").toLowerCase();
             var qty = p.amount || p.qty || p.quantity || 0;
+            var entry = p.entryPrice || p.avgPrice || 0;
+            // Weight = position notional value / total equity
+            var notional = Math.abs(pnl + entry * qty);
+            var weight = eq > 0 ? (notional / eq) * 100 : 0;
             html +=
               "<tr>" +
               '<td class="num" style="color:var(--text-hi)">' +
@@ -974,6 +981,9 @@
               '<td class="num" style="text-align:right">' +
               fmt(qty, 4) +
               "</td>" +
+              '<td class="num" style="text-align:right">' +
+              (entry > 0 ? fmtUsd(entry) : "--") +
+              "</td>" +
               '<td class="num ' +
               pnlClass(pnl) +
               '" style="text-align:right;font-weight:600">' +
@@ -983,6 +993,9 @@
               pnlClass(pnlPct) +
               '" style="text-align:right">' +
               fmtPct(pnlPct) +
+              "</td>" +
+              '<td class="num" style="text-align:right">' +
+              (eq > 0 ? fmt(weight, 1) + "%" : "--") +
               "</td>" +
               "</tr>";
           });
@@ -1106,7 +1119,7 @@
           renderRiskStatus(state.risk, state.fund);
           renderStatPills(t);
           renderConfigStatus(state.config);
-          renderHoldings(t.positions);
+          renderHoldings(t.positions, (summary.totalEquity || summary.equity || 0));
           renderAlerts(state.alerts);
           renderPipeline(t.strategies);
           renderChartStats(t);
@@ -1230,7 +1243,8 @@
           state.trading = data;
           renderTopEquity(data.summary || {});
           renderStatPills(data);
-          renderHoldings(data.positions);
+          var sseSummary = data.summary || {};
+          renderHoldings(data.positions, (sseSummary.totalEquity || sseSummary.equity || 0));
           renderPipeline(data.strategies);
           renderChartStats(data);
           updateEquityChart(data.snapshots);

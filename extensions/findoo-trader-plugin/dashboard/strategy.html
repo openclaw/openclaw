@@ -11,6 +11,7 @@
       rel="stylesheet"
     />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1/Sortable.min.js"></script>
     <style>
       /*__SHARED_CSS__*/
     </style>
@@ -718,6 +719,75 @@
 
           var total = (strategies || []).length;
           $("kanbanCount").textContent = total + " strategies";
+
+          // ── Sortable: drag-and-drop between kanban columns ──
+          var levelMap = { kanbanL0: "L0_INCUBATE", kanbanL1: "L1_BACKTEST", kanbanL2: "L2_PAPER", kanbanL3: "L3_LIVE" };
+          var levelOrder = ["L0_INCUBATE", "L1_BACKTEST", "L2_PAPER", "L3_LIVE"];
+
+          if (typeof Sortable !== "undefined") {
+            [0, 1, 2, 3].forEach(function (lvl) {
+              var col = $("kanbanL" + lvl);
+              // Destroy previous instance if any
+              if (col._sortable) col._sortable.destroy();
+              col._sortable = Sortable.create(col, {
+                group: "kanban-pipeline",
+                animation: 150,
+                ghostClass: "kanban-card--ghost",
+                dragClass: "kanban-card--drag",
+                filter: ".kanban-col-header,.kanban-col-empty",
+                onEnd: function (evt) {
+                  var cardId = evt.item.getAttribute("data-id");
+                  var fromColId = evt.from.id;
+                  var toColId = evt.to.id;
+                  if (fromColId === toColId) return; // same column, no-op
+
+                  var fromLevel = levelMap[fromColId];
+                  var toLevel = levelMap[toColId];
+                  var fromIdx = levelOrder.indexOf(fromLevel);
+                  var toIdx = levelOrder.indexOf(toLevel);
+                  var isDemote = toIdx < fromIdx;
+
+                  // L3_LIVE promotion: API returns 202 pending_approval, show toast
+                  // Demotion: confirm before executing
+                  if (isDemote) {
+                    if (!confirm("Demote strategy from " + fromLevel + " to " + toLevel + "?\nThis will move the strategy to a lower lifecycle stage.")) {
+                      // Revert: re-render to restore original positions
+                      renderKanban(state.strategies);
+                      return;
+                    }
+                  }
+
+                  // Call promote API with explicit targetLevel (works for both promote and demote)
+                  fetch("/api/v1/finance/strategies/promote", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id: cardId, targetLevel: toLevel }),
+                  })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                      if (data.status === "pending_approval") {
+                        toast("L3 Live promotion requires approval. Check pending approvals.", "warn");
+                        // Revert card position — approval flow handles it
+                        renderKanban(state.strategies);
+                      } else if (data.status === "promoted") {
+                        toast("Strategy moved: " + fromLevel + " \u2192 " + toLevel, "success");
+                        // Update local state
+                        var s = (state.strategies || []).find(function (x) { return (x.id || x.name) === cardId; });
+                        if (s) s.level = toLevel;
+                        renderKanban(state.strategies);
+                      } else {
+                        toast("Move failed: " + (data.message || JSON.stringify(data)), "error");
+                        renderKanban(state.strategies);
+                      }
+                    })
+                    .catch(function (err) {
+                      toast("Network error: " + err.message, "error");
+                      renderKanban(state.strategies);
+                    });
+                },
+              });
+            });
+          }
         }
 
         function statusMatch(s, filter) {

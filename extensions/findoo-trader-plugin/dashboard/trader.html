@@ -239,6 +239,15 @@ body::after{
 .pos-row__close:hover{color:var(--loss);border-color:rgba(239,68,68,.3);background:var(--loss-dim)}
 .pos-total{display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;border-top:1px solid var(--border);margin-top:3px;font-size:10px;color:var(--text-dim)}
 
+/* Alert items */
+.alert-item{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);font-size:10px}
+.alert-item:last-child{border-bottom:none}
+.alert-pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-top:3px;animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}
+.alert-cond{color:var(--text);flex:1}
+.alert-time{color:var(--text-dim);font-size:9px;white-space:nowrap}
+.alerts-empty{color:var(--text-dim);font-size:10px;font-style:italic}
+
 /* Quick Actions */
 .qa-grid{display:flex;gap:6px}
 .qa-btn{
@@ -622,8 +631,14 @@ body.embedded .topbar__logo{display:none}
           <div id="recentOrdersList"></div>
         </div>
 
-        <!-- Quick Actions -->
+        <!-- Active Alerts -->
         <div class="col-l__section fade-up d5">
+          <div class="col-l__title">Active Alerts <span id="alertCount" class="num" style="color:var(--text-dim);margin-left:4px"></span></div>
+          <div id="alertsList"></div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="col-l__section fade-up d6">
           <div class="qa-grid">
             <button class="qa-btn qa-btn--primary" onclick="TR.openSlide('order')">Place Order</button>
             <button class="qa-btn qa-btn--danger" onclick="TR.showEstop()">Emergency Stop</button>
@@ -1215,6 +1230,43 @@ body.embedded .topbar__logo{display:none}
           body.innerHTML = html;
         }
 
+        // ── Active Alerts ──
+        function renderAlerts(alerts) {
+          var el = $("alertsList");
+          var countEl = $("alertCount");
+          if (!el) return;
+          if (!alerts || !alerts.length) {
+            el.innerHTML = '<div class="alerts-empty">No active alerts</div>';
+            if (countEl) countEl.textContent = "";
+            return;
+          }
+          if (countEl) countEl.textContent = alerts.length;
+          var html = "";
+          alerts.forEach(function (a) {
+            var cond = a.condition || a.message || a.title || "Alert";
+            var ts = a.timestamp || a.createdAt || "";
+            var timeStr = ts ? timeAgo(ts) : "";
+            html +=
+              '<div class="alert-item">' +
+              '<span class="alert-pulse"></span>' +
+              '<span class="alert-cond">' + esc(cond) + '</span>' +
+              '<span class="alert-time">' + timeStr + '</span>' +
+              '</div>';
+          });
+          el.innerHTML = html;
+        }
+
+        function loadAlerts() {
+          fetch("/api/v1/finance/alerts")
+            .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+            .then(function (d) {
+              var alerts = d.alerts || d || [];
+              state.alerts = alerts;
+              renderAlerts(alerts);
+            })
+            .catch(function () { /* keep existing alerts */ });
+        }
+
         // ── Activity Feed ──
         function eventCategory(e) {
           var t = (e.type || e.category || "").toLowerCase();
@@ -1291,6 +1343,7 @@ body.embedded .topbar__logo{display:none}
           renderChartStats(t);
           renderOrderHistory(t.orders);
           renderBacktestResults(state.backtestResults);
+          renderAlerts(state.alerts);
           renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
           updateEquityChart(t.snapshots);
         }
@@ -1299,6 +1352,10 @@ body.embedded .topbar__logo{display:none}
         function switchDomain(domain) {
           state.domain = domain;
           renderDomainIndicator(domain);
+
+          // Stop order book polling; only restart for live/paper
+          if (obInterval) { clearInterval(obInterval); obInterval = null; }
+
           $("botMsg").innerHTML = "<em>Switching to " + domain + "...</em>";
           fetch("/api/v1/finance/dashboard/trader?domain=" + domain)
             .then(function (r) { return r.json(); })
@@ -1311,6 +1368,9 @@ body.embedded .topbar__logo{display:none}
               state.backtestResults = data.backtestResults || [];
               renderAll();
               $("botMsg").innerHTML = "<em>" + domain + " mode active</em> " + new Date().toLocaleTimeString();
+
+              // Resume order book polling only for live/paper domains
+              if (domain !== "backtest") { startOrderBookRefresh(); }
             })
             .catch(function (e) { toast("Domain switch failed: " + e.message, "error"); });
         }
@@ -1460,14 +1520,38 @@ body.embedded .topbar__logo{display:none}
           ro.observe(container);
         }
 
+        function showKlinePlaceholder(msg) {
+          var container = $("klineChartContainer");
+          if (!container) return;
+          var existing = container.querySelector(".kline-placeholder");
+          if (existing) existing.remove();
+          if (!msg) return;
+          var div = document.createElement("div");
+          div.className = "kline-placeholder";
+          div.style.cssText = "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-dim);font-size:12px;text-align:center;z-index:5;pointer-events:none";
+          div.textContent = msg;
+          container.style.position = "relative";
+          container.appendChild(div);
+        }
+
         function loadKlineData() {
           var symbol = $("klineSymbol").value.trim();
           var tf = $("klineTf").value;
           if (!symbol) return;
+
+          // Clear old data before loading new (prevents flash of stale candles)
+          if (klineSeries) { try { klineSeries.setData([]); klineSeries.setMarkers([]); } catch (e) { /* ignore */ } }
+          showKlinePlaceholder("Loading...");
+
           fetch("/api/v1/finance/ohlcv?symbol=" + encodeURIComponent(symbol) + "&timeframe=" + tf + "&limit=300")
             .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
             .then(function (data) {
-              if (!klineSeries || !data.candles || !data.candles.length) return;
+              if (!klineSeries) return;
+              if (!data.candles || !data.candles.length) {
+                showKlinePlaceholder("No chart data available for " + symbol);
+                return;
+              }
+              showKlinePlaceholder(null); // remove placeholder
               var mapped = data.candles.map(function (c) {
                 return { time: Math.floor((c.timestamp || c.time || 0) / 1000), open: c.open, high: c.high, low: c.low, close: c.close };
               });
@@ -1478,7 +1562,10 @@ body.embedded .topbar__logo{display:none}
               // Add trade markers from orders
               addTradeMarkers(mapped);
             })
-            .catch(function (e) { console.warn("K-line load error:", e); });
+            .catch(function (e) {
+              console.warn("K-line load error:", e);
+              showKlinePlaceholder("Failed to load chart data. Check data provider.");
+            });
         }
 
         function addTradeMarkers(candles) {
@@ -1537,7 +1624,10 @@ body.embedded .topbar__logo{display:none}
           fetch("/api/v1/finance/orderbook?symbol=" + encodeURIComponent(symbol) + "&limit=" + limit)
             .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
             .then(function (data) { renderOrderBook(data.bids || [], data.asks || []); })
-            .catch(function () {});
+            .catch(function (e) {
+              // Preserve last rendered order book data on fetch failure
+              console.warn("Order book load error:", e);
+            });
         }
 
         function renderOrderBook(bids, asks) {
@@ -1771,6 +1861,8 @@ body.embedded .topbar__logo{display:none}
         setInterval(fetchWatchlistTickers, 30000);
 
         initSSE();
+        loadAlerts();
+        renderAlerts(state.alerts);
         $("botMsg").innerHTML = "Trader online. <em>" + new Date().toLocaleString() + "</em>";
       })();
     </script>
