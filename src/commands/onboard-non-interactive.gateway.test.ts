@@ -5,6 +5,30 @@ import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
 
+const serviceInstallMock = vi.fn().mockResolvedValue(undefined);
+const serviceIsLoadedMock = vi.fn().mockResolvedValue(false);
+const isSystemdUserServiceAvailableMock = vi.fn().mockResolvedValue(true);
+const ensureSystemdUserLingerNonInteractiveMock = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({
+    label: "openclaw-gateway",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    install: serviceInstallMock,
+    isLoaded: serviceIsLoadedMock,
+  }),
+}));
+
+vi.mock("../daemon/systemd.js", () => ({
+  isSystemdUserServiceAvailable: () => isSystemdUserServiceAvailableMock(),
+}));
+
+vi.mock("./systemd-linger.js", () => ({
+  ensureSystemdUserLingerNonInteractive: (params: unknown) =>
+    ensureSystemdUserLingerNonInteractiveMock(params),
+}));
+
 const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
@@ -264,6 +288,39 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
       expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
+    });
+  }, 60_000);
+
+  it("installs gateway daemon service when installDaemon is true", async () => {
+    serviceInstallMock.mockClear();
+    ensureSystemdUserLingerNonInteractiveMock.mockClear();
+
+    await withStateDir("state-daemon-install-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: true,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_daemon_test_123",
+        },
+        runtime,
+      );
+
+      expect(serviceInstallMock).toHaveBeenCalledTimes(1);
+      expect(serviceInstallMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          programArguments: expect.arrayContaining([expect.any(String)]),
+          environment: expect.any(Object),
+        }),
+      );
     });
   }, 60_000);
 });
