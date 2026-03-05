@@ -110,8 +110,8 @@ export function resolveRuntimeServiceVersion(
 
   return (
     firstNonEmpty(
-      env["OPENCLAW_VERSION"],
       runtimeVersion,
+      env["OPENCLAW_VERSION"],
       env["OPENCLAW_SERVICE_VERSION"],
       env["npm_package_version"],
     ) ?? fallback

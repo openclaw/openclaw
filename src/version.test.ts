@@ -133,14 +133,14 @@ describe("version resolution", () => {
     });
   });
 
-  it("prefers OPENCLAW_VERSION over service and package versions", () => {
+  it("prefers runtime VERSION over OPENCLAW_VERSION and service/package markers", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "9.9.9",
         OPENCLAW_SERVICE_VERSION: "2.2.2",
         npm_package_version: "1.1.1",
       }),
-    ).toBe("9.9.9");
+    ).toBe(VERSION);
   });
 
   it("normalizes runtime version candidate for fallback handling", () => {
