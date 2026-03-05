@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
-const connectGatewayMock = vi.fn();
-const loadBootstrapMock = vi.fn();
+const { connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
+  connectGatewayMock: vi.fn(),
+  loadBootstrapMock: vi.fn(),
+}));
+const { addEventListenerMock, removeEventListenerMock } = vi.hoisted(() => ({
+  addEventListenerMock: vi.fn(),
+  removeEventListenerMock: vi.fn(),
+}));
+
+vi.stubGlobal("window", {
+  addEventListener: addEventListenerMock,
+  removeEventListener: removeEventListenerMock,
+});
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
