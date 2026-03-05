@@ -169,8 +169,8 @@ function resolveAnthropicSonnet46ForwardCompatModel(
 }
 
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
-// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
-// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
+// google-gemini-cli or google provider catalogs yet. Clone the nearest gemini-3 template
+// so users don't get "Unknown model" errors when either provider gains new minor-version models.
 const GOOGLE_GEMINI_CLI_ELIGIBLE_PROVIDERS = new Set(["google-gemini-cli", "google"]);
 
 function resolveGoogleGeminiCli31ForwardCompatModel(
