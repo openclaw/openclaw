@@ -25,7 +25,7 @@ describe("buildTelegramMessageContext multi-account defaults", () => {
     vi.mocked(loadConfig).mockReturnValue(defaultRouteConfig as never);
   });
 
-  it("blocks inbound DMs for non-default accounts without explicit bindings", async () => {
+  it("accepts inbound DMs for non-default accounts without explicit bindings", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "jarvis2",
       message: {
@@ -35,10 +35,10 @@ describe("buildTelegramMessageContext multi-account defaults", () => {
       },
     });
 
-    expect(ctx).toBeNull();
+    expect(ctx).not.toBeNull();
   });
 
-  it("blocks non-default account when default account is disabled", async () => {
+  it("accepts non-default account when default account is disabled", async () => {
     vi.mocked(loadConfig).mockReturnValue({
       ...defaultRouteConfig,
       channels: {
@@ -61,10 +61,10 @@ describe("buildTelegramMessageContext multi-account defaults", () => {
       },
     });
 
-    expect(ctx).toBeNull();
+    expect(ctx).not.toBeNull();
   });
 
-  it("blocks non-default account when defaultAccount points to a missing id", async () => {
+  it("accepts non-default account when defaultAccount points to a missing id", async () => {
     vi.mocked(loadConfig).mockReturnValue({
       ...defaultRouteConfig,
       channels: {
@@ -86,6 +86,6 @@ describe("buildTelegramMessageContext multi-account defaults", () => {
       },
     });
 
-    expect(ctx).toBeNull();
+    expect(ctx).not.toBeNull();
   });
 });
