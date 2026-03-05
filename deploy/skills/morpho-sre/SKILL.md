@@ -14,6 +14,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Print command target before execution: AWS identity, kube context, namespace.
 - Always include explicit Kubernetes context in commands: `kubectl --context "$K8S_CONTEXT" ...`
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
+- Slack file delivery: when user asks to "send the file/csv directly", emit `MEDIA:<url-or-local-path>` in the reply (keep caption in normal text) instead of saying file upload is unavailable.
 - Linear ticket mutation guardrail (Slack threads):
   - Trigger: explicit ask to create/update/comment a Linear issue/ticket (e.g., `PLA-318`).
   - Mandatory: run a live Linear mutation attempt before replying.

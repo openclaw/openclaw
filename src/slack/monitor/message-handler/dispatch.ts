@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
@@ -103,6 +104,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
 
   // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
@@ -289,6 +291,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       target: prepared.replyTarget,
       token: ctx.botToken,
       accountId: account.accountId,
+      mediaLocalRoots,
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
