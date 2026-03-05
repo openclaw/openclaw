@@ -70,3 +70,4 @@ const MyComp: React.FC = () => (
     <LightLeak durationInFrames={60} seed={3} />
   </AbsoluteFill>
 );
+```
