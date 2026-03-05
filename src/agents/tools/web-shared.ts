@@ -8,6 +8,14 @@ export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
+function pruneExpiredEntries<T>(cache: Map<string, CacheEntry<T>>, now: number): void {
+  for (const [entryKey, entry] of cache) {
+    if (now > entry.expiresAt) {
+      cache.delete(entryKey);
+    }
+  }
+}
+
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(1, Math.floor(parsed));
@@ -47,6 +55,8 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  pruneExpiredEntries(cache, now);
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -55,8 +65,8 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt: now + ttlMs,
+    insertedAt: now,
   });
 }
 
