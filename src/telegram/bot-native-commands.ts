@@ -658,6 +658,7 @@ export const registerTelegramNativeCommands = ({
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
+              enableMessageHooks: false,
               deliver: async (payload, _info) => {
                 const result = await deliverReplies({
                   replies: [payload],

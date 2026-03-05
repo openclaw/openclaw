@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -1388,6 +1389,60 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+
+  it("includes error details in message_sent hook on delivery failure", async () => {
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    const hookRunner = {
+      hasHooks: (name: string) => name === "message_sent",
+      runMessageSent,
+    };
+    const hookSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue(hookRunner as never);
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("send failed");
+      },
+    });
+
+    dispatcher.sendFinalReply({ text: "x" });
+    await dispatcher.waitForIdle();
+
+    expect(runMessageSent).toHaveBeenCalledTimes(1);
+    expect(runMessageSent.mock.calls[0]?.[0]).toMatchObject({
+      success: false,
+      error: "send failed",
+    });
+    hookSpy.mockRestore();
+  });
+
+  it("does not block queue on pending message_sent hooks", async () => {
+    let resolveSent: (() => void) | undefined;
+    const pendingSent = new Promise<void>((resolve) => {
+      resolveSent = resolve;
+    });
+    const runMessageSent = vi.fn().mockImplementation(() => pendingSent);
+    const hookRunner = {
+      hasHooks: (name: string) => name === "message_sent",
+      runMessageSent,
+    };
+    const hookSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue(hookRunner as never);
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendFinalReply({ text: "first" });
+    dispatcher.sendFinalReply({ text: "second" });
+    for (let i = 0; i < 20 && deliver.mock.calls.length < 2; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    resolveSent?.();
+    await dispatcher.waitForIdle();
+    hookSpy.mockRestore();
   });
 });
 

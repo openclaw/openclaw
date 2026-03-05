@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -62,6 +63,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Whether dispatcher should run message_sending/message_sent hooks. */
+  enableMessageHooks?: boolean;
   /** Channel context for message_sending/message_sent hooks. */
   channelContext?: ChannelHookContext;
 };
@@ -165,7 +168,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
 
-        const hookRunner = getGlobalHookRunner();
+        const shouldRunMessageHooks = options.enableMessageHooks !== false;
+        const hookRunner = shouldRunMessageHooks ? getGlobalHookRunner() : undefined;
         const ctx = options.channelContext ?? {};
         const channelId = ctx.channelId ?? "unknown";
         const targetId = ctx.conversationId ?? channelId;
@@ -199,30 +203,31 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
         // Call original deliver
         let success = true;
+        let deliveryError: unknown;
         try {
           await options.deliver(effectivePayload, { kind });
         } catch (err) {
           success = false;
+          deliveryError = err;
           throw err;
         } finally {
           // Run message_sent hook
           if (hookRunner?.hasHooks("message_sent")) {
-            try {
-              await hookRunner.runMessageSent(
+            void hookRunner
+              .runMessageSent(
                 {
                   to: targetId,
                   content: effectivePayload.text ?? "",
                   success,
+                  error: deliveryError != null ? formatErrorMessage(deliveryError) : undefined,
                 },
                 {
                   channelId,
                   accountId: ctx.accountId,
                   conversationId: ctx.conversationId,
                 },
-              );
-            } catch {
-              // Ignore hook errors
-            }
+              )
+              .catch(() => {});
           }
         }
       })
