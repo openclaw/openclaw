@@ -19,9 +19,9 @@ x-i18n:
 
 相关内容：
 
-- 节点概述：[节点](/nodes)
-- 摄像头：[摄像头节点](/nodes/camera)
-- 图像：[图像节点](/nodes/images)
+- 节点概述：[节点](/zh-CN/nodes)
+- 摄像头：[摄像头节点](/zh-CN/nodes/camera)
+- 图像：[图像节点](/zh-CN/nodes/images)
 
 通用选项：
 

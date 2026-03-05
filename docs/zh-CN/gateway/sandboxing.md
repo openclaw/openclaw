@@ -34,7 +34,7 @@ Gateway 网关保留在主机上；启用时工具执行在隔离的沙箱中运
 - Gateway 网关进程本身。
 - 任何明确允许在主机上运行的工具（例如 `tools.elevated`）。
   - **提权 exec 在主机上运行并绕过沙箱隔离。**
-  - 如果沙箱隔离关闭，`tools.elevated` 不会改变执行（已经在主机上）。参见[提权模式](/tools/elevated)。
+  - 如果沙箱隔离关闭，`tools.elevated` 不会改变执行（已经在主机上）。参见[提权模式](/zh-CN/tools/elevated)。
 
 ## 模式
 
@@ -103,7 +103,7 @@ Skills 注意事项：`read` 工具以沙箱为根。使用 `workspaceAccess: "n
 - 绑定绕过沙箱文件系统：它们以你设置的任何模式（`:ro` 或 `:rw`）暴露主机路径。
 - 敏感挂载（例如 `docker.sock`、密钥、SSH 密钥）应该是 `:ro`，除非绝对必要。
 - 如果你只需要对工作区的读取访问，请结合 `workspaceAccess: "ro"`；绑定模式保持独立。
-- 参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)了解绑定如何与工具策略和提权 exec 交互。
+- 参见[沙箱 vs 工具策略 vs 提权](/zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated)了解绑定如何与工具策略和提权 exec 交互。
 
 ## 镜像 + 设置
 
@@ -127,7 +127,7 @@ scripts/sandbox-browser-setup.sh
 通过 `agents.defaults.sandbox.docker.network` 覆盖。
 
 Docker 安装和容器化 Gateway 网关在此：
-[Docker](/install/docker)
+[Docker](/zh-CN/install/docker)
 
 ## setupCommand（一次性容器设置）
 
@@ -151,19 +151,19 @@ Docker 安装和容器化 Gateway 网关在此：
 工具允许/拒绝策略仍在沙箱规则之前应用。如果工具在全局或每智能体被拒绝，沙箱隔离不会恢复它。
 
 `tools.elevated` 是一个显式的逃逸通道，在主机上运行 `exec`。
-`/exec` 指令仅适用于授权发送者并按会话持久化；要硬禁用 `exec`，使用工具策略拒绝（参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)）。
+`/exec` 指令仅适用于授权发送者并按会话持久化；要硬禁用 `exec`，使用工具策略拒绝（参见[沙箱 vs 工具策略 vs 提权](/zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated)）。
 
 调试：
 
 - 使用 `openclaw sandbox explain` 检查生效的沙箱模式、工具策略和修复配置键。
-- 参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)了解"为什么被阻止？"的心智模型。
+- 参见[沙箱 vs 工具策略 vs 提权](/zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated)了解"为什么被阻止？"的心智模型。
   保持锁定。
 
 ## 多智能体覆盖
 
 每个智能体可以覆盖沙箱 + 工具：
 `agents.list[].sandbox` 和 `agents.list[].tools`（加上 `agents.list[].tools.sandbox.tools` 用于沙箱工具策略）。
-参见[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)了解优先级。
+参见[多智能体沙箱与工具](/zh-CN/tools/multi-agent-sandbox-tools)了解优先级。
 
 ## 最小启用示例
 
@@ -183,6 +183,6 @@ Docker 安装和容器化 Gateway 网关在此：
 
 ## 相关文档
 
-- [沙箱配置](/gateway/configuration#agentsdefaults-sandbox)
-- [多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)
-- [安全](/gateway/security)
+- [沙箱配置](/zh-CN/gateway/configuration#agentsdefaults-sandbox)
+- [多智能体沙箱与工具](/zh-CN/tools/multi-agent-sandbox-tools)
+- [安全](/zh-CN/gateway/security)

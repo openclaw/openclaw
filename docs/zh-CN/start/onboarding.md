@@ -95,7 +95,7 @@ Gmail Pub/Sub 设置目前是手动步骤。使用：
 openclaw webhooks gmail setup --account you@gmail.com
 ```
 
-参阅 [/automation/gmail-pubsub](/automation/gmail-pubsub) 了解详情。
+参阅 [/automation/gmail-pubsub](/zh-CN/automation/gmail-pubsub) 了解详情。
 
 ## 远程模式说明
 

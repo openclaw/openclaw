@@ -19,13 +19,13 @@ x-i18n:
 
 ## 选择提供商
 
-- **Railway**（一键 + 浏览器设置）：[Railway](/install/railway)
-- **Northflank**（一键 + 浏览器设置）：[Northflank](/install/northflank)
-- **Oracle Cloud（永久免费）**：[Oracle](/platforms/oracle) — $0/月（永久免费，ARM；容量/注册可能不太稳定）
-- **Fly.io**：[Fly.io](/install/fly)
-- **Hetzner（Docker）**：[Hetzner](/install/hetzner)
-- **GCP（Compute Engine）**：[GCP](/install/gcp)
-- **exe.dev**（VM + HTTPS 代理）：[exe.dev](/install/exe-dev)
+- **Railway**（一键 + 浏览器设置）：[Railway](/zh-CN/install/railway)
+- **Northflank**（一键 + 浏览器设置）：[Northflank](/zh-CN/install/northflank)
+- **Oracle Cloud（永久免费）**：[Oracle](/zh-CN/platforms/oracle) — $0/月（永久免费，ARM；容量/注册可能不太稳定）
+- **Fly.io**：[Fly.io](/zh-CN/install/fly)
+- **Hetzner（Docker）**：[Hetzner](/zh-CN/install/hetzner)
+- **GCP（Compute Engine）**：[GCP](/zh-CN/install/gcp)
+- **exe.dev**（VM + HTTPS 代理）：[exe.dev](/zh-CN/install/exe-dev)
 - **AWS（EC2/Lightsail/免费套餐）**：也运行良好。视频指南：
   https://x.com/techfrenAJ/status/2014934471095812547
 
@@ -37,11 +37,11 @@ x-i18n:
 - 安全默认：将 Gateway 网关保持在 loopback 上，通过 SSH 隧道或 Tailscale Serve 访问。
   如果你绑定到 `lan`/`tailnet`，需要 `gateway.auth.token` 或 `gateway.auth.password`。
 
-远程访问：[Gateway 网关远程访问](/gateway/remote)
-平台中心：[平台](/platforms)
+远程访问：[Gateway 网关远程访问](/zh-CN/gateway/remote)
+平台中心：[平台](/zh-CN/platforms)
 
 ## 在 VPS 上使用节点
 
 你可以将 Gateway 网关保持在云端，并在本地设备（Mac/iOS/Android/无头）上配对**节点**。节点提供本地屏幕/摄像头/canvas 和 `system.run` 功能，而 Gateway 网关保持在云端。
 
-文档：[节点](/nodes)，[节点 CLI](/cli/nodes)
+文档：[节点](/zh-CN/nodes)，[节点 CLI](/zh-CN/cli/nodes)

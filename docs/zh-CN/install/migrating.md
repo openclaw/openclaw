@@ -98,7 +98,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 在**新**机器上，安装 CLI（如果需要还有 Node）：
 
-- 参见：[安装](/install)
+- 参见：[安装](/zh-CN/install)
 
 在这个阶段，如果新手引导创建了一个新的 `~/.openclaw/` 也没关系 — 你将在下一步覆盖它。
 
@@ -194,6 +194,6 @@ openclaw doctor
 
 ## 相关内容
 
-- [Doctor](/gateway/doctor)
-- [Gateway 网关故障排除](/gateway/troubleshooting)
-- [OpenClaw 在哪里存储数据？](/help/faq#where-does-openclaw-store-its-data)
+- [Doctor](/zh-CN/gateway/doctor)
+- [Gateway 网关故障排除](/zh-CN/gateway/troubleshooting)
+- [OpenClaw 在哪里存储数据？](/zh-CN/help/faq#where-does-openclaw-store-its-data)

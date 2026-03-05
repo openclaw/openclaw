@@ -43,11 +43,11 @@ Skills 从**三个**位置加载：
 
 ## 插件 + Skills
 
-插件可以通过在 `openclaw.plugin.json` 中列出 `skills` 目录（相对于插件根目录的路径）来发布自己的 Skills。插件 Skills 在插件启用时加载，并参与正常的 Skills 优先级规则。你可以通过插件配置条目上的 `metadata.openclaw.requires.config` 对它们进行门控。参见[插件](/tools/plugin)了解发现/配置，以及[工具](/tools)了解这些 Skills 所教授的工具接口。
+插件可以通过在 `openclaw.plugin.json` 中列出 `skills` 目录（相对于插件根目录的路径）来发布自己的 Skills。插件 Skills 在插件启用时加载，并参与正常的 Skills 优先级规则。你可以通过插件配置条目上的 `metadata.openclaw.requires.config` 对它们进行门控。参见[插件](/zh-CN/tools/plugin)了解发现/配置，以及[工具](/zh-CN/tools)了解这些 Skills 所教授的工具接口。
 
 ## ClawHub（安装 + 同步）
 
-ClawHub 是 OpenClaw 的公共 Skills 注册表。浏览 https://clawhub.com。使用它来发现、安装、更新和备份 Skills。完整指南：[ClawHub](/tools/clawhub)。
+ClawHub 是 OpenClaw 的公共 Skills 注册表。浏览 https://clawhub.com。使用它来发现、安装、更新和备份 Skills。完整指南：[ClawHub](/zh-CN/tools/clawhub)。
 
 常见流程：
 
@@ -63,9 +63,9 @@ ClawHub 是 OpenClaw 的公共 Skills 注册表。浏览 https://clawhub.com。�
 ## 安全注意事项
 
 - 将第三方 Skills 视为**不受信任的代码**。启用前请阅读它们。
-- 对于不受信任的输入和高风险工具，优先使用沙箱隔离运行。参见[沙箱隔离](/gateway/sandboxing)。
+- 对于不受信任的输入和高风险工具，优先使用沙箱隔离运行。参见[沙箱隔离](/zh-CN/gateway/sandboxing)。
 - `skills.entries.*.env` 和 `skills.entries.*.apiKey` 为该智能体轮次将秘密注入到**宿主机**进程中（而非沙箱）。将秘密保持在提示词和日志之外。
-- 有关更广泛的威胁模型和检查清单，参见[安全性](/gateway/security)。
+- 有关更广泛的威胁模型和检查清单，参见[安全性](/zh-CN/gateway/security)。
 
 ## 格式（AgentSkills + Pi 兼容）
 
@@ -270,7 +270,7 @@ OpenClaw 作为安装的一部分（npm 包或 OpenClaw.app）发布一组基线
 
 ## 配置参考
 
-参见 [Skills 配置](/tools/skills-config)了解完整的配置 schema。
+参见 [Skills 配置](/zh-CN/tools/skills-config)了解完整的配置 schema。
 
 ## 寻找更多 Skills？
 

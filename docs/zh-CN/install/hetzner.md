@@ -39,7 +39,7 @@ Gateway 网关可以通过以下方式访问：
 
 本指南假设在 Hetzner 上使用 Ubuntu 或 Debian。
 如果你使用其他 Linux VPS，请相应地映射软件包。
-通用 Docker 流程请参见 [Docker](/install/docker)。
+通用 Docker 流程请参见 [Docker](/zh-CN/install/docker)。
 
 ---
 

@@ -34,7 +34,7 @@ x-i18n:
 - `/usage tokens` → 在正常回复后附加每次回复的使用量页脚。
 - `/compact` → 将较旧的历史总结为紧凑条目以释放窗口空间。
 
-另请参阅：[斜杠命令](/tools/slash-commands)、[Token 使用与成本](/reference/token-use)、[压缩](/concepts/compaction)。
+另请参阅：[斜杠命令](/zh-CN/tools/slash-commands)、[Token 使用与成本](/zh-CN/reference/token-use)、[压缩](/zh-CN/concepts/compaction)。
 
 ## 示例输出
 
@@ -105,7 +105,7 @@ Top tools (schema size):
 - 运行时元数据（主机/操作系统/模型/思考）。
 - 在**项目上下文**下注入的工作区引导文件。
 
-完整分解：[系统提示词](/concepts/system-prompt)。
+完整分解：[系统提示词](/zh-CN/concepts/system-prompt)。
 
 ## 注入的工作区文件（项目上下文）
 
@@ -146,7 +146,7 @@ Skill 指令默认*不*包含。模型应该**仅在需要时**`read` Skill 的 
   - 正常消息中的内联指令作为每条消息的提示。
 - **内联快捷方式**（仅允许列表中的发送者）：正常消息中的某些 `/...` token 可以立即运行（例如："hey /status"），并在模型看到剩余文本之前被剥离。
 
-详情：[斜杠命令](/tools/slash-commands)。
+详情：[斜杠命令](/zh-CN/tools/slash-commands)。
 
 ## 会话、压缩和修剪（什么会持久化）
 
@@ -156,7 +156,7 @@ Skill 指令默认*不*包含。模型应该**仅在需要时**`read` Skill 的 
 - **压缩**将摘要持久化到记录中，并保持最近的消息不变。
 - **修剪**从运行的*内存中*提示词中删除旧的工具结果，但不重写记录。
 
-文档：[会话](/concepts/session)、[压缩](/concepts/compaction)、[会话修剪](/concepts/session-pruning)。
+文档：[会话](/zh-CN/concepts/session)、[压缩](/zh-CN/concepts/compaction)、[会话修剪](/zh-CN/concepts/session-pruning)。
 
 ## `/context` 实际报告什么
 

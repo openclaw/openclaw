@@ -19,8 +19,8 @@ x-i18n:
 
 相关内容：
 
-- 快速开始：[快速开始](/start/getting-started)
-- 向导：[新手引导](/start/onboarding)
+- 快速开始：[快速开始](/zh-CN/start/getting-started)
+- 向导：[新手引导](/zh-CN/start/onboarding)
 
 ## 示例
 

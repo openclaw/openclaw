@@ -124,6 +124,6 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 
 ## 相关文档
 
-- [系统提示词](/concepts/system-prompt)
-- [时区](/concepts/timezone)
-- [消息](/concepts/messages)
+- [系统提示词](/zh-CN/concepts/system-prompt)
+- [时区](/zh-CN/concepts/timezone)
+- [消息](/zh-CN/concepts/messages)

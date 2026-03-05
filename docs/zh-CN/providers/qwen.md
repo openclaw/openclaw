@@ -52,4 +52,4 @@ openclaw models set qwen-portal/coder-model
 
 - 令牌自动刷新；如果刷新失败或访问被撤销，请重新运行登录命令。
 - 默认基础 URL：`https://portal.qwen.ai/v1`（如果 Qwen 提供不同的端点，使用 `models.providers.qwen-portal.baseUrl` 覆盖）。
-- 参阅[模型提供商](/concepts/model-providers)了解提供商级别的规则。
+- 参阅[模型提供商](/zh-CN/concepts/model-providers)了解提供商级别的规则。

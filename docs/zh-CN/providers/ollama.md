@@ -225,6 +225,6 @@ ollama serve
 
 ## 另请参阅
 
-- [模型提供商](/concepts/model-providers) - 所有提供商概览
-- [模型选择](/concepts/models) - 如何选择模型
-- [配置](/gateway/configuration) - 完整配置参考
+- [模型提供商](/zh-CN/concepts/model-providers) - 所有提供商概览
+- [模型选择](/zh-CN/concepts/models) - 如何选择模型
+- [配置](/zh-CN/gateway/configuration) - 完整配置参考

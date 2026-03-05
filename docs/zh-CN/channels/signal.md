@@ -88,7 +88,7 @@ x-i18n:
 }
 ```
 
-多账户支持：使用 `channels.signal.accounts` 配置每个账户及可选的 `name`。共享模式请参见 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
+多账户支持：使用 `channels.signal.accounts` 配置每个账户及可选的 `name`。共享模式请参见 [`gateway/configuration`](/zh-CN/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
 
 ## 外部守护进程模式（httpUrl）
 
@@ -116,7 +116,7 @@ x-i18n:
 - 通过以下方式批准：
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- 配对是 Signal 私信的默认令牌交换方式。详情：[配对](/channels/pairing)
+- 配对是 Signal 私信的默认令牌交换方式。详情：[配对](/zh-CN/channels/pairing)
 - 仅有 UUID 的发送者（来自 `sourceUuid`）在 `channels.signal.allowFrom` 中存储为 `uuid:<id>`。
 
 群组：
@@ -177,7 +177,7 @@ message action=react channel=signal target=signal:group:<groupId> targetAuthor=u
 
 ## 配置参考（Signal）
 
-完整配置：[配置](/gateway/configuration)
+完整配置：[配置](/zh-CN/gateway/configuration)
 
 提供商选项：
 

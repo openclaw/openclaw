@@ -19,8 +19,8 @@ x-i18n:
 
 相关内容：
 
-- 钩子：[钩子](/automation/hooks)
-- 插件钩子：[插件](/tools/plugin#plugin-hooks)
+- 钩子：[钩子](/zh-CN/automation/hooks)
+- 插件钩子：[插件](/zh-CN/tools/plugin#plugin-hooks)
 
 ## 列出所有钩子
 
@@ -254,7 +254,7 @@ openclaw hooks enable session-memory
 
 **输出：** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
 
-**参见：** [session-memory 文档](/automation/hooks#session-memory)
+**参见：** [session-memory 文档](/zh-CN/automation/hooks#session-memory)
 
 ### command-logger
 
@@ -281,7 +281,7 @@ cat ~/.openclaw/logs/commands.log | jq .
 grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
-**参见：** [command-logger 文档](/automation/hooks#command-logger)
+**参见：** [command-logger 文档](/zh-CN/automation/hooks#command-logger)
 
 ### boot-md
 
@@ -295,4 +295,4 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 openclaw hooks enable boot-md
 ```
 
-**参见：** [boot-md 文档](/automation/hooks#boot-md)
+**参见：** [boot-md 文档](/zh-CN/automation/hooks#boot-md)

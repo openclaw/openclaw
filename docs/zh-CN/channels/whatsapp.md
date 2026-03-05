@@ -203,7 +203,7 @@ WhatsApp 需要真实手机号码进行验证。VoIP 和虚拟号码通常会被
 - 码在 1 小时后过期；每个渠道的待处理请求上限为 3 个。
 
 **多个人可以在一个 WhatsApp 号码上使用不同的 OpenClaw 实例吗？**
-可以，通过 `bindings` 将每个发送者路由到不同的智能体（peer `kind: "dm"`，发送者 E.164 如 `+15551234567`）。回复仍然来自**同一个 WhatsApp 账户**，直接聊天会折叠到每个智能体的主会话，因此**每人使用一个智能体**。私信访问控制（`dmPolicy`/`allowFrom`）是每个 WhatsApp 账户全局的。参见[多智能体路由](/concepts/multi-agent)。
+可以，通过 `bindings` 将每个发送者路由到不同的智能体（peer `kind: "dm"`，发送者 E.164 如 `+15551234567`）。回复仍然来自**同一个 WhatsApp 账户**，直接聊天会折叠到每个智能体的主会话，因此**每人使用一个智能体**。私信访问控制（`dmPolicy`/`allowFrom`）是每个 WhatsApp 账户全局的。参见[多智能体路由](/zh-CN/concepts/multi-agent)。
 
 **为什么向导会询问我的手机号码？**
 向导使用它来设置你的**允许列表/所有者**，以便允许你自己的私信。它不会用于自动发送。如果你在个人 WhatsApp 号码上运行，请使用相同的号码并启用 `channels.whatsapp.selfChatMode`。
@@ -303,7 +303,7 @@ WhatsApp 可以在收到传入消息时立即自动发送表情回应，在机�
 
 - 工具：`whatsapp`，带有 `react` 动作（`chatJid`、`messageId`、`emoji`，可选 `remove`）。
 - 可选：`participant`（群组发送者）、`fromMe`（对自己的消息做出回应）、`accountId`（多账户）。
-- 表情移除语义：参见 [/tools/reactions](/tools/reactions)。
+- 表情移除语义：参见 [/tools/reactions](/zh-CN/tools/reactions)。
 - 工具门控：`channels.whatsapp.actions.reactions`（默认：启用）。
 
 ## 限制
@@ -391,7 +391,7 @@ WhatsApp 将音频作为**语音消息**（PTT 气泡）发送。
 
 - 子系统：`whatsapp/inbound`、`whatsapp/outbound`、`web-heartbeat`、`web-reconnect`。
 - 日志文件：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（可配置）。
-- 故障排除指南：[Gateway 网关故障排除](/gateway/troubleshooting)。
+- 故障排除指南：[Gateway 网关故障排除](/zh-CN/gateway/troubleshooting)。
 
 ## 故障排除（快速）
 

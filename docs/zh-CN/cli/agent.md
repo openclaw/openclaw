@@ -18,7 +18,7 @@ x-i18n:
 
 相关内容：
 
-- 智能体发送工具：[Agent send](/tools/agent-send)
+- 智能体发送工具：[Agent send](/zh-CN/tools/agent-send)
 
 ## 示例
 

@@ -28,7 +28,7 @@ x-i18n:
 
 ## 配置
 
-有关 `agents.defaults.compaction` 设置，请参阅[压缩配置与模式](/concepts/compaction)。
+有关 `agents.defaults.compaction` 设置，请参阅[压缩配置与模式](/zh-CN/concepts/compaction)。
 
 ## 自动压缩（默认开启）
 
@@ -39,7 +39,7 @@ x-i18n:
 - 详细模式下显示 `🧹 Auto-compaction complete`
 - `/status` 显示 `🧹 Compactions: <count>`
 
-在压缩之前，OpenClaw 可以运行一次**静默记忆刷写**轮次，将持久化笔记写入磁盘。详情及配置请参阅[记忆](/concepts/memory)。
+在压缩之前，OpenClaw 可以运行一次**静默记忆刷写**轮次，将持久化笔记写入磁盘。详情及配置请参阅[记忆](/zh-CN/concepts/memory)。
 
 ## 手动压缩
 
@@ -58,7 +58,7 @@ x-i18n:
 - **压缩**：总结并**持久化**到 JSONL 中。
 - **会话修剪**：仅裁剪旧的**工具结果**，**在内存中**按请求进行。
 
-有关修剪的详情，请参阅 [/concepts/session-pruning](/concepts/session-pruning)。
+有关修剪的详情，请参阅 [/concepts/session-pruning](/zh-CN/concepts/session-pruning)。
 
 ## 提示
 

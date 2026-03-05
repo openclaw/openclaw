@@ -34,7 +34,7 @@ Windows (PowerShell) 帮助：
 & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -?
 ```
 
-如果安装器完成但在新终端中找不到 `openclaw`，通常是 Node/npm PATH 问题。参见：[安装](/install#nodejs--npm-path-sanity)。
+如果安装器完成但在新终端中找不到 `openclaw`，通常是 Node/npm PATH 问题。参见：[安装](/zh-CN/install#nodejs--npm-path-sanity)。
 
 ## install.sh（推荐）
 

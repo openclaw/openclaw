@@ -235,4 +235,4 @@ Doctor 持久化任何配置更改，并标记向导元数据以记录 doctor �
 
 当缺失时，Doctor 建议使用工作区记忆系统，并在工作区尚未在 git 下时打印备份提示。
 
-参见 [/concepts/agent-workspace](/concepts/agent-workspace) 了解工作区结构和 git 备份的完整指南（推荐私有 GitHub 或 GitLab）。
+参见 [/concepts/agent-workspace](/zh-CN/concepts/agent-workspace) 了解工作区结构和 git 备份的完整指南（推荐私有 GitHub 或 GitLab）。

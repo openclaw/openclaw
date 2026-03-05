@@ -53,7 +53,7 @@ OAuth 提供商通常在登录/刷新流程中发放**新的刷新令牌**。某
 
 - `~/.openclaw/credentials/oauth.json`（首次使用时导入到 `auth-profiles.json`）
 
-以上所有路径也遵循 `$OPENCLAW_STATE_DIR`（状态目录覆盖）。完整参考：[/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+以上所有路径也遵循 `$OPENCLAW_STATE_DIR`（状态目录覆盖）。完整参考：[/gateway/configuration](/zh-CN/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token（订阅认证）
 
@@ -147,5 +147,5 @@ openclaw agents add personal
 
 相关文档：
 
-- [/concepts/model-failover](/concepts/model-failover)（轮换 + 冷却规则）
-- [/tools/slash-commands](/tools/slash-commands)（命令界面）
+- [/concepts/model-failover](/zh-CN/concepts/model-failover)（轮换 + 冷却规则）
+- [/tools/slash-commands](/zh-CN/tools/slash-commands)（命令界面）

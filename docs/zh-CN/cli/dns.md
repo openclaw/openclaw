@@ -19,8 +19,8 @@ x-i18n:
 
 相关内容：
 
-- Gateway 网关设备发现：[设备发现](/gateway/discovery)
-- 广域设备发现配置：[配置](/gateway/configuration)
+- Gateway 网关设备发现：[设备发现](/zh-CN/gateway/discovery)
+- 广域设备发现配置：[配置](/zh-CN/gateway/configuration)
 
 ## 设置
 

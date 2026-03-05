@@ -21,7 +21,7 @@ x-i18n:
 
 - 已安装并登录 `gcloud`（[安装指南](https://docs.cloud.google.com/sdk/docs/install-sdk)）。
 - 已安装 `gog` (gogcli) 并为 Gmail 账户授权（[gogcli.sh](https://gogcli.sh/)）。
-- 已启用 OpenClaw hooks（参见 [Webhooks](/automation/webhook)）。
+- 已启用 OpenClaw hooks（参见 [Webhooks](/zh-CN/automation/webhook)）。
 - 已登录 `tailscale`（[tailscale.com](https://tailscale.com/)）。支持的设置使用 Tailscale Funnel 作为公共 HTTPS 端点。
   其他隧道服务也可以使用，但需要自行配置/不受支持，需要手动接入。
   目前，我们支持的是 Tailscale。
@@ -90,7 +90,7 @@ x-i18n:
 - Gmail hook 内容默认使用外部内容安全边界包装。
   要禁用（危险），请设置 `hooks.gmail.allowUnsafeExternalContent: true`。
 
-要进一步自定义负载处理，请添加 `hooks.mappings` 或在 `hooks.transformsDir` 下添加 JS/TS 转换模块（参见 [Webhooks](/automation/webhook)）。
+要进一步自定义负载处理，请添加 `hooks.mappings` 或在 `hooks.transformsDir` 下添加 JS/TS 转换模块（参见 [Webhooks](/zh-CN/automation/webhook)）。
 
 ## 向导（推荐）
 

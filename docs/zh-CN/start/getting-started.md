@@ -17,7 +17,7 @@ x-i18n:
 
 目标：尽快从**零**到**第一个可用聊天**（使用合理的默认值）。
 
-最快聊天：打开 Control UI（无需渠道设置）。运行 `openclaw dashboard` 并在浏览器中聊天，或在 Gateway 网关主机上打开 `http://127.0.0.1:18789/`。文档：[Dashboard](/web/dashboard) 和 [Control UI](/web/control-ui)。
+最快聊天：打开 Control UI（无需渠道设置）。运行 `openclaw dashboard` 并在浏览器中聊天，或在 Gateway 网关主机上打开 `http://127.0.0.1:18789/`。文档：[Dashboard](/zh-CN/web/dashboard) 和 [Control UI](/zh-CN/web/control-ui)。
 
 推荐路径：使用 **CLI 新手引导向导**（`openclaw onboard`）。它设置：
 
@@ -28,7 +28,7 @@ x-i18n:
 - 工作区引导 + Skills
 - 可选的后台服务
 
-如果你想要更深入的参考页面，跳转到：[向导](/start/wizard)、[设置](/start/setup)、[配对](/channels/pairing)、[安全](/gateway/security)。
+如果你想要更深入的参考页面，跳转到：[向导](/zh-CN/start/wizard)、[设置](/zh-CN/start/setup)、[配对](/zh-CN/channels/pairing)、[安全](/zh-CN/gateway/security)。
 
 沙箱注意事项：`agents.defaults.sandbox.mode: "non-main"` 使用 `session.mainKey`（默认 `"main"`），因此群组/渠道会话会被沙箱隔离。如果你想要主智能体始终在主机上运行，设置显式的每智能体覆盖：
 
@@ -49,10 +49,10 @@ x-i18n:
 
 - Node `>=22`
 - `pnpm`（可选；如果从源代码构建则推荐）
-- **推荐：**Brave Search API 密钥用于网页搜索。最简单的方式：`openclaw configure --section web`（存储 `tools.web.search.apiKey`）。参见 [Web 工具](/tools/web)。
+- **推荐：**Brave Search API 密钥用于网页搜索。最简单的方式：`openclaw configure --section web`（存储 `tools.web.search.apiKey`）。参见 [Web 工具](/zh-CN/tools/web)。
 
 macOS：如果你计划构建应用，安装 Xcode / CLT。仅用于 CLI + Gateway 网关的话，Node 就足够了。
-Windows：使用 **WSL2**（推荐 Ubuntu）。强烈推荐 WSL2；原生 Windows 未经测试，问题更多，工具兼容性更差。先安装 WSL2，然后在 WSL 内运行 Linux 步骤。参见 [Windows (WSL2)](/platforms/windows)。
+Windows：使用 **WSL2**（推荐 Ubuntu）。强烈推荐 WSL2；原生 Windows 未经测试，问题更多，工具兼容性更差。先安装 WSL2，然后在 WSL 内运行 Linux 步骤。参见 [Windows (WSL2)](/zh-CN/platforms/windows)。
 
 ## 1) 安装 CLI（推荐）
 
@@ -60,7 +60,7 @@ Windows：使用 **WSL2**（推荐 Ubuntu）。强烈推荐 WSL2；原生 Window
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-安装程序选项（安装方法、非交互式、从 GitHub）：[安装](/install)。
+安装程序选项（安装方法、非交互式、从 GitHub）：[安装](/zh-CN/install)。
 
 Windows (PowerShell)：
 
@@ -93,7 +93,7 @@ openclaw onboard --install-daemon
   - **运行时**：Node（推荐；WhatsApp/Telegram 必需）。**不推荐** Bun。
 - **Gateway 网关令牌**：向导默认生成一个（即使在 loopback 上）并存储在 `gateway.auth.token`。
 
-向导文档：[向导](/start/wizard)
+向导文档：[向导](/zh-CN/start/wizard)
 
 ### 凭证：存储位置（重要）
 
@@ -141,15 +141,15 @@ openclaw channels login
 
 通过 WhatsApp → 设置 → 链接设备扫描。
 
-WhatsApp 文档：[WhatsApp](/channels/whatsapp)
+WhatsApp 文档：[WhatsApp](/zh-CN/channels/whatsapp)
 
 ### Telegram / Discord / 其他
 
 向导可以为你写入令牌/配置。如果你更喜欢手动配置，从这里开始：
 
-- Telegram：[Telegram](/channels/telegram)
-- Discord：[Discord](/channels/discord)
-- Mattermost（插件）：[Mattermost](/channels/mattermost)
+- Telegram：[Telegram](/zh-CN/channels/telegram)
+- Discord：[Discord](/zh-CN/channels/discord)
+- Mattermost（插件）：[Mattermost](/zh-CN/channels/mattermost)
 
 **Telegram 私信提示：**你的第一条私信会返回配对码。批准它（见下一步），否则机器人不会响应。
 
@@ -162,7 +162,7 @@ openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <code>
 ```
 
-配对文档：[配对](/channels/pairing)
+配对文档：[配对](/zh-CN/channels/pairing)
 
 ## 从源代码（开发）
 
@@ -200,7 +200,7 @@ openclaw message send --target +15555550123 --message "Hello from OpenClaw"
 
 ## 下一步（可选，但很棒）
 
-- macOS 菜单栏应用 + 语音唤醒：[macOS 应用](/platforms/macos)
-- iOS/Android 节点（Canvas/相机/语音）：[节点](/nodes)
-- 远程访问（SSH 隧道 / Tailscale Serve）：[远程访问](/gateway/remote) 和 [Tailscale](/gateway/tailscale)
-- 常开 / VPN 设置：[远程访问](/gateway/remote)、[exe.dev](/install/exe-dev)、[Hetzner](/install/hetzner)、[macOS 远程](/platforms/mac/remote)
+- macOS 菜单栏应用 + 语音唤醒：[macOS 应用](/zh-CN/platforms/macos)
+- iOS/Android 节点（Canvas/相机/语音）：[节点](/zh-CN/nodes)
+- 远程访问（SSH 隧道 / Tailscale Serve）：[远程访问](/zh-CN/gateway/remote) 和 [Tailscale](/zh-CN/gateway/tailscale)
+- 常开 / VPN 设置：[远程访问](/zh-CN/gateway/remote)、[exe.dev](/zh-CN/install/exe-dev)、[Hetzner](/zh-CN/install/hetzner)、[macOS 远程](/zh-CN/platforms/mac/remote)

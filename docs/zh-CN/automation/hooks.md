@@ -22,9 +22,9 @@ Hooks 提供了一个可扩展的事件驱动系统，用于响应智能体命�
 Hooks 是在事件发生时运行的小脚本。有两种类型：
 
 - **Hooks**（本页）：当智能体事件触发时在 Gateway 网关内运行，如 `/new`、`/reset`、`/stop` 或生命周期事件。
-- **Webhooks**：外部 HTTP webhooks，让其他系统触发 OpenClaw 中的工作。参见 [Webhook Hooks](/automation/webhook) 或使用 `openclaw webhooks` 获取 Gmail 助手命令。
+- **Webhooks**：外部 HTTP webhooks，让其他系统触发 OpenClaw 中的工作。参见 [Webhook Hooks](/zh-CN/automation/webhook) 或使用 `openclaw webhooks` 获取 Gmail 助手命令。
 
-Hooks 也可以捆绑在插件中；参见 [插件](/tools/plugin#plugin-hooks)。
+Hooks 也可以捆绑在插件中；参见 [插件](/zh-CN/tools/plugin#plugin-hooks)。
 
 常见用途：
 
@@ -249,7 +249,7 @@ export default myHandler;
 
 这些 hooks 不是事件流监听器；它们让插件在 OpenClaw 持久化工具结果之前同步调整它们。
 
-- **`tool_result_persist`**：在工具结果写入会话记录之前转换它们。必须是同步的；返回更新后的工具结果负载或 `undefined` 保持原样。参见 [智能体循环](/concepts/agent-loop)。
+- **`tool_result_persist`**：在工具结果写入会话记录之前转换它们。必须是同步的；返回更新后的工具结果负载或 `undefined` 保持原样。参见 [智能体循环](/zh-CN/concepts/agent-loop)。
 
 ### 未来事件
 
@@ -876,7 +876,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 ## 另请参阅
 
-- [CLI 参考：hooks](/cli/hooks)
+- [CLI 参考：hooks](/zh-CN/cli/hooks)
 - [捆绑 Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
-- [Webhook Hooks](/automation/webhook)
-- [配置](/gateway/configuration#hooks)
+- [Webhook Hooks](/zh-CN/automation/webhook)
+- [配置](/zh-CN/gateway/configuration#hooks)

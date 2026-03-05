@@ -24,7 +24,7 @@ x-i18n:
 openclaw onboard
 ```
 
-最快开始聊天的方式：打开控制界面（无需设置渠道）。运行 `openclaw dashboard` 并在浏览器中聊天。文档：[控制面板](/web/dashboard)。
+最快开始聊天的方式：打开控制界面（无需设置渠道）。运行 `openclaw dashboard` 并在浏览器中聊天。文档：[控制面板](/zh-CN/web/dashboard)。
 
 后续重新配置：
 
@@ -32,7 +32,7 @@ openclaw onboard
 openclaw configure
 ```
 
-推荐：设置 Brave Search API 密钥，以便智能体可以使用 `web_search`（`web_fetch` 无需密钥即可使用）。最简单的方式：`openclaw configure --section web`，它会存储 `tools.web.search.apiKey`。文档：[Web 工具](/tools/web)。
+推荐：设置 Brave Search API 密钥，以便智能体可以使用 `web_search`（`web_fetch` 无需密钥即可使用）。最简单的方式：`openclaw configure --section web`，它会存储 `tools.web.search.apiKey`。文档：[Web 工具](/zh-CN/tools/web)。
 
 ## 快速开始 vs 高级
 
@@ -94,25 +94,25 @@ openclaw agents add <name>
    - **OpenCode Zen（多模型代理）**：提示输入 `OPENCODE_API_KEY`（或 `OPENCODE_ZEN_API_KEY`，在 https://opencode.ai/auth 获取）。
    - **API 密钥**：为你存储密钥。
    - **Vercel AI Gateway（多模型代理）**：提示输入 `AI_GATEWAY_API_KEY`。
-   - 更多详情：[Vercel AI Gateway](/providers/vercel-ai-gateway)
+   - 更多详情：[Vercel AI Gateway](/zh-CN/providers/vercel-ai-gateway)
    - **MiniMax M2.1**：自动写入配置。
-   - 更多详情：[MiniMax](/providers/minimax)
+   - 更多详情：[MiniMax](/zh-CN/providers/minimax)
    - **Synthetic（Anthropic 兼容）**：提示输入 `SYNTHETIC_API_KEY`。
-   - 更多详情：[Synthetic](/providers/synthetic)
+   - 更多详情：[Synthetic](/zh-CN/providers/synthetic)
    - **Moonshot（Kimi K2）**：自动写入配置。
    - **Kimi Coding**：自动写入配置。
-   - 更多详情：[Moonshot AI（Kimi + Kimi Coding）](/providers/moonshot)
+   - 更多详情：[Moonshot AI（Kimi + Kimi Coding）](/zh-CN/providers/moonshot)
    - **跳过**：尚未配置认证。
    - 从检测到的选项中选择默认模型（或手动输入提供商/模型）。
    - 向导运行模型检查，如果配置的模型未知或缺少认证则发出警告。
 
 - OAuth 凭证存储在 `~/.openclaw/credentials/oauth.json`；认证配置文件存储在 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`（API 密钥 + OAuth）。
-- 更多详情：[/concepts/oauth](/concepts/oauth)
+- 更多详情：[/concepts/oauth](/zh-CN/concepts/oauth)
 
 3. **工作区**
    - 默认 `~/.openclaw/workspace`（可配置）。
    - 为智能体引导仪式播种所需的工作区文件。
-   - 完整的工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
+   - 完整的工作区布局 + 备份指南：[智能体工作区](/zh-CN/concepts/agent-workspace)
 
 4. **Gateway 网关**
    - 端口、绑定、认证模式、tailscale 暴露。
@@ -121,13 +121,13 @@ openclaw agents add <name>
    - 非 loopback 绑定仍需要认证。
 
 5. **渠道**
-   - [WhatsApp](/channels/whatsapp)：可选的二维码登录。
-   - [Telegram](/channels/telegram)：机器人令牌。
-   - [Discord](/channels/discord)：机器人令牌。
-   - [Google Chat](/channels/googlechat)：服务账户 JSON + webhook 受众。
-   - [Mattermost](/channels/mattermost)（插件）：机器人令牌 + 基础 URL。
-   - [Signal](/channels/signal)：可选的 `signal-cli` 安装 + 账户配置。
-   - [iMessage](/channels/imessage)：本地 `imsg` CLI 路径 + 数据库访问。
+   - [WhatsApp](/zh-CN/channels/whatsapp)：可选的二维码登录。
+   - [Telegram](/zh-CN/channels/telegram)：机器人令牌。
+   - [Discord](/zh-CN/channels/discord)：机器人令牌。
+   - [Google Chat](/zh-CN/channels/googlechat)：服务账户 JSON + webhook 受众。
+   - [Mattermost](/zh-CN/channels/mattermost)（插件）：机器人令牌 + 基础 URL。
+   - [Signal](/zh-CN/channels/signal)：可选的 `signal-cli` 安装 + 账户配置。
+   - [iMessage](/zh-CN/channels/imessage)：本地 `imsg` CLI 路径 + 数据库访问。
    - 私信安全：默认为配对。第一条私信发送验证码；通过 `openclaw pairing approve <channel> <code>` 批准或使用允许列表。
 
 6. **守护进程安装**
@@ -325,7 +325,7 @@ WhatsApp 凭证存储在 `~/.openclaw/credentials/whatsapp/<accountId>/` 下。
 
 ## 相关文档
 
-- macOS 应用新手引导：[新手引导](/start/onboarding)
-- 配置参考：[Gateway 网关配置](/gateway/configuration)
-- 提供商：[WhatsApp](/channels/whatsapp)、[Telegram](/channels/telegram)、[Discord](/channels/discord)、[Google Chat](/channels/googlechat)、[Signal](/channels/signal)、[iMessage](/channels/imessage)
-- Skills：[Skills](/tools/skills)、[Skills 配置](/tools/skills-config)
+- macOS 应用新手引导：[新手引导](/zh-CN/start/onboarding)
+- 配置参考：[Gateway 网关配置](/zh-CN/gateway/configuration)
+- 提供商：[WhatsApp](/zh-CN/channels/whatsapp)、[Telegram](/zh-CN/channels/telegram)、[Discord](/zh-CN/channels/discord)、[Google Chat](/zh-CN/channels/googlechat)、[Signal](/zh-CN/channels/signal)、[iMessage](/zh-CN/channels/imessage)
+- Skills：[Skills](/zh-CN/tools/skills)、[Skills 配置](/zh-CN/tools/skills-config)

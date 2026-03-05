@@ -28,18 +28,18 @@ Gateway 网关在 Linux 上完全支持。**Node 是推荐的运行时**。
 4. 从你的笔记本电脑：`ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. 打开 `http://127.0.0.1:18789/` 并粘贴你的令牌
 
-分步 VPS 指南：[exe.dev](/install/exe-dev)
+分步 VPS 指南：[exe.dev](/zh-CN/install/exe-dev)
 
 ## 安装
 
-- [入门指南](/start/getting-started)
-- [安装与更新](/install/updating)
-- 可选流程：[Bun（实验性）](/install/bun)、[Nix](/install/nix)、[Docker](/install/docker)
+- [入门指南](/zh-CN/start/getting-started)
+- [安装与更新](/zh-CN/install/updating)
+- 可选流程：[Bun（实验性）](/zh-CN/install/bun)、[Nix](/zh-CN/install/nix)、[Docker](/zh-CN/install/docker)
 
 ## Gateway 网关
 
-- [Gateway 网关运行手册](/gateway)
-- [配置](/gateway/configuration)
+- [Gateway 网关运行手册](/zh-CN/gateway)
+- [配置](/zh-CN/gateway/configuration)
 
 ## Gateway 网关服务安装（CLI）
 
@@ -73,7 +73,7 @@ openclaw doctor
 
 OpenClaw 默认安装 systemd **用户**服务。对于共享或常驻服务器使用**系统**
 服务。完整的单元示例和指南
-在 [Gateway 网关运行手册](/gateway) 中。
+在 [Gateway 网关运行手册](/zh-CN/gateway) 中。
 
 最小设置：
 

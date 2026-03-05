@@ -17,7 +17,7 @@ x-i18n:
 
 OpenClaw 支持模型提供商的 OAuth 和 API 密钥。对于 Anthropic 账户，我们推荐使用 **API 密钥**。对于 Claude 订阅访问，使用 `claude setup-token` 创建的长期令牌。
 
-参阅 [/concepts/oauth](/concepts/oauth) 了解完整的 OAuth 流程和存储布局。
+参阅 [/concepts/oauth](/zh-CN/concepts/oauth) 了解完整的 OAuth 流程和存储布局。
 
 ## 推荐的 Anthropic 设置（API 密钥）
 
@@ -48,7 +48,7 @@ openclaw doctor
 
 如果你不想自己管理环境变量，新手引导向导可以为守护进程使用存储 API 密钥：`openclaw onboard`。
 
-参阅[帮助](/help)了解环境变量继承的详情（`env.shellEnv`、`~/.openclaw/.env`、systemd/launchd）。
+参阅[帮助](/zh-CN/help)了解环境变量继承的详情（`env.shellEnv`、`~/.openclaw/.env`、systemd/launchd）。
 
 ## Anthropic：setup-token（订阅认证）
 
@@ -91,7 +91,7 @@ openclaw models auth paste-token --provider openrouter
 openclaw models status --check
 ```
 
-可选的运维脚本（systemd/Termux）在此处记录：[/automation/auth-monitoring](/automation/auth-monitoring)
+可选的运维脚本（systemd/Termux）在此处记录：[/automation/auth-monitoring](/zh-CN/automation/auth-monitoring)
 
 > `claude setup-token` 需要交互式 TTY。
 

@@ -73,7 +73,7 @@ OpenClaw 将回复**路由回消息来源的渠道**。模型不会选择渠道�
 }
 ```
 
-参见：[广播组](/channels/broadcast-groups)。
+参见：[广播组](/zh-CN/channels/broadcast-groups)。
 
 ## 配置概览
 
