@@ -692,6 +692,20 @@ function parseLineageSourceMessageIndex(text: string): number | undefined {
   return value;
 }
 
+const SYNTHETIC_POINTER_NOTE_HEADER =
+  /^\[(?:\d+ repeats? of content omitted|Read delta from earlier chunk|Same file chunk already shown earlier|Read overlap trimmed)\]/;
+
+function isSyntheticPointerOrLineageNote(text: string): boolean {
+  if (!SYNTHETIC_POINTER_NOTE_HEADER.test(text)) {
+    return false;
+  }
+
+  return (
+    text.includes("Same as context message #") ||
+    text.includes("Earlier chunk: context message #")
+  );
+}
+
 function resolveRootSourceMessageIndex(messages: any[], startIndex: number): number {
   let current = startIndex;
   const visited = new Set<number>();
@@ -781,6 +795,10 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
     const content = msg?.content;
 
     if (typeof content === "string") {
+      if (!isSyntheticPointerOrLineageNote(content)) {
+        continue;
+      }
+
       const rewritten = rewriteDedupPointerSourceHint(rewriteLineageSourceHint(content, messages), messages);
       if (rewritten !== content) {
         if (!nextMessages) {
@@ -799,6 +817,9 @@ export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
     const nextContent = content.map((block) => {
       const text = extractBlockText(block);
       if (typeof text !== "string") {
+        return block;
+      }
+      if (!isSyntheticPointerOrLineageNote(text)) {
         return block;
       }
 
