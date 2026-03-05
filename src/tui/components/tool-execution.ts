@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import {
   Box,
@@ -54,13 +54,18 @@ function validateMediaPath(filePath: string): boolean {
   if (filePath.includes("\0")) {
     return false;
   }
+  // Reject traversal before normalization — matches server-side readImageAsBase64.
+  if (filePath.includes("..")) {
+    return false;
+  }
   const ext = extname(filePath).toLowerCase();
   if (!ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
     return false;
   }
   try {
-    const stat = statSync(filePath);
-    if (!stat.isFile()) {
+    // lstatSync (not statSync) to detect symlinks without following them.
+    const stat = lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
       return false;
     }
     if (stat.size > MAX_IMAGE_BYTES || stat.size === 0) {

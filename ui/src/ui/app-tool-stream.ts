@@ -501,7 +501,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       }
       return "";
     })();
-    if (/\.(?:png|jpe?g|gif|webp)\b/i.test(cmdStr)) {
+    // Mirror server-side IMAGE_VIEWER_CMD_RE gate to avoid spurious reloads
+    // from commands that merely reference image files (e.g. rm photo.png).
+    const IMAGE_VIEWER_RE = /\b(?:view[-_]?image|imgcat|icat|viu|timg|catimg|chafa|kitty\s+icat)\b/i;
+    if (IMAGE_VIEWER_RE.test(cmdStr) && /\.(?:png|jpe?g|gif|webp)\b/i.test(cmdStr)) {
       host.chatRunHasMedia = true;
     }
   }
