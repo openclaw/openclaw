@@ -31,6 +31,7 @@ import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { cleanupSessionSanitizationArtifacts } from "../../memory/session-sanitization/service.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -566,6 +567,10 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+    });
+    await cleanupSessionSanitizationArtifacts({
+      agentId,
+      sessionId: previousSessionEntry.sessionId,
     });
   }
 
