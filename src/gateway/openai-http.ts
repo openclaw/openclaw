@@ -5,6 +5,7 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
+import { estimateBase64DecodedBytes } from "../media/base64.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
@@ -49,6 +50,8 @@ type OpenAiChatCompletionRequest = {
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
+const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
+const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
   allowUrl: true,
   allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
@@ -184,19 +187,38 @@ function extractImageUrls(content: unknown): string[] {
   return urls;
 }
 
+type LatestUserImageRefs = {
+  messageIndex: number;
+  urls: string[];
+};
+
 function parseImageUrlToSource(url: string): InputImageSource {
-  const dataUriMatch = /^data:([^;]+);base64,(.+)$/is.exec(url);
+  const dataUriMatch = /^data:([^,]*?),(.*)$/is.exec(url);
   if (dataUriMatch) {
+    const metadata = dataUriMatch[1]?.trim() ?? "";
+    const data = dataUriMatch[2] ?? "";
+    const metadataParts = metadata
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const isBase64 = metadataParts.some((part) => part.toLowerCase() === "base64");
+    if (!isBase64) {
+      throw new Error("image_url data URI must be base64 encoded");
+    }
+    if (!data.trim()) {
+      throw new Error("image_url data URI is missing payload data");
+    }
+    const mediaTypeRaw = metadataParts.find((part) => part.includes("/"));
     return {
       type: "base64",
-      mediaType: dataUriMatch[1],
-      data: dataUriMatch[2],
+      mediaType: mediaTypeRaw,
+      data,
     };
   }
   return { type: "url", url };
 }
 
-function resolveLatestUserImageUrls(messagesUnknown: unknown): string[] {
+function resolveLatestUserImageRefs(messagesUnknown: unknown): LatestUserImageRefs {
   const messages = asMessages(messagesUnknown);
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
@@ -207,26 +229,47 @@ function resolveLatestUserImageUrls(messagesUnknown: unknown): string[] {
     if (role !== "user") {
       continue;
     }
-    return extractImageUrls(msg.content);
+    return { messageIndex: i, urls: extractImageUrls(msg.content) };
   }
-  return [];
+  return { messageIndex: -1, urls: [] };
 }
 
-async function resolveImagesForRequest(messagesUnknown: unknown): Promise<ImageContent[]> {
-  const urls = resolveLatestUserImageUrls(messagesUnknown);
+async function resolveImagesForRequest(
+  latestUserImageRefs: Pick<LatestUserImageRefs, "urls">,
+): Promise<ImageContent[]> {
+  const urls = latestUserImageRefs.urls;
   if (urls.length === 0) {
     return [];
   }
-  const images: ImageContent[] = [];
-  for (const url of urls) {
-    const source = parseImageUrlToSource(url);
-    const image = await extractImageContentFromSource(source, DEFAULT_OPENAI_IMAGE_LIMITS);
-    images.push(image);
+  if (urls.length > DEFAULT_OPENAI_MAX_IMAGE_PARTS) {
+    throw new Error(
+      `Too many image_url parts (${urls.length}; limit ${DEFAULT_OPENAI_MAX_IMAGE_PARTS})`,
+    );
+  }
+
+  const images = await Promise.all(
+    urls.map(async (url) => {
+      const source = parseImageUrlToSource(url);
+      return await extractImageContentFromSource(source, DEFAULT_OPENAI_IMAGE_LIMITS);
+    }),
+  );
+
+  let totalBytes = 0;
+  for (const image of images) {
+    totalBytes += estimateBase64DecodedBytes(image.data);
+    if (totalBytes > DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES) {
+      throw new Error(
+        `Total image payload too large (${totalBytes}; limit ${DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES})`,
+      );
+    }
   }
   return images;
 }
 
-function buildAgentPrompt(messagesUnknown: unknown): {
+function buildAgentPrompt(
+  messagesUnknown: unknown,
+  latestUserMessageIndex: number,
+): {
   message: string;
   extraSystemPrompt?: string;
 } {
@@ -235,7 +278,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
 
-  for (const msg of messages) {
+  for (const [i, msg] of messages.entries()) {
     if (!msg || typeof msg !== "object") {
       continue;
     }
@@ -257,8 +300,12 @@ function buildAgentPrompt(messagesUnknown: unknown): {
       continue;
     }
 
+    // Keep the image-only placeholder scoped to the active user turn so we don't
+    // mention historical image-only turns whose bytes are intentionally not replayed.
     const messageContent =
-      normalizedRole === "user" && !content && hasImage ? IMAGE_ONLY_USER_MESSAGE : content;
+      normalizedRole === "user" && !content && hasImage && i === latestUserMessageIndex
+        ? IMAGE_ONLY_USER_MESSAGE
+        : content;
     if (!messageContent) {
       continue;
     }
@@ -339,10 +386,11 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
-  const prompt = buildAgentPrompt(payload.messages);
+  const latestUserImageRefs = resolveLatestUserImageRefs(payload.messages);
+  const prompt = buildAgentPrompt(payload.messages, latestUserImageRefs.messageIndex);
   let images: ImageContent[] = [];
   try {
-    images = await resolveImagesForRequest(payload.messages);
+    images = await resolveImagesForRequest(latestUserImageRefs);
   } catch (err) {
     logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
     sendJson(res, 400, {
