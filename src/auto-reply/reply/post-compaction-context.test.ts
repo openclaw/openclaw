@@ -203,7 +203,7 @@ Never modify memory/YYYY-MM-DD.md destructively.
 `;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
     const cfg = {
-      agents: { defaults: { userTimezone: "America/New_York" } },
+      agents: { defaults: { userTimezone: "America/New_York", timeFormat: "12" } },
     } as OpenClawConfig;
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
@@ -211,8 +211,9 @@ Never modify memory/YYYY-MM-DD.md destructively.
     expect(result).not.toBeNull();
     expect(result).toContain("memory/2026-03-03.md");
     expect(result).not.toContain("memory/YYYY-MM-DD.md");
-    expect(result).toContain("Current time:");
-    expect(result).toContain("America/New_York");
+    expect(result).toContain(
+      "Current time: Tuesday, March 3rd, 2026 — 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
+    );
   });
 
   it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
