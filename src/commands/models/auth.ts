@@ -21,6 +21,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -240,6 +242,67 @@ type LoginOptions = {
   setDefault?: boolean;
 };
 
+function resolveBuiltInLoginProviders(): ProviderPlugin[] {
+  return [
+    {
+      id: "openai-codex",
+      label: "openai-codex",
+      aliases: ["codex-cli"],
+      docsPath: "https://docs.openclaw.ai/start/auth",
+      auth: [
+        {
+          id: "oauth",
+          label: "OAuth",
+          kind: "oauth",
+          hint: "Sign in with your OpenAI account",
+          run: async (ctx) => {
+            const creds = await loginOpenAICodexOAuth({
+              prompter: ctx.prompter,
+              runtime: ctx.runtime,
+              isRemote: ctx.isRemote,
+              openUrl: async (url) => {
+                await ctx.openUrl(url);
+              },
+              localBrowserMessage: "Complete sign-in in browser…",
+            });
+            if (!creds) {
+              throw new Error("OpenAI Codex OAuth canceled.");
+            }
+            const email =
+              typeof creds.email === "string" && creds.email.trim()
+                ? creds.email.trim()
+                : "default";
+            return {
+              profiles: [
+                {
+                  profileId: `openai-codex:${email}`,
+                  credential: {
+                    type: "oauth" as const,
+                    provider: "openai-codex",
+                    ...creds,
+                  },
+                },
+              ],
+              defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+            };
+          },
+        },
+      ],
+    },
+  ];
+}
+
+export function resolveLoginProviders(pluginProviders: ProviderPlugin[]): ProviderPlugin[] {
+  const byId = new Map<string, ProviderPlugin>();
+  for (const provider of resolveBuiltInLoginProviders()) {
+    byId.set(normalizeProviderId(provider.id), provider);
+  }
+  for (const provider of pluginProviders) {
+    byId.set(normalizeProviderId(provider.id), provider);
+  }
+  return [...byId.values()];
+}
+
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -283,7 +346,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
-  const providers = resolvePluginProviders({ config, workspaceDir });
+  const providers = resolveLoginProviders(resolvePluginProviders({ config, workspaceDir }));
   if (providers.length === 0) {
     throw new Error(
       `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,

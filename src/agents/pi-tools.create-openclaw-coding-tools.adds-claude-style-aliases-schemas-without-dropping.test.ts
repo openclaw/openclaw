@@ -557,4 +557,18 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(details?.truncation).not.toHaveProperty("content");
   });
+
+  it("returns EISDIR for directory reads without crashing image mime sniffing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-dir-"));
+    await fs.mkdir(path.join(tmpDir, "docs"), { recursive: true });
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      await expect(readTool.execute("read-dir-1", { path: "docs" })).rejects.toThrow(/EISDIR/);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

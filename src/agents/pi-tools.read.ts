@@ -521,8 +521,15 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       if (!stat) {
         throw createFsAccessError("ENOENT", absolutePath);
       }
+      if (stat.type === "directory") {
+        throw createFsAccessError("EISDIR", absolutePath);
+      }
     },
     detectImageMimeType: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat || stat.type !== "file") {
+        return undefined;
+      }
       const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
       const mime = await detectMime({ buffer, filePath: absolutePath });
       return mime && mime.startsWith("image/") ? mime : undefined;

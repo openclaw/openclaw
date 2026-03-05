@@ -4,6 +4,7 @@ import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 type RequesterResolution = {
@@ -203,6 +204,7 @@ describe("subagent announce formatting", () => {
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
+    resetAnnounceQueuesForTests();
     configOverride = {
       session: {
         mainKey: "main",
@@ -620,6 +622,64 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain(
       "If they are part of the same workflow, wait for the remaining results before sending a user update.",
     );
+  });
+
+  it("coalesces rapid completion announcements into a single parent turn when requester is idle", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    try {
+      sessionStore = {
+        "agent:main:subagent:child-a": {
+          sessionId: "child-session-a",
+        },
+        "agent:main:subagent:child-b": {
+          sessionId: "child-session-b",
+        },
+        "agent:main:main": {
+          sessionId: "requester-session-main",
+          queueMode: "collect",
+          queueDebounceMs: 10,
+        },
+      };
+      subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
+        sessionKey === "agent:main:main" ? 2 : 0,
+      );
+
+      await Promise.all([
+        runSubagentAnnounceFlow({
+          childSessionKey: "agent:main:subagent:child-a",
+          childRunId: "run-child-a",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+          ...defaultOutcomeAnnounce,
+          expectsCompletionMessage: true,
+          roundOneReply: "result from child A",
+        }),
+        runSubagentAnnounceFlow({
+          childSessionKey: "agent:main:subagent:child-b",
+          childRunId: "run-child-b",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+          ...defaultOutcomeAnnounce,
+          expectsCompletionMessage: true,
+          roundOneReply: "result from child B",
+        }),
+      ]);
+
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+      const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const message = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(message).toContain("Queued #1");
+      expect(message).toContain("Queued #2");
+      expect(message).toContain("result from child A");
+      expect(message).toContain("result from child B");
+    } finally {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    }
   });
 
   it("keeps session-mode completion delivery on the bound destination when sibling runs are active", async () => {

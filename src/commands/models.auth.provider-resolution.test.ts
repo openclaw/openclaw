@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { resolveRequestedLoginProviderOrThrow } from "./models/auth.js";
+import { resolveLoginProviders, resolveRequestedLoginProviderOrThrow } from "./models/auth.js";
 
 function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
   return {
@@ -40,5 +40,20 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
     ).toThrowError(
       'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, qwen-portal. Verify plugins via `openclaw plugins list --json`.',
     );
+  });
+});
+
+describe("resolveLoginProviders", () => {
+  it("includes openai-codex built-in provider when no plugins are installed", () => {
+    const providers = resolveLoginProviders([]);
+    expect(providers.some((provider) => provider.id === "openai-codex")).toBe(true);
+  });
+
+  it("prefers loaded plugins over built-in providers for the same id", () => {
+    const providers = resolveLoginProviders([
+      makeProvider({ id: "openai-codex", label: "custom" }),
+    ]);
+    const codex = providers.find((provider) => provider.id === "openai-codex");
+    expect(codex?.label).toBe("custom");
   });
 });
