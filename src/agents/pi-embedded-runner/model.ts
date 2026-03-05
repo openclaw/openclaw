@@ -28,7 +28,15 @@ function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): InlineProviderConfig | undefined {
-  return findNormalizedProviderValue(cfg?.models?.providers, provider);
+  const configuredProviders = cfg?.models?.providers;
+  if (!configuredProviders) {
+    return undefined;
+  }
+  const exactProviderConfig = configuredProviders[provider];
+  if (exactProviderConfig) {
+    return exactProviderConfig;
+  }
+  return findNormalizedProviderValue(configuredProviders, provider);
 }
 
 function applyConfiguredProviderOverrides(params: {
