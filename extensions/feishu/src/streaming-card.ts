@@ -85,17 +85,38 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+function isBootstrapPlaceholder(value: string): boolean {
+  const normalized = value.trim().replaceAll("…", "...");
+  // Placeholder can be configured per locale; treat both as transient scaffolding.
+  return normalized === "⏳ Thinking..." || normalized === "⏳ 正在连接模型并等待首段输出...";
+}
+
+function stripBootstrapPlaceholderPrefix(value: string): string {
+  const trimmed = value.trim();
+  return trimmed
+    .replace(/^⏳\s*Thinking(?:\.\.\.|…)\s*/u, "")
+    .replace(/^⏳\s*正在连接模型并等待首段输出(?:\.\.\.|…)\s*/u, "");
+}
+
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
 ): string {
   const previous = typeof previousText === "string" ? previousText : "";
-  const next = typeof nextText === "string" ? nextText : "";
-  if (!next) {
+  const nextRaw = typeof nextText === "string" ? nextText : "";
+  const next = stripBootstrapPlaceholderPrefix(nextRaw);
+
+  if (!nextRaw || isBootstrapPlaceholder(nextRaw)) {
     return previous;
+  }
+  if (isBootstrapPlaceholder(previous)) {
+    return next;
   }
   if (!previous || next === previous || next.includes(previous)) {
     return next;
+  }
+  if (isBootstrapPlaceholder(next)) {
+    return previous;
   }
   if (previous.includes(next)) {
     return previous;
