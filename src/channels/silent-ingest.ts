@@ -11,7 +11,6 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_INFLIGHT = 64;
 const DEFAULT_MAX_GLOBAL_INFLIGHT = 256;
 const DEFAULT_CONTENT_MAX_LENGTH = 8192;
-const DISALLOWED_CONTROL_CHARS_REGEX = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
 function truncateUnicodeSafe(value: string, maxCodePoints: number): string {
   if (maxCodePoints <= 0) {
@@ -25,7 +24,16 @@ function truncateUnicodeSafe(value: string, maxCodePoints: number): string {
 }
 
 function sanitizeIngestContent(value: string, maxLength: number): string {
-  const stripped = value.replace(DISALLOWED_CONTROL_CHARS_REGEX, "");
+  let stripped = "";
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isDisallowedC0 = code <= 0x08 || code === 0x0b || code === 0x0c || (code >= 0x0e && code <= 0x1f);
+    const isDisallowedC1 = code >= 0x7f && code <= 0x9f;
+    if (isDisallowedC0 || isDisallowedC1) {
+      continue;
+    }
+    stripped += ch;
+  }
   return truncateUnicodeSafe(stripped, maxLength);
 }
 
