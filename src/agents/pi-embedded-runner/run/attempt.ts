@@ -1688,6 +1688,14 @@ export async function runEmbeddedAttempt(
         const preCompactionSessionId = activeSession.sessionId;
 
         try {
+          // Flush buffered block replies before waiting for compaction so the
+          // user receives the assistant response immediately.  Without this,
+          // coalesced/buffered blocks stay in the pipeline until compaction
+          // finishes — which can take minutes on large contexts (#35074).
+          if (params.onBlockReplyFlush) {
+            await params.onBlockReplyFlush();
+          }
+
           await abortable(waitForCompactionRetry());
         } catch (err) {
           if (isRunnerAbortError(err)) {
