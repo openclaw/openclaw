@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSandboxBrowserConfig,
+  resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
@@ -32,6 +34,38 @@ describe("sandbox config merges", () => {
       nofile: { soft: 10, hard: 20 },
       nproc: 256,
     });
+  });
+
+  it("includes top-level config env in sandbox docker env (with sandbox override precedence)", () => {
+    const cfg = {
+      env: {
+        vars: {
+          SUPADATA_API_KEY: "from-top-level",
+          "NOT-PORTABLE": "blocked",
+        },
+      },
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              env: {
+                SUPADATA_API_KEY: "from-sandbox",
+                SANDBOX_ONLY: "1",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSandboxConfigForAgent(cfg);
+
+    expect(resolved.docker.env).toMatchObject({
+      LANG: "C.UTF-8",
+      SUPADATA_API_KEY: "from-sandbox",
+      SANDBOX_ONLY: "1",
+    });
+    expect(resolved.docker.env["NOT-PORTABLE"]).toBeUndefined();
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {

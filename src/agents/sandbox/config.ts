@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { collectConfigRuntimeEnvVars } from "../../config/env-vars.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -77,13 +78,17 @@ export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
   globalDocker?: Partial<SandboxDockerConfig>;
   agentDocker?: Partial<SandboxDockerConfig>;
+  runtimeEnv?: Record<string, string>;
 }): SandboxDockerConfig {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const env = {
+    LANG: "C.UTF-8",
+    ...params.runtimeEnv,
+    ...globalDocker?.env,
+    ...agentDocker?.env,
+  };
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
@@ -186,6 +191,7 @@ export function resolveSandboxConfigForAgent(
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
+  const runtimeEnv = collectConfigRuntimeEnvVars(cfg);
 
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
@@ -197,6 +203,7 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+      runtimeEnv,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,
