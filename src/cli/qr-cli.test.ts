@@ -293,7 +293,7 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("does not resolve local password SecretRef when token SecretRef is configured in inferred mode", async () => {
+  it("fails when token and password SecretRefs are both configured with inferred mode", async () => {
     vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
     loadConfig.mockReturnValue({
       secrets: {
@@ -311,13 +311,9 @@ describe("registerQrCli", () => {
       },
     });
 
-    await runQr(["--setup-code-only"]);
-
-    const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
-      token: "inferred-token",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    await expectQrExit(["--setup-code-only"]);
+    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("gateway.auth.mode is unset");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
