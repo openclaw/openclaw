@@ -51,8 +51,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
+  // Normalize both target.to and delivery.to for Feishu/Lark to handle cases where
+  // messaging tool records targets with prefixes (user:ou_xxx) when provider is "message"
+  const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to);
   const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
-  return target.to === normalizedDeliveryTo;
+  return normalizedTargetTo === normalizedDeliveryTo;
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
