@@ -13,10 +13,15 @@ import {
   DEFAULT_MEMORY_ALT_FILENAME,
 } from "./workspace.js";
 
+// POLICY.md is not exported from workspace.ts — use a local constant.
+const DEFAULT_POLICY_FILENAME = "POLICY.md";
+
 /**
  * Filenames that are considered "core workspace documents" and should be change-tracked.
  */
-export const TRACKED_DOC_FILENAMES: ReadonlySet<string> = new Set<WorkspaceBootstrapFileName>([
+export const TRACKED_DOC_FILENAMES: ReadonlySet<string> = new Set<
+  WorkspaceBootstrapFileName | typeof DEFAULT_POLICY_FILENAME
+>([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
@@ -24,7 +29,7 @@ export const TRACKED_DOC_FILENAMES: ReadonlySet<string> = new Set<WorkspaceBoots
   DEFAULT_USER_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
-  "POLICY.md",
+  DEFAULT_POLICY_FILENAME,
 ]);
 
 export type WriteTrackedDocResult = {
@@ -44,12 +49,37 @@ export type DocCommit = {
   body?: string;
 };
 
-async function gitCommand(
-  args: string[],
-  cwd: string,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+export type DocSessionParams = {
+  workspaceDir: string;
+  sessionKey: string;
+  agentLabel?: string;
+};
+
+/**
+ * A tracking session.
+ *
+ * Allows agents to make any number of mutations to workspace documents
+ * (raw writes, sed/awk, patch, etc.) and then commit them all at once
+ * with a single provenance record.
+ *
+ * Usage:
+ *   const session = await beginDocSession(workspaceDir, { sessionKey, agentLabel });
+ *   // ... make changes however you want ...
+ *   await session.commit('Added disk hygiene rule');
+ */
+export type DocSession = {
+  /** Commit all currently-dirty tracked docs under a single message. */
+  commit(reason: string): Promise<WriteTrackedDocResult>;
+  /** Discard the session — leaves files as-is, makes no commit. */
+  discard(): void;
+};
+
+type GitResult = { code: number; stdout: string; stderr: string };
+
+async function gitCommand(args: string[], cwd: string): Promise<GitResult> {
   try {
-    return await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 10_000 });
+    const r = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 10_000 });
+    return { code: r.code ?? 1, stdout: r.stdout, stderr: r.stderr };
   } catch {
     return { code: 1, stdout: "", stderr: "git command failed" };
   }
@@ -65,7 +95,74 @@ async function hasGitRepo(dir: string): Promise<boolean> {
 }
 
 /**
+ * Begin a tracked-doc session.
+ *
+ * The session batches all file mutations made between `beginDocSession()` and
+ * `session.commit()` into a single git commit, regardless of how those mutations
+ * were made (write, sed, patch, etc.). This avoids noisy per-write commits.
+ *
+ * Falls back gracefully if git is unavailable.
+ */
+export async function beginDocSession(params: DocSessionParams): Promise<DocSession> {
+  const resolvedDir = resolveUserPath(params.workspaceDir);
+  const gitAvailable = await hasGitRepo(resolvedDir);
+
+  const buildBody = (): string =>
+    [`Session: ${params.sessionKey}`, params.agentLabel ? `Agent: ${params.agentLabel}` : null]
+      .filter(Boolean)
+      .join("\n");
+
+  async function commit(reason: string): Promise<WriteTrackedDocResult> {
+    if (!gitAvailable) {
+      return {
+        committed: false,
+        warning: `Git repo not found in ${resolvedDir}; changes not tracked.`,
+      };
+    }
+
+    // Stage only tracked doc filenames that are present and modified.
+    const trackedFiles = [...TRACKED_DOC_FILENAMES];
+    for (const filename of trackedFiles) {
+      // `git add` on a missing file is a no-op — safe to call unconditionally.
+      await gitCommand(["add", filename], resolvedDir);
+    }
+
+    // Nothing staged → content unchanged.
+    const diffResult = await gitCommand(["diff", "--cached", "--quiet"], resolvedDir);
+    if (diffResult.code === 0) {
+      return { committed: false };
+    }
+
+    const subject = `docs: ${reason}`;
+    const body = buildBody();
+
+    const commitResult = await gitCommand(
+      ["commit", "-m", subject, "-m", body, "--author", "OpenClaw Agent <agent@openclaw.local>"],
+      resolvedDir,
+    );
+
+    if (commitResult.code !== 0) {
+      return { committed: false, warning: `git commit failed: ${commitResult.stderr}` };
+    }
+
+    const shaResult = await gitCommand(["rev-parse", "HEAD"], resolvedDir);
+    const sha = shaResult.stdout.trim().slice(0, 12) || undefined;
+
+    return { committed: true, sha };
+  }
+
+  function discard(): void {
+    // No-op: files stay as-is, nothing committed.
+  }
+
+  return { commit, discard };
+}
+
+/**
  * Write a core workspace document and record the change as a git commit.
+ *
+ * Convenience wrapper over `beginDocSession` for single-file, single-write mutations.
+ * For multi-step or targeted edits (sed/awk/patch), use `beginDocSession` directly.
  *
  * Falls back to plain write if git is unavailable.
  */
@@ -80,53 +177,16 @@ export async function writeTrackedDoc(params: {
   const resolvedDir = resolveUserPath(params.workspaceDir);
   const filePath = path.join(resolvedDir, params.filename);
 
-  // Always write the file first.
+  // Write the file first, then commit via a session.
   await fs.writeFile(filePath, params.content, "utf-8");
 
-  if (!(await hasGitRepo(resolvedDir))) {
-    return {
-      committed: false,
-      warning: `Git repo not found in ${resolvedDir}; change not tracked.`,
-    };
-  }
+  const session = await beginDocSession({
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
+    agentLabel: params.agentLabel,
+  });
 
-  // Stage the file.
-  const addResult = await gitCommand(["add", params.filename], resolvedDir);
-  if (addResult.code !== 0) {
-    return { committed: false, warning: `git add failed: ${addResult.stderr}` };
-  }
-
-  // Check if there's actually anything to commit.
-  const diffResult = await gitCommand(["diff", "--cached", "--quiet"], resolvedDir);
-  if (diffResult.code === 0) {
-    // Nothing staged — content was identical.
-    return { committed: false };
-  }
-
-  // Build commit message.
-  const subject = `docs(${params.filename}): ${params.reason}`;
-  const body = [
-    `Session: ${params.sessionKey}`,
-    params.agentLabel ? `Agent: ${params.agentLabel}` : null,
-    `Filename: ${params.filename}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const commitResult = await gitCommand(
-    ["commit", "-m", subject, "-m", body, "--author", "OpenClaw Agent <agent@openclaw.local>"],
-    resolvedDir,
-  );
-
-  if (commitResult.code !== 0) {
-    return { committed: false, warning: `git commit failed: ${commitResult.stderr}` };
-  }
-
-  // Retrieve the new commit SHA.
-  const shaResult = await gitCommand(["rev-parse", "HEAD"], resolvedDir);
-  const sha = shaResult.stdout.trim().slice(0, 12) || undefined;
-
-  return { committed: true, sha };
+  return session.commit(`${params.filename}: ${params.reason}`);
 }
 
 /**

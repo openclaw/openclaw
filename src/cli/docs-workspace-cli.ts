@@ -9,18 +9,14 @@
 import type { Command } from "commander";
 import { getDocAtCommit, getDocDiff, getDocHistory, rollbackDoc } from "../agents/tracked-docs.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { colorize, isRich } from "../terminal/theme.js";
+import { isRich, theme } from "../terminal/theme.js";
 
 function resolveWorkspaceDir(options: { workspace?: string }): string {
   return options.workspace?.trim() || resolveDefaultAgentWorkspaceDir();
 }
 
 function printHeader(text: string): void {
-  if (isRich()) {
-    console.log(colorize("bold", text));
-  } else {
-    console.log(text);
-  }
+  console.log(isRich() ? theme.heading(text) : text);
 }
 
 export function registerWorkspaceDocsCommands(program: Command): void {
@@ -42,7 +38,7 @@ export function registerWorkspaceDocsCommands(program: Command): void {
       if (history.length === 0) {
         console.log(`No tracked history found for ${filename}.`);
         console.log(
-          `Hint: use \`openclaw workspace-docs write\` or ensure workspace has a git repo.`,
+          `Hint: ensure the workspace has a git repo and that changes were made via writeTrackedDoc() or a DocSession.`,
         );
         return;
       }

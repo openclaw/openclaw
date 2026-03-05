@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
+  beginDocSession,
   getDocAtCommit,
   getDocDiff,
   getDocHistory,
@@ -280,5 +281,89 @@ describe("getDocDiff", () => {
     });
 
     expect(diff).toContain("+line two");
+  });
+});
+
+describe("beginDocSession", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeTempWorkspace();
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("batches multiple file writes into a single commit", async () => {
+    const session = await beginDocSession({
+      workspaceDir: dir,
+      sessionKey: "test-session-1",
+      agentLabel: "TestAgent",
+    });
+
+    // Simulate two separate file mutations (as an agent using sed/write/etc would do).
+    await fs.writeFile(path.join(dir, "AGENTS.md"), "# Agents v2\n", "utf-8");
+    await fs.writeFile(path.join(dir, "SOUL.md"), "# Soul v2\n", "utf-8");
+
+    const result = await session.commit("updated agents and soul docs");
+
+    expect(result.committed).toBe(true);
+    expect(result.sha).toBeDefined();
+
+    // History for each file should show only 1 commit from this session.
+    const agentsHistory = await getDocHistory({ workspaceDir: dir, filename: "AGENTS.md" });
+    const soulHistory = await getDocHistory({ workspaceDir: dir, filename: "SOUL.md" });
+
+    expect(agentsHistory).toHaveLength(1);
+    expect(soulHistory).toHaveLength(1);
+    // Both should share the same commit SHA (batched).
+    expect(agentsHistory[0]!.sha).toBe(soulHistory[0]!.sha);
+    expect(agentsHistory[0]!.subject).toContain("updated agents and soul docs");
+    expect(agentsHistory[0]!.body).toContain("Session: test-session-1");
+    expect(agentsHistory[0]!.body).toContain("Agent: TestAgent");
+  });
+
+  it("discard() makes no commit", async () => {
+    const session = await beginDocSession({
+      workspaceDir: dir,
+      sessionKey: "test-session-2",
+    });
+
+    await fs.writeFile(path.join(dir, "AGENTS.md"), "# Changed but not committed\n", "utf-8");
+
+    session.discard();
+
+    const history = await getDocHistory({ workspaceDir: dir, filename: "AGENTS.md" });
+    expect(history).toHaveLength(0);
+  });
+
+  it("returns committed=false when no tracked docs changed", async () => {
+    const session = await beginDocSession({
+      workspaceDir: dir,
+      sessionKey: "test-session-3",
+    });
+
+    // Write a non-tracked file.
+    await fs.writeFile(path.join(dir, "untracked.txt"), "ignored\n", "utf-8");
+
+    const result = await session.commit("should not commit");
+    expect(result.committed).toBe(false);
+  });
+
+  it("returns warning when no git repo", async () => {
+    const noGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "tracked-docs-nogit-"));
+    try {
+      const session = await beginDocSession({
+        workspaceDir: noGitDir,
+        sessionKey: "test-session-4",
+      });
+      await fs.writeFile(path.join(noGitDir, "AGENTS.md"), "content\n", "utf-8");
+      const result = await session.commit("no git");
+      expect(result.committed).toBe(false);
+      expect(result.warning).toContain("Git repo not found");
+    } finally {
+      await fs.rm(noGitDir, { recursive: true, force: true });
+    }
   });
 });
