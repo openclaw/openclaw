@@ -33,7 +33,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Installation + updates
 
 - [Docker](/install/docker)
-- [Sealos](/install/sealos)
 - [Nix](/install/nix)
 - [Updating / rollback](/install/updating)
 - [Bun workflow (experimental)](/install/bun)
