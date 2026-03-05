@@ -288,6 +288,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({
+                    sessionKey: opts.agentSessionKey,
+                    config: loadConfig(),
+                  })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({
+                    key: opts.agentSessionKey,
+                    alias: resolveMainSessionAlias(loadConfig()).alias,
+                    mainKey: resolveMainSessionAlias(loadConfig()).mainKey,
+                  })
+                : undefined,
             }),
           );
         case "add": {
@@ -478,10 +491,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
             }),
           );
         }
@@ -490,7 +511,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          return jsonResult(
+            await callGateway("cron.remove", gatewayOpts, {
+              id,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
+            }),
+          );
         }
         case "run": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -499,7 +532,20 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
+          const cfg = loadConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          return jsonResult(
+            await callGateway("cron.run", gatewayOpts, {
+              id,
+              mode: runMode,
+              agentId: opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined,
+              sessionKey: opts?.agentSessionKey
+                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+                : undefined,
+            }),
+          );
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
