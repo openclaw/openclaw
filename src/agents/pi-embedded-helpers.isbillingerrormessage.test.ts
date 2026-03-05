@@ -540,10 +540,9 @@ describe("classifyFailoverReason", () => {
         "This model is currently experiencing high demand. Please try again later.",
       ),
     ).toBe("rate_limit");
-    // "service unavailable" combined with overload indicator → rate_limit
-    expect(
-      classifyFailoverReason("service unavailable due to high demand and overloaded servers"),
-    ).toBe("rate_limit");
+    // "service unavailable" combined with overload/capacity indicator → rate_limit
+    // (exercises the new regex — none of the standalone patterns match here)
+    expect(classifyFailoverReason("service unavailable due to capacity limits")).toBe("rate_limit");
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
