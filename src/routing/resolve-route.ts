@@ -576,18 +576,22 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
-    const sessionKey = buildAgentSessionKey({
-      agentId: resolvedAgentId,
-      channel,
-      accountId,
-      peer,
-      dmScope,
-      identityLinks,
-    }).toLowerCase();
-    const mainSessionKey = buildAgentMainSessionKey({
-      agentId: resolvedAgentId,
-      mainKey: DEFAULT_MAIN_KEY,
-    }).toLowerCase();
+    const mainSessionKeyRaw =
+      buildAgentMainSessionKey({
+        agentId: resolvedAgentId,
+        mainKey: DEFAULT_MAIN_KEY,
+      }) || `agent:${resolvedAgentId}:${DEFAULT_MAIN_KEY}`;
+    const sessionKeyRaw =
+      buildAgentSessionKey({
+        agentId: resolvedAgentId,
+        channel,
+        accountId,
+        peer,
+        dmScope,
+        identityLinks,
+      }) || mainSessionKeyRaw;
+    const sessionKey = sessionKeyRaw.toLowerCase();
+    const mainSessionKey = mainSessionKeyRaw.toLowerCase();
     const route = {
       agentId: resolvedAgentId,
       channel,
