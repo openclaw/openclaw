@@ -391,3 +391,25 @@ describe("systemd service control", () => {
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
   });
 });
+
+describe("isSystemdServiceEnabled fallback for Ubuntu 24.04", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+  });
+
+  it("returns false when systemctl is-enabled fails with command failed (Ubuntu 24.04 regression)", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    // On Ubuntu 24.04, systemctl --user is-enabled can fail with a generic
+    // "Command failed" error when the user bus isn't properly initialized.
+    // This should return false, not throw.
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error(
+        "Command failed: systemctl --user is-enabled openclaw-gateway.service",
+      ) as Error & { code?: number };
+      err.code = 1;
+      cb(err, "", "Command failed: systemctl --user is-enabled openclaw-gateway.service");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+});
