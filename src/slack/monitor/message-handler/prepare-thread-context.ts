@@ -25,6 +25,63 @@ export type SlackThreadContextData = {
   isEffectivelyNewSession: boolean;
 };
 
+/**
+ * Result of checking thread session freshness.
+ * Returns both the freshness status AND the session timestamp,
+ * allowing callers to avoid a redundant session store read.
+ */
+export type ThreadSessionFreshnessResult = {
+  fresh: boolean;
+  timestamp: number | undefined;
+};
+
+/**
+ * Check if a thread session is fresh enough to allow implicit mentions.
+ * Used to determine whether the bot should auto-reply to thread messages
+ * without an explicit @mention, based on the configured session timeout.
+ *
+ * Returns both freshness status and the session timestamp. The timestamp
+ * is returned so callers can pass it to other functions (like
+ * resolveSlackThreadContextData) to avoid redundant session store reads.
+ *
+ * @param params - Store path, session key, and Slack context
+ * @returns Object with fresh (boolean) and timestamp (number | undefined)
+ */
+export function checkThreadSessionFreshness(params: {
+  storePath: string;
+  sessionKey: string;
+  ctx: SlackMonitorContext;
+}): ThreadSessionFreshnessResult {
+  const threadSessionPreviousTimestamp = readSessionUpdatedAt({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    skipCache: true,
+  });
+
+  // No previous timestamp = truly new session, not stale
+  if (!threadSessionPreviousTimestamp) {
+    return { fresh: true, timestamp: undefined };
+  }
+
+  // Check if the existing session is stale
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg: params.ctx.cfg.session,
+    channel: "slack",
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg: params.ctx.cfg.session,
+    resetType: "thread",
+    resetOverride: channelReset,
+  });
+  const freshness = evaluateSessionFreshness({
+    updatedAt: threadSessionPreviousTimestamp,
+    now: Date.now(),
+    policy: resetPolicy,
+  });
+
+  return { fresh: freshness.fresh, timestamp: threadSessionPreviousTimestamp };
+}
+
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -39,6 +96,13 @@ export async function resolveSlackThreadContextData(params: {
     typeof import("../../../auto-reply/envelope.js").resolveEnvelopeFormatOptions
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
+  /**
+   * Optional cached session timestamp from a previous read.
+   * If provided, this function will use it instead of reading from the session store,
+   * avoiding a redundant I/O operation. This is an optimization to reduce the number
+   * of session store reads per thread message from 2 to 1.
+   */
+  threadSessionPreviousTimestamp?: number | undefined;
 }): Promise<SlackThreadContextData> {
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
@@ -83,11 +147,19 @@ export async function resolveSlackThreadContextData(params: {
   // CRITICAL: Skip cache for session freshness check to match initSessionState behavior
   // and avoid incorrect thread context loading decisions (stale cache could cause
   // loading history when session is actually fresh, or vice versa)
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    skipCache: true,
-  });
+  // OPTIMIZATION: Use the cached timestamp from the earlier freshness check if available,
+  // otherwise read from the session store. This reduces I/O from 2 reads to 1 read per thread message.
+  if (params.threadSessionPreviousTimestamp !== undefined) {
+    // Use cached timestamp from earlier freshness check (cache hit)
+    threadSessionPreviousTimestamp = params.threadSessionPreviousTimestamp;
+  } else {
+    // No cached timestamp available, read from session store (fallback path)
+    threadSessionPreviousTimestamp = readSessionUpdatedAt({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      skipCache: true,
+    });
+  }
 
   // Determine if this is effectively a new session (either truly new or stale):
   // - No previous timestamp = truly new session
