@@ -4,7 +4,10 @@ export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
+const GroupPolicySchema = z.union([
+  z.enum(["open", "allowlist", "disabled"]),
+  z.literal("allowall").transform(() => "open" as const),
+]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   z.string().url().startsWith("https://"),
