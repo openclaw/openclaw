@@ -125,7 +125,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   const { randomBytes } = await import("node:crypto");
   const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.writeFile(tmp, `${kept.join("\n")}\n`, "utf-8");
+  await fs.writeFile(tmp, `${kept.join("\n")}\n`, { encoding: "utf-8", mode: 0o600 });
   await fs.rename(tmp, filePath);
 }
 

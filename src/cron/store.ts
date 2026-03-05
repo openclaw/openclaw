@@ -86,7 +86,8 @@ export async function saveCronStore(
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      const bakContent = await fs.promises.readFile(storePath);
+      await fs.promises.writeFile(`${storePath}.bak`, bakContent, { mode: 0o600 });
     } catch {
       // best-effort
     }
