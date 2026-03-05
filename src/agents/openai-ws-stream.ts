@@ -138,6 +138,10 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
     data?: string;
     mimeType?: string;
   }>) {
+    // Skip malformed entries (null, undefined, or non-objects)
+    if (!part || typeof part !== "object") {
+      continue;
+    }
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
@@ -205,6 +209,10 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
           arguments?: Record<string, unknown>;
           thinking?: string;
         }>) {
+          // Skip malformed entries (null, undefined, or non-objects)
+          if (!block || typeof block !== "object") {
+            continue;
+          }
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
           } else if (block.type === "thinking" && typeof block.thinking === "string") {
@@ -293,6 +301,10 @@ export function buildAssistantMessageFromResponse(
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       for (const part of item.content ?? []) {
+        // Skip malformed entries (null, undefined, or non-objects)
+        if (!part || typeof part !== "object") {
+          continue;
+        }
         if (part.type === "output_text" && part.text) {
           content.push({ type: "text", text: part.text });
         }
