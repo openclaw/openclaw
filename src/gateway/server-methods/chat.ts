@@ -1142,7 +1142,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      // chat.inject should be resilient: create the transcript if the session metadata points
+      // to a file that hasn't been created yet.
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
