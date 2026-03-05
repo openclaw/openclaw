@@ -5,7 +5,6 @@ import type { RuntimeEnv } from "../runtime.js";
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
-const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => false));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
     programArguments: [],
@@ -257,7 +256,6 @@ describe("finalizeOnboardingWizard", () => {
   });
 
   it("shows missing-node guidance when gateway service install cannot find node", async () => {
-    isSystemdUserServiceAvailable.mockResolvedValue(true);
     buildGatewayInstallPlan.mockRejectedValueOnce(new Error("Node not found in PATH."));
     const note = vi.fn(async () => {});
     const prompter = buildWizardPrompter({
