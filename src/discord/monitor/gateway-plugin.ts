@@ -56,6 +56,35 @@ function logRegisterClientFailure(error: unknown, runtime: RuntimeEnv): void {
   );
 }
 
+/**
+ * Create a GatewayPlugin subclass that catches unhandled promise rejections
+ * from `registerClient`. Carbon's `Client` constructor calls
+ * `plugin.registerClient(this)` without awaiting the returned promise, so
+ * any rejection would crash the gateway process.
+ */
+function createSafeGatewayPlugin(
+  gatewayOptions: ConstructorParameters<typeof GatewayPlugin>[0],
+  runtime: RuntimeEnv,
+): GatewayPlugin {
+  class SafeGatewayPlugin extends GatewayPlugin {
+    constructor() {
+      super(gatewayOptions);
+    }
+
+    override async registerClient(
+      client: Parameters<GatewayPlugin["registerClient"]>[0],
+    ): Promise<void> {
+      try {
+        await super.registerClient(client);
+      } catch (error) {
+        logRegisterClientFailure(error, runtime);
+      }
+    }
+  }
+
+  return new SafeGatewayPlugin();
+}
+
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
@@ -69,27 +98,7 @@ export function createDiscordGatewayPlugin(params: {
   };
 
   if (!proxy) {
-    // No proxy — still need to guard against unhandled rejections from
-    // Carbon's registerClient (which fetches gateway info via native fetch).
-    // Carbon's Client constructor calls plugin.registerClient() without
-    // awaiting the returned promise, so any rejection becomes unhandled.
-    class SafeGatewayPlugin extends GatewayPlugin {
-      constructor() {
-        super(options);
-      }
-
-      override async registerClient(
-        client: Parameters<GatewayPlugin["registerClient"]>[0],
-      ): Promise<void> {
-        try {
-          await super.registerClient(client);
-        } catch (error) {
-          logRegisterClientFailure(error, params.runtime);
-        }
-      }
-    }
-
-    return new SafeGatewayPlugin();
+    return createSafeGatewayPlugin(options, params.runtime);
   }
 
   try {
@@ -140,24 +149,6 @@ export function createDiscordGatewayPlugin(params: {
     return new ProxyGatewayPlugin();
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-
-    // Fall back to a safe non-proxy plugin.
-    class SafeGatewayPlugin extends GatewayPlugin {
-      constructor() {
-        super(options);
-      }
-
-      override async registerClient(
-        client: Parameters<GatewayPlugin["registerClient"]>[0],
-      ): Promise<void> {
-        try {
-          await super.registerClient(client);
-        } catch (error) {
-          logRegisterClientFailure(error, params.runtime);
-        }
-      }
-    }
-
-    return new SafeGatewayPlugin();
+    return createSafeGatewayPlugin(options, params.runtime);
   }
 }
