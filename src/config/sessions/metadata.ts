@@ -171,8 +171,9 @@ export function deriveSessionMetaPatch(params: {
   }
 
   // Auto-label group/channel sessions with a human-friendly name when no
-  // explicit label has been set yet. Only applies when existing label is undefined.
-  if (params.existing?.label === undefined && !patch.label) {
+  // explicit label has been set yet. Only applies when both existing.label and
+  // origin.label are undefined (user has not explicitly set or cleared a label).
+  if (params.existing?.label === undefined && !patch.label && mergedOrigin?.label === undefined) {
     const nextGroupChannel = (groupPatch as any)?.groupChannel;
     const nextSubject = (groupPatch as any)?.subject;
     const autoLabel =
@@ -180,20 +181,18 @@ export function deriveSessionMetaPatch(params: {
     if (autoLabel) {
       // Validate the auto-generated label using parseSessionLabel to avoid creating unresolvable labels
       const parsed = parseSessionLabel(autoLabel);
-      if (parsed.ok) {
-        // Check for label uniqueness if we have access to all sessions
-        if (params.allSessions) {
-          const isUnique = Object.entries(params.allSessions).every(([key, entry]) => {
-            if (key === params.sessionKey) return true;
-            return entry?.label !== parsed.label;
-          });
-          if (isUnique) {
-            patch.label = parsed.label;
-          }
-        } else {
-          // Fallback: set the label without uniqueness check (best-effort)
+      if (parsed.ok && params.allSessions) {
+        // Always check for label uniqueness when allSessions is available
+        const isUnique = Object.entries(params.allSessions).every(([key, entry]) => {
+          if (key === params.sessionKey) return true;
+          return entry?.label !== parsed.label;
+        });
+        if (isUnique) {
           patch.label = parsed.label;
         }
+      } else if (parsed.ok) {
+        // Fallback without allSessions: skip auto-labeling to avoid creating duplicate labels
+        // Label-based session resolution requires uniqueness, so we defer to explicit user action
       }
     }
   }
