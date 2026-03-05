@@ -192,6 +192,44 @@ async function runAnnounceFlowResult(bestEffort: boolean) {
   return outcome;
 }
 
+async function runSignalAnnounceFlowResult(bestEffort: boolean) {
+  let outcome:
+    | {
+        res: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>;
+        deps: CliDeps;
+      }
+    | undefined;
+  await withTempHome(async (home) => {
+    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+    const deps = createCliDeps();
+    mockAgentPayloads([{ text: "hello from cron" }]);
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValueOnce(false);
+    const res = await runCronIsolatedAgentTurn({
+      cfg: makeCfg(home, storePath, {
+        channels: { signal: {} },
+      }),
+      deps,
+      job: {
+        ...makeJob({ kind: "agentTurn", message: "do it" }),
+        delivery: {
+          mode: "announce",
+          channel: "signal",
+          to: "+15551234567",
+          bestEffort,
+        },
+      },
+      message: "do it",
+      sessionKey: "cron:job-1",
+      lane: "cron",
+    });
+    outcome = { res, deps };
+  });
+  if (!outcome) {
+    throw new Error("signal announce flow did not produce an outcome");
+  }
+  return outcome;
+}
+
 async function assertExplicitTelegramTargetAnnounce(params: {
   home: string;
   storePath: string;
@@ -428,6 +466,15 @@ describe("runCronIsolatedAgentTurn", () => {
     expect(res.deliveryAttempted).toBe(true);
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to direct delivery for signal when announce reports false and best-effort is enabled", async () => {
+    const { res, deps } = await runSignalAnnounceFlowResult(true);
+    expect(res.status).toBe("ok");
+    expect(res.delivered).toBe(true);
+    expect(res.deliveryAttempted).toBe(true);
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(deps.sendMessageSignal).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to direct delivery when announce flow throws and best-effort is disabled", async () => {
