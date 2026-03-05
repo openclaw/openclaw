@@ -188,10 +188,6 @@ const transition1Duration = timing1.getDurationInFrames({ fps: 30 });
 const transition2Duration = timing2.getDurationInFrames({ fps: 30 });
 
 const totalDuration =
-  scene1Duration +
-  scene2Duration +
-  scene3Duration -
-  transition1Duration -
-  transition2Duration;
+  scene1Duration + scene2Duration + scene3Duration - transition1Duration - transition2Duration;
 // 60 + 60 + 60 - 15 - 20 = 145 frames
 ```
