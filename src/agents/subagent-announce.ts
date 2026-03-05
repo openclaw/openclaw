@@ -1150,11 +1150,17 @@ export async function runSubagentAnnounceFlow(params: {
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
-        // The child run is still active (e.g., compaction retry still in progress).
-        // Defer announcement so we don't report stale/partial output.
-        // Keep the child session so output is not lost while the run is still active.
-        shouldDeleteChildSession = false;
-        return false;
+        // The embedded run state hasn't cleared yet. However, if we already
+        // have a terminal outcome from the lifecycle event or agent.wait,
+        // the run is logically complete — the embedded state just lags behind.
+        // Proceed with the announce instead of deferring, which avoids the
+        // intermittent stall where the parent never gets woken up (#36081).
+        const hasTerminalOutcome =
+          outcome?.status === "ok" || outcome?.status === "error" || outcome?.status === "timeout";
+        if (!hasTerminalOutcome) {
+          shouldDeleteChildSession = false;
+          return false;
+        }
       }
     }
 
