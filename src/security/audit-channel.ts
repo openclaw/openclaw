@@ -211,7 +211,17 @@ export async function collectChannelSecurityFindings(params: {
         plugin.id,
         accountId,
       );
-      const account = plugin.config.resolveAccount(params.cfg, accountId);
+      let account: ReturnType<typeof plugin.config.resolveAccount>;
+      try {
+        account = plugin.config.resolveAccount(params.cfg, accountId);
+      } catch (err) {
+        // Skip accounts whose credentials are unresolved SecretRefs (e.g. file-backed tokens).
+        // The audit cannot inspect credentials that require a live gateway runtime to resolve.
+        if (err instanceof Error && err.message.includes("unresolved SecretRef")) {
+          continue;
+        }
+        throw err;
+      }
       const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, params.cfg) : true;
       if (!enabled) {
         continue;

@@ -61,6 +61,10 @@ describe("format-duration", () => {
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
     });
 
+    it("returns ms for zero input", () => {
+      expect(formatDurationHuman(0)).toBe("0ms");
+    });
+
     it("formats single-unit outputs and day threshold behavior", () => {
       const cases = [
         [500, "500ms"],
@@ -94,6 +98,11 @@ describe("format-duration", () => {
       expect(formatDurationPrecise(NaN)).toBe("unknown");
       expect(formatDurationPrecise(Infinity)).toBe("unknown");
     });
+
+    it("returns unknown for negative input", () => {
+      expect(formatDurationPrecise(-500)).toBe("unknown");
+      expect(formatDurationPrecise(-1500)).toBe("unknown");
+    });
   });
 
   describe("formatDurationSeconds", () => {
@@ -105,6 +114,10 @@ describe("format-duration", () => {
 
     it("supports seconds unit", () => {
       expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe("2 seconds");
+    });
+
+    it("clamps negative input to 0", () => {
+      expect(formatDurationSeconds(-1000)).toBe("0s");
     });
   });
 });
@@ -164,6 +177,11 @@ describe("format-relative", () => {
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
     });
 
+    it("returns fallback for NaN and Infinity", () => {
+      expect(formatTimeAgo(NaN)).toBe("unknown");
+      expect(formatTimeAgo(Infinity)).toBe("unknown");
+    });
+
     it("formats relative age around key unit boundaries", () => {
       const cases = [
         [0, "just now"],
@@ -193,6 +211,11 @@ describe("format-relative", () => {
         expect(formatRelativeTimestamp(value)).toBe("n/a");
       }
       expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
+    });
+
+    it("returns fallback for NaN and Infinity", () => {
+      expect(formatRelativeTimestamp(NaN)).toBe("n/a");
+      expect(formatRelativeTimestamp(Infinity)).toBe("n/a");
     });
 
     it.each([
