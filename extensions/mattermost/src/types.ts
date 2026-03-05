@@ -1,4 +1,9 @@
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  SecretInput,
+} from "openclaw/plugin-sdk";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -7,12 +12,17 @@ export type MattermostAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /**
+   * Break-glass override: allow mutable identity matching (@username/display name) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /** If false, do not start this Mattermost account. Default: true. */
   enabled?: boolean;
   /** Bot token for Mattermost. */
-  botToken?: string;
+  botToken?: SecretInput;
   /** Base URL for the Mattermost server (e.g., https://chat.example.com). */
   baseUrl?: string;
   /**
@@ -54,4 +64,6 @@ export type MattermostAccountConfig = {
 export type MattermostConfig = {
   /** Optional per-account Mattermost configuration (multi-account). */
   accounts?: Record<string, MattermostAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & MattermostAccountConfig;

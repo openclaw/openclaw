@@ -9,7 +9,7 @@ import { readLatestAssistantReply } from "./agent-step.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("returns the most recent assistant message when compaction markers trail history", async () => {

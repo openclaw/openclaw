@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayChatClient } from "./gateway-chat.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
@@ -49,7 +50,7 @@ describe("tui session actions", () => {
     const requestRender = vi.fn();
 
     const { refreshSessionInfo } = createSessionActions({
-      client: { listSessions } as { listSessions: typeof listSessions },
+      client: { listSessions } as unknown as GatewayChatClient,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
       opts: {},
@@ -97,7 +98,7 @@ describe("tui session actions", () => {
       sessions: [
         {
           key: "agent:main:main",
-          model: "Minimax-M2.1",
+          model: "Minimax-M2.5",
           modelProvider: "minimax",
         },
       ],
@@ -105,7 +106,7 @@ describe("tui session actions", () => {
 
     await second;
 
-    expect(state.sessionInfo.model).toBe("Minimax-M2.1");
+    expect(state.sessionInfo.model).toBe("Minimax-M2.5");
     expect(updateAutocompleteProvider).toHaveBeenCalledTimes(2);
     expect(updateFooter).toHaveBeenCalledTimes(2);
     expect(requestRender).toHaveBeenCalledTimes(2);

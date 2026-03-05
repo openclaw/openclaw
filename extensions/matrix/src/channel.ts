@@ -1,11 +1,14 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
@@ -30,6 +33,7 @@ import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -169,8 +173,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg as CoreConfig);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: (cfg as CoreConfig).channels?.matrix !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -319,7 +327,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         return "Matrix requires --homeserver";
       }
       const accessToken = input.accessToken?.trim();
-      const password = input.password?.trim();
+      const password = normalizeSecretInputString(input.password);
       const userId = input.userId?.trim();
       if (!accessToken && !password) {
         return "Matrix requires --access-token or --password";
@@ -357,7 +365,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         homeserver: input.homeserver?.trim(),
         userId: input.userId?.trim(),
         accessToken: input.accessToken?.trim(),
-        password: input.password?.trim(),
+        password: normalizeSecretInputString(input.password),
         deviceName: input.deviceName?.trim(),
         initialSyncLimit: input.initialSyncLimit,
       });
@@ -387,16 +395,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           },
         ];
       }),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
     probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
         const auth = await resolveMatrixAuth({

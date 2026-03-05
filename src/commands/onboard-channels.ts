@@ -27,7 +27,9 @@ import {
   listChannelOnboardingAdapters,
 } from "./onboarding/registry.js";
 import type {
+  ChannelOnboardingConfiguredResult,
   ChannelOnboardingDmPolicy,
+  ChannelOnboardingResult,
   ChannelOnboardingStatus,
   SetupChannelsOptions,
 } from "./onboarding/types.js";
@@ -197,7 +199,7 @@ async function noteChannelPrimer(
       "Multi-user DMs: run: " +
         formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
         ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       "",
       ...channelLines,
     ].join("\n"),
@@ -253,7 +255,7 @@ async function maybeConfigureDmPolicies(params: {
         "Multi-user DMs: run: " +
           formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-        `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+        `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       ].join("\n"),
       `${policy.label} DM access`,
     );
@@ -467,10 +469,44 @@ export async function setupChannels(
       workspaceDir,
     });
     if (!getChannelPlugin(channel)) {
+      // Some installs/environments can fail to populate the plugin registry during onboarding,
+      // even for built-in channels. If the channel supports onboarding, proceed with config
+      // so setup isn't blocked; the gateway can still load plugins on startup.
+      const adapter = getChannelOnboardingAdapter(channel);
+      if (adapter) {
+        await prompter.note(
+          `${channel} plugin not available (continuing with onboarding). If the channel still doesn't work after setup, run \`${formatCliCommand(
+            "openclaw plugins list",
+          )}\` and \`${formatCliCommand("openclaw plugins enable " + channel)}\`, then restart the gateway.`,
+          "Channel setup",
+        );
+        await refreshStatus(channel);
+        return true;
+      }
       await prompter.note(`${channel} plugin not available.`, "Channel setup");
       return false;
     }
     await refreshStatus(channel);
+    return true;
+  };
+
+  const applyOnboardingResult = async (channel: ChannelChoice, result: ChannelOnboardingResult) => {
+    next = result.cfg;
+    if (result.accountId) {
+      recordAccount(channel, result.accountId);
+    }
+    addSelection(channel);
+    await refreshStatus(channel);
+  };
+
+  const applyCustomOnboardingResult = async (
+    channel: ChannelChoice,
+    result: ChannelOnboardingConfiguredResult,
+  ) => {
+    if (result === "skip") {
+      return false;
+    }
+    await applyOnboardingResult(channel, result);
     return true;
   };
 
@@ -489,17 +525,29 @@ export async function setupChannels(
       shouldPromptAccountIds,
       forceAllowFrom: forceAllowFromChannels.has(channel),
     });
-    next = result.cfg;
-    if (result.accountId) {
-      recordAccount(channel, result.accountId);
-    }
-    addSelection(channel);
-    await refreshStatus(channel);
+    await applyOnboardingResult(channel, result);
   };
 
   const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
     const plugin = getChannelPlugin(channel);
     const adapter = getChannelOnboardingAdapter(channel);
+    if (adapter?.configureWhenConfigured) {
+      const custom = await adapter.configureWhenConfigured({
+        cfg: next,
+        runtime,
+        prompter,
+        options,
+        accountOverrides,
+        shouldPromptAccountIds,
+        forceAllowFrom: forceAllowFromChannels.has(channel),
+        configured: true,
+        label,
+      });
+      if (!(await applyCustomOnboardingResult(channel, custom))) {
+        return;
+      }
+      return;
+    }
     const supportsDisable = Boolean(
       options?.allowDisable && (plugin?.config.setAccountEnabled || adapter?.disable),
     );
@@ -601,9 +649,27 @@ export async function setupChannels(
     }
 
     const plugin = getChannelPlugin(channel);
+    const adapter = getChannelOnboardingAdapter(channel);
     const label = plugin?.meta.label ?? catalogEntry?.meta.label ?? channel;
     const status = statusByChannel.get(channel);
     const configured = status?.configured ?? false;
+    if (adapter?.configureInteractive) {
+      const custom = await adapter.configureInteractive({
+        cfg: next,
+        runtime,
+        prompter,
+        options,
+        accountOverrides,
+        shouldPromptAccountIds,
+        forceAllowFrom: forceAllowFromChannels.has(channel),
+        configured,
+        label,
+      });
+      if (!(await applyCustomOnboardingResult(channel, custom))) {
+        return;
+      }
+      return;
+    }
     if (configured) {
       await handleConfiguredChannel(channel, label);
       return;

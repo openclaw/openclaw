@@ -11,12 +11,14 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  restartSystemdService,
   resolveSystemdUserUnitPath,
+  stopSystemdService,
 } from "./systemd.js";
 
 describe("systemd availability", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
+    execFileMock.mockClear();
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -40,6 +42,56 @@ describe("systemd availability", () => {
   });
 });
 
+describe("isSystemdServiceEnabled", () => {
+  beforeEach(() => {
+    execFileMock.mockClear();
+  });
+
+  it("returns false when systemctl is not present", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("spawn systemctl EACCES") as Error & { code?: string };
+      err.code = "EACCES";
+      cb(err, "", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
+  it("calls systemctl is-enabled when systemctl is present", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+      cb(null, "enabled", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(true);
+  });
+
+  it("returns false when systemctl reports disabled", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("disabled") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "disabled", "");
+    });
+    const result = await isSystemdServiceEnabled({ env: {} });
+    expect(result).toBe(false);
+  });
+
+  it("throws when systemctl is-enabled fails for non-state errors", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = new Error("Failed to connect to bus") as Error & { code?: number };
+      err.code = 1;
+      cb(err, "", "Failed to connect to bus");
+    });
+    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
+      "systemctl is-enabled unavailable: Failed to connect to bus",
+    );
+  });
+});
+
 describe("systemd runtime parsing", () => {
   it("parses active state details", () => {
     const output = [
@@ -59,49 +111,44 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("resolveSystemdUserUnitPath", () => {
-  it("uses default service name when OPENCLAW_PROFILE is unset", () => {
-    const env = { HOME: "/home/test" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
-  it("uses profile-specific service name when OPENCLAW_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "jbphoenix" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway-jbphoenix.service",
-    );
-  });
-
-  it("prefers OPENCLAW_SYSTEMD_UNIT over OPENCLAW_PROFILE", () => {
-    const env = {
-      HOME: "/home/test",
-      OPENCLAW_PROFILE: "jbphoenix",
-      OPENCLAW_SYSTEMD_UNIT: "custom-unit",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
-  });
-
-  it("handles OPENCLAW_SYSTEMD_UNIT with .service suffix", () => {
-    const env = {
-      HOME: "/home/test",
-      OPENCLAW_SYSTEMD_UNIT: "custom-unit.service",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_SYSTEMD_UNIT", () => {
-    const env = {
-      HOME: "/home/test",
-      OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
+  it.each([
+    {
+      name: "uses default service name when OPENCLAW_PROFILE is unset",
+      env: { HOME: "/home/test" },
+      expected: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    },
+    {
+      name: "uses profile-specific service name when OPENCLAW_PROFILE is set to a custom value",
+      env: { HOME: "/home/test", OPENCLAW_PROFILE: "jbphoenix" },
+      expected: "/home/test/.config/systemd/user/openclaw-gateway-jbphoenix.service",
+    },
+    {
+      name: "prefers OPENCLAW_SYSTEMD_UNIT over OPENCLAW_PROFILE",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_PROFILE: "jbphoenix",
+        OPENCLAW_SYSTEMD_UNIT: "custom-unit",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+    {
+      name: "handles OPENCLAW_SYSTEMD_UNIT with .service suffix",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_UNIT: "custom-unit.service",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+    {
+      name: "trims whitespace from OPENCLAW_SYSTEMD_UNIT",
+      env: {
+        HOME: "/home/test",
+        OPENCLAW_SYSTEMD_UNIT: "  custom-unit  ",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveSystemdUserUnitPath(env)).toBe(expected);
   });
 });
 
@@ -149,5 +196,60 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("systemd service control", () => {
+  beforeEach(() => {
+    execFileMock.mockClear();
+  });
+
+  it("stops the resolved user unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "stop", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await stopSystemdService({ stdout, env: {} });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
+  });
+
+  it("restarts a profile-specific user unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway-work.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { OPENCLAW_PROFILE: "work" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("surfaces stop failures with systemctl detail", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("stop failed") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
+      });
+
+    await expect(
+      stopSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: {},
+      }),
+    ).rejects.toThrow("systemctl stop failed: permission denied");
   });
 });

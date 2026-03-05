@@ -18,7 +18,7 @@ describe("CronService", () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" }));
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
 
     const cronA = new CronService({
       storePath: store.storePath,

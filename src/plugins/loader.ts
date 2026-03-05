@@ -4,19 +4,21 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
-  resolveEnableState,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -46,20 +48,25 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
+  modulePath?: string;
 }): string | null => {
   try {
-    const modulePath = fileURLToPath(import.meta.url);
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    const normalizedModulePath = modulePath.replace(/\\/g, "/");
+    const isDistRuntime = normalizedModulePath.includes("/dist/");
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates = isProduction
-        ? isTest
-          ? [distCandidate, srcCandidate]
-          : [distCandidate]
-        : [srcCandidate, distCandidate];
+      const orderedCandidates = isDistRuntime
+        ? [distCandidate, srcCandidate]
+        : isProduction
+          ? isTest
+            ? [distCandidate, srcCandidate]
+            : [distCandidate]
+          : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;
@@ -82,6 +89,10 @@ const resolvePluginSdkAlias = (): string | null =>
 
 const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
+};
+
+export const __testing = {
+  resolvePluginSdkAliasFile,
 };
 
 function buildCacheKey(params: {
@@ -110,7 +121,7 @@ function validatePluginConfig(params: {
   if (result.ok) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
-  return { ok: false, errors: result.errors };
+  return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -165,7 +176,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpHandlers: 0,
+    httpRoutes: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
@@ -173,8 +184,190 @@ function createPluginRecord(params: {
   };
 }
 
+function recordPluginError(params: {
+  logger: PluginLogger;
+  registry: PluginRegistry;
+  record: PluginRecord;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  pluginId: string;
+  origin: PluginRecord["origin"];
+  error: unknown;
+  logPrefix: string;
+  diagnosticMessagePrefix: string;
+}) {
+  const errorText = String(params.error);
+  params.logger.error(`${params.logPrefix}${errorText}`);
+  params.record.status = "error";
+  params.record.error = errorText;
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.pluginId, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    message: `${params.diagnosticMessagePrefix}${errorText}`,
+  });
+}
+
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
+}
+
+type PathMatcher = {
+  exact: Set<string>;
+  dirs: string[];
+};
+
+type InstallTrackingRule = {
+  trackedWithoutPaths: boolean;
+  matcher: PathMatcher;
+};
+
+type PluginProvenanceIndex = {
+  loadPathMatcher: PathMatcher;
+  installRules: Map<string, InstallTrackingRule>;
+};
+
+function createPathMatcher(): PathMatcher {
+  return { exact: new Set<string>(), dirs: [] };
+}
+
+function addPathToMatcher(matcher: PathMatcher, rawPath: string): void {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return;
+  }
+  const resolved = resolveUserPath(trimmed);
+  if (!resolved) {
+    return;
+  }
+  if (matcher.exact.has(resolved) || matcher.dirs.includes(resolved)) {
+    return;
+  }
+  const stat = safeStatSync(resolved);
+  if (stat?.isDirectory()) {
+    matcher.dirs.push(resolved);
+    return;
+  }
+  matcher.exact.add(resolved);
+}
+
+function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
+  if (matcher.exact.has(sourcePath)) {
+    return true;
+  }
+  return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
+}
+
+function buildProvenanceIndex(params: {
+  config: OpenClawConfig;
+  normalizedLoadPaths: string[];
+}): PluginProvenanceIndex {
+  const loadPathMatcher = createPathMatcher();
+  for (const loadPath of params.normalizedLoadPaths) {
+    addPathToMatcher(loadPathMatcher, loadPath);
+  }
+
+  const installRules = new Map<string, InstallTrackingRule>();
+  const installs = params.config.plugins?.installs ?? {};
+  for (const [pluginId, install] of Object.entries(installs)) {
+    const rule: InstallTrackingRule = {
+      trackedWithoutPaths: false,
+      matcher: createPathMatcher(),
+    };
+    const trackedPaths = [install.installPath, install.sourcePath]
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter(Boolean);
+    if (trackedPaths.length === 0) {
+      rule.trackedWithoutPaths = true;
+    } else {
+      for (const trackedPath of trackedPaths) {
+        addPathToMatcher(rule.matcher, trackedPath);
+      }
+    }
+    installRules.set(pluginId, rule);
+  }
+
+  return { loadPathMatcher, installRules };
+}
+
+function isTrackedByProvenance(params: {
+  pluginId: string;
+  source: string;
+  index: PluginProvenanceIndex;
+}): boolean {
+  const sourcePath = resolveUserPath(params.source);
+  const installRule = params.index.installRules.get(params.pluginId);
+  if (installRule) {
+    if (installRule.trackedWithoutPaths) {
+      return true;
+    }
+    if (matchesPathMatcher(installRule.matcher, sourcePath)) {
+      return true;
+    }
+  }
+  return matchesPathMatcher(params.index.loadPathMatcher, sourcePath);
+}
+
+function warnWhenAllowlistIsOpen(params: {
+  logger: PluginLogger;
+  pluginsEnabled: boolean;
+  allow: string[];
+  discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
+}) {
+  if (!params.pluginsEnabled) {
+    return;
+  }
+  if (params.allow.length > 0) {
+    return;
+  }
+  const nonBundled = params.discoverablePlugins.filter((entry) => entry.origin !== "bundled");
+  if (nonBundled.length === 0) {
+    return;
+  }
+  const preview = nonBundled
+    .slice(0, 6)
+    .map((entry) => `${entry.id} (${entry.source})`)
+    .join(", ");
+  const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  params.logger.warn(
+    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+  );
+}
+
+function warnAboutUntrackedLoadedPlugins(params: {
+  registry: PluginRegistry;
+  provenance: PluginProvenanceIndex;
+  logger: PluginLogger;
+}) {
+  for (const plugin of params.registry.plugins) {
+    if (plugin.status !== "loaded" || plugin.origin === "bundled") {
+      continue;
+    }
+    if (
+      isTrackedByProvenance({
+        pluginId: plugin.id,
+        source: plugin.source,
+        index: params.provenance,
+      })
+    ) {
+      continue;
+    }
+    const message =
+      "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: plugin.id,
+      source: plugin.source,
+      message,
+    });
+    params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+  }
+}
+
+function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
+  setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry);
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
@@ -192,7 +385,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
-      setActivePluginRegistry(cached, cacheKey);
+      activatePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -219,6 +412,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     diagnostics: discovery.diagnostics,
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
+  warnWhenAllowlistIsOpen({
+    logger,
+    pluginsEnabled: normalized.enabled,
+    allow: normalized.allow,
+    discoverablePlugins: manifestRegistry.plugins.map((plugin) => ({
+      id: plugin.id,
+      source: plugin.source,
+      origin: plugin.origin,
+    })),
+  });
+  const provenance = buildProvenanceIndex({
+    config: cfg,
+    normalizedLoadPaths: normalized.loadPaths,
+  });
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
   let jitiLoader: ReturnType<typeof createJiti> | null = null;
@@ -279,7 +486,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    const enableState = resolveEnableState(pluginId, candidate.origin, normalized);
+    const enableState = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: candidate.origin,
+      config: normalized,
+      rootConfig: cfg,
+    });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
       id: pluginId,
@@ -295,6 +507,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
+    const pushPluginLoadError = (message: string) => {
+      record.status = "error";
+      record.error = message;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
+    };
 
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -305,33 +529,39 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (!manifestRecord.configSchema) {
-      record.status = "error";
-      record.error = "missing config schema";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("missing config schema");
       continue;
     }
 
+    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const opened = openBoundaryFileSync({
+      absolutePath: candidate.source,
+      rootPath: pluginRoot,
+      boundaryLabel: "plugin root",
+      rejectHardlinks: candidate.origin !== "bundled",
+      skipLexicalRootCheck: true,
+    });
+    if (!opened.ok) {
+      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      continue;
+    }
+    const safeSource = opened.path;
+    fs.closeSync(opened.fd);
+
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      mod = getJiti()(safeSource) as OpenClawPluginModule;
     } catch (err) {
-      logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
-      record.status = "error";
-      record.error = String(err);
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `failed to load plugin: ${String(err)}`,
+      recordPluginError({
+        logger,
+        registry,
+        record,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        error: err,
+        logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
+        diagnosticMessagePrefix: "failed to load plugin: ",
       });
       continue;
     }
@@ -396,16 +626,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      record.status = "error";
-      record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
       continue;
     }
 
@@ -417,16 +638,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (typeof register !== "function") {
       logger.error(`[plugins] ${record.id} missing register/activate export`);
-      record.status = "error";
-      record.error = "plugin export missing register/activate";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("plugin export missing register/activate");
       continue;
     }
 
@@ -448,18 +660,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
-      logger.error(
-        `[plugins] ${record.id} failed during register from ${record.source}: ${String(err)}`,
-      );
-      record.status = "error";
-      record.error = String(err);
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin failed during register: ${String(err)}`,
+      recordPluginError({
+        logger,
+        registry,
+        record,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        error: err,
+        logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
+        diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
   }
@@ -471,10 +681,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
 
+  warnAboutUntrackedLoadedPlugins({
+    registry,
+    provenance,
+    logger,
+  });
+
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
-  setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
+  activatePluginRegistry(registry, cacheKey);
   return registry;
+}
+
+function safeRealpathOrResolve(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
 }

@@ -10,13 +10,27 @@ import {
 } from "../agents/model-catalog.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import {
+  mergeInboundPathRoots,
+  resolveIMessageAttachmentRoots,
+} from "../media/inbound-path-policy.js";
+import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import { MediaAttachmentCache, normalizeAttachments, selectAttachments } from "./attachments.js";
+import {
+  MediaAttachmentCache,
+  type MediaAttachmentCacheOptions,
+  normalizeAttachments,
+  selectAttachments,
+} from "./attachments.js";
 import {
   AUTO_AUDIO_KEY_PROVIDERS,
   AUTO_IMAGE_KEY_PROVIDERS,
@@ -69,8 +83,24 @@ export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
   return normalizeAttachments(ctx);
 }
 
-export function createMediaAttachmentCache(attachments: MediaAttachment[]): MediaAttachmentCache {
-  return new MediaAttachmentCache(attachments);
+export function resolveMediaAttachmentLocalRoots(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+}): readonly string[] {
+  return mergeInboundPathRoots(
+    getDefaultMediaLocalRoots(),
+    resolveIMessageAttachmentRoots({
+      cfg: params.cfg,
+      accountId: params.ctx.AccountId,
+    }),
+  );
+}
+
+export function createMediaAttachmentCache(
+  attachments: MediaAttachment[],
+  options?: MediaAttachmentCacheOptions,
+): MediaAttachmentCache {
+  return new MediaAttachmentCache(attachments, options);
 }
 
 const binaryCache = new Map<string, Promise<string | null>>();
@@ -391,6 +421,35 @@ async function resolveKeyEntry(params: {
   return null;
 }
 
+function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
+  const refs: string[] = [];
+  const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
+  if (primary?.trim()) {
+    refs.push(primary.trim());
+  }
+  for (const fb of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
+    if (fb?.trim()) {
+      refs.push(fb.trim());
+    }
+  }
+  if (refs.length === 0) {
+    return [];
+  }
+  const entries: MediaUnderstandingModelConfig[] = [];
+  for (const ref of refs) {
+    const slashIdx = ref.indexOf("/");
+    if (slashIdx <= 0 || slashIdx >= ref.length - 1) {
+      continue;
+    }
+    entries.push({
+      type: "provider",
+      provider: ref.slice(0, slashIdx),
+      model: ref.slice(slashIdx + 1),
+    });
+  }
+  return entries;
+}
+
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -406,6 +465,12 @@ async function resolveAutoEntries(params: {
     const localAudio = await resolveLocalAudioEntry();
     if (localAudio) {
       return [localAudio];
+    }
+  }
+  if (params.capability === "image") {
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
+    if (imageModelEntries.length > 0) {
+      return imageModelEntries;
     }
   }
   const gemini = await resolveGeminiCliEntry(params.capability);

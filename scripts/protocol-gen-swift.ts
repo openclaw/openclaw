@@ -114,11 +114,10 @@ function emitStruct(name: string, schema: JsonSchema): string {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   const lines: string[] = [];
-  lines.push(`public struct ${name}: Codable, Sendable {`);
   if (Object.keys(props).length === 0) {
-    lines.push("}\n");
-    return lines.join("\n");
+    return `public struct ${name}: Codable, Sendable {}\n`;
   }
+  lines.push(`public struct ${name}: Codable, Sendable {`);
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
     const propName = safeName(key);
@@ -139,14 +138,15 @@ function emitStruct(name: string, schema: JsonSchema): string {
           return `        ${propName}: ${swiftType(prop, true)}${req ? "" : "?"}`;
         })
         .join(",\n") +
-      "\n    ) {\n" +
+      ")\n" +
+      "    {\n" +
       Object.entries(props)
         .map(([key]) => {
           const propName = safeName(key);
           return `        self.${propName} = ${propName}`;
         })
         .join("\n") +
-      "\n    }\n" +
+      "\n    }\n\n" +
       "    private enum CodingKeys: String, CodingKey {\n" +
       codingKeys.join("\n") +
       "\n    }\n}",
@@ -173,11 +173,11 @@ function emitGatewayFrame(): string {
         let type = try typeContainer.decode(String.self, forKey: .type)
         switch type {
         case "req":
-            self = .req(try RequestFrame(from: decoder))
+            self = try .req(RequestFrame(from: decoder))
         case "res":
-            self = .res(try ResponseFrame(from: decoder))
+            self = try .res(ResponseFrame(from: decoder))
         case "event":
-            self = .event(try EventFrame(from: decoder))
+            self = try .event(EventFrame(from: decoder))
         default:
             let container = try decoder.singleValueContainer()
             let raw = try container.decode([String: AnyCodable].self)
@@ -187,10 +187,13 @@ function emitGatewayFrame(): string {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .req(let v): try v.encode(to: encoder)
-        case .res(let v): try v.encode(to: encoder)
-        case .event(let v): try v.encode(to: encoder)
-        case .unknown(_, let raw):
+        case let .req(v):
+            try v.encode(to: encoder)
+        case let .res(v):
+            try v.encode(to: encoder)
+        case let .event(v):
+            try v.encode(to: encoder)
+        case let .unknown(_, raw):
             var container = encoder.singleValueContainer()
             try container.encode(raw)
         }
@@ -201,7 +204,7 @@ function emitGatewayFrame(): string {
     "public enum GatewayFrame: Codable, Sendable {",
     ...caseLines,
     "    case unknown(type: String, raw: [String: AnyCodable])",
-    initLines,
+    initLines.trimEnd(),
     "}",
     "",
   ].join("\n");

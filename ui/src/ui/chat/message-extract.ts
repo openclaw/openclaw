@@ -1,60 +1,28 @@
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
-
-/**
- * Strip inline directive tags (`[[reply_to_current]]`, `[[reply_to:<id>]]`,
- * `[[audio_as_voice]]`) that should never be rendered to the user.
- * Matches the same patterns as `src/utils/directive-tags.ts`.
- */
-function stripDirectiveTags(text: string): string {
-  return text
-    .replace(/\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+|audio_as_voice)\s*\]\]/gi, "")
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
-}
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+function processMessageText(text: string, role: string): string {
+  const shouldStripInboundMetadata = role.toLowerCase() === "user";
+  if (role === "assistant") {
+    return stripThinkingTags(text);
+  }
+  return shouldStripInboundMetadata
+    ? stripInboundMetadata(stripEnvelope(text))
+    : stripEnvelope(text);
+}
+
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const content = m.content;
-  if (typeof content === "string") {
-    let processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
-    if (role === "assistant") {
-      processed = stripDirectiveTags(processed);
-    }
-    return processed;
+  const raw = extractRawText(message);
+  if (!raw) {
+    return null;
   }
-  if (Array.isArray(content)) {
-    const parts = content
-      .map((p) => {
-        const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
-          return item.text;
-        }
-        return null;
-      })
-      .filter((v): v is string => typeof v === "string");
-    if (parts.length > 0) {
-      const joined = parts.join("\n");
-      let processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
-      if (role === "assistant") {
-        processed = stripDirectiveTags(processed);
-      }
-      return processed;
-    }
-  }
-  if (typeof m.text === "string") {
-    let processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
-    if (role === "assistant") {
-      processed = stripDirectiveTags(processed);
-    }
-    return processed;
-  }
-  return null;
+  return processMessageText(raw, role);
 }
 
 export function extractTextCached(message: unknown): string | null {

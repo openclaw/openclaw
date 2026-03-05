@@ -1,4 +1,5 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {
@@ -35,8 +36,8 @@ export async function fetchBlueBubblesServerInfo(params: {
   accountId?: string;
   timeoutMs?: number;
 }): Promise<BlueBubblesServerInfo | null> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl || !password) {
     return null;
   }
@@ -96,6 +97,14 @@ export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolea
   return info.private_api;
 }
 
+export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
+  return status === true;
+}
+
+export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
+  return isBlueBubblesPrivateApiStatusEnabled(getCachedBlueBubblesPrivateApiStatus(accountId));
+}
+
 /**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */
@@ -130,8 +139,8 @@ export async function probeBlueBubbles(params: {
   password?: string | null;
   timeoutMs?: number;
 }): Promise<BlueBubblesProbe> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl) {
     return { ok: false, error: "serverUrl not configured" };
   }

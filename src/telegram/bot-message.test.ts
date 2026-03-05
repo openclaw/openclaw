@@ -15,8 +15,8 @@ import { createTelegramMessageProcessor } from "./bot-message.js";
 
 describe("telegram bot message processor", () => {
   beforeEach(() => {
-    buildTelegramMessageContext.mockReset();
-    dispatchTelegramMessage.mockReset();
+    buildTelegramMessageContext.mockClear();
+    dispatchTelegramMessage.mockClear();
   });
 
   const baseDeps = {
@@ -39,13 +39,29 @@ describe("telegram bot message processor", () => {
     streamMode: "partial",
     textLimit: 4096,
     opts: {},
-  };
+  } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
+
+  async function processSampleMessage(
+    processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+  ) {
+    await processMessage(
+      {
+        message: {
+          chat: { id: 123, type: "private", title: "chat" },
+          message_id: 456,
+        },
+      } as unknown as Parameters<typeof processMessage>[0],
+      [],
+      [],
+      {},
+    );
+  }
 
   it("dispatches when context is available", async () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
+    await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
@@ -53,7 +69,7 @@ describe("telegram bot message processor", () => {
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
+    await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 });

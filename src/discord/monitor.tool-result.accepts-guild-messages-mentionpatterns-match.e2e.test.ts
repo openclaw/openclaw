@@ -1,7 +1,7 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import {
   dispatchMock,
@@ -11,6 +11,7 @@ import {
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 const loadConfigMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -23,9 +24,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 beforeEach(() => {
   vi.useRealTimers();
-  sendMock.mockReset().mockResolvedValue(undefined);
-  updateLastRouteMock.mockReset();
-  dispatchMock.mockReset().mockImplementation(async (params: unknown) => {
+  sendMock.mockClear().mockResolvedValue(undefined);
+  updateLastRouteMock.mockClear();
+  dispatchMock.mockClear().mockImplementation(async (params: unknown) => {
     if (
       typeof params === "object" &&
       params !== null &&
@@ -54,15 +55,21 @@ beforeEach(() => {
     }
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  loadConfigMock.mockReset().mockReturnValue({});
+  readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+  loadConfigMock.mockClear().mockReturnValue({});
   __resetDiscordChannelInfoCacheForTest();
 });
 
 const MENTION_PATTERNS_TEST_TIMEOUT_MS = process.platform === "win32" ? 90_000 : 60_000;
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+let createDiscordMessageHandler: typeof import("./monitor.js").createDiscordMessageHandler;
+let createDiscordNativeCommand: typeof import("./monitor.js").createDiscordNativeCommand;
+
+beforeAll(async () => {
+  ({ createDiscordMessageHandler, createDiscordNativeCommand } = await import("./monitor.js"));
+});
 
 function makeRuntime() {
   return {
@@ -75,7 +82,6 @@ function makeRuntime() {
 }
 
 async function createHandler(cfg: LoadedConfig) {
-  const { createDiscordMessageHandler } = await import("./monitor.js");
   return createDiscordMessageHandler({
     cfg,
     discordConfig: cfg.channels?.discord,
@@ -91,6 +97,7 @@ async function createHandler(cfg: LoadedConfig) {
     dmEnabled: true,
     groupDmEnabled: false,
     guildEntries: cfg.channels?.discord?.guilds,
+    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -129,6 +136,77 @@ function createDefaultThreadConfig(): LoadedConfig {
       },
     },
   } as LoadedConfig;
+}
+
+function createGuildChannelPolicyConfig(requireMention: boolean) {
+  return {
+    dm: { enabled: true, policy: "open" as const },
+    groupPolicy: "open" as const,
+    guilds: { "*": { requireMention } },
+  };
+}
+
+function createMentionRequiredGuildConfig(
+  params: {
+    messages?: LoadedConfig["messages"];
+  } = {},
+): LoadedConfig {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: "/tmp/openclaw",
+      },
+    },
+    session: { store: "/tmp/openclaw-sessions.json" },
+    channels: { discord: createGuildChannelPolicyConfig(true) },
+    ...(params.messages ? { messages: params.messages } : {}),
+  } as LoadedConfig;
+}
+
+function createGuildTextClient() {
+  return {
+    fetchChannel: vi.fn().mockResolvedValue({
+      type: ChannelType.GuildText,
+      name: "general",
+    }),
+  } as unknown as Client;
+}
+
+function createGuildMessageEvent(params: {
+  messageId: string;
+  content: string;
+  messagePatch?: Record<string, unknown>;
+  eventPatch?: Record<string, unknown>;
+}) {
+  const messageBase = createDiscordMessageMeta();
+  return {
+    message: {
+      id: params.messageId,
+      content: params.content,
+      channelId: "c1",
+      ...messageBase,
+      author: { id: "u1", bot: false, username: "Ada" },
+      ...params.messagePatch,
+    },
+    author: { id: "u1", bot: false, username: "Ada" },
+    member: { nickname: "Ada" },
+    guild: { id: "g1", name: "Guild" },
+    guild_id: "g1",
+    ...params.eventPatch,
+  };
+}
+
+function createDiscordMessageMeta() {
+  return {
+    timestamp: new Date().toISOString(),
+    type: MessageType.Default,
+    attachments: [],
+    embeds: [],
+    mentionedEveryone: false,
+    mentionedUsers: [],
+    mentionedRoles: [],
+  };
 }
 
 function createThreadChannel(params: { includeStarter?: boolean } = {}) {
@@ -176,19 +254,14 @@ function createThreadClient(
 }
 
 function createThreadEvent(messageId: string, channel?: unknown) {
+  const messageBase = createDiscordMessageMeta();
   return {
     message: {
       id: messageId,
       content: "thread reply",
       channelId: "t1",
       channel,
-      timestamp: new Date().toISOString(),
-      type: MessageType.Default,
-      attachments: [],
-      embeds: [],
-      mentionedEveryone: false,
-      mentionedUsers: [],
-      mentionedRoles: [],
+      ...messageBase,
       author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
     },
     author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
@@ -198,60 +271,31 @@ function createThreadEvent(messageId: string, channel?: unknown) {
   };
 }
 
+function captureThreadDispatchCtx() {
+  return captureNextDispatchCtx<{
+    SessionKey?: string;
+    ParentSessionKey?: string;
+    ThreadStarterBody?: string;
+    ThreadLabel?: string;
+  }>();
+}
+
 describe("discord tool result dispatch", () => {
   it(
     "accepts guild messages when mentionPatterns match",
     async () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: "/tmp/openclaw",
-          },
-        },
-        session: { store: "/tmp/openclaw-sessions.json" },
-        channels: {
-          discord: {
-            dm: { enabled: true, policy: "open" },
-            groupPolicy: "open",
-            guilds: { "*": { requireMention: true } },
-          },
-        },
+      const cfg = createMentionRequiredGuildConfig({
         messages: {
           responsePrefix: "PFX",
           groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
         },
-      } as ReturnType<typeof import("../config/config.js").loadConfig>;
+      });
 
       const handler = await createHandler(cfg);
-
-      const client = {
-        fetchChannel: vi.fn().mockResolvedValue({
-          type: ChannelType.GuildText,
-          name: "general",
-        }),
-      } as unknown as Client;
+      const client = createGuildTextClient();
 
       await handler(
-        {
-          message: {
-            id: "m2",
-            content: "openclaw: hello",
-            channelId: "c1",
-            timestamp: new Date().toISOString(),
-            type: MessageType.Default,
-            attachments: [],
-            embeds: [],
-            mentionedEveryone: false,
-            mentionedUsers: [],
-            mentionedRoles: [],
-            author: { id: "u1", bot: false, username: "Ada" },
-          },
-          author: { id: "u1", bot: false, username: "Ada" },
-          member: { nickname: "Ada" },
-          guild: { id: "g1", name: "Guild" },
-          guild_id: "g1",
-        },
+        createGuildMessageEvent({ messageId: "m2", content: "openclaw: hello" }),
         client,
       );
 
@@ -265,7 +309,6 @@ describe("discord tool result dispatch", () => {
     "skips tool results for native slash commands",
     { timeout: MENTION_PATTERNS_TEST_TIMEOUT_MS },
     async () => {
-      const { createDiscordNativeCommand } = await import("./monitor.js");
       const cfg = {
         agents: {
           defaults: {
@@ -291,6 +334,7 @@ describe("discord tool result dispatch", () => {
         accountId: "default",
         sessionPrefix: "discord:slash",
         ephemeralDefault: true,
+        threadBindings: createNoopThreadBindingManager("default"),
       });
 
       const reply = vi.fn().mockResolvedValue(undefined);
@@ -316,75 +360,37 @@ describe("discord tool result dispatch", () => {
   );
 
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: { "*": { requireMention: true } },
-        },
-      },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+    const cfg = createMentionRequiredGuildConfig();
 
     const handler = await createHandler(cfg);
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.GuildText,
-        name: "general",
-      }),
-    } as unknown as Client;
+    const client = createGuildTextClient();
 
     await handler(
-      {
-        message: {
-          id: "m3",
-          content: "following up",
-          channelId: "c1",
-          timestamp: new Date().toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada" },
+      createGuildMessageEvent({
+        messageId: "m3",
+        content: "following up",
+        messagePatch: {
           referencedMessage: {
             id: "m2",
             channelId: "c1",
             content: "bot reply",
-            timestamp: new Date().toISOString(),
-            type: MessageType.Default,
-            attachments: [],
-            embeds: [],
-            mentionedEveryone: false,
-            mentionedUsers: [],
-            mentionedRoles: [],
+            ...createDiscordMessageMeta(),
             author: { id: "bot-id", bot: true, username: "OpenClaw" },
           },
         },
-        author: { id: "u1", bot: false, username: "Ada" },
-        member: { nickname: "Ada" },
-        guild: { id: "g1", name: "Guild" },
-        guild_id: "g1",
-        channel: { id: "c1", type: ChannelType.GuildText },
-        client,
-        data: {
-          id: "m3",
-          content: "following up",
-          channel_id: "c1",
-          guild_id: "g1",
-          type: MessageType.Default,
-          mentions: [],
+        eventPatch: {
+          channel: { id: "c1", type: ChannelType.GuildText },
+          client,
+          data: {
+            id: "m3",
+            content: "following up",
+            channel_id: "c1",
+            guild_id: "g1",
+            type: MessageType.Default,
+            mentions: [],
+          },
         },
-      },
+      }),
       client,
     );
 
@@ -394,12 +400,7 @@ describe("discord tool result dispatch", () => {
   });
 
   it("forks thread sessions and injects starter context", async () => {
-    const getCapturedCtx = captureNextDispatchCtx<{
-      SessionKey?: string;
-      ParentSessionKey?: string;
-      ThreadStarterBody?: string;
-      ThreadLabel?: string;
-    }>();
+    const getCapturedCtx = captureThreadDispatchCtx();
     const cfg = createDefaultThreadConfig();
     const handler = await createHandler(cfg);
     const threadChannel = createThreadChannel({ includeStarter: true });
@@ -442,23 +443,10 @@ describe("discord tool result dispatch", () => {
   });
 
   it("treats forum threads as distinct sessions without channel payloads", async () => {
-    const getCapturedCtx = captureNextDispatchCtx<{
-      SessionKey?: string;
-      ParentSessionKey?: string;
-      ThreadStarterBody?: string;
-      ThreadLabel?: string;
-    }>();
+    const getCapturedCtx = captureThreadDispatchCtx();
 
     const cfg = {
-      agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: { "*": { requireMention: false } },
-        },
-      },
+      ...createDefaultThreadConfig(),
       routing: { allowFrom: [] },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

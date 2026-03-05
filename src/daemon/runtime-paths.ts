@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -17,6 +18,12 @@ const VERSION_MANAGER_MARKERS = [
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
+}
+
+function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
+  const pathModule = getPathModule(platform);
+  const base = pathModule.basename(execPath).toLowerCase();
+  return base === "node" || base === "node.exe";
 }
 
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
@@ -146,6 +153,7 @@ export function renderSystemNodeWarning(
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
 }
+export { resolveStableNodePath };
 
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
@@ -160,12 +168,13 @@ export async function resolvePreferredNodePath(params: {
 
   // Prefer the node that is currently running `openclaw gateway install`.
   // This respects the user's active version manager (fnm/nvm/volta/etc.).
+  const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
-  if (currentExecPath) {
+  if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      return currentExecPath;
+      return resolveStableNodePath(currentExecPath);
     }
   }
 

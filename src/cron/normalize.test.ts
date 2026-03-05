@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({
@@ -19,32 +20,74 @@ function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   expect(schedule.at).toBe(new Date(Date.parse("2026-01-12T18:00:00Z")).toISOString());
 }
 
+function expectAnnounceDeliveryTarget(
+  delivery: Record<string, unknown>,
+  params: { channel: string; to: string },
+): void {
+  expect(delivery.mode).toBe("announce");
+  expect(delivery.channel).toBe(params.channel);
+  expect(delivery.to).toBe(params.to);
+}
+
+function expectPayloadDeliveryHintsCleared(payload: Record<string, unknown>): void {
+  expect(payload.channel).toBeUndefined();
+  expect(payload.deliver).toBeUndefined();
+}
+
+function normalizeIsolatedAgentTurnCreateJob(params: {
+  name: string;
+  payload?: Record<string, unknown>;
+  delivery?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return normalizeCronJobCreate({
+    name: params.name,
+    enabled: true,
+    schedule: { kind: "cron", expr: "* * * * *" },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: {
+      kind: "agentTurn",
+      message: "hi",
+      ...params.payload,
+    },
+    ...(params.delivery ? { delivery: params.delivery } : {}),
+  }) as unknown as Record<string, unknown>;
+}
+
+function normalizeMainSystemEventCreateJob(params: {
+  name: string;
+  schedule: Record<string, unknown>;
+}): Record<string, unknown> {
+  return normalizeCronJobCreate({
+    name: params.name,
+    enabled: true,
+    schedule: params.schedule,
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: {
+      kind: "systemEvent",
+      text: "tick",
+    },
+  }) as unknown as Record<string, unknown>;
+}
+
 describe("normalizeCronJobCreate", () => {
   it("maps legacy payload.provider to payload.channel and strips provider", () => {
-    const normalized = normalizeCronJobCreate({
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "legacy",
-      enabled: true,
-      schedule: { kind: "cron", expr: "* * * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "now",
       payload: {
-        kind: "agentTurn",
-        message: "hi",
         deliver: true,
         provider: " TeLeGrAm ",
         to: "7200373102",
       },
-    }) as unknown as Record<string, unknown>;
+    });
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.channel).toBeUndefined();
-    expect(payload.deliver).toBeUndefined();
+    expectPayloadDeliveryHintsCleared(payload);
     expect("provider" in payload).toBe(false);
 
     const delivery = normalized.delivery as Record<string, unknown>;
-    expect(delivery.mode).toBe("announce");
-    expect(delivery.channel).toBe("telegram");
-    expect(delivery.to).toBe("7200373102");
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
   it("trims agentId and drops null", () => {
@@ -104,29 +147,20 @@ describe("normalizeCronJobCreate", () => {
   });
 
   it("canonicalizes payload.channel casing", () => {
-    const normalized = normalizeCronJobCreate({
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "legacy provider",
-      enabled: true,
-      schedule: { kind: "cron", expr: "* * * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "now",
       payload: {
-        kind: "agentTurn",
-        message: "hi",
         deliver: true,
         channel: "Telegram",
         to: "7200373102",
       },
-    }) as unknown as Record<string, unknown>;
+    });
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.channel).toBeUndefined();
-    expect(payload.deliver).toBeUndefined();
+    expectPayloadDeliveryHintsCleared(payload);
 
     const delivery = normalized.delivery as Record<string, unknown>;
-    expect(delivery.mode).toBe("announce");
-    expect(delivery.channel).toBe("telegram");
-    expect(delivery.to).toBe("7200373102");
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
@@ -135,6 +169,38 @@ describe("normalizeCronJobCreate", () => {
 
   it("coerces schedule.atMs string to schedule.at (UTC)", () => {
     expectNormalizedAtSchedule({ kind: "at", atMs: "2026-01-12T18:00:00" });
+  });
+
+  it("migrates legacy schedule.cron into schedule.expr", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "legacy-cron-field",
+      schedule: { kind: "cron", cron: "*/10 * * * *", tz: "UTC" },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("*/10 * * * *");
+    expect(schedule.cron).toBeUndefined();
+  });
+
+  it("defaults cron stagger for recurring top-of-hour schedules", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "hourly",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+  });
+
+  it("preserves explicit exact cron schedule", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "exact",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(0);
   });
 
   it("defaults deleteAfterRun for one-shot schedules", () => {
@@ -154,27 +220,46 @@ describe("normalizeCronJobCreate", () => {
   });
 
   it("normalizes delivery mode and channel", () => {
-    const normalized = normalizeCronJobCreate({
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery",
-      enabled: true,
-      schedule: { kind: "cron", expr: "* * * * *" },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: {
-        kind: "agentTurn",
-        message: "hi",
-      },
       delivery: {
         mode: " ANNOUNCE ",
         channel: " TeLeGrAm ",
         to: " 7200373102 ",
       },
-    }) as unknown as Record<string, unknown>;
+    });
 
     const delivery = normalized.delivery as Record<string, unknown>;
-    expect(delivery.mode).toBe("announce");
-    expect(delivery.channel).toBe("telegram");
-    expect(delivery.to).toBe("7200373102");
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+  });
+
+  it("normalizes delivery accountId and strips blanks", () => {
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
+      name: "delivery account",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003816714067",
+        accountId: " coordinator ",
+      },
+    });
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.accountId).toBe("coordinator");
+  });
+
+  it("strips empty accountId from delivery", () => {
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
+      name: "empty account",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        accountId: "   ",
+      },
+    });
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect("accountId" in delivery).toBe(false);
   });
 
   it("normalizes webhook delivery mode and target URL", () => {
@@ -197,15 +282,9 @@ describe("normalizeCronJobCreate", () => {
   });
 
   it("defaults isolated agentTurn delivery to announce", () => {
-    const normalized = normalizeCronJobCreate({
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "default-announce",
-      enabled: true,
-      schedule: { kind: "cron", expr: "* * * * *" },
-      payload: {
-        kind: "agentTurn",
-        message: "hi",
-      },
-    }) as unknown as Record<string, unknown>;
+    });
 
     const delivery = normalized.delivery as Record<string, unknown>;
     expect(delivery.mode).toBe("announce");
@@ -227,9 +306,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const delivery = normalized.delivery as Record<string, unknown>;
-    expect(delivery.mode).toBe("announce");
-    expect(delivery.channel).toBe("telegram");
-    expect(delivery.to).toBe("7200373102");
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
     expect(delivery.bestEffort).toBe(true);
   });
 
@@ -300,6 +377,18 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.allowUnsafeExternalContent).toBe(true);
   });
 
+  it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy no-timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      timeoutSeconds: 0,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0);
+  });
+
   it("coerces sessionTarget and wakeMode casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "casing",
@@ -364,5 +453,14 @@ describe("normalizeCronJobPatch", () => {
       sessionKey: null,
     }) as unknown as Record<string, unknown>;
     expect(cleared.sessionKey).toBeNull();
+  });
+
+  it("normalizes cron stagger values in patch schedules", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "30000" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.staggerMs).toBe(30_000);
   });
 });

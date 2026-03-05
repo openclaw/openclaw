@@ -39,7 +39,7 @@ describe("buildAgentSystemPrompt uses sanitized workspace/sandbox strings", () =
         enabled: true,
         containerWorkspaceDir: "/work\u2029space",
         workspaceDir: "/host\nspace",
-        workspaceAccess: "read-write",
+        workspaceAccess: "rw",
         agentWorkspaceMount: "/mnt\u2028mount",
         browserNoVncUrl: "http://example.test/\nui",
       },

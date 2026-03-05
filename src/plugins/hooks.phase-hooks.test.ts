@@ -4,7 +4,7 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
-  TypedPluginHookRegistration,
+  PluginHookRegistration,
 } from "./types.js";
 
 function addTypedHook(
@@ -23,7 +23,7 @@ function addTypedHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 describe("phase hooks merger", () => {

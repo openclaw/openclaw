@@ -6,15 +6,17 @@ import {
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
+import { buildSecretInputSchema } from "./secret-input.js";
 
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
-    botToken: z.string().optional(),
+    botToken: buildSecretInputSchema().optional(),
     baseUrl: z.string().optional(),
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
@@ -49,6 +51,7 @@ const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, 
 
 export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,

@@ -51,7 +51,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     });
 
     // Check usage in meta
-    const usage = result.meta.agentMeta.usage;
+    const usage = result.meta.agentMeta?.usage;
     expect(usage).toBeDefined();
 
     // Check if total matches the last turn's total (200)

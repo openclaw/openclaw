@@ -2,6 +2,7 @@ import {
   isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
+  type ParsedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "openclaw/plugin-sdk";
@@ -14,11 +15,7 @@ export type BlueBubblesTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: BlueBubblesService };
 
-export type BlueBubblesAllowTarget =
-  | { kind: "chat_id"; chatId: number }
-  | { kind: "chat_guid"; chatGuid: string }
-  | { kind: "chat_identifier"; chatIdentifier: string }
-  | { kind: "handle"; handle: string };
+export type BlueBubblesAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
@@ -76,6 +73,40 @@ function looksLikeRawChatIdentifier(value: string): boolean {
     return true;
   }
   return CHAT_IDENTIFIER_UUID_RE.test(trimmed) || CHAT_IDENTIFIER_HEX_RE.test(trimmed);
+}
+
+function parseGroupTarget(params: {
+  trimmed: string;
+  lower: string;
+  requireValue: boolean;
+}): { kind: "chat_id"; chatId: number } | { kind: "chat_guid"; chatGuid: string } | null {
+  if (!params.lower.startsWith("group:")) {
+    return null;
+  }
+  const value = stripPrefix(params.trimmed, "group:");
+  const chatId = Number.parseInt(value, 10);
+  if (Number.isFinite(chatId)) {
+    return { kind: "chat_id", chatId };
+  }
+  if (value) {
+    return { kind: "chat_guid", chatGuid: value };
+  }
+  if (params.requireValue) {
+    throw new Error("group target is required");
+  }
+  return null;
+}
+
+function parseRawChatIdentifierTarget(
+  trimmed: string,
+): { kind: "chat_identifier"; chatIdentifier: string } | null {
+  if (/^chat\d+$/i.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+  if (looksLikeRawChatIdentifier(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+  return null;
 }
 
 export function normalizeBlueBubblesHandle(raw: string): string {
@@ -239,16 +270,9 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
     return chatTarget;
   }
 
-  if (lower.startsWith("group:")) {
-    const value = stripPrefix(trimmed, "group:");
-    const chatId = Number.parseInt(value, 10);
-    if (Number.isFinite(chatId)) {
-      return { kind: "chat_id", chatId };
-    }
-    if (!value) {
-      throw new Error("group target is required");
-    }
-    return { kind: "chat_guid", chatGuid: value };
+  const groupTarget = parseGroupTarget({ trimmed, lower, requireValue: true });
+  if (groupTarget) {
+    return groupTarget;
   }
 
   const rawChatGuid = parseRawChatGuid(trimmed);
@@ -256,15 +280,9 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
     return { kind: "chat_guid", chatGuid: rawChatGuid };
   }
 
-  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
-  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
-  if (/^chat\d+$/i.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-
-  // Handle UUID/hex chat identifiers (e.g., "8b9c1a10536d4d86a336ea03ab7151cc")
-  if (looksLikeRawChatIdentifier(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  const rawChatIdentifierTarget = parseRawChatIdentifierTarget(trimmed);
+  if (rawChatIdentifierTarget) {
+    return rawChatIdentifierTarget;
   }
 
   return { kind: "handle", to: trimmed, service: "auto" };
@@ -298,26 +316,14 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
     return chatTarget;
   }
 
-  if (lower.startsWith("group:")) {
-    const value = stripPrefix(trimmed, "group:");
-    const chatId = Number.parseInt(value, 10);
-    if (Number.isFinite(chatId)) {
-      return { kind: "chat_id", chatId };
-    }
-    if (value) {
-      return { kind: "chat_guid", chatGuid: value };
-    }
+  const groupTarget = parseGroupTarget({ trimmed, lower, requireValue: false });
+  if (groupTarget) {
+    return groupTarget;
   }
 
-  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
-  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
-  if (/^chat\d+$/i.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-
-  // Handle UUID/hex chat identifiers (e.g., "8b9c1a10536d4d86a336ea03ab7151cc")
-  if (looksLikeRawChatIdentifier(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  const rawChatIdentifierTarget = parseRawChatIdentifierTarget(trimmed);
+  if (rawChatIdentifierTarget) {
+    return rawChatIdentifierTarget;
   }
 
   return { kind: "handle", handle: normalizeBlueBubblesHandle(trimmed) };

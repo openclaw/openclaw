@@ -11,6 +11,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
@@ -44,6 +45,19 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     }
   }
   return fallback;
+}
+
+function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
+  opts: T,
+  command?: Command,
+): T {
+  const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentPassword = inheritOptionFromParent<string>(command, "password");
+  return {
+    ...opts,
+    token: opts.token ?? parentToken,
+    password: opts.password ?? parentPassword,
+  };
 }
 
 function renderCostUsageSummary(summary: CostUsageSummary, days: number, rich: boolean): string[] {
@@ -103,11 +117,12 @@ export function registerGatewayCli(program: Command) {
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
-      .action(async (method, opts) => {
+      .action(async (method, opts, command) => {
         await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, opts, params);
-          if (opts.json) {
+          const result = await callGatewayCli(method, rpcOpts, params);
+          if (rpcOpts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
@@ -125,11 +140,12 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
-      .action(async (opts) => {
+      .action(async (opts, command) => {
         await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", opts, { days });
-          if (opts.json) {
+          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
+          if (rpcOpts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
@@ -146,10 +162,11 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("health")
       .description("Fetch Gateway health")
-      .action(async (opts) => {
+      .action(async (opts, command) => {
         await runGatewayCommand(async () => {
-          const result = await callGatewayCli("health", opts);
-          if (opts.json) {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const result = await callGatewayCli("health", rpcOpts);
+          if (rpcOpts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
@@ -180,9 +197,10 @@ export function registerGatewayCli(program: Command) {
     .option("--password <password>", "Gateway password (applies to all probes)")
     .option("--timeout <ms>", "Overall probe budget in ms", "3000")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runGatewayCommand(async () => {
-        await gatewayStatusCommand(opts, defaultRuntime);
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await gatewayStatusCommand(rpcOpts, defaultRuntime);
       });
     });
 

@@ -13,7 +13,9 @@ describe("heartbeat-wake", () => {
     initialReason: string;
     expectedRetryReason: string;
   }) {
-    setHeartbeatWakeHandler(params.handler);
+    setHeartbeatWakeHandler(
+      params.handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+    );
     requestHeartbeatNow({ reason: params.initialReason, coalesceMs: 0 });
 
     await vi.advanceTimersByTimeAsync(1);

@@ -51,7 +51,7 @@ Notes:
 - `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
   are used for discovered models (override if you know your model limits).
 
-## Setup (manual)
+## Onboarding
 
 1. Ensure AWS credentials are available on the **gateway host**:
 
@@ -122,7 +122,7 @@ export AWS_REGION=us-east-1
 
 Or attach the managed policy `AmazonBedrockFullAccess`.
 
-**Quick setup:**
+## Quick setup (AWS path)
 
 ```bash
 # 1. Create IAM role and instance profile

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
@@ -10,12 +10,23 @@ import {
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
 
+let doctorCommand: typeof import("./doctor.js").doctorCommand;
+let healthCommand: typeof import("./health.js").healthCommand;
+
 describe("doctor command", () => {
+  beforeAll(async () => {
+    ({ doctorCommand } = await import("./doctor.js"));
+    ({ healthCommand } = await import("./health.js"));
+  });
+
   it("runs legacy state migrations in yes mode without prompting", async () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await doctorCommand(runtime, { yes: true });
+    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+      runtime,
+      { yes: true },
+    );
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -25,7 +36,10 @@ describe("doctor command", () => {
     const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
-    await doctorCommand(runtime, { nonInteractive: true });
+    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+      runtime,
+      { nonInteractive: true },
+    );
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -34,14 +48,12 @@ describe("doctor command", () => {
   it("skips gateway restarts in non-interactive mode", async () => {
     mockDoctorConfigSnapshot();
 
-    const { healthCommand } = await import("./health.js");
-    healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
+    vi.mocked(healthCommand).mockRejectedValueOnce(new Error("gateway closed"));
 
     serviceIsLoaded.mockResolvedValueOnce(true);
     serviceRestart.mockClear();
     confirm.mockClear();
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
     expect(serviceRestart).not.toHaveBeenCalled();
@@ -73,7 +85,6 @@ describe("doctor command", () => {
       },
     });
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { yes: true });
 
     const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;

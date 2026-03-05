@@ -4,6 +4,7 @@ import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import { safeRealpathSync } from "./path-safety.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
@@ -18,20 +19,6 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
-
-function safeRealpathSync(rootDir: string, cache: Map<string, string>): string | null {
-  const cached = cache.get(rootDir);
-  if (cached) {
-    return cached;
-  }
-  try {
-    const resolved = fs.realpathSync(rootDir);
-    cache.set(rootDir, resolved);
-    return resolved;
-  } catch {
-    return null;
-  }
-}
 
 export type PluginManifestRecord = {
   id: string;
@@ -180,7 +167,8 @@ export function loadPluginManifestRegistry(params: {
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const manifestRes = loadPluginManifest(candidate.rootDir);
+    const rejectHardlinks = candidate.origin !== "bundled";
+    const manifestRes = loadPluginManifest(candidate.rootDir, rejectHardlinks);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
@@ -201,19 +189,30 @@ export function loadPluginManifestRegistry(params: {
     }
 
     const configSchema = manifest.configSchema;
-    const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
-    const schemaCacheKey = manifestMtime
-      ? `${manifestRes.manifestPath}:${manifestMtime}`
-      : manifestRes.manifestPath;
+    const schemaCacheKey = (() => {
+      if (!configSchema) {
+        return undefined;
+      }
+      const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
+      return manifestMtime
+        ? `${manifestRes.manifestPath}:${manifestMtime}`
+        : manifestRes.manifestPath;
+    })();
 
     const existing = seenIds.get(manifest.id);
     if (existing) {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
-      const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      const samePath = existing.candidate.rootDir === candidate.rootDir;
+      const samePlugin = (() => {
+        if (samePath) {
+          return true;
+        }
+        const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
+        const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
+        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      })();
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
