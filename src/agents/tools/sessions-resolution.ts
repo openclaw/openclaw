@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { logWarn } from "../../logger.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 
@@ -32,6 +33,97 @@ export function resolveInternalSessionKey(params: { key: string; alias: string; 
   return params.key;
 }
 
+const SESSIONS_LIST_RETRY_BACKOFF_MS = [40, 120] as const;
+
+type SpawnedSessionListResult = {
+  keys: Set<string>;
+  verified: boolean;
+};
+
+function summarizeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return String(err);
+}
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logSpawnVerificationFailOpen(params: {
+  reasonTag: "sessions_list_throw" | "sessions_list_unexpected_shape";
+  requesterSessionKey: string;
+  limit: number;
+  attempt: number;
+  detail: string;
+}) {
+  logWarn(
+    `subagent-spawn-verify: fail-open reason=${params.reasonTag} requester=${params.requesterSessionKey} limit=${params.limit} attempt=${params.attempt} detail=${params.detail}`,
+  );
+}
+
+async function listSpawnedSessionKeysForVerification(params: {
+  requesterSessionKey: string;
+  limit: number;
+}): Promise<SpawnedSessionListResult> {
+  const attempts = SESSIONS_LIST_RETRY_BACKOFF_MS.length + 1;
+  for (let index = 0; index < attempts; index += 1) {
+    const attempt = index + 1;
+    try {
+      const list = await callGateway<{ sessions?: unknown }>({
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          limit: params.limit,
+          spawnedBy: params.requesterSessionKey,
+        },
+      });
+
+      if (!Array.isArray(list?.sessions)) {
+        logSpawnVerificationFailOpen({
+          reasonTag: "sessions_list_unexpected_shape",
+          requesterSessionKey: params.requesterSessionKey,
+          limit: params.limit,
+          attempt,
+          detail: `sessionsType=${typeof list?.sessions}`,
+        });
+        return { keys: new Set(), verified: false };
+      }
+
+      const keys = list.sessions
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return "";
+          }
+          const key = (entry as { key?: unknown }).key;
+          return typeof key === "string" ? key : "";
+        })
+        .map((value) => value.trim())
+        .filter(Boolean);
+      return { keys: new Set(keys), verified: true };
+    } catch (err) {
+      if (index < SESSIONS_LIST_RETRY_BACKOFF_MS.length) {
+        await delayMs(SESSIONS_LIST_RETRY_BACKOFF_MS[index]);
+        continue;
+      }
+      logSpawnVerificationFailOpen({
+        reasonTag: "sessions_list_throw",
+        requesterSessionKey: params.requesterSessionKey,
+        limit: params.limit,
+        attempt,
+        detail: summarizeError(err),
+      });
+      return { keys: new Set(), verified: false };
+    }
+  }
+  return { keys: new Set(), verified: false };
+}
+
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
@@ -40,25 +132,11 @@ export async function listSpawnedSessionKeys(params: {
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.max(1, Math.floor(params.limit))
       : 500;
-  try {
-    const list = await callGateway<{ sessions: Array<{ key?: unknown }> }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        limit,
-        spawnedBy: params.requesterSessionKey,
-      },
-    });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions
-      .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return new Set(keys);
-  } catch {
-    return new Set();
-  }
+  const result = await listSpawnedSessionKeysForVerification({
+    requesterSessionKey: params.requesterSessionKey,
+    limit,
+  });
+  return result.keys;
 }
 
 export async function isRequesterSpawnedSessionVisible(params: {
@@ -69,11 +147,18 @@ export async function isRequesterSpawnedSessionVisible(params: {
   if (params.requesterSessionKey === params.targetSessionKey) {
     return true;
   }
-  const keys = await listSpawnedSessionKeys({
+  const limit =
+    typeof params.limit === "number" && Number.isFinite(params.limit)
+      ? Math.max(1, Math.floor(params.limit))
+      : 500;
+  const result = await listSpawnedSessionKeysForVerification({
     requesterSessionKey: params.requesterSessionKey,
-    limit: params.limit,
+    limit,
   });
-  return keys.has(params.targetSessionKey);
+  if (!result.verified) {
+    return true;
+  }
+  return result.keys.has(params.targetSessionKey);
 }
 
 export function shouldVerifyRequesterSpawnedSessionVisibility(params: {
