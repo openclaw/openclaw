@@ -256,6 +256,26 @@ export const buildTelegramMessageContext = async ({
   const configuredBinding = configuredRoute.configuredBinding;
   const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
+  const requiresExplicitAccountBinding = (candidate: ResolvedAgentRoute): boolean => {
+    const dmScope = freshCfg.session?.dmScope ?? "main";
+    return (
+      candidate.accountId !== DEFAULT_ACCOUNT_ID &&
+      candidate.matchedBy === "default" &&
+      dmScope === "main"
+    );
+  };
+  // Fail closed for named Telegram accounts when route resolution falls back to
+  // default-agent routing under dmScope=main; otherwise sessions can leak across
+  // bot accounts via a shared agent:<id>:main key.
+  if (requiresExplicitAccountBinding(route)) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "non-default account requires explicit binding",
+      target: route.accountId,
+    });
+    return null;
+  }
   // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
