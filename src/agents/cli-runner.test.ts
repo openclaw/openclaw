@@ -146,6 +146,7 @@ describe("runCliAgent with process supervisor", () => {
 
       const input = supervisorSpawnMock.mock.calls[0]?.[0] as { env?: Record<string, string> };
       expect(input.env?.[envKey]).toBe("from-config");
+      expect(process.env[envKey]).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env[envKey];

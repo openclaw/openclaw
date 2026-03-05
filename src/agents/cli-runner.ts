@@ -2,7 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyConfigEnvVars } from "../config/env-vars.js";
+import { collectConfigRuntimeEnvVars } from "../config/env-vars.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -89,9 +89,6 @@ export async function runCliAgent(params: {
   }
   const workspaceDir = resolvedWorkspace;
 
-  if (params.config) {
-    applyConfigEnvVars(params.config);
-  }
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config);
   if (!backendResolved) {
@@ -291,7 +288,13 @@ export async function runCliAgent(params: {
         }
 
         const env = (() => {
-          const next = { ...process.env, ...backend.env };
+          const next: NodeJS.ProcessEnv = { ...process.env };
+          const configEnv = collectConfigRuntimeEnvVars(params.config);
+          for (const [key, value] of Object.entries(configEnv)) {
+            if (next[key]?.trim()) continue;
+            next[key] = value;
+          }
+          Object.assign(next, backend.env);
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
           }
