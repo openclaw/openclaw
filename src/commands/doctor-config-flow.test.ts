@@ -373,6 +373,82 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
   });
 
+  it("does not inject top-level telegram policy defaults into account-only configs on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: "123:abc",
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["12345"],
+                allowFrom: ["12345"],
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          enabled?: boolean;
+          dmPolicy?: string;
+          groupPolicy?: string;
+          streaming?: string;
+          accounts: {
+            default: {
+              dmPolicy?: string;
+              streaming?: string;
+              groupPolicy?: string;
+              groupAllowFrom?: string[];
+              allowFrom?: string[];
+            };
+          };
+        };
+      };
+    };
+
+    expect(cfg.channels.telegram.enabled).toBe(true);
+    expect(cfg.channels.telegram.dmPolicy).toBeUndefined();
+    expect(cfg.channels.telegram.groupPolicy).toBeUndefined();
+    expect(cfg.channels.telegram.streaming).toBeUndefined();
+    expect(cfg.channels.telegram.accounts.default.dmPolicy).toBeUndefined();
+    expect(cfg.channels.telegram.accounts.default.streaming).toBeUndefined();
+    expect(cfg.channels.telegram.accounts.default.groupPolicy).toBe("allowlist");
+    expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["12345"]);
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["12345"]);
+  });
+
+  it("does not warn about empty top-level telegram group allowlist for account-only configs", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["12345"],
+              allowFrom: ["12345"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("silently dropped"),
+      ),
+    ).toBe(false);
+  });
+
   it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
