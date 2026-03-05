@@ -366,12 +366,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
-    deliver: async (incomingPayload) => {
-      const payload = enforceSlackDirectEitherOrAnswer({
-        questionText:
-          message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
-        payload: incomingPayload,
-      });
+    deliver: async (incomingPayload, info) => {
+      const payload =
+        info.kind === "final"
+          ? enforceSlackDirectEitherOrAnswer({
+              questionText:
+                message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
+              payload: incomingPayload,
+            })
+          : incomingPayload;
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
