@@ -44,10 +44,16 @@ param slackAppToken string
 @secure()
 param slackBotToken string
 
+@description('JSON array of Slack member IDs allowed to interact with the bot (e.g., \'["U12345","U67890"]\').')
+param slackAllowedMembers string = '["*"]'
+
 // 1. Log Analytics Workspace
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: '${environmentName}-logs'
   location: location
+  tags: {
+    Component: 'OpenClaw'
+  }
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -60,6 +66,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
   name: 'ocdata${uniqueString(resourceGroup().id)}'
   location: location
+  tags: {
+    Component: 'OpenClaw'
+  }
   sku: {
     name: 'Standard_LRS'
   }
@@ -75,6 +84,9 @@ resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2022-0
 resource containerAppEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
   name: environmentName
   location: location
+  tags: {
+    Component: 'OpenClaw'
+  }
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
@@ -106,6 +118,9 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
 resource openclawApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: containerAppName
   location: location
+  tags: {
+    Component: 'OpenClaw'
+  }
   dependsOn: [
     containerAppEnv::storage
   ]
@@ -200,11 +215,11 @@ When you call `web_search`, the tool result JSON contains a `citations` array wi
 3. Prefer URLs from the `citations` array (they are resolved/clean URLs).
 4. If `citations` is empty, use URLs from the References section in the content.
 AGENTS_EOF
-node --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '["0.0.0.0/0", "::/0"]'
+node --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]'
 node --require /tmp/patch.js openclaw.mjs config set gateway.controlUi.allowedOrigins "[\"$OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS\"]"
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.enabled true
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '"open"'
-node --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom '["*"]'
+node --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom "$OPENCLAW_SLACK_ALLOWED_MEMBERS"
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '"open"'
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
@@ -217,7 +232,7 @@ exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bi
             }
             {
               name: 'OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH'
-              value: 'true' // Bypasses the device pairing waiting room
+              value: 'false' // Requires gateway-token auth via the Control UI
             }
 
             // Slack Integration
@@ -259,6 +274,12 @@ exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bi
               name: 'OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS'
               // Dynamically whitelist the Azure Container App's own default hostname
               value: 'https://${containerAppName}.${containerAppEnv.properties.defaultDomain}'
+            }
+
+            // Slack Access Control
+            {
+              name: 'OPENCLAW_SLACK_ALLOWED_MEMBERS'
+              value: slackAllowedMembers
             }
           ]
           volumeMounts: [

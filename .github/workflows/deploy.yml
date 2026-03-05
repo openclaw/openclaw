@@ -69,3 +69,6 @@ jobs:
                       geminiApiKey=${{ secrets.GEMINI_API_KEY }}
                       slackAppToken=${{ secrets.SLACK_APP_TOKEN }}
                       slackBotToken=${{ secrets.SLACK_BOT_TOKEN }}
+                      # Uncomment below and create a SLACK_ALLOWED_MEMBERS secret with a JSON array
+                      # of Slack member IDs (e.g., '["U12345","U67890"]') to restrict bot access.
+                      # slackAllowedMembers=${{ secrets.SLACK_ALLOWED_MEMBERS }}

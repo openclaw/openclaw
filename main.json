@@ -1,0 +1,306 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "8689810768792273512"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "openclaw-workspace-env",
+      "metadata": {
+        "description": "Name of the Container Apps Environment."
+      }
+    },
+    "containerAppName": {
+      "type": "string",
+      "defaultValue": "openclaw-gateway",
+      "metadata": {
+        "description": "Name of the OpenClaw Container App."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "The full image tag from GitHub Actions (e.g., myacr.azurecr.io/my-openclaw:abc1234)."
+      }
+    },
+    "registryServer": {
+      "type": "string",
+      "metadata": {
+        "description": "The ACR login server (e.g., myacr.azurecr.io)."
+      }
+    },
+    "registryUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "The ACR username (usually the registry name)."
+      }
+    },
+    "registryPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "The ACR password."
+      }
+    },
+    "openclawStaticToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Your static token to lock down the OpenClaw dashboard."
+      }
+    },
+    "openAiApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "OpenAI API Key for the execution model"
+      }
+    },
+    "anthropicApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Anthropic API Key for the reasoning model"
+      }
+    },
+    "geminiApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Gemini API Key for web search grounding"
+      }
+    },
+    "slackAppToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Slack App Token (starts with xapp-) for socket mode"
+      }
+    },
+    "slackBotToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Slack Bot Token (starts with xoxb-) for bot actions"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/managedEnvironments/storages",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', parameters('environmentName'), 'openclaw-mount')]",
+      "properties": {
+        "azureFile": {
+          "accountName": "[format('ocdata{0}', uniqueString(resourceGroup().id))]",
+          "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', format('ocdata{0}', uniqueString(resourceGroup().id))), '2022-09-01').keys[0].value]",
+          "shareName": "openclaw-workspace",
+          "accessMode": "ReadWrite"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('environmentName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', split(format('{0}/default/openclaw-workspace', format('ocdata{0}', uniqueString(resourceGroup().id))), '/')[0], split(format('{0}/default/openclaw-workspace', format('ocdata{0}', uniqueString(resourceGroup().id))), '/')[1], split(format('{0}/default/openclaw-workspace', format('ocdata{0}', uniqueString(resourceGroup().id))), '/')[2])]",
+        "[resourceId('Microsoft.Storage/storageAccounts', format('ocdata{0}', uniqueString(resourceGroup().id)))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[format('{0}-logs', parameters('environmentName'))]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Component": "OpenClaw"
+      },
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2022-09-01",
+      "name": "[format('ocdata{0}', uniqueString(resourceGroup().id))]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Component": "OpenClaw"
+      },
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2"
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "apiVersion": "2022-09-01",
+      "name": "[format('{0}/default/openclaw-workspace', format('ocdata{0}', uniqueString(resourceGroup().id)))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', format('ocdata{0}', uniqueString(resourceGroup().id)))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('environmentName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Component": "OpenClaw"
+      },
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('environmentName'))), '2022-10-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('environmentName'))), '2022-10-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('environmentName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('containerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Component": "OpenClaw"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('environmentName'))]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 18789
+          },
+          "secrets": [
+            {
+              "name": "acr-password",
+              "value": "[parameters('registryPassword')]"
+            },
+            {
+              "name": "gateway-token",
+              "value": "[parameters('openclawStaticToken')]"
+            },
+            {
+              "name": "openai-api-key",
+              "value": "[parameters('openAiApiKey')]"
+            },
+            {
+              "name": "anthropic-api-key",
+              "value": "[parameters('anthropicApiKey')]"
+            },
+            {
+              "name": "gemini-api-key",
+              "value": "[parameters('geminiApiKey')]"
+            },
+            {
+              "name": "slack-app-token",
+              "value": "[parameters('slackAppToken')]"
+            },
+            {
+              "name": "slack-bot-token",
+              "value": "[parameters('slackBotToken')]"
+            }
+          ],
+          "registries": [
+            {
+              "server": "[parameters('registryServer')]",
+              "username": "[parameters('registryUsername')]",
+              "passwordSecretRef": "acr-password"
+            }
+          ]
+        },
+        "template": {
+          "volumes": [
+            {
+              "name": "openclaw-volume",
+              "storageType": "AzureFile",
+              "storageName": "openclaw-mount"
+            }
+          ],
+          "containers": [
+            {
+              "name": "openclaw-core",
+              "image": "[parameters('containerImage')]",
+              "command": ["/bin/sh"],
+              "args": [
+                "-c",
+                "cat << 'EOF' > /tmp/patch.js\nconst fs = require('fs');\n['chmod', 'fchmod', 'chown', 'fchown'].forEach(f => {\n  fs[f] = (...args) => { const cb = args.pop(); if (typeof cb === 'function') cb(null); };\n  fs[f + 'Sync'] = () => {};\n  if (fs.promises && fs.promises[f]) fs.promises[f] = async () => {};\n});\nEOF\nmkdir -p /home/node/.openclaw/workspace\ncat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md\n# Agent Instructions\n\nYou are a helpful enterprise assistant.\n\n## CITATION & FORMATTING RULES\nWhen you call `web_search`, the tool result JSON contains a `citations` array with `url` and `title` fields, AND the content text ends with a numbered \"References:\" section. You MUST use these URLs as clickable links in your response. NEVER omit them.\n\n**How to format links (check the Runtime channel= line in your system prompt):**\n* If channel is **slack**: Use Slack link syntax exactly: `<URL|[1]>` — e.g. `<https://example.com|[1]>`\n* If channel is **wecom**: Use Markdown link syntax: `[[1]](URL)`\n* For **all other channels**: Use standard Markdown: `[1](URL)`\n\n**Rules:**\n1. Every factual claim from web_search MUST have at least one citation link.\n2. Place citation links inline at the end of the relevant sentence or paragraph.\n3. Prefer URLs from the `citations` array (they are resolved/clean URLs).\n4. If `citations` is empty, use URLs from the References section in the content.\nAGENTS_EOF\nnode --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '[\"0.0.0.0/0\", \"::/0\"]'\nnode --require /tmp/patch.js openclaw.mjs config set gateway.controlUi.allowedOrigins \"[\\\"$OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS\\\"]\"\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.enabled true\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '\"open\"'\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom '[\"*\"]'\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '\"open\"'\nexec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan\n            "
+              ],
+              "env": [
+                {
+                  "name": "OPENCLAW_GATEWAY_AUTH_TOKEN",
+                  "secretRef": "gateway-token"
+                },
+                {
+                  "name": "OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH",
+                  "value": "true"
+                },
+                {
+                  "name": "SLACK_BOT_TOKEN",
+                  "secretRef": "slack-bot-token"
+                },
+                {
+                  "name": "SLACK_APP_TOKEN",
+                  "secretRef": "slack-app-token"
+                },
+                {
+                  "name": "OPENAI_API_KEY",
+                  "secretRef": "openai-api-key"
+                },
+                {
+                  "name": "ANTHROPIC_API_KEY",
+                  "secretRef": "anthropic-api-key"
+                },
+                {
+                  "name": "GEMINI_API_KEY",
+                  "secretRef": "gemini-api-key"
+                },
+                {
+                  "name": "OPENCLAW_AGENTS_DEFAULTS_MODEL_PRIMARY",
+                  "value": "anthropic/claude-opus-4-6"
+                },
+                {
+                  "name": "OPENCLAW_AGENTS_DEFAULTS_MODEL_FAST",
+                  "value": "openai/gpt-5-mini"
+                },
+                {
+                  "name": "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS",
+                  "value": "[format('https://{0}.{1}', parameters('containerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', parameters('environmentName')), '2023-05-01').defaultDomain)]"
+                }
+              ],
+              "volumeMounts": [
+                {
+                  "volumeName": "openclaw-volume",
+                  "mountPath": "/home/node/.openclaw"
+                }
+              ],
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('environmentName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments/storages', parameters('environmentName'), 'openclaw-mount')]"
+      ]
+    }
+  ]
+}
