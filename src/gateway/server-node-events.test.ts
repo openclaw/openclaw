@@ -388,7 +388,6 @@ describe("notifications changed events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "node-node-n1",
     });
   });
 
@@ -409,7 +408,6 @@ describe("notifications changed events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "node-node-n2",
     });
   });
 
