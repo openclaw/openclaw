@@ -10,9 +10,13 @@ import {
   buildOpenAICodexForwardCompatExpectation,
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL,
+  GOOGLE_GENERATIVE_AI_PRO_TEMPLATE_MODEL,
   makeModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
+  mockGoogleGenerativeAiFlashTemplateModel,
+  mockGoogleGenerativeAiProTemplateModel,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -85,5 +89,38 @@ describe("pi embedded model e2e smoke", () => {
     const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
+  });
+
+  // google (API key / google-generative-ai) provider forward compat (#36111)
+  it("builds a google forward-compat fallback for gemini-3.1-pro-preview (API key auth)", () => {
+    mockGoogleGenerativeAiProTemplateModel();
+
+    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GENERATIVE_AI_PRO_TEMPLATE_MODEL,
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-flash-lite-preview (API key auth)", () => {
+    mockGoogleGenerativeAiFlashTemplateModel();
+
+    const result = resolveModel("google", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL,
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
+      reasoning: true,
+    });
+  });
+
+  it("keeps unknown-model errors for unrecognized google model IDs", () => {
+    const result = resolveModel("google", "gemini-4-unknown", "/tmp/agent");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google/gemini-4-unknown");
   });
 });

@@ -89,6 +89,36 @@ export function mockGoogleGeminiCliFlashTemplateModel(): void {
   });
 }
 
+export const GOOGLE_GENERATIVE_AI_PRO_TEMPLATE_MODEL = {
+  ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  provider: "google",
+  api: "google-generative-ai",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+};
+
+export const GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL = {
+  ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  provider: "google",
+  api: "google-generative-ai",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+};
+
+export function mockGoogleGenerativeAiProTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google",
+    modelId: "gemini-3-pro-preview",
+    templateModel: GOOGLE_GENERATIVE_AI_PRO_TEMPLATE_MODEL,
+  });
+}
+
+export function mockGoogleGenerativeAiFlashTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "google",
+    modelId: "gemini-3-flash-preview",
+    templateModel: GOOGLE_GENERATIVE_AI_FLASH_TEMPLATE_MODEL,
+  });
+}
+
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),
