@@ -25,6 +25,11 @@ function runTailscaleCommand(
       resolve({ code: -1, stdout: "" });
     }, timeoutMs);
 
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout: "" });
+    });
+
     proc.on("close", (code) => {
       clearTimeout(timer);
       resolve({ code: code ?? -1, stdout });
