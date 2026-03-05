@@ -49,6 +49,31 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
+  it("strips bot mention in group when followed by slash command (/model, /reset, /new)", () => {
+    // This is the fix for issue #35994 - slash commands should work in group chats
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 /model",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("/model");
+  });
+
+  it("strips bot mention in group when followed by slash command with args", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 /reset conversation",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("/reset conversation");
+  });
+
   it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 @_user_alice hello", [

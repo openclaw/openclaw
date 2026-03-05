@@ -775,12 +775,24 @@ export function parseFeishuMessageEvent(
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // In p2p, the bot mention is a pure addressing prefix with no semantic value;
   // strip it so slash commands like @Bot /help still have a leading /.
-  // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
-  const content = normalizeMentions(
-    rawContent,
-    event.message.mentions,
-    event.message.chat_type === "p2p" ? botOpenId : undefined,
-  );
+  // In group chats, also strip the bot mention if it's followed by a slash command
+  // (e.g., @Bot /model) so Gateway command parser can recognize it (#35994).
+  const isGroup = event.message.chat_type === "group";
+  // Check if raw content after stripping bot mention key starts with a command
+  const botMentionKey = event.message.mentions?.find(
+    (m) => m.id.open_id === botOpenId || m.id.user_id === botOpenId,
+  )?.key;
+  const contentAfterBotMention = botMentionKey
+    ? rawContent.replace(botMentionKey, "").trim()
+    : rawContent;
+  const isCommand = contentAfterBotMention.startsWith("/");
+  const shouldStripBotMention =
+    event.message.chat_type === "p2p"
+      ? botOpenId
+      : isGroup && mentionedBot && isCommand
+        ? botOpenId
+        : undefined;
+  const content = normalizeMentions(rawContent, event.message.mentions, shouldStripBotMention);
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";
