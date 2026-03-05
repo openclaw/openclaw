@@ -1194,7 +1194,9 @@ export const registerTelegramHandlers = ({
             if (errStr.includes("no text in the message")) {
               try {
                 await deleteCallbackMessage();
-              } catch {}
+              } catch (deleteErr) {
+                logger.debug({ error: String(deleteErr) }, "deleteCallbackMessage failed");
+              }
               await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
             } else if (!errStr.includes("message is not modified")) {
               throw editErr;

@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -17,6 +18,8 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
+
+const log = createSubsystemLogger("model-auth");
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -190,7 +193,11 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      log.debug(`resolveApiKeyForProvider: profile ${candidate} resolution failed`, {
+        error: String(err),
+      });
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);

@@ -575,7 +575,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               break;
             }
           }
-        } catch {}
+        } catch (err) {
+          log.debug(`readFile: extra path not accessible: ${additionalPath}`, {
+            error: String(err),
+          });
+        }
       }
     }
     if (!allowedWorkspace && !allowedAdditional) {
@@ -778,7 +782,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pendingSync) {
       try {
         await pendingSync;
-      } catch {}
+      } catch (err) {
+        log.debug(`close: pending sync failed`, { error: String(err) });
+      }
     }
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);
