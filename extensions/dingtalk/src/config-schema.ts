@@ -33,8 +33,6 @@ const DingtalkSharedConfigShape = {
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   mediaMaxMb: z.number().positive().optional(),
-  // 是否启用流式卡片输出 / Whether to enable streaming card output
-  streaming: z.boolean().optional(),
   groupSessionScope: GroupSessionScopeSchema,
   // 是否解析发送者名称 / Whether to resolve sender names
   resolveSenderNames: z.boolean().optional(),
@@ -67,7 +65,6 @@ export const DingtalkConfigSchema = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     groupPolicy: GroupPolicySchema.optional().default("open"),
     requireMention: z.boolean().optional().default(true),
-    streaming: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
     // 多账号配置 / Multi-account configuration
     accounts: z.record(z.string(), DingtalkAccountConfigSchema.optional()).optional(),

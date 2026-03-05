@@ -30,21 +30,8 @@ const meta: ChannelMeta = {
   order: 36,
 };
 
-const secretInputJsonSchema = {
-  oneOf: [
-    { type: "string" },
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["source", "provider", "id"],
-      properties: {
-        source: { type: "string", enum: ["env", "file", "exec"] },
-        provider: { type: "string", minLength: 1 },
-        id: { type: "string", minLength: 1 },
-      },
-    },
-  ],
-} as const;
+// Simplified to plain string for frontend compatibility (oneOf is unsupported)
+const secretInputJsonSchema = { type: "string" } as const;
 
 // 钉钉 Channel 插件定义 / DingTalk channel plugin definition
 export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
@@ -72,12 +59,12 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
     reactions: false,
     edit: false,
     reply: false,
-    blockStreaming: true,
+    blockStreaming: false,
   },
   agentPrompt: {
     messageToolHints: () => [
       "- DingTalk targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:staffId`.",
-      "- DingTalk supports Markdown messages and interactive cards for rich content.",
+      "- DingTalk supports Markdown messages for rich content.",
     ],
   },
   mentions: {
@@ -95,12 +82,9 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
         clientSecret: secretInputJsonSchema,
         robotCode: { type: "string" },
         dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
-        allowFrom: { type: "array", items: { oneOf: [{ type: "string" }, { type: "number" }] } },
+        allowFrom: { type: "array", items: { type: "string" } },
         groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
-        groupAllowFrom: {
-          type: "array",
-          items: { oneOf: [{ type: "string" }, { type: "number" }] },
-        },
+        groupAllowFrom: { type: "array", items: { type: "string" } },
         requireMention: { type: "boolean" },
         groupSessionScope: { type: "string", enum: ["group", "group_sender"] },
         groups: {
@@ -110,10 +94,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
             properties: {
               enabled: { type: "boolean" },
               requireMention: { type: "boolean" },
-              allowFrom: {
-                type: "array",
-                items: { oneOf: [{ type: "string" }, { type: "number" }] },
-              },
+              allowFrom: { type: "array", items: { type: "string" } },
               systemPrompt: { type: "string" },
               groupSessionScope: { type: "string", enum: ["group", "group_sender"] },
             },
@@ -122,7 +103,6 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
         textChunkLimit: { type: "integer", minimum: 1 },
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
-        streaming: { type: "boolean" },
         resolveSenderNames: { type: "boolean" },
         accounts: {
           type: "object",

@@ -13,7 +13,6 @@ export {
 } from "./src/send.js";
 export { uploadMedia, downloadMessageFile, sendImageMessage } from "./src/media.js";
 export { probeDingtalk } from "./src/probe.js";
-export { sendDingtalkCard, updateDingtalkCard, DingtalkStreamingSession } from "./src/card.js";
 export { dingtalkPlugin } from "./src/channel.js";
 
 const plugin = {
