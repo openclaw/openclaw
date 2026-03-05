@@ -101,6 +101,10 @@ export function hasWsSession(sessionId: string): boolean {
 
 type AnyMessage = Message & { role: string; content: unknown };
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -132,12 +136,10 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
     return [];
   }
   const parts: ContentPart[] = [];
-  for (const part of content as Array<{
-    type?: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>) {
+  for (const part of content) {
+    if (!isObjectRecord(part)) {
+      continue;
+    }
     if (part.type === "text" && typeof part.text === "string") {
       parts.push({ type: "input_text", text: part.text });
     } else if (part.type === "image" && typeof part.data === "string") {
@@ -145,7 +147,7 @@ function contentToOpenAIParts(content: unknown): ContentPart[] {
         type: "input_image",
         source: {
           type: "base64",
-          media_type: part.mimeType ?? "image/jpeg",
+          media_type: typeof part.mimeType === "string" ? part.mimeType : "image/jpeg",
           data: part.data,
         },
       });
@@ -197,14 +199,10 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
       if (Array.isArray(content)) {
         // Collect text blocks and tool calls separately
         const textParts: string[] = [];
-        for (const block of content as Array<{
-          type?: string;
-          text?: string;
-          id?: string;
-          name?: string;
-          arguments?: Record<string, unknown>;
-          thinking?: string;
-        }>) {
+        for (const block of content) {
+          if (!isObjectRecord(block)) {
+            continue;
+          }
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
           } else if (block.type === "thinking" && typeof block.thinking === "string") {
@@ -291,9 +289,18 @@ export function buildAssistantMessageFromResponse(
   const content: (TextContent | ToolCall)[] = [];
 
   for (const item of response.output ?? []) {
+    if (!isObjectRecord(item)) {
+      continue;
+    }
     if (item.type === "message") {
-      for (const part of item.content ?? []) {
-        if (part.type === "output_text" && part.text) {
+      if (!Array.isArray(item.content)) {
+        continue;
+      }
+      for (const part of item.content) {
+        if (!isObjectRecord(part)) {
+          continue;
+        }
+        if (part.type === "output_text" && typeof part.text === "string" && part.text.length > 0) {
           content.push({ type: "text", text: part.text });
         }
       }
@@ -302,13 +309,14 @@ export function buildAssistantMessageFromResponse(
       if (!toolName) {
         continue;
       }
+      const rawArguments = typeof item.arguments === "string" ? item.arguments : "{}";
       content.push({
         type: "toolCall",
         id: toNonEmptyString(item.call_id) ?? `call_${randomUUID()}`,
         name: toolName,
         arguments: (() => {
           try {
-            return JSON.parse(item.arguments) as Record<string, unknown>;
+            return JSON.parse(rawArguments) as Record<string, unknown>;
           } catch {
             return {} as Record<string, unknown>;
           }
