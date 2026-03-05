@@ -9,6 +9,12 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+// A2A flow: stub agent-step helpers (we only assert outbound send params)
+vi.mock("./agent-step.js", () => ({
+  readLatestAssistantReply: async () => "latest reply",
+  runAgentStep: async () => "announce reply",
+}));
+
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
@@ -32,6 +38,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 
 import { createSessionsListTool } from "./sessions-list-tool.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
@@ -60,6 +67,32 @@ const installRegistry = async () => {
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "Telegram test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "group", "thread"] },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+          messaging: {
+            normalizeTarget: (t: string) => {
+              // Minimal normalizer used by resolveAnnounceTargetFromKey tests.
+              // In real telegram plugin, chat ids are raw strings.
+              return t.replace(/^(group:|channel:)/, "");
+            },
           },
         },
       },
@@ -366,6 +399,45 @@ describe("resolveAnnounceTarget — DM gateway fallback with threadId", () => {
       displayKey: "agent:main:main",
     });
     expect(target).toBeNull();
+  });
+});
+
+describe("runSessionsSendA2AFlow — forwards threadId to send", () => {
+  beforeEach(async () => {
+    callGatewayMock.mockClear();
+    await installRegistry();
+  });
+
+  it("includes threadId when announce target has one", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      displayKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      message: "hello",
+      announceTimeoutMs: 1000,
+      maxPingPongTurns: 0,
+      roundOneReply: "round one",
+    });
+
+    type GatewayCall = { method?: unknown; params?: unknown };
+    const asGatewayCall = (x: unknown): GatewayCall | null => {
+      if (!x || typeof x !== "object") {
+        return null;
+      }
+      const obj = x as Record<string, unknown>;
+      return { method: obj.method, params: obj.params };
+    };
+
+    const sendCalls = callGatewayMock.mock.calls
+      .map((c) => asGatewayCall(c?.[0]))
+      .filter((c): c is GatewayCall => !!c && c.method === "send");
+
+    expect(sendCalls.length).toBe(1);
+    const params = sendCalls[0]?.params;
+    expect(params).toMatchObject({
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "99",
+    });
   });
 });
 
