@@ -722,6 +722,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
   "channels.discord.retry.jitter": "Discord Retry Jitter",
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
+  "channels.discord.inboundWorker.runTimeoutMs": "Discord Inbound Worker Timeout (ms)",
   "channels.discord.eventQueue.listenerTimeout": "Discord EventQueue Listener Timeout (ms)",
   "channels.discord.eventQueue.maxQueueSize": "Discord EventQueue Max Queue Size",
   "channels.discord.eventQueue.maxConcurrency": "Discord EventQueue Max Concurrency",
