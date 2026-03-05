@@ -10,6 +10,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -21,6 +22,7 @@ import {
   normalizeAttachmentPath,
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
@@ -301,15 +303,25 @@ export async function tryDispatchAcpReply(params: {
       );
     }
 
-    await acpManager.runTurn({
-      cfg: params.cfg,
-      sessionKey,
-      text: promptText,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
-    });
+    // Guard against stalled upstream streams: abort the turn after the configured
+    // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
+    // a silently hung SSE connection blocks the session queue forever. refs #17258
+    const turnTimeoutMs = resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
+    await withTimeout(
+      (signal) =>
+        acpManager.runTurn({
+          cfg: params.cfg,
+          sessionKey,
+          text: promptText,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          mode: "prompt",
+          requestId: resolveAcpRequestId(params.ctx),
+          onEvent: (event) => projector.onEvent(event),
+          signal,
+        }),
+      turnTimeoutMs,
+      "ACP turn",
+    );
 
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";

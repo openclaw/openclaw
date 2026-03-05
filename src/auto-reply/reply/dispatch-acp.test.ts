@@ -413,6 +413,49 @@ describe("tryDispatchAcpReply", () => {
       expect(onReplyStart).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+  it("passes an abort signal to runTurn for timeout protection", async () => {
+    setReadyAcpResolution();
+    let receivedSignal: AbortSignal | undefined;
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({
+        onEvent,
+        signal,
+      }: {
+        onEvent: (event: unknown) => Promise<void>;
+        signal?: AbortSignal;
+      }) => {
+        receivedSignal = signal;
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "hello" });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal!.aborted).toBe(false);
+  });
+
+  it("aborts runTurn when the turn timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      setReadyAcpResolution();
+      let receivedSignal: AbortSignal | undefined;
+      managerMocks.runTurn.mockImplementationOnce(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            receivedSignal = signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+
+      const dispatchPromise = runDispatch({ bodyForAgent: "stall" });
+      await vi.advanceTimersByTimeAsync(600_001);
+      await expect(dispatchPromise).resolves.toBeDefined();
+      expect(receivedSignal!.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+
     }
   });
 
