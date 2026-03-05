@@ -38,6 +38,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasTypecastKey: Boolean(resolveTtsApiKey(config, "typecast")),
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
       });
     } catch (err) {
@@ -100,13 +101,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    if (
+      provider !== "openai" &&
+      provider !== "elevenlabs" &&
+      provider !== "edge" &&
+      provider !== "typecast"
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          "Invalid provider. Use openai, elevenlabs, typecast, or edge.",
         ),
       );
       return;
@@ -140,6 +146,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
             models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+          },
+          {
+            id: "typecast",
+            name: "Typecast",
+            configured: Boolean(resolveTtsApiKey(config, "typecast")),
+            models: ["ssfm-v21", "ssfm-v30"],
           },
           {
             id: "edge",
