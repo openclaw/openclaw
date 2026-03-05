@@ -123,13 +123,21 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         })
       : undefined;
   const explicitToken = trimToUndefined(opts?.gatewayToken);
+  // Fallback to environment variable if no explicit token provided
+  const envToken = explicitToken
+    ? undefined
+    : resolveGatewayCredentialsFromConfig({
+        cfg,
+        env: process.env,
+        explicitAuth: undefined,
+      }).token;
   const token = validatedOverride
     ? resolveGatewayOverrideToken({
         cfg,
         target: validatedOverride.target,
         explicitToken,
       })
-    : explicitToken;
+    : (explicitToken ?? envToken);
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
