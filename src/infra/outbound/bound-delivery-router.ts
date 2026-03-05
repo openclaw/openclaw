@@ -26,14 +26,19 @@ function isActiveBinding(record: SessionBindingRecord): boolean {
   return record.status === "active";
 }
 
+function hasSameChannelAccount(requester: ConversationRef, binding: SessionBindingRecord): boolean {
+  return (
+    binding.conversation.channel === requester.channel &&
+    binding.conversation.accountId === requester.accountId
+  );
+}
+
 function resolveBindingForRequester(
   requester: ConversationRef,
   bindings: SessionBindingRecord[],
 ): SessionBindingRecord | null {
-  const matchingChannelAccount = bindings.filter(
-    (entry) =>
-      entry.conversation.channel === requester.channel &&
-      entry.conversation.accountId === requester.accountId,
+  const matchingChannelAccount = bindings.filter((entry) =>
+    hasSameChannelAccount(requester, entry),
   );
   if (matchingChannelAccount.length === 0) {
     return null;
@@ -113,7 +118,11 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      if (activeBindings.length === 1 && !input.failClosed) {
+      if (
+        activeBindings.length === 1 &&
+        !input.failClosed &&
+        hasSameChannelAccount(requester, activeBindings[0])
+      ) {
         return {
           binding: activeBindings[0] ?? null,
           mode: "bound",

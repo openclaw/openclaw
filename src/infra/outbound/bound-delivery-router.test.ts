@@ -127,6 +127,29 @@ describe("bound delivery router", () => {
     expect(route.binding?.conversation.conversationId).toBe("thread-2");
   });
 
+  it("falls back when requester channel/account does not match single binding", () => {
+    registerDiscordSessionBindings(TARGET_SESSION_KEY, [
+      createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
+    ]);
+
+    const route = createBoundDeliveryRouter().resolveDestination({
+      eventKind: "task_completion",
+      targetSessionKey: TARGET_SESSION_KEY,
+      requester: {
+        channel: "telegram",
+        accountId: "runtime",
+        conversationId: "chat-1",
+      },
+      failClosed: false,
+    });
+
+    expect(route).toEqual({
+      binding: null,
+      mode: "fallback",
+      reason: "no-requester-match",
+    });
+  });
+
   it("falls back for invalid requester conversation values", () => {
     registerDiscordSessionBindings(TARGET_SESSION_KEY, [
       createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
