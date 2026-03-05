@@ -653,7 +653,12 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
     buildLineMessageContextMock.mockResolvedValueOnce({
-      ctxPayload: { From: "line:group:group-1", Body: "hello team", RawBody: "hello team" },
+      ctxPayload: {
+        From: "line:group:group-1",
+        Body: "hello team",
+        BodyForAgent: "hello team",
+        RawBody: "hello team",
+      },
       replyToken: "reply-token",
       route: { agentId: "default", sessionKey: "line:group:group-1" },
       isGroup: true,
