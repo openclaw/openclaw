@@ -86,7 +86,7 @@ export async function handleDiscordMessageAction(
     const question = readStringParam(params, "pollQuestion", {
       required: true,
     });
-    const answers = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+    const answers = readStringArrayParam(params, "pollOption", { required: true });
     const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
     const durationHours = readNumberParam(params, "pollDurationHours", {
       integer: true,

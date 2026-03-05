@@ -309,7 +309,7 @@ async function handleBroadcastAction(
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
   }
-  const rawTargets = readStringArrayParam(params, "targets", { required: true }) ?? [];
+  const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {
     throw new Error("Broadcast requires at least one target in --targets.");
   }
@@ -573,7 +573,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   const question = readStringParam(params, "pollQuestion", {
     required: true,
   });
-  const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+  const options = readStringArrayParam(params, "pollOption", { required: true });
   if (options.length < 2) {
     throw new Error("pollOption requires at least two values");
   }
