@@ -129,4 +129,20 @@ describe("resolveChannelRestartReason", () => {
     );
     expect(reason).toBe("gave-up");
   });
+
+  it("maps disconnected evaluation to disconnected (not stuck)", () => {
+    const reason = resolveChannelRestartReason(
+      { running: true, connected: false },
+      { healthy: false, reason: "disconnected" },
+    );
+    expect(reason).toBe("disconnected");
+  });
+
+  it("maps stuck evaluation to stuck", () => {
+    const reason = resolveChannelRestartReason(
+      { running: true, busy: true, activeRuns: 1 },
+      { healthy: false, reason: "stuck" },
+    );
+    expect(reason).toBe("stuck");
+  });
 });
