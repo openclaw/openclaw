@@ -1352,8 +1352,13 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
-    const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+    // When the user replied to a specific message (parentId), honour that target
+    // so the bot's response anchors to the same message instead of the thread root (#35518).
+    const replyTargetMessageId = ctx.parentId
+      ? ctx.parentId
+      : isTopicSession || configReplyInThread
+        ? (ctx.rootId ?? ctx.messageId)
+        : ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

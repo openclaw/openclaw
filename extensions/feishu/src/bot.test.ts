@@ -1631,6 +1631,45 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies to parent_id when user replied to a specific message in topic group (#35518)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-reply-user" } },
+      message: {
+        message_id: "om_new_reply",
+        root_id: "om_thread_root",
+        parent_id: "om_specific_message",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "replying to specific message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_specific_message",
+        rootId: "om_thread_root",
+      }),
+    );
+  });
+
   it("forces thread replies when inbound message contains thread_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
