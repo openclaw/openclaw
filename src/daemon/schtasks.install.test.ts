@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import { VERSION } from "../version.js";
+import {
+  installScheduledTask,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+  restartScheduledTask,
+} from "./schtasks.js";
 
 const schtasksCalls: string[][] = [];
 
@@ -131,6 +137,55 @@ describe("installScheduledTask", () => {
           environment: {},
         }),
       ).rejects.toThrow(/Task description cannot contain CR or LF/);
+    });
+  });
+});
+
+describe("restartScheduledTask", () => {
+  async function withUserProfileDir(
+    run: (tmpDir: string, env: Record<string, string>) => Promise<void>,
+  ) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-restart-"));
+    const env = {
+      USERPROFILE: tmpDir,
+      OPENCLAW_PROFILE: "default",
+    };
+    try {
+      await run(tmpDir, env);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  it("refreshes OPENCLAW_SERVICE_VERSION in gateway.cmd before restarting task", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(
+        scriptPath,
+        [
+          "@echo off",
+          "rem OpenClaw Gateway",
+          "set OPENCLAW_SERVICE_VERSION=2026.2.26",
+          "set NODE_ENV=production",
+          "node gateway.js --port 18789",
+        ].join("\r\n"),
+        "utf8",
+      );
+
+      await restartScheduledTask({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      const script = await fs.readFile(scriptPath, "utf8");
+      expect(script).toContain(`set "OPENCLAW_SERVICE_VERSION=${VERSION}"`);
+      expect(script).not.toContain("set OPENCLAW_SERVICE_VERSION=2026.2.26");
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+        ["/Run", "/TN", "OpenClaw Gateway"],
+      ]);
     });
   });
 });

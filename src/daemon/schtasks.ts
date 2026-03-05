@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VERSION } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -310,12 +311,56 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
+async function refreshScheduledTaskScriptVersion(
+  env: GatewayServiceEnv,
+  serviceVersion: string,
+): Promise<void> {
+  const scriptPath = resolveTaskScriptPath(env);
+  let content: string;
+  try {
+    content = await fs.readFile(scriptPath, "utf8");
+  } catch {
+    return;
+  }
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
+  const renderedVersionLine = renderCmdSetAssignment("OPENCLAW_SERVICE_VERSION", serviceVersion);
+  let replaced = false;
+  const nextLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.toLowerCase().startsWith("set ")) {
+      return line;
+    }
+    const assignment = parseCmdSetAssignment(trimmed.slice(4));
+    if (!assignment || assignment.key.toUpperCase() !== "OPENCLAW_SERVICE_VERSION") {
+      return line;
+    }
+    replaced = true;
+    return renderedVersionLine;
+  });
+  if (!replaced) {
+    const insertAt = nextLines.findIndex((line) => {
+      const trimmed = line.trim().toLowerCase();
+      return trimmed.length > 0 && !trimmed.startsWith("@echo") && !trimmed.startsWith("rem ");
+    });
+    nextLines.splice(insertAt === -1 ? nextLines.length : insertAt, 0, renderedVersionLine);
+  }
+  const rewritten = nextLines.join(newline);
+  if (rewritten === content) {
+    return;
+  }
+  const normalized = rewritten.endsWith(newline) ? rewritten : `${rewritten}${newline}`;
+  await fs.writeFile(scriptPath, normalized, "utf8");
+}
+
 export async function restartScheduledTask({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  const taskName = resolveTaskName(resolvedEnv);
+  await refreshScheduledTaskScriptVersion(resolvedEnv, VERSION);
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
