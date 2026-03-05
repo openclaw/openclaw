@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Feishu/HTTP timeout: set a 30-second request timeout on the Lark SDK HTTP client so stalled Feishu API connections no longer deadlock the per-chat promise queue, preventing message delivery stalls for subsequent messages in the same chat. (#36412)
 - Gateway/chat.inject: create missing transcript file instead of returning "transcript file not found" when the session entry has a `transcriptPath` but the file does not exist on disk (e.g. ACP oneshot/run sessions). (#36170)
 - Hooks/message:sent internal hook: propagate the invoking agent session key through the outbound send context so `message:sent` internal hooks fire for direct agent responses — not just mirrored sessions. (#35557)
 - WhatsApp/allowFrom error clarity: replace misleading "requires target <E.164|group JID>" error with a clear "not listed in the configured WhatsApp allowFrom policy" message when a valid target is blocked by the allowFrom list, so users can distinguish format errors from policy rejections. (#35580)

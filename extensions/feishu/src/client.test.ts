@@ -11,6 +11,8 @@ const httpsProxyAgentCtorMock = vi.hoisted(() =>
     return { proxyUrl };
   }),
 );
+// Expose defaultHttpInstance so we can verify the timeout side-effect applied at module init
+const defaultHttpInstanceMock = vi.hoisted(() => ({ defaults: { timeout: 0 } }));
 
 const mockBaseHttpInstance = vi.hoisted(() => ({
   request: vi.fn().mockResolvedValue({}),
