@@ -218,22 +218,25 @@ export function shouldInjectOllamaCompatNumCtx(params: {
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
   const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamFn(model, context, {
-      ...options,
-      onPayload: (payload: unknown) => {
-        if (!payload || typeof payload !== "object") {
-          options?.onPayload?.(payload);
-          return;
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
-          payloadRecord.options = {};
-        }
-        (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        options?.onPayload?.(payload);
-      },
+  return (model, context, options) => {
+    const downstreamOnPayload = options?.onPayload;
+    const streamOptions = options ? { ...options } : {};
+    streamOptions.onPayload = (payload: unknown) => {
+      if (!payload || typeof payload !== "object") {
+        downstreamOnPayload?.(payload);
+        return;
+      }
+      const payloadRecord = payload as Record<string, unknown>;
+      if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+        payloadRecord.options = {};
+      }
+      (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
+      downstreamOnPayload?.(payload);
+    };
+    return streamFn(model, context, {
+      ...streamOptions,
     });
+  };
 }
 
 function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {

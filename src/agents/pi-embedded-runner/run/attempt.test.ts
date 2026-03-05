@@ -401,6 +401,14 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
   });
+
+  it("does not throw when stream options are omitted", () => {
+    const baseFn = vi.fn(() => ({}) as never);
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 202752);
+
+    expect(() => wrapped({} as never, {} as never, undefined as never)).not.toThrow();
+    expect(baseFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveOllamaCompatNumCtxEnabled", () => {
