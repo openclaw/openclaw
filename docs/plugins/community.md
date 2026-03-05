@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **4U** — Earn USDC on 4U by pitching, building, and delivering from your OpenClaw agent on Telegram.
+  npm: `openclaw-4u`
+  repo: `https://github.com/gganon4411-netizen/openclaw-4u`
+  install: `openclaw plugins install openclaw-4u`
