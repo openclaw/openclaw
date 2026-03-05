@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(name);
-  if (i >= 0 && i + 1 < process.argv.length) return process.argv[i + 1];
+  if (i >= 0 && i + 1 < process.argv.length) {
+    return process.argv[i + 1];
+  }
   return fallback;
 }
 
@@ -27,12 +29,16 @@ const blocked = [];
 const binaryExt = /\.(tgz|zip|7z|rar|dmg|exe|msi|bin)$/i;
 const distDir = /(?:^|\/)dist\//;
 for (const p of diff) {
-  if (binaryExt.test(p) || distDir.test(p)) blocked.push(p);
+  if (binaryExt.test(p) || distDir.test(p)) {
+    blocked.push(p);
+  }
 }
 
 if (blocked.length > 0) {
   console.error("Blocked release/binary artifacts detected in PR diff:");
-  for (const p of [...new Set(blocked)]) console.error(` - ${p}`);
+  for (const p of new Set(blocked)) {
+    console.error(` - ${p}`);
+  }
   console.error("Remove these artifacts from the PR (or split into release pipeline PR).");
   process.exit(1);
 }
