@@ -48,10 +48,16 @@ private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSession
 private func makeViewModel(
     sessionKey: String = "main",
     historyResponses: [OpenClawChatHistoryPayload],
-    sessionsResponses: [OpenClawChatSessionsListResponse] = []) async -> (TestChatTransport, OpenClawChatViewModel)
+    sessionsResponses: [OpenClawChatSessionsListResponse] = [],
+    pendingRunTimeoutMs: UInt64 = 120_000) async -> (TestChatTransport, OpenClawChatViewModel)
 {
     let transport = TestChatTransport(historyResponses: historyResponses, sessionsResponses: sessionsResponses)
-    let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: sessionKey, transport: transport) }
+    let vm = await MainActor.run {
+        OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: transport,
+            pendingRunTimeoutMs: pendingRunTimeoutMs)
+    }
     return (transport, vm)
 }
 
@@ -405,6 +411,45 @@ extension TestChatTransportState {
             await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
         }
         #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func softTimeoutKeepsRunTrackedAndAcceptsLateFinal() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload()
+        let history2 = historyPayload(messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)])
+        let history3 = historyPayload(
+            messages: [
+                chatTextMessage(role: "user", text: "hello", timestamp: now),
+                chatTextMessage(role: "assistant", text: "late answer", timestamp: now + 1),
+            ])
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2, history3],
+            pendingRunTimeoutMs: 20)
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm, text: "hello")
+        let runId = try #require(await transport.lastSentRunId())
+        try await waitUntil("warning appears after soft timeout") {
+            await MainActor.run {
+                vm.errorText == "Still waiting for the model; large-model replies can take longer."
+                    && vm.pendingRunCount == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("late final clears pending run") { await MainActor.run { vm.pendingRunCount == 0 } }
+        try await waitUntil("history includes late assistant reply") {
+            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
     }
 
     @Test func sessionChoicesPreferMainAndRecent() async throws {

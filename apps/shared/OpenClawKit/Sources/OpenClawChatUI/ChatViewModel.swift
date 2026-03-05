@@ -41,7 +41,7 @@ public final class OpenClawChatViewModel {
 
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
-    private let pendingRunTimeoutMs: UInt64 = 120_000
+    private let pendingRunTimeoutMs: UInt64
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -52,9 +52,14 @@ public final class OpenClawChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any OpenClawChatTransport) {
+    public init(
+        sessionKey: String,
+        transport: any OpenClawChatTransport,
+        pendingRunTimeoutMs: UInt64 = 120_000)
+    {
         self.sessionKey = sessionKey
         self.transport = transport
+        self.pendingRunTimeoutMs = pendingRunTimeoutMs
 
         self.eventTask = Task { [weak self] in
             guard let self else { return }
@@ -589,8 +594,12 @@ public final class OpenClawChatViewModel {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard self.pendingRuns.contains(runId) else { return }
-                self.clearPendingRun(runId)
-                self.errorText = "Timed out waiting for a reply; try again or refresh."
+                // Keep tracking long-running runs so late final events still refresh history.
+                self.errorText = "Still waiting for the model; large-model replies can take longer."
+                Task {
+                    await self.refreshHistoryAfterRun()
+                    await self.pollHealthIfNeeded(force: true)
+                }
             }
         }
     }
