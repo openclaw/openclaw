@@ -1674,3 +1674,106 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
   });
 });
+
+describe("initSessionState clears followup queue on /new", () => {
+  it("flushes pending followup queue when reset is triggered", async () => {
+    const { FOLLOWUP_QUEUES } = await import("./queue/state.js");
+    const storePath = await createStorePath("openclaw-new-clear-queue-");
+    const sessionKey = "agent:main:telegram:dm:queue-test";
+    const existingSessionId = "existing-session-queued";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    FOLLOWUP_QUEUES.set(sessionKey, {
+      items: [{ prompt: "stale question", enqueuedAt: Date.now(), run: {} as never }],
+      draining: false,
+      lastEnqueuedAt: Date.now(),
+      mode: "collect",
+      debounceMs: 1000,
+      cap: 20,
+      dropPolicy: "summarize",
+      droppedCount: 0,
+      summaryLines: [],
+    });
+
+    expect(FOLLOWUP_QUEUES.has(sessionKey)).toBe(true);
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "queue-test",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(FOLLOWUP_QUEUES.has(sessionKey)).toBe(false);
+  });
+
+  it("does not clear queue when session expires naturally (no reset trigger)", async () => {
+    const { FOLLOWUP_QUEUES } = await import("./queue/state.js");
+    const storePath = await createStorePath("openclaw-expire-keep-queue-");
+    const sessionKey = "agent:main:telegram:dm:expire-test";
+    const existingSessionId = "existing-session-expire";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: 0,
+      },
+    });
+
+    FOLLOWUP_QUEUES.set(sessionKey, {
+      items: [{ prompt: "pending question", enqueuedAt: Date.now(), run: {} as never }],
+      draining: false,
+      lastEnqueuedAt: Date.now(),
+      mode: "collect",
+      debounceMs: 1000,
+      cap: 20,
+      dropPolicy: "summarize",
+      droppedCount: 0,
+      summaryLines: [],
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 0 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "expire-test",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(FOLLOWUP_QUEUES.has(sessionKey)).toBe(true);
+
+    FOLLOWUP_QUEUES.delete(sessionKey);
+  });
+});
