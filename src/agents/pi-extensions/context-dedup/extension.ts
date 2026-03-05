@@ -900,7 +900,6 @@ function resolveRootDedupPointerTarget(params: {
         break;
       }
       currentMessageIndex = lineageTarget;
-      currentBlockIndex = 0;
       continue;
     }
 

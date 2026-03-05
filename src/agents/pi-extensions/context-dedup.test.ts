@@ -473,6 +473,44 @@ describe("context-dedup", () => {
     expect(postRewrite).not.toContain("toolCallId call_mid");
   });
 
+  it("preserves block index when dedup pointers hop through lineage notes", () => {
+    const rootChunk = "root chunk line ".repeat(20);
+    const lineageNote =
+      "[Same file chunk already shown earlier]\n" +
+      "Path: /tmp/hop.txt\n" +
+      "Earlier chunk: context message #0 (toolCallId call_root)\n" +
+      "Lines: 1-20";
+    const pointerToLineage =
+      "[1 repeat of content omitted]\n" +
+      "Same as context message #1, block #1 (toolCallId call_lineage).";
+
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "call_root",
+        content: [
+          { type: "text", text: "header" },
+          { type: "text", text: rootChunk },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_lineage",
+        content: [
+          { type: "text", text: "metadata" },
+          { type: "text", text: lineageNote },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call_pointer", content: pointerToLineage },
+    ];
+
+    const rewritten = rewriteReadLineageSourcePointers(messages as any[]);
+    const postRewrite = String(rewritten[2].content);
+
+    expect(postRewrite).toContain("Same as context message #0, block #1");
+    expect(postRewrite).not.toContain("Same as context message #0, block #0");
+  });
+
   it("rewrites nested lineage source pointers to original dedup source", () => {
     const original = Array.from({ length: 40 }, (_, idx) => `line ${idx + 1} :: ${"z".repeat(48)}`);
     const variant = Array.from(
