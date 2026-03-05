@@ -42,4 +42,10 @@ describe("buildOutboundSessionContext", () => {
     expect(buildOutboundSessionContext({ cfg, agentId: "  " })).toBeUndefined();
     expect(buildOutboundSessionContext({ cfg, agentId: null })).toBeUndefined();
   });
+
+  it("respects session.mainKey config when deriving key from agentId", () => {
+    const cfgWithMainKey = { session: { mainKey: "custom" } };
+    const result = buildOutboundSessionContext({ cfg: cfgWithMainKey, agentId: "mybot" });
+    expect(result).toEqual({ key: "agent:mybot:custom", agentId: "mybot" });
+  });
 });
