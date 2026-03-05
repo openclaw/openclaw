@@ -76,6 +76,30 @@ describe("runSilentMessageIngest", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("truncates long content on Unicode code point boundaries", async () => {
+    const runMessageIngest = vi.fn(async () => {});
+    const runner = {
+      hasHooks: vi.fn(() => true),
+      runMessageIngest,
+    } as unknown as HookRunner;
+
+    const content = `${"a".repeat(8191)}😀z`;
+
+    await runSilentMessageIngest({
+      enabled: true,
+      event: { from: "x", content },
+      ctx: { channelId: "signal", conversationId: "g1" },
+      hookRunner: runner,
+      log: vi.fn(),
+      logPrefix: "signal",
+    });
+
+    const calls = runMessageIngest.mock.calls as unknown[][];
+    const event = calls[0]?.[0] as { content: string } | undefined;
+    expect(event?.content.length).toBeGreaterThan(8191);
+    expect(event?.content).toBe(`${"a".repeat(8191)}😀`);
+  });
+
   it("keeps inflight slot until timed-out hook actually settles", async () => {
     let release = () => {};
     const blocked = new Promise<void>((resolve) => {

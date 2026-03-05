@@ -13,12 +13,20 @@ const DEFAULT_MAX_GLOBAL_INFLIGHT = 256;
 const DEFAULT_CONTENT_MAX_LENGTH = 8192;
 const DISALLOWED_CONTROL_CHARS_REGEX = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
+function truncateUnicodeSafe(value: string, maxCodePoints: number): string {
+  if (maxCodePoints <= 0) {
+    return "";
+  }
+  const codePoints = Array.from(value);
+  if (codePoints.length <= maxCodePoints) {
+    return value;
+  }
+  return codePoints.slice(0, maxCodePoints).join("");
+}
+
 function sanitizeIngestContent(value: string, maxLength: number): string {
   const stripped = value.replace(DISALLOWED_CONTROL_CHARS_REGEX, "");
-  if (stripped.length <= maxLength) {
-    return stripped;
-  }
-  return stripped.substring(0, maxLength);
+  return truncateUnicodeSafe(stripped, maxLength);
 }
 
 function makeInflightKey(ctx: PluginHookMessageContext): InflightKey {
