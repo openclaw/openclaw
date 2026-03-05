@@ -100,5 +100,3 @@ If the composition uses [`<TransitionSeries>`](./transitions.md), subtract the o
 See [audio.md](./audio.md) for more information on how to render audio in the component.
 
 ## Delaying audio start
-
-See [audio.md#delaying](./audio.md#delaying) for more information on how to delay the audio start.
