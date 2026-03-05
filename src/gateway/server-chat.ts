@@ -4,7 +4,9 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import type { GatewayAgentActivityEventPayload } from "./events.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -87,6 +89,62 @@ function isSilentReplyLeadFragment(text: string): boolean {
     return false;
   }
   return SILENT_REPLY_TOKEN.startsWith(normalized);
+}
+
+function buildAgentActivityPayload(params: {
+  evt: AgentEventPayload;
+  runId: string;
+  sourceRunId: string;
+  sessionKey?: string;
+}): GatewayAgentActivityEventPayload | null {
+  if (resolveHeartbeatContext(params.runId, params.sourceRunId)?.isHeartbeat) {
+    return null;
+  }
+
+  const phase =
+    typeof params.evt.data?.phase === "string" ? params.evt.data.phase.trim().toLowerCase() : "";
+  const taskName =
+    typeof params.evt.data?.name === "string" ? params.evt.data.name.trim() : undefined;
+  const base: Omit<GatewayAgentActivityEventPayload, "state"> = {
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    agent: resolveAgentIdFromSessionKey(params.sessionKey),
+    seq: params.evt.seq,
+    ts: params.evt.ts,
+    ...(taskName ? { task: taskName } : {}),
+    ...(phase ? { phase } : {}),
+  };
+
+  if (params.evt.stream === "tool") {
+    // Tool "result"/"end" events are often too chatty for activity dashboards.
+    if (phase === "result" || phase === "end") {
+      return null;
+    }
+    return { ...base, state: "tool" };
+  }
+
+  if (params.evt.stream === "assistant") {
+    return { ...base, state: "generating" };
+  }
+
+  if (params.evt.stream === "error") {
+    return { ...base, state: "error" };
+  }
+
+  if (params.evt.stream === "lifecycle") {
+    if (phase === "error") {
+      return { ...base, state: "error" };
+    }
+    if (phase === "end") {
+      return { ...base, state: "idle" };
+    }
+    // start/fallback/update/etc. should present as actively generating.
+    if (phase) {
+      return { ...base, state: "generating" };
+    }
+  }
+
+  return null;
 }
 
 export type ChatRunEntry = {
@@ -296,6 +354,8 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  const lastAgentActivityByRun = new Map<string, string>();
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -502,6 +562,23 @@ export function createAgentEventHandler({
       broadcast("agent", agentPayload);
     }
 
+    const activityPayload = buildAgentActivityPayload({
+      evt,
+      runId: eventRunId,
+      sourceRunId: evt.runId,
+      sessionKey,
+    });
+    if (activityPayload) {
+      const signature = `${activityPayload.state}|${activityPayload.task ?? ""}`;
+      if (lastAgentActivityByRun.get(evt.runId) !== signature) {
+        broadcast("agent.activity", activityPayload, { dropIfSlow: true });
+        if (sessionKey) {
+          nodeSendToSession(sessionKey, "agent.activity", activityPayload);
+        }
+        lastAgentActivityByRun.set(evt.runId, signature);
+      }
+    }
+
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
@@ -558,6 +635,8 @@ export function createAgentEventHandler({
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
+      lastAgentActivityByRun.delete(evt.runId);
+      lastAgentActivityByRun.delete(clientRunId);
     }
   };
 }

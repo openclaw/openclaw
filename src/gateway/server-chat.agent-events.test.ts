@@ -93,6 +93,10 @@ describe("agent event handler", () => {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
 
+  function activityBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
+    return broadcast.mock.calls.filter(([event]) => event === "agent.activity");
+  }
+
   function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
   }
@@ -394,7 +398,13 @@ describe("agent event handler", () => {
       data: { phase: "start", name: "read", toolCallId: "t1" },
     });
 
-    expect(broadcast).not.toHaveBeenCalled();
+    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(broadcastAgentCalls).toHaveLength(0);
+    const activityCalls = activityBroadcastCalls(broadcast);
+    expect(activityCalls).toHaveLength(1);
+    const activityPayload = activityCalls[0]?.[1] as { state?: string; task?: string };
+    expect(activityPayload.state).toBe("tool");
+    expect(activityPayload.task).toBe("read");
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     resetAgentRunContextForTest();
   });
@@ -637,5 +647,67 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe(
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
+  });
+
+  it("broadcasts deduplicated agent.activity transitions", () => {
+    const { broadcast, nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "agent:forge:discord:channel:ops",
+    });
+
+    handler({
+      runId: "run-activity",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+    handler({
+      runId: "run-activity",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "working..." },
+    });
+    handler({
+      runId: "run-activity",
+      seq: 3,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "search" },
+    });
+    handler({
+      runId: "run-activity",
+      seq: 4,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "update", name: "search" },
+    });
+    handler({
+      runId: "run-activity",
+      seq: 5,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const activityPayloads = activityBroadcastCalls(broadcast).map(
+      ([, payload]) => payload,
+    ) as Array<{
+      state?: string;
+      task?: string;
+      agent?: string;
+    }>;
+    expect(activityPayloads.map((payload) => payload.state)).toEqual([
+      "generating",
+      "tool",
+      "idle",
+    ]);
+    expect(activityPayloads[1]?.task).toBe("search");
+    expect(activityPayloads[0]?.agent).toBe("forge");
+
+    const nodeActivityCalls = nodeSendToSession.mock.calls.filter(
+      ([, event]) => event === "agent.activity",
+    );
+    expect(nodeActivityCalls).toHaveLength(3);
   });
 });
