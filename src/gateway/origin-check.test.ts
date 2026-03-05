@@ -100,4 +100,87 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(true);
   });
+  describe("Tailscale Serve (x-forwarded-host)", () => {
+    it("accepts forwarded-host when it matches allowlist", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("accepts forwarded-host even without host-header fallback enabled", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        allowHostHeaderOriginFallback: false,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("rejects forwarded-host not in allowlist", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "attacker.tailnet.ts.net",
+        origin: "https://attacker.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("origin not allowed");
+    });
+
+    it("accepts forwarded-host with full URL in allowlist and host-only origin", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("rejects forwarded-host partial match (host part only)", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "evilhost.com:8443",
+        origin: "https://evilhost.com:8443",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("origin not allowed");
+    });
+
+    it("works without forwarded-host (direct request still passes)", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        origin: "http://localhost:5173",
+        allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:18789"],
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("non-Tailscale proxy headers don't bypass allowlist", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "attacker.tailnet.ts.net",
+        origin: "https://attacker.tailnet.ts.net",
+        allowedOrigins: ["https://allowed.com"],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("origin not allowed");
+    });
+  });
 });

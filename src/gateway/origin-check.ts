@@ -28,6 +28,7 @@ function parseOrigin(
 
 export function checkBrowserOrigin(params: {
   requestHost?: string;
+  requestForwardedHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
@@ -38,18 +39,45 @@ export function checkBrowserOrigin(params: {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
+  const allowlistOrigins = (params.allowedOrigins ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const allowlist = new Set(allowlistOrigins);
+
+  const allowedHosts = new Set(
+    allowlistOrigins.map((origin) => {
+      try {
+        return new URL(origin).host.toLowerCase();
+      } catch {
+        return origin;
+      }
+    }),
   );
+
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }
 
-  const requestHost = normalizeHostHeader(params.requestHost);
+  const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
+  if (requestForwardedHost) {
+    const normalizedForwardedHost = requestForwardedHost.toLowerCase();
+    if (allowedHosts.has(normalizedForwardedHost)) {
+      return { ok: true, matchedBy: "allowlist" };
+    }
+  }
+
+  if (
+    requestForwardedHost &&
+    params.allowHostHeaderOriginFallback === true &&
+    parsedOrigin.host === requestForwardedHost
+  ) {
+    return { ok: true, matchedBy: "host-header-fallback" };
+  }
+
+  const directRequestHost = normalizeHostHeader(params.requestHost);
   if (
     params.allowHostHeaderOriginFallback === true &&
-    requestHost &&
-    parsedOrigin.host === requestHost
+    parsedOrigin.host === directRequestHost
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }

@@ -313,11 +313,19 @@ export function attachGatewayWsMessageHandler(params: {
     allowRealIpFallback,
   });
 
+  const requestForwardedHost = (() => {
+    const raw = upgradeReq.headers["x-forwarded-host"];
+    if (Array.isArray(raw)) {
+      return raw[0];
+    }
+    return raw;
+  })();
+
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
   // proxy without proper configuration - the proxy's loopback connection would otherwise
   // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = Boolean(forwardedFor || realIp);
+  const hasProxyHeaders = Boolean(forwardedFor || realIp || requestForwardedHost);
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
@@ -501,6 +509,7 @@ export function attachGatewayWsMessageHandler(params: {
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
+            requestForwardedHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
