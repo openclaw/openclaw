@@ -158,6 +158,8 @@ function splitTextForSynology(text: string): string[] {
   }
 
   return chunks.filter((chunk) => chunk.length > 0);
+}
+
 /**
  * Fetch the list of Chat users visible to this bot via the user_list API.
  * Results are cached for CACHE_TTL_MS to avoid excessive API calls.
