@@ -56,9 +56,41 @@ export function createDocumentInjectionWrapper(
       provider === "anthropic" || provider.startsWith("anthropic") || provider.includes("bedrock");
 
     if (!isAnthropic) {
-      // For non-Anthropic providers, append document info as text
-      // (fallback: the model sees the document metadata but not content)
-      return underlying(model, context, options);
+      // For non-Anthropic providers (OpenAI, Gemini, etc.), inject document
+      // metadata as a text block via onPayload so the model at least knows a
+      // PDF was attached. Full Anthropic { type: "document" } blocks are
+      // provider-specific and can't be used here, but a text note preserves
+      // context instead of silently dropping the attachment entirely.
+      const originalOnPayloadNonAnthropic = options?.onPayload;
+      return underlying(model, context, {
+        ...options,
+        onPayload: (payload) => {
+          if (payload && typeof payload === "object") {
+            const p = payload as Record<string, unknown>;
+            const messages = p.messages as Array<{ role: string; content: unknown }> | undefined;
+            if (messages) {
+              for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === "user") {
+                  const content = messages[i].content;
+                  const noteText = documents
+                    .map((doc, idx) => {
+                      const name = doc.fileName ?? `document-${idx + 1}.pdf`;
+                      return `[Attached PDF: ${name}]`;
+                    })
+                    .join("\n");
+                  if (typeof content === "string") {
+                    messages[i].content = content ? `${noteText}\n\n${content}` : noteText;
+                  } else if (Array.isArray(content)) {
+                    messages[i].content = [{ type: "text", text: noteText }, ...content];
+                  }
+                  break;
+                }
+              }
+            }
+          }
+          originalOnPayloadNonAnthropic?.(payload);
+        },
+      });
     }
 
     // Inject the Anthropic PDF beta header, preserving existing values.

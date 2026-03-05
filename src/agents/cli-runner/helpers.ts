@@ -344,7 +344,9 @@ export async function writeCliDocuments(
   for (let i = 0; i < documents.length; i += 1) {
     const doc = documents[i];
     const ext = doc.mimeType === "application/pdf" ? "pdf" : "bin";
-    const baseName = doc.fileName ?? `document-${i + 1}.${ext}`;
+    // Sanitize fileName: strip any path separators to prevent directory
+    // traversal (e.g. "../../../etc/passwd" from a crafted attachment name).
+    const baseName = path.basename(doc.fileName ?? `document-${i + 1}.${ext}`);
     const filePath = path.join(tempDir, baseName);
     const buffer = Buffer.from(doc.data, "base64");
     await fs.writeFile(filePath, buffer, { mode: 0o600 });
