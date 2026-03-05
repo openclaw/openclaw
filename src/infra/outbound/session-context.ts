@@ -1,6 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import type { SessionScope } from "../../config/sessions/types.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
@@ -17,6 +18,10 @@ function normalizeOptionalString(value?: string | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isGlobalScope(cfg: OpenClawConfig): boolean {
+  return (cfg.session?.scope as SessionScope | undefined) === "global";
+}
+
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
@@ -29,7 +34,12 @@ export function buildOutboundSessionContext(params: {
     : undefined;
   const agentId = explicitAgentId ?? derivedAgentId;
   const key =
-    explicitKey ?? (agentId ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId }) : undefined);
+    explicitKey ??
+    (agentId
+      ? isGlobalScope(params.cfg)
+        ? "global"
+        : resolveAgentMainSessionKey({ cfg: params.cfg, agentId })
+      : undefined);
   if (!key && !agentId) {
     return undefined;
   }

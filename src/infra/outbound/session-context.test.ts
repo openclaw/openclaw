@@ -29,4 +29,18 @@ describe("buildOutboundSessionContext", () => {
       agentId: "main",
     });
   });
+
+  it("uses global session key fallback when scope is global", () => {
+    const ctx = buildOutboundSessionContext({
+      cfg: {
+        session: { scope: "global" },
+      } as unknown as OpenClawConfig,
+      agentId: "main",
+    });
+
+    expect(ctx).toEqual({
+      key: "global",
+      agentId: "main",
+    });
+  });
 });
