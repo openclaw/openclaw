@@ -147,7 +147,19 @@ function windowsPathExtensions(): string[] {
 
 let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
+const HAS_BINARY_CACHE_MAX = 256;
 const hasBinaryCache = new Map<string, boolean>();
+
+function setHasBinaryCache(bin: string, exists: boolean): void {
+  hasBinaryCache.set(bin, exists);
+  if (hasBinaryCache.size <= HAS_BINARY_CACHE_MAX) {
+    return;
+  }
+  const oldest = hasBinaryCache.keys().next();
+  if (!oldest.done) {
+    hasBinaryCache.delete(oldest.value);
+  }
+}
 
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
@@ -168,13 +180,13 @@ export function hasBinary(bin: string): boolean {
       const candidate = path.join(part, bin + ext);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
-        hasBinaryCache.set(bin, true);
+        setHasBinaryCache(bin, true);
         return true;
       } catch {
         // keep scanning
       }
     }
   }
-  hasBinaryCache.set(bin, false);
+  setHasBinaryCache(bin, false);
   return false;
 }

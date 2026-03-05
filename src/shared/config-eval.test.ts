@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { evaluateRuntimeEligibility } from "./config-eval.js";
+import fs from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { evaluateRuntimeEligibility, hasBinary } from "./config-eval.js";
 
 describe("evaluateRuntimeEligibility", () => {
   it("rejects entries when required OS does not match local or remote", () => {
@@ -49,5 +50,53 @@ describe("evaluateRuntimeEligibility", () => {
       isConfigPathTruthy: (path) => path === "browser.enabled",
     });
     expect(result).toBe(true);
+  });
+});
+
+describe("hasBinary", () => {
+  const originalPath = process.env.PATH;
+  const originalPathext = process.env.PATHEXT;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env.PATH = `/tmp/config-eval-bin-${Date.now()}`;
+    process.env.PATHEXT = "";
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env.PATH = originalPath;
+    if (originalPathext === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathext;
+    }
+  });
+
+  it("reuses cached lookup results for the same binary", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    expect(hasBinary("cache-hit-bin")).toBe(false);
+    expect(hasBinary("cache-hit-bin")).toBe(false);
+    expect(accessSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts oldest entries once the cache cap is exceeded", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    for (let i = 0; i < 300; i += 1) {
+      expect(hasBinary(`bin-${i}`)).toBe(false);
+    }
+
+    const callsAfterWarmup = accessSpy.mock.calls.length;
+    expect(hasBinary("bin-0")).toBe(false);
+    expect(accessSpy).toHaveBeenCalledTimes(callsAfterWarmup + 1);
+
+    expect(hasBinary("bin-299")).toBe(false);
+    expect(accessSpy).toHaveBeenCalledTimes(callsAfterWarmup + 1);
   });
 });
