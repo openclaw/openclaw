@@ -643,11 +643,19 @@ export async function runAgentTurnWithFallback(params: {
     // have already completed (mid-turn).  Flush any queued block replies and
     // await pending tool tasks before returning so that partial results are
     // not lost or delivered out of order.
+    //
+    // Use a bounded wait so that a stuck tool-delivery promise cannot block
+    // the error path indefinitely — which would recreate the silent-turn
+    // behaviour this change is meant to fix.
+    const PENDING_TOOL_DRAIN_TIMEOUT_MS = 5_000;
     if (params.blockReplyPipeline) {
       await params.blockReplyPipeline.flush({ force: true });
     }
     if (params.pendingToolTasks.size > 0) {
-      await Promise.allSettled(params.pendingToolTasks);
+      await Promise.race([
+        Promise.allSettled(params.pendingToolTasks),
+        new Promise<void>((resolve) => setTimeout(resolve, PENDING_TOOL_DRAIN_TIMEOUT_MS)),
+      ]);
     }
     params.blockReplyPipeline?.stop();
 
