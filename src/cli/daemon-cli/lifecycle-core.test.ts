@@ -39,10 +39,11 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -58,6 +59,7 @@ describe("runServiceRestart token drift", () => {
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
+    service.label = "TestService";
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
@@ -122,5 +124,55 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+});
+
+describe("runServiceStart launchd self-heal", () => {
+  beforeEach(() => {
+    runtimeLogs.length = 0;
+    service.isLoaded.mockReset();
+    service.readCommand.mockReset();
+    service.restart.mockReset();
+  });
+
+  it("restarts unloaded LaunchAgent when plist config still exists", async () => {
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {},
+    });
+    service.restart.mockResolvedValue(undefined);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(service.readCommand).toHaveBeenCalledTimes(1);
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+    expect(payload.result).toBe("started");
+  });
+
+  it("keeps not-loaded response when LaunchAgent is not installed", async () => {
+    service.label = "LaunchAgent";
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+    expect(payload.result).toBe("not-loaded");
   });
 });
