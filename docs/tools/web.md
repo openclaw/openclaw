@@ -1,8 +1,8 @@
 ---
-summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, and Kimi providers)"
+summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, Kimi, and Querit providers)"
 read_when:
   - You want to enable web_search or web_fetch
-  - You need Perplexity or Brave Search API key setup
+  - You need Perplexity, Brave or Querit Search API key setup
   - You want to use Gemini with Google Search grounding
 title: "Web Tools"
 ---
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, or Kimi.
+- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, Kimi or Querit.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -36,6 +36,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 | **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
 | **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
 | **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
+| **Querit**                | Fast, multiligual, results for LLM                                                            | Requires Querit API key                     | `QUERIT_API_KEY`                    |
 
 ### Auto-detection
 
@@ -167,6 +168,7 @@ Search the web using your configured provider.
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **Querit**: `QUERIT_API_KEY` or `tools.web.search.querit.apiKey`
 
 ### Config
 

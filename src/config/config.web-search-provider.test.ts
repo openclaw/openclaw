@@ -7,7 +7,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { __testing } = await import("../agents/tools/web-search.js");
-const { resolveSearchProvider } = __testing;
+const { resolveSearchProvider, resolveQueritApiKey, resolveQueritConfig } = __testing;
 
 describe("web search provider config", () => {
   it("accepts perplexity provider and config", () => {
@@ -63,6 +63,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.QUERIT_API_KEY;
   });
 
   afterEach(() => {
@@ -129,5 +130,92 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("auto-detects querit when only QUERIT_API_KEY is set", () => {
+    process.env.QUERIT_API_KEY = "test-querit-key";
+    expect(resolveSearchProvider({})).toBe("querit");
+  });
+
+  it("querit loses to brave when both keys are set", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    process.env.QUERIT_API_KEY = "test-querit-key";
+    expect(resolveSearchProvider({})).toBe("brave");
+  });
+
+  it("querit loses to gemini when both keys are set", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.QUERIT_API_KEY = "test-querit-key";
+    expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("explicit querit provider always wins regardless of other keys", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    expect(
+      resolveSearchProvider({ provider: "querit" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("querit");
+  });
+});
+
+describe("querit provider config", () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it("accepts querit provider with apiKey config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "querit",
+        providerConfig: {
+          apiKey: "test-querit-key",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts querit provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "querit",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("resolveQueritConfig returns empty object when no search config", () => {
+    expect(resolveQueritConfig(undefined)).toEqual({});
+    expect(resolveQueritConfig({} as never)).toEqual({});
+  });
+
+  it("resolveQueritConfig extracts apiKey from search config", () => {
+    const config = { querit: { apiKey: "from-config" } } as never;
+    expect(resolveQueritConfig(config)).toEqual({ apiKey: "from-config" });
+  });
+
+  it("resolveQueritApiKey reads apiKey from config", () => {
+    expect(resolveQueritApiKey({ apiKey: "config-key" })).toBe("config-key");
+  });
+
+  it("resolveQueritApiKey falls back to QUERIT_API_KEY env var", () => {
+    process.env.QUERIT_API_KEY = "env-key";
+    expect(resolveQueritApiKey({})).toBe("env-key");
+  });
+
+  it("resolveQueritApiKey prefers config apiKey over env var", () => {
+    process.env.QUERIT_API_KEY = "env-key";
+    expect(resolveQueritApiKey({ apiKey: "config-key" })).toBe("config-key");
+  });
+
+  it("resolveQueritApiKey returns undefined when no key available", () => {
+    delete process.env.QUERIT_API_KEY;
+    expect(resolveQueritApiKey({})).toBeUndefined();
   });
 });
