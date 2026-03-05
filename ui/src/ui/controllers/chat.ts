@@ -40,14 +40,25 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  /** Info about the most recent compaction event */
+  lastCompactionInfo?: {
+    archivedCount: number;
+    remainingCount: number;
+    timestamp: number;
+  } | null;
 };
 
 export type ChatEventPayload = {
   runId: string;
   sessionKey: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "delta" | "final" | "aborted" | "error" | "compacted";
   message?: unknown;
   errorMessage?: string;
+  compactionInfo?: {
+    firstKeptEntryId: string;
+    archivedCount: number;
+    remainingCount: number;
+  };
 };
 
 export async function loadChatHistory(state: ChatState) {
@@ -313,6 +324,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
+  } else if (payload.state === "compacted") {
+    // Session messages were compacted; reload history to reflect changes.
+    // This prevents messages from appearing to be "deleted" when context is conserved.
+    void loadChatHistory(state);
+    return "compacted";
   }
   return payload.state;
 }

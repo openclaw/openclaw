@@ -122,6 +122,16 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** Optional callback for compaction events to notify UI */
+  onEvent?: (event: {
+    type: "compacted";
+    sessionKey?: string;
+    sessionId: string;
+    firstKeptEntryId: string;
+    archivedCount: number;
+    remainingCount: number;
+    timestamp: number;
+  }) => void;
 };
 
 type CompactionMessageMetrics = {
@@ -716,6 +726,20 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
+
+        // Notify listeners that compaction occurred (e.g., UI refresh)
+        if (params.onEvent && result.firstKeptEntryId) {
+          params.onEvent({
+            type: "compacted",
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            firstKeptEntryId: result.firstKeptEntryId,
+            archivedCount: Math.max(0, (preMetrics?.messages ?? 0) - (postMetrics?.messages ?? 0)),
+            remainingCount: postMetrics?.messages ?? 0,
+            timestamp: Date.now(),
+          });
+        }
+
         return {
           ok: true,
           compacted: true,
