@@ -65,11 +65,19 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   }
 
   // Create new client
+  // Bug fix for #36412: Add HTTP timeout to prevent queue deadlock.
+  // When Feishu API hangs (slow response, stuck TCP connection), the sendChain
+  // never settles, causing the per-chat queue to remain in processing state forever.
+  // This blocks all subsequent messages for that chatId until gateway restart.
+  const httpInstance = Lark.newHTTPInstance();
+  httpInstance.defaults.timeout = 30000; // 30 seconds (reasonable timeout for chat messages)
+  
   const client = new Lark.Client({
     appId,
     appSecret,
     appType: Lark.AppType.SelfBuild,
     domain: resolveDomain(domain),
+    httpInstance,
   });
 
   // Cache it
