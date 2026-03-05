@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/.autopr/scripts/task-start" "$@"

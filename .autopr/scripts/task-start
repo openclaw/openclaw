@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<USAGE
+Usage:
+  .autopr/scripts/task-start <task-id> [area]
+USAGE
+}
+
+sanitize() {
+  local v="$1"
+  v="$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')"
+  v="${v// /-}"
+  v="${v//\//-}"
+  printf '%s\n' "$v" | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+}
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  usage
+  exit 2
+fi
+
+task_id="$(sanitize "$1")"
+area="$(sanitize "${2:-core}")"
+[ -n "$task_id" ] || { echo "task-id is empty after normalization"; exit 1; }
+
+branch="codex/${area}/${task_id}"
+worktree_dir=".worktrees/${branch//\//-}"
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+git fetch upstream main
+
+if git show-ref --verify --quiet "refs/heads/$branch"; then
+  echo "Local branch already exists: $branch"
+  exit 1
+fi
+
+if [ -d "$worktree_dir" ]; then
+  echo "Worktree already exists: $worktree_dir"
+  echo "cd $worktree_dir"
+  exit 0
+fi
+
+mkdir -p .worktrees
+if git show-ref --verify --quiet "refs/remotes/upstream/main"; then
+  git worktree add "$worktree_dir" -b "$branch" upstream/main
+else
+  git worktree add "$worktree_dir" -b "$branch" origin/main
+fi
+
+echo "Created task workspace:"
+echo "  branch:   $branch"
+echo "  worktree: $worktree_dir"
+echo "Next:"
+echo "  cd $worktree_dir"
+echo "  .autopr/scripts/task-verify"

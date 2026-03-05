@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+VERIFY_SCRIPT="$ROOT_DIR/.autopr/scripts/task-verify"
+
+if [[ ! -x "$VERIFY_SCRIPT" ]]; then
+  echo "Missing helper: $VERIFY_SCRIPT" >&2
+  exit 1
+fi
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$branch" =~ ^codex/ ]]; then
+  "$VERIFY_SCRIPT" --fast
+fi

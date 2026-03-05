@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$branch" != clean/* ]]; then
+  echo "task-pr-open must run on a clean/* branch. Current: $branch"
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh is required"
+  exit 1
+fi
+
+base="${BASE_BRANCH:-main}"
+title="${PR_TITLE:-${branch#clean/}}"
+body_file=".autopr/templates/pr-body.md"
+
+if [ ! -f "$body_file" ]; then
+  echo "Missing PR template: $body_file"
+  exit 1
+fi
+
+gh pr create --base "$base" --title "$title" --body-file "$body_file"

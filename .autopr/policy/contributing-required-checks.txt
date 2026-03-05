@@ -1,0 +1,3 @@
+pnpm build
+pnpm check
+pnpm test

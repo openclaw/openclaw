@@ -41,6 +41,32 @@ fi
 
 files=("$@")
 
+# Enforce fork auto-PR guardrails on codex branches.
+root_dir="$(git rev-parse --show-toplevel)"
+guardrails="$root_dir/scripts/pr-guardrails.sh"
+if [ -f "$guardrails" ]; then
+  # shellcheck disable=SC1090
+  source "$guardrails"
+  current_branch="$(git rev-parse --abbrev-ref HEAD)"
+  if is_autopr_branch "$current_branch" && [ "${OPENCLAW_AUTOPR_ALLOW_SYSTEM_FILES:-0}" != "1" ]; then
+    blocked=()
+    for file in "${files[@]}"; do
+      if is_system_file "$file"; then
+        blocked+=("$file")
+      fi
+    done
+
+    if [ "${#blocked[@]}" -gt 0 ]; then
+      printf 'Error: forbidden automation-maintenance files on codex task branch:\n' >&2
+      for path in "${blocked[@]}"; do
+        printf '  - %s\n' "$path" >&2
+      done
+      printf 'Set OPENCLAW_AUTOPR_ALLOW_SYSTEM_FILES=1 only for explicit maintenance tasks.\n' >&2
+      exit 1
+    fi
+  fi
+fi
+
 # Disallow "." because it stages the entire repository and defeats the helper's safety guardrails.
 for file in "${files[@]}"; do
   if [ "$file" = "." ]; then

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/.autopr/scripts/common.sh"
+
+base_ref="${1:-origin/main}"
+
+echo "[INFO] CI verifying PR against $base_ref"
+
+system_files="$(find_system_files_in_diff "$base_ref" || true)"
+if [ -n "$system_files" ]; then
+  echo "[FAIL] Upstream PR contains automation/system files:" >&2
+  printf '%s\n' "$system_files" | sed 's/^/  - /' >&2
+  exit 1
+fi
+
+echo "[INFO] Running CONTRIBUTING hard checks"
+pnpm build
+pnpm check
+pnpm test
+
+echo "[PASS] ci-verify-pr completed"

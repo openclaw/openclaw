@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/.autopr/scripts/common.sh"
+
+source_branch="$(git rev-parse --abbrev-ref HEAD)"
+if ! is_autopr_branch "$source_branch"; then
+  echo "Current branch is not a codex task branch: $source_branch"
+  exit 1
+fi
+
+base_ref="$(resolve_base_ref "${BASE_REF:-origin/main}")"
+base_commit="$(git rev-parse "$base_ref")"
+
+mapfile -t files < <(changed_files_against_base "$base_ref")
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "No changes found against $base_ref"
+  exit 1
+fi
+
+filtered=()
+for f in "${files[@]}"; do
+  if ! is_system_file "$f"; then
+    filtered+=("$f")
+  fi
+done
+
+if [ "${#filtered[@]}" -eq 0 ]; then
+  echo "Only system automation files changed. Nothing to carry into clean PR branch."
+  exit 1
+fi
+
+clean_branch="clean/${source_branch//\//-}"
+if git show-ref --verify --quiet "refs/heads/$clean_branch"; then
+  clean_branch="${clean_branch}-$(date +%Y%m%d%H%M%S)"
+fi
+
+git switch -c "$clean_branch" "$base_commit"
+git checkout "$source_branch" -- "${filtered[@]}"
+
+if git diff --cached --quiet && git diff --quiet; then
+  echo "No effective content after filtering."
+  exit 1
+fi
+
+git add -- "${filtered[@]}"
+
+msg="${1:-AutoPR: clean branch from $source_branch}"
+git commit -m "$msg"
+
+echo "Created clean branch: $clean_branch"
+echo "Filtered-in files:"
+printf '%s\n' "${filtered[@]}" | sed 's/^/  - /'
+echo "Next: git push -u <fork-remote> $clean_branch"

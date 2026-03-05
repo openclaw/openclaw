@@ -1,0 +1,32 @@
+name: AutoPR Hygiene
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'clean/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify PR hygiene + CONTRIBUTING gates
+        run: .autopr/scripts/ci-verify-pr "origin/${{ github.base_ref }}"

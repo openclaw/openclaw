@@ -1,0 +1,7 @@
+.autopr/
+AGENTS.md
+CLAUDE.md
+git-hooks/pre-push
+scripts/task-start
+scripts/task-verify
+scripts/pr-guardrails.sh

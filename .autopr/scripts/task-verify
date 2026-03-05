@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck disable=SC1091
+source "$ROOT/.autopr/scripts/common.sh"
+
+mode="full"
+if [ "${1:-}" = "--fast" ]; then
+  mode="fast"
+fi
+
+base_ref="$(resolve_base_ref "${BASE_REF:-origin/main}")"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+errors=0
+
+if ! is_linked_worktree; then
+  echo "[FAIL] Must run from a linked git worktree for task isolation."
+  errors=1
+fi
+
+if ! is_autopr_branch "$branch"; then
+  echo "[FAIL] Branch must match: $AUTOPR_BRANCH_REGEX"
+  echo "       current: $branch"
+  errors=1
+fi
+
+if git diff --quiet "$base_ref...HEAD"; then
+  echo "[FAIL] No changes detected against $base_ref."
+  errors=1
+fi
+
+if [ "${OPENCLAW_AUTOPR_ALLOW_SYSTEM_FILES:-0}" != "1" ]; then
+  system_files="$(find_system_files_in_diff "$base_ref" || true)"
+  if [ -n "$system_files" ]; then
+    echo "[FAIL] System automation files are present in this task diff:"
+    printf '%s\n' "$system_files" | sed 's/^/  - /'
+    echo "Use OPENCLAW_AUTOPR_ALLOW_SYSTEM_FILES=1 only for explicit automation-maintenance tasks."
+    errors=1
+  fi
+fi
+
+if [ "$mode" = "full" ]; then
+  echo "[INFO] Running CONTRIBUTING hard checks"
+  pnpm build
+  pnpm check
+  pnpm test
+else
+  echo "[INFO] fast mode enabled: skipped build/check/test"
+fi
+
+if [ "$errors" -ne 0 ]; then
+  exit 1
+fi
+
+echo "[PASS] task-verify completed."

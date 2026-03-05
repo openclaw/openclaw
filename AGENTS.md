@@ -116,6 +116,24 @@
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 
+## Fork Auto-PR Policy (OpenClaw + Codex)
+
+- Scope: this policy governs fork-local automated PR iteration only.
+- OpenClaw role: scheduler only. OpenClaw creates tasks, tracks status, and dispatches Codex. OpenClaw does not hand-edit feature code.
+- Codex role: executor/owner. Codex owns one task branch at a time and is responsible for implementation, tests, PR updates, and follow-up until merge/close.
+- Rule source of truth: keep the automation system in `.autopr/` inside this fork so it can be reused on other machines.
+- Isolation is mandatory: every task must run in a dedicated linked worktree + dedicated branch.
+  - Start with `pnpm task:start <task-id> [area]` (branch format: `codex/<area>/<task-id>`).
+  - Verify with `pnpm task:verify` before opening or updating a PR.
+- Codex permissions: workspace-full by default for execution tasks; use policy gates to control what can be shipped upstream.
+- Forbidden-by-default upstream paths for Codex task PRs:
+  - `.autopr/**`, `AGENTS.md`, `CLAUDE.md`
+  - `git-hooks/pre-push`, `scripts/task-start`, `scripts/task-verify`, `scripts/pr-guardrails.sh`
+- Exception gate: modify those files only for explicit automation-maintenance tasks and set `OPENCLAW_AUTOPR_ALLOW_SYSTEM_FILES=1` while verifying/pushing.
+- Upstream PR workflow: always create PRs from clean branches (`pnpm task:pr:clean` + `pnpm task:pr:open`) so fork automation files stay out of upstream diffs.
+- Branch/worktree gate is enforced locally by `git-hooks/pre-push` (runs `.autopr/scripts/task-verify --fast` on `codex/*` branches).
+- CONTRIBUTING hard gate: before upstream PR, pass `pnpm build && pnpm check && pnpm test`.
+
 ## Shorthand Commands
 
 - `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
@@ -189,7 +207,7 @@
 - Notary auth env vars (`APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_API_KEY_P8`) are expected in your environment (per internal release docs).
 - **Multi-agent safety:** do **not** create/apply/drop `git stash` entries unless explicitly requested (this includes `git pull --rebase --autostash`). Assume other agents may be working; keep unrelated WIP untouched and avoid cross-cutting state changes.
 - **Multi-agent safety:** when the user says "push", you may `git pull --rebase` to integrate latest changes (never discard other agents' work). When the user says "commit", scope to your changes only. When the user says "commit all", commit everything in grouped chunks.
-- **Multi-agent safety:** do **not** create/remove/modify `git worktree` checkouts (or edit `.worktrees/*`) unless explicitly requested.
+- **Multi-agent safety:** do **not** create/remove/modify `git worktree` checkouts (or edit `.worktrees/*`) unless explicitly requested, except when following the fork auto-PR policy via `scripts/task-start`.
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless explicitly requested.
 - **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - **Multi-agent safety:** when you see unrecognized files, keep going; focus on your changes and commit only those.
