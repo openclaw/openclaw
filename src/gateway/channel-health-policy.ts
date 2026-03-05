@@ -32,7 +32,12 @@ export type ChannelHealthPolicy = {
   channelConnectGraceMs: number;
 };
 
-export type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck";
+export type ChannelRestartReason =
+  | "gave-up"
+  | "stopped"
+  | "disconnected"
+  | "stale-socket"
+  | "stuck";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
@@ -115,6 +120,9 @@ export function resolveChannelRestartReason(
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";
+  }
+  if (evaluation.reason === "disconnected") {
+    return "disconnected";
   }
   return "stuck";
 }
