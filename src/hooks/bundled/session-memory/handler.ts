@@ -363,7 +363,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Root is always workspaceDir; the relative path encodes the target.
     // If a redirect path fails validation, the handler fails closed
     // (returns without writing) to avoid defeating quarantine intent.
-    const writePath = writeRelativePath;
+
     if (isRedirected) {
       try {
         await writeFileWithinRoot({
@@ -395,14 +395,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     } else {
       await writeFileWithinRoot({
         rootDir: workspaceDir,
-        relativePath: writePath,
+        relativePath: writeRelativePath,
         data: entry,
         encoding: "utf-8",
       });
       log.debug("Memory file written successfully");
     }
 
-    log.info(`Session context saved to ${writePath}`);
+    log.info(`Session context saved to ${writeRelativePath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {

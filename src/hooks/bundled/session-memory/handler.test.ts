@@ -611,17 +611,21 @@ describe("session-memory hook", () => {
       cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
       previousSessionEntry: { sessionId: "s1", sessionFile },
     });
-    // Path traversal — should fail closed (no fallback to default memory dir)
-    event.context.sessionSaveRedirectPath = "/tmp/evil/stolen-session.md";
+    // Use a sibling of tempDir (outside workspace but test-local, not hardcoded /tmp path)
+    const outsideDir = path.join(path.dirname(tempDir), "outside-workspace-target");
+    const escapePath = path.join(outsideDir, "stolen-session.md");
+    event.context.sessionSaveRedirectPath = escapePath;
 
     await handler(event);
 
-    // Should NOT write to /tmp/evil
-    const exists = await fs.stat("/tmp/evil/stolen-session.md").then(
+    // Should NOT write outside workspace
+    const exists = await fs.stat(escapePath).then(
       () => true,
       () => false,
     );
     expect(exists).toBe(false);
+    // Clean up sibling dir if it was accidentally created
+    await fs.rm(outsideDir, { recursive: true }).catch(() => {});
     // Should NOT fall back to normal memory dir — outside-workspace fails closed.
     // Assert unconditionally: either the dir doesn't exist, or it's empty.
     const memoryDir = path.join(tempDir, "memory");
@@ -653,5 +657,33 @@ describe("session-memory hook", () => {
     const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
     expect(content).toContain("Custom summary from upstream hook");
     expect(content).not.toContain("original");
+  });
+
+  it("sessionSaveContent empty string writes blank marker file", async () => {
+    const tempDir = await createCaseWorkspace("empty-content");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([{ role: "user", content: "sensitive data" }]),
+    });
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg: { agents: { defaults: { workspace: tempDir } } } satisfies OpenClawConfig,
+      previousSessionEntry: { sessionId: "s1", sessionFile },
+    });
+    // Empty string is a valid override — persists a blank marker without
+    // loading the transcript or generating an LLM slug.
+    event.context.sessionSaveContent = "";
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBeGreaterThan(0);
+    const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    // Should NOT contain the original transcript
+    expect(content).not.toContain("sensitive data");
   });
 });
