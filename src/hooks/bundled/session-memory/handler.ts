@@ -24,6 +24,29 @@ const log = createSubsystemLogger("hooks/session-memory");
 /**
  * Read recent messages from session file for slug generation
  */
+/**
+ * Canonicalize an absolute path by walking up to the nearest existing ancestor
+ * and resolving symlinks from there. Handles cases like macOS /tmp → /private/tmp
+ * where the target file (or its parent dirs) don't exist yet.
+ */
+async function canonicalizeViaAncestor(absPath: string): Promise<string> {
+  let current = absPath;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const real = await fs.realpath(current);
+      return suffix.length > 0 ? path.join(real, ...suffix) : real;
+    } catch {
+      suffix.unshift(path.basename(current));
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return absPath;
+      } // reached filesystem root
+      current = parent;
+    }
+  }
+}
+
 async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount: number = 15,
@@ -311,18 +334,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
       isRedirected && path.isAbsolute(redirectPath)
         ? await fs.realpath(workspaceDir).catch(() => workspaceDir)
         : workspaceDir;
-    // Canonicalize the redirect path. For new files that don't exist yet,
-    // realpath fails — so canonicalize the parent directory and re-append
-    // the filename. NOTE: if the workspace itself is a symlink and the
-    // redirect parent does not yet exist, realpath falls back to the raw
-    // path, which may cause a spurious outside-workspace rejection (fails
-    // closed safely — no data loss, but the redirect is silently dropped).
+    // Canonicalize the redirect path by walking up to the nearest existing
+    // ancestor. This handles macOS /tmp → /private/tmp symlinks and other
+    // cases where the redirect target's parent doesn't exist yet.
     let canonicalRedirect = redirectPath;
     if (isRedirected && path.isAbsolute(redirectPath)) {
-      const redirectParent = path.dirname(redirectPath);
-      const redirectBase = path.basename(redirectPath);
-      const canonicalParent = await fs.realpath(redirectParent).catch(() => redirectParent);
-      canonicalRedirect = path.join(canonicalParent, redirectBase);
+      canonicalRedirect = await canonicalizeViaAncestor(redirectPath);
     }
     const writeRelativePath = isRedirected
       ? path.isAbsolute(redirectPath)
@@ -375,6 +392,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // If a redirect path fails validation, the handler fails closed
     // (returns without writing) to avoid defeating quarantine intent.
 
+    // Write scope: redirect paths use workspace/ as root (not memory/) to
+    // support quarantine and custom save locations. This is intentional —
+    // upstream hooks (e.g. provenance) need flexibility to direct saves to
+    // arbitrary workspace subdirs. Security is enforced by writeFileWithinRoot
+    // (path traversal, symlink, containment checks) preventing workspace escape.
+    // Non-redirect writes remain scoped to memory/ via hardcoded path prefix.
     if (isRedirected) {
       try {
         await writeFileWithinRoot({
