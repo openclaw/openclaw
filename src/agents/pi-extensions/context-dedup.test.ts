@@ -75,6 +75,23 @@ describe("context-dedup", () => {
     expect(String(result.messages[2].content)).toContain("[2 repeats of content omitted]");
   });
 
+  it("normalizes trailing newlines when matching duplicate payloads", () => {
+    const base = `${"line payload xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n".repeat(20)}`;
+    const withExtraTrailing = `${base}\n\n`;
+
+    const result = deduplicateMessages(
+      [
+        { role: "toolResult", content: withExtraTrailing },
+        { role: "toolResult", content: base },
+      ],
+      DEDUP_ON,
+    );
+
+    expect(String(result.messages[0].content)).toBe(withExtraTrailing);
+    expect(String(result.messages[1].content)).toContain("[1 repeat of content omitted]");
+    expect(String(result.messages[1].content)).toContain("context message #0");
+  });
+
   it("preserves scalar string content shape after replacement", () => {
     const repeated = "C".repeat(180);
 

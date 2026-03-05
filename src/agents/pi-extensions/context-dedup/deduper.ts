@@ -153,11 +153,26 @@ function stripLeadingTimestampPrefix(text: string): string {
   return normalized;
 }
 
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+function normalizeTrailingNewlines(text: string): string {
+  return text.replace(/\n+$/g, "\n");
+}
+
 function normalizeTextForDedup(text: string, role: string): string {
+  let normalized = normalizeLineEndings(text);
+
   if (role === "user" || role === "assistant") {
-    return stripLeadingTimestampPrefix(text);
+    normalized = stripLeadingTimestampPrefix(normalized);
   }
-  return text;
+
+  // Tool/read payloads that are otherwise identical can differ only by terminal
+  // newline count; normalize this so obvious repeats still dedup.
+  normalized = normalizeTrailingNewlines(normalized);
+
+  return normalized;
 }
 
 /**
