@@ -1336,10 +1336,11 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   const channelAllowlistConfigured = isDiscordChannelAllowlistConfigured(guildInfo?.channels);
+  const channelAllowed = channelConfig?.allowed !== false;
   if (
     shouldDenyDiscordChannelByAllowFlag({
       isGuildMessage: Boolean(interaction.guild),
-      channelAllowed: channelConfig?.allowed !== false,
+      channelAllowed,
       useAccessGroups,
       channelAllowlistConfigured,
     })
@@ -1348,7 +1349,6 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
