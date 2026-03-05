@@ -153,6 +153,15 @@ describe("createDiscordGatewayPlugin", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
+    expect((plugin as { emitter?: EventEmitter }).emitter?.listenerCount("error")).toBeGreaterThan(
+      0,
+    );
+    expect(() =>
+      (plugin as { emitter?: EventEmitter }).emitter?.emit(
+        "error",
+        new Error("proxy mode fallback listener check"),
+      ),
+    ).not.toThrow();
   });
 
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
@@ -166,6 +175,15 @@ describe("createDiscordGatewayPlugin", () => {
     expect(Object.getPrototypeOf(plugin)).toBe(GatewayPlugin.prototype);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+    expect((plugin as { emitter?: EventEmitter }).emitter?.listenerCount("error")).toBeGreaterThan(
+      0,
+    );
+    expect(() =>
+      (plugin as { emitter?: EventEmitter }).emitter?.emit(
+        "error",
+        new Error("invalid proxy fallback listener check"),
+      ),
+    ).not.toThrow();
   });
 
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
@@ -197,7 +215,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("attaches a fallback gateway error listener", () => {
+  it("attaches a fallback gateway error listener in default mode", () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
