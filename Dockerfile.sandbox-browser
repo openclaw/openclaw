@@ -9,6 +9,7 @@ RUN apt-get update \
     chromium \
     curl \
     fonts-liberation \
+    fonts-noto-cjk \
     fonts-noto-color-emoji \
     git \
     jq \
