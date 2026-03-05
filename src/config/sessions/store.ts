@@ -122,6 +122,12 @@ function resolveStoreSessionEntry(params: {
 } {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+  const equivalentNormalizedKeys = new Set([normalizedKey]);
+  if (normalizedKey.includes(":group:")) {
+    equivalentNormalizedKeys.add(normalizedKey.replace(":group:", ":channel:"));
+  } else if (normalizedKey.includes(":channel:")) {
+    equivalentNormalizedKeys.add(normalizedKey.replace(":channel:", ":group:"));
+  }
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
@@ -131,12 +137,25 @@ function resolveStoreSessionEntry(params: {
   }
   let existing =
     params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+  if (!existing) {
+    for (const equivalentKey of equivalentNormalizedKeys) {
+      if (equivalentKey === normalizedKey) {
+        continue;
+      }
+      const candidate = params.store[equivalentKey];
+      if (candidate) {
+        existing = candidate;
+        legacyKeySet.add(equivalentKey);
+        break;
+      }
+    }
+  }
   let existingUpdatedAt = existing?.updatedAt ?? 0;
   for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
     if (candidateKey === normalizedKey) {
       continue;
     }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
+    if (!equivalentNormalizedKeys.has(candidateKey.toLowerCase())) {
       continue;
     }
     legacyKeySet.add(candidateKey);

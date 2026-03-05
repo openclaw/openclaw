@@ -109,6 +109,39 @@ describe("session store key normalization", () => {
     expect(store[MIXED_CASE_KEY]).toBeUndefined();
   });
 
+  it("migrates legacy group/channel alias entries to the requested canonical key", async () => {
+    const channelAliasKey = "agent:main:webchat:channel:mixed-user";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [channelAliasKey]: {
+            sessionId: "legacy-channel-alias",
+            updatedAt: 1,
+            chatType: "group",
+            channel: "webchat",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: CANONICAL_KEY.replace(":dm:", ":group:"),
+      channel: "webchat",
+      to: "webchat:user-3",
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const canonicalGroupKey = CANONICAL_KEY.replace(":dm:", ":group:");
+    expect(store[canonicalGroupKey]?.sessionId).toBe("legacy-channel-alias");
+    expect(store[channelAliasKey]).toBeUndefined();
+  });
+
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
     await fs.writeFile(
       storePath,

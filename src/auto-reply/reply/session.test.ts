@@ -496,6 +496,82 @@ describe("initSessionState RawBody", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("restores telegram group sessions from legacy mixed-case keys", async () => {
+    const root = await makeCaseDir("openclaw-telegram-group-key-case-");
+    const storePath = path.join(root, "sessions.json");
+    const legacyKey = "Agent:Main:Telegram:Group:-1001234567890";
+    const canonicalKey = "agent:main:telegram:group:-1001234567890";
+    const existingSessionId = "telegram-group-existing";
+
+    await writeSessionStoreFast(storePath, {
+      [legacyKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        chatType: "group",
+        channel: "telegram",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        ChatType: "group",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: canonicalKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.sessionId).toBe(existingSessionId);
+    expect(result.sessionKey).toBe(canonicalKey);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[canonicalKey]?.sessionId).toBe(existingSessionId);
+    expect(store[legacyKey]).toBeUndefined();
+  });
+
+  it("restores telegram group sessions from legacy channel-shaped keys", async () => {
+    const root = await makeCaseDir("openclaw-telegram-group-channel-legacy-");
+    const storePath = path.join(root, "sessions.json");
+    const legacyChannelKey = "agent:main:telegram:channel:-1001234567890";
+    const canonicalGroupKey = "agent:main:telegram:group:-1001234567890";
+    const existingSessionId = "telegram-group-channel-legacy";
+
+    await writeSessionStoreFast(storePath, {
+      [legacyChannelKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        chatType: "group",
+        channel: "telegram",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        ChatType: "group",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: canonicalGroupKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionEntry.sessionId).toBe(existingSessionId);
+    expect(result.sessionKey).toBe(canonicalGroupKey);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[canonicalGroupKey]?.sessionId).toBe(existingSessionId);
+    expect(store[legacyChannelKey]).toBeUndefined();
+  });
 });
 
 describe("initSessionState reset policy", () => {

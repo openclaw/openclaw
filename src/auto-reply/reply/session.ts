@@ -43,6 +43,70 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 
 const log = createSubsystemLogger("session-init");
 
+function normalizeStoreSessionKey(sessionKey: string): string {
+  return sessionKey.trim().toLowerCase();
+}
+
+function resolveStoreSessionEntry(params: {
+  store: Record<string, SessionEntry>;
+  sessionKey: string;
+}): {
+  normalizedKey: string;
+  existing: SessionEntry | undefined;
+  legacyKeys: string[];
+} {
+  const trimmedKey = params.sessionKey.trim();
+  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+  const equivalentNormalizedKeys = new Set([normalizedKey]);
+  if (normalizedKey.includes(":group:")) {
+    equivalentNormalizedKeys.add(normalizedKey.replace(":group:", ":channel:"));
+  } else if (normalizedKey.includes(":channel:")) {
+    equivalentNormalizedKeys.add(normalizedKey.replace(":channel:", ":group:"));
+  }
+  const legacyKeySet = new Set<string>();
+  if (
+    trimmedKey !== normalizedKey &&
+    Object.prototype.hasOwnProperty.call(params.store, trimmedKey)
+  ) {
+    legacyKeySet.add(trimmedKey);
+  }
+  let existing =
+    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+  if (!existing) {
+    for (const equivalentKey of equivalentNormalizedKeys) {
+      if (equivalentKey === normalizedKey) {
+        continue;
+      }
+      const candidate = params.store[equivalentKey];
+      if (candidate) {
+        existing = candidate;
+        legacyKeySet.add(equivalentKey);
+        break;
+      }
+    }
+  }
+  let existingUpdatedAt = existing?.updatedAt ?? 0;
+  for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
+    if (candidateKey === normalizedKey) {
+      continue;
+    }
+    if (!equivalentNormalizedKeys.has(candidateKey.toLowerCase())) {
+      continue;
+    }
+    legacyKeySet.add(candidateKey);
+    const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
+    if (!existing || candidateUpdatedAt > existingUpdatedAt) {
+      existing = candidateEntry;
+      existingUpdatedAt = candidateUpdatedAt;
+    }
+  }
+  return {
+    normalizedKey,
+    existing,
+    legacyKeys: [...legacyKeySet],
+  };
+}
+
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -185,7 +249,15 @@ export async function initSessionState(params: {
   if (retiredLegacyMainDelivery) {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
-  const entry = sessionStore[sessionKey];
+  const resolvedEntry = resolveStoreSessionEntry({ store: sessionStore, sessionKey });
+  const entry = resolvedEntry.existing;
+  sessionKey = resolvedEntry.normalizedKey;
+  if (resolvedEntry.legacyKeys.length > 0 && entry) {
+    sessionStore[sessionKey] = entry;
+    for (const legacyKey of resolvedEntry.legacyKeys) {
+      delete sessionStore[legacyKey];
+    }
+  }
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
@@ -396,6 +468,9 @@ export async function initSessionState(params: {
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      for (const legacyKey of resolvedEntry.legacyKeys) {
+        delete store[legacyKey];
+      }
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
