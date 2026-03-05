@@ -293,7 +293,7 @@ export function killChildProcessTree(pid: number): void {
   if (process.platform === "win32") {
     // taskkill /T kills the entire process tree on Windows.
     try {
-      spawn("taskkill", ["/T", "/PID", String(pid)], { stdio: "ignore", detached: true });
+      spawn("taskkill", ["/T", "/PID", String(pid)], { stdio: "ignore", detached: true }).unref();
     } catch {
       // ignore
     }
@@ -302,7 +302,10 @@ export function killChildProcessTree(pid: number): void {
         return;
       }
       try {
-        spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", detached: true });
+        spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+          stdio: "ignore",
+          detached: true,
+        }).unref();
       } catch {
         // ignore
       }
@@ -321,16 +324,16 @@ export function killChildProcessTree(pid: number): void {
     }
   }
 
+  // Unconditionally attempt SIGKILL on the process group. The leader may
+  // have exited while descendants that caught/ignored SIGTERM are still alive.
   setTimeout(() => {
-    if (isProcessAlive(pid)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
       try {
-        process.kill(-pid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // already gone
-        }
+        // already gone
       }
     }
   }, KILL_TREE_GRACE_MS).unref();

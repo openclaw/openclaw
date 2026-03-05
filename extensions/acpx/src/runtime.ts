@@ -101,8 +101,8 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly spawnCommandCache: SpawnCommandCache = {};
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
-  /** PIDs of active prompt child processes, used for cleanup on close. */
-  private readonly activeChildPids = new Set<number>();
+  /** PIDs of active prompt child processes, keyed by session name for scoped cleanup. */
+  private readonly activeChildPids = new Map<string, Set<number>>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -281,7 +281,12 @@ export class AcpxRuntime implements AcpRuntime {
       this.spawnCommandOptions,
     );
     if (child.pid) {
-      this.activeChildPids.add(child.pid);
+      let pids = this.activeChildPids.get(state.name);
+      if (!pids) {
+        pids = new Set();
+        this.activeChildPids.set(state.name, pids);
+      }
+      pids.add(child.pid);
     }
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
@@ -355,7 +360,7 @@ export class AcpxRuntime implements AcpRuntime {
       // Kill the process tree to prevent orphaned grandchildren (e.g.
       // claude-agent-acp, metabase-mcp) from accumulating as zombies.
       if (child.pid) {
-        this.activeChildPids.delete(child.pid);
+        this.activeChildPids.get(state.name)?.delete(child.pid);
         killChildProcessTree(child.pid);
       }
     }
@@ -550,12 +555,15 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
-    // Force-kill any remaining child process trees that survived the
-    // graceful close to prevent zombie process accumulation.
-    for (const pid of this.activeChildPids) {
-      killChildProcessTree(pid);
+    // Force-kill child process trees belonging to this session that survived
+    // the graceful close to prevent zombie process accumulation.
+    const pids = this.activeChildPids.get(state.name);
+    if (pids) {
+      for (const pid of pids) {
+        killChildProcessTree(pid);
+      }
+      this.activeChildPids.delete(state.name);
     }
-    this.activeChildPids.clear();
   }
 
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
