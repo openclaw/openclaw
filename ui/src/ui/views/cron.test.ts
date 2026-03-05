@@ -136,6 +136,38 @@ describe("cron view", () => {
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
   });
 
+  it("shows explicit agent id on cron jobs", () => {
+    const container = document.createElement("div");
+    const job = { ...createJob("job-1"), agentId: "ops" };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+          defaultAgentId: "main",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Agent: ops");
+  });
+
+  it("shows fallback default agent id when cron job agent is empty", () => {
+    const container = document.createElement("div");
+    const job = createJob("job-1");
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+          defaultAgentId: "main",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Agent: main");
+  });
+
   it("marks the selected job and keeps History button to a single call", () => {
     const container = document.createElement("div");
     const onLoadRuns = vi.fn();
