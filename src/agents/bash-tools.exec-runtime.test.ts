@@ -54,6 +54,11 @@ describe("checkExecBlockedPath", () => {
     expect(checkExecBlockedPath("news-search 'AI news'")).toBeNull();
   });
 
+  it("blocks workdir containing a blocked path pattern", () => {
+    expect(checkExecBlockedPath("/Users/someone/.ssh/keys")).toBe(".ssh/");
+    expect(checkExecBlockedPath("/home/user/.config/secrets")).toBe(".config/");
+  });
+
   it("blocks CLAUDE.md access", () => {
     expect(checkExecBlockedPath("cat ~/CLAUDE.md")).toBe("CLAUDE.md");
   });

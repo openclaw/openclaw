@@ -353,10 +353,11 @@ export async function runExecProcess(opts: {
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   // L2.5: Block commands referencing sensitive paths before spawning any process
-  // Check both display command and actual exec command (which may differ for safeBins)
+  // Check command, execCommand (safeBins), and workdir (prevents cwd-based bypass)
   const blockedPath =
     checkExecBlockedPath(opts.command) ??
-    (opts.execCommand ? checkExecBlockedPath(opts.execCommand) : null);
+    (opts.execCommand ? checkExecBlockedPath(opts.execCommand) : null) ??
+    checkExecBlockedPath(opts.workdir);
   if (blockedPath) {
     const msg = `Access denied: blocked path (${blockedPath})`;
     logWarn(`exec-blocked: "${opts.command}" → ${msg}`);
