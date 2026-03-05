@@ -166,7 +166,10 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    };
   }
 
   // Trigger internal hook for reset/new commands
