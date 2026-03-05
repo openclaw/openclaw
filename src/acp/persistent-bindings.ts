@@ -13,4 +13,7 @@ export {
   ensureConfiguredAcpBindingSession,
   resetAcpSessionInPlace,
 } from "./persistent-bindings.lifecycle.js";
-export { resolveConfiguredAcpBindingRecord } from "./persistent-bindings.resolve.js";
+export {
+  resolveConfiguredAcpBindingRecord,
+  resolveConfiguredAcpBindingSpecBySessionKey,
+} from "./persistent-bindings.resolve.js";

@@ -3,6 +3,7 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
+import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
@@ -73,7 +74,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
         cfg: params.cfg,
         sessionKey,
         reason: "config-binding-reconfigure",
-        clearMeta: true,
+        clearMeta: false,
         allowBackendUnavailable: true,
         requireAcpSession: false,
       });
@@ -123,6 +124,23 @@ export async function resetAcpSessionInPlace(params: {
     sessionKey,
   })?.acp;
   if (!meta) {
+    const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg: params.cfg,
+      sessionKey,
+    });
+    if (configuredBinding) {
+      const ensured = await ensureConfiguredAcpBindingSession({
+        cfg: params.cfg,
+        spec: configuredBinding,
+      });
+      if (ensured.ok) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error: ensured.error,
+      };
+    }
     return {
       ok: false,
       skipped: true,
@@ -140,7 +158,7 @@ export async function resetAcpSessionInPlace(params: {
       cfg: params.cfg,
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
-      clearMeta: true,
+      clearMeta: false,
       allowBackendUnavailable: true,
       requireAcpSession: false,
     });

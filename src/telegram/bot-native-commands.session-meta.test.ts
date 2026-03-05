@@ -135,6 +135,42 @@ function registerAndResolveStatusHandler(params: {
   return { handler: handler as TelegramCommandHandler, sendMessage };
 }
 
+function registerAndResolveCommandHandler(params: {
+  commandName: string;
+  cfg: OpenClawConfig;
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  useAccessGroups?: boolean;
+}): {
+  handler: TelegramCommandHandler;
+  sendMessage: ReturnType<typeof vi.fn>;
+} {
+  const { commandName, cfg, allowFrom, groupAllowFrom, useAccessGroups } = params;
+  const commandHandlers = new Map<string, TelegramCommandHandler>();
+  const sendMessage = vi.fn().mockResolvedValue(undefined);
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage,
+        },
+        command: vi.fn((name: string, cb: TelegramCommandHandler) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      cfg,
+      allowFrom: allowFrom ?? [],
+      groupAllowFrom: groupAllowFrom ?? [],
+      useAccessGroups: useAccessGroups ?? true,
+    }),
+  });
+
+  const handler = commandHandlers.get(commandName);
+  expect(handler).toBeTruthy();
+  return { handler: handler as TelegramCommandHandler, sendMessage };
+}
+
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeEach(() => {
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockClear();
@@ -272,6 +308,80 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       -1001234567890,
       "Configured ACP binding is unavailable right now. Please try again.",
+      expect.objectContaining({ message_thread_id: 42 }),
+    );
+  });
+
+  it("allows /new in ACP-bound Telegram topics without sender allowlist entries", async () => {
+    const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
+      spec: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+        agentId: "codex",
+        mode: "persistent",
+      },
+      record: {
+        bindingId: "config:acp:telegram:default:-1001234567890:topic:42",
+        targetSessionKey: boundSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    });
+    persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
+      ok: true,
+      sessionKey: boundSessionKey,
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "new",
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+    });
+    await handler(buildStatusTopicCommandContext());
+
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandAuthorized?: boolean; CommandBody?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandBody).toBe("/new");
+    expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      -1001234567890,
+      "You are not authorized to use this command.",
+      expect.anything(),
+    );
+  });
+
+  it("keeps /new blocked for unbound Telegram topics when sender is unauthorized", async () => {
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(null);
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "new",
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      useAccessGroups: true,
+    });
+    await handler(buildStatusTopicCommandContext());
+
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      -1001234567890,
+      "You are not authorized to use this command.",
       expect.objectContaining({ message_thread_id: 42 }),
     );
   });

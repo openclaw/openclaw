@@ -56,10 +56,6 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
     typeof params.ctx.CommandTargetSessionKey === "string"
       ? params.ctx.CommandTargetSessionKey.trim()
       : "";
-  const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
-  if (activeSessionKey && !isAcpSessionKey(activeSessionKey)) {
-    return undefined;
-  }
   const configuredBinding = resolveConfiguredAcpBindingRecord({
     cfg: params.cfg,
     channel: bindingContext.channel,
@@ -68,10 +64,14 @@ export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): s
     parentConversationId: bindingContext.parentConversationId,
   });
   const binding = configuredBinding?.record ?? null;
-  if (!binding || binding.targetKind !== "session") {
+  if (binding && binding.targetKind === "session") {
+    return binding.targetSessionKey.trim() || undefined;
+  }
+  const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
+  if (activeSessionKey && !isAcpSessionKey(activeSessionKey)) {
     return undefined;
   }
-  return binding.targetSessionKey.trim() || undefined;
+  return undefined;
 }
 
 export async function resolveAcpTargetSessionKey(params: {

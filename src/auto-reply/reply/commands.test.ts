@@ -124,6 +124,7 @@ vi.mock("../../acp/persistent-bindings.js", async () => {
   };
 });
 
+import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -1003,24 +1004,27 @@ describe("handleCommands ACP-bound /new and /reset", () => {
   const buildDiscordBoundConfig = (): OpenClawConfig =>
     ({
       commands: { text: true },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: discordChannelId,
+            },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
       channels: {
         discord: {
           allowFrom: ["*"],
-          guilds: {
-            "1459246755253325866": {
-              channels: {
-                [discordChannelId]: {
-                  bindings: {
-                    acp: {
-                      enabled: true,
-                      agentId: "codex",
-                      mode: "persistent",
-                    },
-                  },
-                },
-              },
-            },
-          },
+          guilds: { "1459246755253325866": { channels: { [discordChannelId]: {} } } },
         },
       },
     }) as OpenClawConfig;
@@ -1076,8 +1080,15 @@ describe("handleCommands ACP-bound /new and /reset", () => {
     expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
   });
 
-  it("skips ACP in-place reset when runtime routing already fell back to a non-ACP session", async () => {
+  it("still targets configured ACP binding when runtime routing falls back to a non-ACP session", async () => {
     const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
+    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: discordChannelId,
+      agentId: "codex",
+      mode: "persistent",
+    });
     const params = buildDiscordBoundParams("/new");
     params.sessionKey = fallbackSessionKey;
     params.ctx.SessionKey = fallbackSessionKey;
@@ -1085,8 +1096,13 @@ describe("handleCommands ACP-bound /new and /reset", () => {
 
     const result = await handleCommands(params);
 
-    expect(result.shouldContinue).toBe(true);
-    expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset unavailable");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: configuredAcpSessionKey,
+      reason: "new",
+    });
   });
 });
 

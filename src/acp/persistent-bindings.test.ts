@@ -4,6 +4,10 @@ const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   closeSession: vi.fn(),
   initializeSession: vi.fn(),
+  updateSessionRuntimeOptions: vi.fn(),
+}));
+const sessionMetaMocks = vi.hoisted(() => ({
+  readAcpSessionEntry: vi.fn(),
 }));
 
 vi.mock("./control-plane/manager.js", () => ({
@@ -11,13 +15,19 @@ vi.mock("./control-plane/manager.js", () => ({
     resolveSession: managerMocks.resolveSession,
     closeSession: managerMocks.closeSession,
     initializeSession: managerMocks.initializeSession,
+    updateSessionRuntimeOptions: managerMocks.updateSessionRuntimeOptions,
   }),
+}));
+vi.mock("./runtime/session-meta.js", () => ({
+  readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
 import {
   buildConfiguredAcpSessionKey,
   ensureConfiguredAcpBindingSession,
+  resetAcpSessionInPlace,
   resolveConfiguredAcpBindingRecord,
+  resolveConfiguredAcpBindingSpecBySessionKey,
 } from "./persistent-bindings.js";
 
 const baseCfg = {
@@ -34,6 +44,8 @@ beforeEach(() => {
     metaCleared: true,
   });
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
+  managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
+  sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {
@@ -238,6 +250,52 @@ describe("resolveConfiguredAcpBindingRecord", () => {
   });
 });
 
+describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
+  it("maps a configured discord binding session key back to its spec", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "1478836151241412759" },
+          },
+          acp: {
+            backend: "acpx",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1478836151241412759",
+    });
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+
+    expect(spec?.channel).toBe("discord");
+    expect(spec?.conversationId).toBe("1478836151241412759");
+    expect(spec?.agentId).toBe("codex");
+    expect(spec?.backend).toBe("acpx");
+  });
+
+  it("returns null for unknown session keys", () => {
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg: baseCfg,
+      sessionKey: "agent:main:acp:binding:discord:default:notfound",
+    });
+    expect(spec).toBeNull();
+  });
+});
+
 describe("buildConfiguredAcpSessionKey", () => {
   it("is deterministic for the same conversation binding", () => {
     const sessionKeyA = buildConfiguredAcpSessionKey({
@@ -323,6 +381,12 @@ describe("ensureConfiguredAcpBindingSession", () => {
 
     expect(ensured).toEqual({ ok: true, sessionKey });
     expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        clearMeta: false,
+      }),
+    );
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
@@ -346,6 +410,81 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.initializeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "codex",
+      }),
+    );
+  });
+});
+
+describe("resetAcpSessionInPlace", () => {
+  it("reinitializes from configured binding when ACP metadata is missing", async () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "1478844424791396446" },
+          },
+          acp: {
+            mode: "persistent",
+            backend: "acpx",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1478844424791396446",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+    });
+    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+
+    const result = await resetAcpSessionInPlace({
+      cfg,
+      sessionKey,
+      reason: "new",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agent: "claude",
+        mode: "persistent",
+        backendId: "acpx",
+      }),
+    );
+  });
+
+  it("does not clear ACP metadata before reinitialize succeeds", async () => {
+    const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+        runtimeOptions: { cwd: "/home/bob/clawd" },
+      },
+    });
+    managerMocks.initializeSession.mockRejectedValueOnce(new Error("backend unavailable"));
+
+    const result = await resetAcpSessionInPlace({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(result).toEqual({ ok: false, error: "backend unavailable" });
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        clearMeta: false,
       }),
     );
   });

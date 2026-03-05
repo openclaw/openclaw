@@ -2,9 +2,14 @@ import { listAcpBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentAcpBinding } from "../config/types.js";
 import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { parseTelegramTopicConversation } from "./conversation-id.js";
 import {
+  buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
   normalizeMode,
   normalizeText,
@@ -36,6 +41,29 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
 function resolveBindingConversationId(binding: AgentAcpBinding): string | null {
   const id = binding.match.peer?.id?.trim();
   return id ? id : null;
+}
+
+function parseConfiguredBindingSessionKey(params: {
+  sessionKey: string;
+}): { channel: ConfiguredAcpBindingChannel; accountId: string } | null {
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  const rest = parsed?.rest?.trim().toLowerCase() ?? "";
+  if (!rest) {
+    return null;
+  }
+  const tokens = rest.split(":");
+  if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
+    return null;
+  }
+  const channel = normalizeBindingChannel(tokens[2]);
+  if (!channel) {
+    return null;
+  }
+  const accountId = normalizeAccountId(tokens[3]);
+  return {
+    channel,
+    accountId,
+  };
 }
 
 function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgentId: string }): {
@@ -87,6 +115,64 @@ function toConfiguredBindingSpec(params: {
     backend: bindingOverrides.backend ?? runtimeDefaults.backend,
     label: bindingOverrides.label,
   };
+}
+
+export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): ConfiguredAcpBindingSpec | null {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const parsedSessionKey = parseConfiguredBindingSessionKey({ sessionKey });
+  if (!parsedSessionKey) {
+    return null;
+  }
+  for (const binding of listAcpBindings(params.cfg)) {
+    const channel = normalizeBindingChannel(binding.match.channel);
+    if (!channel || channel !== parsedSessionKey.channel) {
+      continue;
+    }
+    if (!matchesAccountId(binding.match.accountId, parsedSessionKey.accountId)) {
+      continue;
+    }
+    const targetConversationId = resolveBindingConversationId(binding);
+    if (!targetConversationId) {
+      continue;
+    }
+    if (channel === "discord") {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: parsedSessionKey.accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        return spec;
+      }
+      continue;
+    }
+    const parsedTopic = parseTelegramTopicConversation({
+      conversationId: targetConversationId,
+    });
+    if (!parsedTopic || !parsedTopic.chatId.startsWith("-")) {
+      continue;
+    }
+    const spec = toConfiguredBindingSpec({
+      cfg: params.cfg,
+      channel: "telegram",
+      accountId: parsedSessionKey.accountId,
+      conversationId: parsedTopic.canonicalConversationId,
+      parentConversationId: parsedTopic.chatId,
+      binding,
+    });
+    if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+      return spec;
+    }
+  }
+  return null;
 }
 
 export function resolveConfiguredAcpBindingRecord(params: {

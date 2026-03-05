@@ -43,7 +43,11 @@ import {
   matchPluginCommand,
 } from "../plugins/commands.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey, resolveThreadSessionKeys } from "../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
@@ -74,6 +78,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const RESET_COMMAND_NAMES = new Set(["new", "reset"]);
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -495,6 +500,20 @@ export const registerTelegramNativeCommands = ({
         ),
     });
   };
+  const sendCommandUnauthorizedReply = async (params: {
+    chatId: number;
+    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+  }) => {
+    const threadParams = buildTelegramThreadParams(params.threadSpec) ?? {};
+    await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        bot.api.sendMessage(params.chatId, "You are not authorized to use this command.", {
+          ...threadParams,
+        }),
+    });
+  };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
     accountId: string;
@@ -531,6 +550,7 @@ export const registerTelegramNativeCommands = ({
           if (shouldSkipUpdate(ctx)) {
             return;
           }
+          const isSessionResetCommand = RESET_COMMAND_NAMES.has(normalizedCommandName);
           const auth = await resolveTelegramCommandAuth({
             msg,
             bot,
@@ -542,7 +562,7 @@ export const registerTelegramNativeCommands = ({
             useAccessGroups,
             resolveGroupPolicy,
             resolveTelegramGroupConfig,
-            requireAuth: true,
+            requireAuth: !isSessionResetCommand,
           });
           if (!auth) {
             return;
@@ -556,8 +576,9 @@ export const registerTelegramNativeCommands = ({
             senderUsername,
             groupConfig,
             topicConfig,
-            commandAuthorized,
+            commandAuthorized: initialCommandAuthorized,
           } = auth;
+          let commandAuthorized = initialCommandAuthorized;
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
@@ -576,6 +597,14 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          if (isSessionResetCommand && !commandAuthorized) {
+            if (isAcpSessionKey(route.sessionKey)) {
+              commandAuthorized = true;
+            } else {
+              await sendCommandUnauthorizedReply({ chatId, threadSpec });
+              return;
+            }
+          }
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
