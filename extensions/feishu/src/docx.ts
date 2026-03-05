@@ -562,7 +562,13 @@ async function processImages(
 
       processed++;
     } catch (err) {
-      console.error(`Failed to process image ${url}:`, err);
+      try {
+        getFeishuRuntime()
+          .logging.getChildLogger({ module: "feishu-docx" })
+          .warn?.(`Failed to process image ${url}: ${String(err)}`);
+      } catch {
+        // Fallback when runtime logging is unavailable.
+      }
     }
   }
 

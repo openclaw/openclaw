@@ -76,6 +76,14 @@ async function sendOutboundText(params: {
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
 }
 
+function logOutboundWarning(message: string): void {
+  try {
+    getFeishuRuntime().logging.getChildLogger({ module: "feishu-outbound" }).warn?.(message);
+  } catch {
+    // Fallback when runtime logging is unavailable (e.g. during tests).
+  }
+}
+
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -98,7 +106,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        console.error(`[feishu] local image path auto-send failed:`, err);
+        logOutboundWarning(`local image path auto-send failed: ${String(err)}`);
         // fall through to plain text as last resort
       }
     }
@@ -147,8 +155,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        // Log the error for debugging
-        console.error(`[feishu] sendMediaFeishu failed:`, err);
+        logOutboundWarning(`sendMediaFeishu failed, falling back to URL text: ${String(err)}`);
         // Fallback to URL link if upload fails
         const fallbackText = `📎 ${mediaUrl}`;
         const result = await sendOutboundText({
