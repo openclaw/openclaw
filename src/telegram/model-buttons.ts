@@ -203,7 +203,10 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     // Compare full provider/model key to avoid marking all providers with the same modelId.
-    const isCurrentModel = `${provider}/${model}` === currentModel;
+    // Fall back to bare modelId comparison when currentModel has no provider prefix.
+    const isCurrentModel = currentModel?.includes("/")
+      ? `${provider}/${model}` === currentModel
+      : model === currentModel;
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

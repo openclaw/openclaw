@@ -287,6 +287,20 @@ describe("buildModelsKeyboard", () => {
     expect(result2[1]?.[0]?.text).toBe("claude-sonnet-4");
   });
 
+  it("falls back to bare modelId comparison when currentModel has no provider prefix", () => {
+    // Session override without provider (storedOverride.provider is undefined)
+    // passes a bare model ID like "gpt-4" as currentModel.
+    const result = buildModelsKeyboard({
+      provider: "openai",
+      models: ["gpt-4", "gpt-3.5-turbo"],
+      currentModel: "gpt-4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("gpt-4 ✓");
+    expect(result[1]?.[0]?.text).toBe("gpt-3.5-turbo");
+  });
+
   it("keeps short display IDs untouched and truncates overly long IDs", () => {
     const cases = [
       {
