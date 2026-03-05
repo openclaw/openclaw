@@ -109,7 +109,7 @@ export default function register(api: any) {
       }
 
       emitGeneration(ph, traceCtx, sk, event, getPrivacyMode());
-      emitTrace(ph, traceCtx, sk);
+      emitTrace(ph, traceCtx, sk, event, getPrivacyMode());
       emitCustomEvent(ph, "dench_turn_completed", {
         session_id: sk,
         run_id: ctx.runId,

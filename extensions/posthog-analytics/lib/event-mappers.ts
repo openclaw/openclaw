@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import type { PostHogClient } from "./posthog-client.js";
 import type { TraceContextManager } from "./trace-context.js";
-import { sanitizeForCapture, stripSecrets } from "./privacy.js";
+import { sanitizeMessages, sanitizeOutputChoices, stripSecrets } from "./privacy.js";
 
 function getAnonymousId(): string {
   try {
@@ -15,8 +15,6 @@ function getAnonymousId(): string {
 
 /**
  * Extract actual token counts and cost from OpenClaw's per-message usage metadata.
- * Each assistant message in the agent_end messages array includes:
- *   usage: { input, output, cacheRead, cacheWrite, cost: { total, input, output, ... } }
  */
 export function extractUsageFromMessages(messages: unknown): {
   inputTokens: number;
@@ -52,17 +50,18 @@ export function extractToolNamesFromMessages(messages: unknown): string[] {
     if (!msg || typeof msg !== "object") continue;
     const m = msg as Record<string, unknown>;
 
-    // OpenAI format: assistant message with tool_calls array
     if (Array.isArray(m.tool_calls)) {
       for (const tc of m.tool_calls) {
         const name = (tc as any)?.function?.name ?? (tc as any)?.name;
         if (typeof name === "string" && name) names.push(name);
       }
     }
-    // Anthropic format: content blocks with type "tool_use"
     if (Array.isArray(m.content)) {
       for (const block of m.content) {
         if ((block as any)?.type === "tool_use" && typeof (block as any)?.name === "string") {
+          names.push((block as any).name);
+        }
+        if ((block as any)?.type === "toolCall" && typeof (block as any)?.name === "string") {
           names.push((block as any).name);
         }
         if ((block as any)?.type === "tool-call" && typeof (block as any)?.toolName === "string") {
@@ -70,7 +69,6 @@ export function extractToolNamesFromMessages(messages: unknown): string[] {
         }
       }
     }
-    // Tool result messages have a "name" field with the tool name
     if (m.role === "tool" && typeof m.name === "string") {
       names.push(m.name);
     }
@@ -81,8 +79,6 @@ export function extractToolNamesFromMessages(messages: unknown): string[] {
 /**
  * Normalize OpenClaw's message format into OpenAI-compatible output choices
  * so PostHog can extract tool calls for the Tools tab.
- * Converts Anthropic-style content blocks (type: "toolCall") to OpenAI's
- * tool_calls array format.
  */
 export function normalizeOutputForPostHog(messages: unknown): unknown[] | undefined {
   if (!Array.isArray(messages)) return undefined;
@@ -133,6 +129,80 @@ export function normalizeOutputForPostHog(messages: unknown): unknown[] | undefi
     choices.push(choice);
   }
   return choices.length > 0 ? choices : undefined;
+}
+
+/**
+ * Build full conversation state for the $ai_trace event.
+ * Splits messages into input (user/tool/system) and output (assistant) arrays,
+ * preserving chronological order so PostHog renders the full conversation.
+ */
+export function buildTraceState(
+  messages: unknown,
+  privacyMode: boolean,
+): { inputState: unknown; outputState: unknown } {
+  if (!Array.isArray(messages)) return { inputState: undefined, outputState: undefined };
+
+  const inputMessages: unknown[] = [];
+  const outputMessages: unknown[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+
+    const extractText = () => {
+      if (Array.isArray(m.content)) {
+        return (m.content as Array<Record<string, unknown>>)
+          .filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("");
+      }
+      return typeof m.content === "string" ? m.content : null;
+    };
+
+    if (m.role === "assistant") {
+      const content = privacyMode ? "[REDACTED]" : extractText();
+      const entry: Record<string, unknown> = { role: "assistant", content };
+
+      const toolNames = extractToolNamesFromSingleMessage(m);
+      if (toolNames.length > 0) {
+        entry.tool_calls = toolNames.map((name) => ({
+          type: "function",
+          function: { name },
+        }));
+      }
+
+      outputMessages.push(entry);
+    } else if (m.role === "user" || m.role === "tool" || m.role === "toolResult" || m.role === "system") {
+      const content = privacyMode ? "[REDACTED]" : extractText();
+      const entry: Record<string, unknown> = { role: m.role, content };
+      if (m.name) entry.name = m.name;
+      if (m.toolName) entry.toolName = m.toolName;
+      inputMessages.push(entry);
+    }
+  }
+
+  return {
+    inputState: inputMessages.length > 0 ? inputMessages : undefined,
+    outputState: outputMessages.length > 0 ? outputMessages : undefined,
+  };
+}
+
+function extractToolNamesFromSingleMessage(m: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  if (Array.isArray(m.tool_calls)) {
+    for (const tc of m.tool_calls) {
+      const name = (tc as any)?.function?.name ?? (tc as any)?.name;
+      if (typeof name === "string" && name) names.push(name);
+    }
+  }
+  if (Array.isArray(m.content)) {
+    for (const block of m.content) {
+      if ((block as any)?.type === "toolCall" && typeof (block as any)?.name === "string") {
+        names.push((block as any).name);
+      }
+    }
+  }
+  return names;
 }
 
 /**
@@ -187,10 +257,10 @@ export function emitGeneration(
       if (extracted.totalCostUsd > 0) properties.$ai_total_cost_usd = extracted.totalCostUsd;
     }
 
-    properties.$ai_input = sanitizeForCapture(trace.input, privacyMode);
+    properties.$ai_input = sanitizeMessages(trace.input, privacyMode);
 
     const outputChoices = normalizeOutputForPostHog(event.messages);
-    properties.$ai_output_choices = sanitizeForCapture(
+    properties.$ai_output_choices = sanitizeOutputChoices(
       outputChoices ?? event.output ?? event.messages,
       privacyMode,
     );
@@ -264,6 +334,8 @@ export function emitTrace(
   ph: PostHogClient,
   traceCtx: TraceContextManager,
   sessionKey: string,
+  event?: any,
+  privacyMode?: boolean,
 ): void {
   try {
     const trace = traceCtx.getTrace(sessionKey);
@@ -273,6 +345,11 @@ export function emitTrace(
       ? (Date.now() - trace.startedAt) / 1_000
       : undefined;
 
+    const { inputState, outputState } = buildTraceState(
+      event?.messages,
+      privacyMode ?? true,
+    );
+
     ph.capture({
       distinctId: getAnonymousId(),
       event: "$ai_trace",
@@ -281,6 +358,8 @@ export function emitTrace(
         $ai_session_id: trace.sessionId,
         $ai_latency: latency,
         $ai_span_name: "agent_run",
+        $ai_input_state: inputState,
+        $ai_output_state: outputState,
         tool_count: trace.toolSpans.length,
       },
     });

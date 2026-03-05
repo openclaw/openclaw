@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TraceContextManager } from "../../extensions/posthog-analytics/lib/trace-context.js";
-import { emitGeneration, emitToolSpan, emitTrace, emitCustomEvent, extractToolNamesFromMessages, extractUsageFromMessages, normalizeOutputForPostHog } from "../../extensions/posthog-analytics/lib/event-mappers.js";
+import { emitGeneration, emitToolSpan, emitTrace, emitCustomEvent, extractToolNamesFromMessages, extractUsageFromMessages, normalizeOutputForPostHog, buildTraceState } from "../../extensions/posthog-analytics/lib/event-mappers.js";
 
 function createMockPostHog() {
   return {
@@ -164,7 +164,7 @@ describe("emitGeneration", () => {
     expect(call.properties.$ai_is_error).toBe(false);
   });
 
-  it("redacts input/output when privacy mode is on (enforces privacy boundary)", () => {
+  it("redacts input/output content when privacy mode is on but preserves message structure (roles, tool names visible)", () => {
     traceCtx.startTrace("s", "r");
     traceCtx.setInput("s", [{ role: "user", content: "sensitive" }], true);
 
@@ -173,8 +173,12 @@ describe("emitGeneration", () => {
     }, true);
 
     const props = ph.capture.mock.calls[0][0].properties;
-    expect(props.$ai_input).toBe("[REDACTED]");
-    expect(props.$ai_output_choices).toBe("[REDACTED]");
+    const input = props.$ai_input as Array<Record<string, unknown>>;
+    expect(input[0].role).toBe("user");
+    expect(input[0].content).toBe("[REDACTED]");
+    const output = props.$ai_output_choices as Array<Record<string, unknown>>;
+    expect(output[0].role).toBe("assistant");
+    expect(output[0].content).toBe("[REDACTED]");
   });
 
   it("does not set $ai_total_cost_usd when cost is zero (prevents misleading $0 in PostHog)", () => {
@@ -341,22 +345,97 @@ describe("emitToolSpan", () => {
   });
 });
 
+describe("buildTraceState", () => {
+  it("includes all user messages in inputState and all assistant messages in outputState (full conversation)", () => {
+    const messages = [
+      { role: "user", content: "Question 1" },
+      { role: "assistant", content: "Answer 1" },
+      { role: "user", content: "Question 2" },
+      { role: "assistant", content: "Answer 2" },
+    ];
+    const { inputState, outputState } = buildTraceState(messages, false);
+    expect(inputState).toEqual([
+      { role: "user", content: "Question 1" },
+      { role: "user", content: "Question 2" },
+    ]);
+    expect(outputState).toEqual([
+      { role: "assistant", content: "Answer 1" },
+      { role: "assistant", content: "Answer 2" },
+    ]);
+  });
+
+  it("includes tool result messages in inputState (user sees tool activity)", () => {
+    const messages = [
+      { role: "user", content: "run ls" },
+      { role: "assistant", content: "Running..." },
+      { role: "tool", name: "exec", content: "file1.txt" },
+      { role: "assistant", content: "Done!" },
+    ];
+    const { inputState, outputState } = buildTraceState(messages, false);
+    expect(inputState).toHaveLength(2);
+    expect((inputState as any[])[1].role).toBe("tool");
+    expect((inputState as any[])[1].name).toBe("exec");
+    expect(outputState).toHaveLength(2);
+  });
+
+  it("redacts content in privacy mode but keeps role and tool metadata", () => {
+    const messages = [
+      { role: "user", content: "secret" },
+      { role: "assistant", content: [{ type: "text", text: "classified" }, { type: "toolCall", name: "exec" }] },
+    ];
+    const { inputState, outputState } = buildTraceState(messages, true);
+    expect((inputState as any[])[0]).toEqual({ role: "user", content: "[REDACTED]" });
+    expect((outputState as any[])[0].content).toBe("[REDACTED]");
+    expect((outputState as any[])[0].tool_calls).toEqual([{ type: "function", function: { name: "exec" } }]);
+  });
+
+  it("preserves tool call names on assistant messages in privacy mode (tool type always visible)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "Let me search",
+        tool_calls: [{ function: { name: "web_search" } }],
+      },
+    ];
+    const { outputState } = buildTraceState(messages, true);
+    expect((outputState as any[])[0].tool_calls).toEqual([{ type: "function", function: { name: "web_search" } }]);
+  });
+
+  it("returns undefined for empty or non-array input", () => {
+    expect(buildTraceState(null, false)).toEqual({ inputState: undefined, outputState: undefined });
+    expect(buildTraceState([], false)).toEqual({ inputState: undefined, outputState: undefined });
+  });
+});
+
 describe("emitTrace", () => {
-  it("emits $ai_trace with correct trace ID, session ID, and tool count", () => {
+  it("emits $ai_trace with full conversation state from buildTraceState", () => {
     const ph = createMockPostHog();
     const traceCtx = new TraceContextManager();
     traceCtx.startTrace("sess-1", "r");
-    traceCtx.startToolSpan("sess-1", "a", {});
-    traceCtx.endToolSpan("sess-1", "a", {});
-    traceCtx.startToolSpan("sess-1", "b", {});
-    traceCtx.endToolSpan("sess-1", "b", {});
 
-    emitTrace(ph, traceCtx, "sess-1");
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+    ];
 
-    const call = ph.capture.mock.calls[0][0];
-    expect(call.event).toBe("$ai_trace");
-    expect(call.properties.$ai_trace_id).toBe(traceCtx.getTrace("sess-1")!.traceId);
-    expect(call.properties.tool_count).toBe(2);
+    emitTrace(ph, traceCtx, "sess-1", { messages }, false);
+
+    const props = ph.capture.mock.calls[0][0].properties;
+    expect(props.$ai_trace_id).toBe(traceCtx.getTrace("sess-1")!.traceId);
+    expect(props.$ai_input_state).toEqual([{ role: "user", content: "Hello" }]);
+    expect(props.$ai_output_state).toEqual([{ role: "assistant", content: "Hi there!" }]);
+  });
+
+  it("sets undefined state when no messages provided (backward compat)", () => {
+    const ph = createMockPostHog();
+    const traceCtx = new TraceContextManager();
+    traceCtx.startTrace("s", "r");
+
+    emitTrace(ph, traceCtx, "s");
+
+    const props = ph.capture.mock.calls[0][0].properties;
+    expect(props.$ai_input_state).toBeUndefined();
+    expect(props.$ai_output_state).toBeUndefined();
   });
 });
 
