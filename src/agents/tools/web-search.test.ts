@@ -389,6 +389,7 @@ describe("web_search ark provider auto-detection", () => {
         BRAVE_API_KEY: undefined,
         GEMINI_API_KEY: undefined,
         KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
       },
       () => {
         expect(resolveSearchProvider({})).toBe("ark");
@@ -403,6 +404,7 @@ describe("web_search ark provider auto-detection", () => {
         BRAVE_API_KEY: undefined,
         GEMINI_API_KEY: undefined,
         KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
       },
       () => {
         expect(resolveSearchProvider({})).toBe("ark");
@@ -417,6 +419,7 @@ describe("web_search ark provider auto-detection", () => {
         BRAVE_API_KEY: undefined,
         GEMINI_API_KEY: undefined,
         KIMI_API_KEY: undefined,
+        MOONSHOT_API_KEY: undefined,
       },
       () => {
         expect(resolveSearchProvider({})).toBe("ark");
