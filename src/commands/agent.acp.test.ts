@@ -62,6 +62,24 @@ function mockConfigWithAcpOverrides(
   loadConfigSpy.mockReturnValue(cfg);
 }
 
+function createAcpConfigWithModelFallbacks(home: string, storePath: string): OpenClawConfig {
+  const cfg = createAcpEnabledConfig(home, storePath);
+  cfg.agents = {
+    defaults: {
+      model: {
+        primary: "openai/gpt-5.3-codex",
+        fallbacks: ["openai/gpt-4"],
+      },
+      models: {
+        "openai/gpt-5.3-codex": {},
+        "openai/gpt-4": {},
+      },
+      workspace: path.join(home, "openclaw"),
+    },
+  };
+  return cfg;
+}
+
 function writeAcpSessionStore(storePath: string, agent = "codex") {
   const sessionKey = `agent:${agent}:acp:test`;
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -157,6 +175,24 @@ describe("agentCommand ACP runtime routing", () => {
         durationMs: 5,
       },
     } as never);
+  });
+
+  it("skips ACP path when model fallbacks are configured and uses embedded path (runWithModelFallback)", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath);
+      loadConfigSpy.mockReturnValue(createAcpConfigWithModelFallbacks(home, storePath));
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      expect(runTurn).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentSpy).toHaveBeenCalled();
+    });
   });
 
   it("routes ACP sessions through AcpSessionManager instead of embedded agent", async () => {
