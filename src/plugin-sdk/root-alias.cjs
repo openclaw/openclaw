@@ -180,7 +180,10 @@ const rootProxy = new Proxy(fastExports, {
     if (own) {
       return own;
     }
-    const monolithic = loadMonolithicSdk();
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return undefined;
+    }
     const descriptor = Object.getOwnPropertyDescriptor(monolithic, prop);
     if (!descriptor) {
       return undefined;
