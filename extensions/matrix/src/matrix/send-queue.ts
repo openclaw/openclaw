@@ -1,5 +1,3 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-
 export const DEFAULT_SEND_GAP_MS = 150;
 
 type MatrixSendQueueOptions = {
@@ -8,7 +6,7 @@ type MatrixSendQueueOptions = {
 };
 
 // Serialize sends per room to preserve Matrix delivery order.
-const roomQueues = new KeyedAsyncQueue();
+const roomQueues = new Map<string, Promise<unknown>>();
 
 export function enqueueSend<T>(
   roomId: string,
@@ -17,10 +15,16 @@ export function enqueueSend<T>(
 ): Promise<T> {
   const gapMs = options?.gapMs ?? DEFAULT_SEND_GAP_MS;
   const delayFn = options?.delayFn ?? delay;
-  return roomQueues.enqueue(roomId, async () => {
-    await delayFn(gapMs);
-    return await fn();
-  });
+  const previous = roomQueues.get(roomId) ?? Promise.resolve();
+  const next = previous.then(() => delayFn(gapMs)).then(() => fn());
+  roomQueues.set(
+    roomId,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
 }
 
 function delay(ms: number): Promise<void> {
