@@ -86,6 +86,14 @@ export function handleMessageUpdate(
 
   ctx.noteLastAssistant(msg);
 
+  // If a cross-turn separator is pending, prepend it to deltaBuffer before processing
+  // the first chunk of the new turn. This ensures proper separation between
+  // tool-call cycles when block streaming is enabled (issue #35308).
+  if (ctx.state.pendingCrossTurnSeparator) {
+    ctx.state.deltaBuffer = "\n\n" + ctx.state.deltaBuffer;
+    ctx.state.pendingCrossTurnSeparator = false;
+  }
+
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
     assistantEvent && typeof assistantEvent === "object"
