@@ -49,6 +49,7 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
+const CONTEXT_1M_TOKENS = 1_048_576;
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
   if (a === b) {
@@ -600,9 +601,45 @@ export function resolveModelDirectiveSelection(params: {
 
 export function resolveContextTokens(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  provider: string;
   model: string;
 }): number {
+  const modelKeyValue = modelKey(normalizeProviderId(params.provider), params.model);
+  const modelEntry = (() => {
+    const entries = params.agentCfg?.models;
+    if (!entries) {
+      return undefined;
+    }
+    if (entries[modelKeyValue]) {
+      return entries[modelKeyValue];
+    }
+    for (const [rawKey, entry] of Object.entries(entries)) {
+      const parsed = resolveModelRefFromString({
+        raw: rawKey,
+        defaultProvider: params.provider,
+      });
+      if (!parsed) {
+        continue;
+      }
+      if (modelKey(normalizeProviderId(parsed.ref.provider), parsed.ref.model) === modelKeyValue) {
+        return entry;
+      }
+    }
+    return undefined;
+  })();
+  const modelParams = modelEntry?.params;
+  const contextTokensFromParams =
+    typeof modelParams?.contextTokens === "number" &&
+    Number.isFinite(modelParams.contextTokens) &&
+    modelParams.contextTokens > 0
+      ? Math.trunc(modelParams.contextTokens)
+      : modelParams?.context1m === true
+        ? CONTEXT_1M_TOKENS
+        : undefined;
   return (
-    params.agentCfg?.contextTokens ?? lookupContextTokens(params.model) ?? DEFAULT_CONTEXT_TOKENS
+    params.agentCfg?.contextTokens ??
+    contextTokensFromParams ??
+    lookupContextTokens(params.model) ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }

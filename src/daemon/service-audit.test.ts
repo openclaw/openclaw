@@ -118,6 +118,22 @@ describe("checkTokenDrift", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when service token is wrapped in quotes", () => {
+    const result = checkTokenDrift({
+      serviceToken: '"same-token"',
+      configToken: "same-token",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when tokens only differ by surrounding whitespace", () => {
+    const result = checkTokenDrift({
+      serviceToken: " same-token ",
+      configToken: "same-token",
+    });
+    expect(result).toBeNull();
+  });
+
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
     expect(result).not.toBeNull();
