@@ -19,6 +19,25 @@ vi.mock("../config/config.js", () => ({
     mockWriteConfigFile(cfg, options),
 }));
 
+vi.mock("../config/safe-mode.js", () => ({
+  createSafeModeConfig: () => ({ gateway: { port: 18789 } }),
+  createSafeModeSentinel: async () => {},
+  isSafeModeEnabled: () => false,
+  shouldStartInSafeMode: () => false,
+}));
+
+vi.mock("../config/atomic-config.js", () => ({
+  getAtomicConfigManager: () => ({
+    validateConfig: async () => ({
+      valid: true,
+      errors: [],
+      warnings: [],
+      twelveFactorIssues: [],
+    }),
+    listBackups: async () => [],
+  }),
+}));
+
 const mockLog = vi.fn();
 const mockError = vi.fn();
 const mockExit = vi.fn((code: number) => {
@@ -406,6 +425,58 @@ describe("config cli", () => {
       await runConfigCommand(["config", "file"]);
 
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+    });
+  });
+
+  describe("config validate --check-backups", () => {
+    it("includes backup info in help text", () => {
+      const program = new Command();
+      registerConfigCli(program);
+
+      const configCommand = program.commands.find((c) => c.name() === "config");
+      const validateCommand = configCommand?.commands.find((c) => c.name() === "validate");
+      const helpText = validateCommand?.helpInformation() ?? "";
+
+      expect(helpText).toContain("--check-backups");
+      expect(helpText).toContain("--12-factor");
+      expect(helpText).toContain("--fix");
+    });
+  });
+
+  describe("config validate --fix", () => {
+    it("exits 1 on invalid config even with --fix", async () => {
+      setSnapshotOnce({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: false,
+        config: {},
+        issues: [{ path: "gateway.port", message: "Expected number, received string" }],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate", "--fix"])).rejects.toThrow("__exit__:1");
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
+      // --fix creates safe-mode sentinel (logged as success)
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Safe mode sentinel created"));
+    });
+  });
+
+  describe("config validate --json with valid config", () => {
+    it("returns valid JSON with path", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "validate", "--json"]);
+
+      const raw = mockLog.mock.calls.at(0)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as { valid: boolean; path: string };
+      expect(payload.valid).toBe(true);
+      expect(payload.path).toBeTruthy();
     });
   });
 });
