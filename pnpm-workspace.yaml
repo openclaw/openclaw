@@ -14,3 +14,4 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
+  - @tloncorp/api
