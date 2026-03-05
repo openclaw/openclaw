@@ -337,7 +337,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Canonicalize the redirect path by walking up to the nearest existing
     // ancestor. This handles macOS /tmp → /private/tmp symlinks and other
     // cases where the redirect target's parent doesn't exist yet.
-    let canonicalRedirect = redirectPath;
+    let canonicalRedirect = redirectPath as string;
     if (isRedirected && path.isAbsolute(redirectPath)) {
       canonicalRedirect = await canonicalizeViaAncestor(redirectPath);
     }
