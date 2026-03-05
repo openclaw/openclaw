@@ -62,6 +62,7 @@ export async function saveCronStore(
   opts?: SaveCronStoreOptions,
 ) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
+  await fs.promises.chmod(path.dirname(storePath), 0o700).catch(() => {});
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
   if (cached === json) {
@@ -86,8 +87,8 @@ export async function saveCronStore(
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
-      await fs.promises.chmod(`${storePath}.bak`, 0o600);
+      const bakContent = await fs.promises.readFile(storePath);
+      await fs.promises.writeFile(`${storePath}.bak`, bakContent, { mode: 0o600 });
     } catch {
       // best-effort
     }
