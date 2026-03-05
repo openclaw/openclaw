@@ -1,7 +1,17 @@
 import type { ChatEventPayload } from "./controllers/chat.ts";
 
-export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
+type ChatEventReloadOptions = {
+  activeRunId?: string | null;
+};
+
+export function shouldReloadHistoryForFinalEvent(
+  payload?: ChatEventPayload,
+  options?: ChatEventReloadOptions,
+): boolean {
   if (!payload || payload.state !== "final") {
+    return false;
+  }
+  if (options?.activeRunId && payload.runId === options.activeRunId) {
     return false;
   }
   if (!payload.message || typeof payload.message !== "object") {
