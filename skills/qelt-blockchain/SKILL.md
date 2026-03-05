@@ -115,7 +115,8 @@ LATEST=$(curl -fsSL -X POST https://mainnet.qelt.ai \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
 
 # Then query a bounded recent range (last ~1000 blocks ≈ 83 minutes on QELT)
-FROM_HEX=$(python3 -c "print(hex(int('$LATEST',16) - 1000))")
+# Clamp at 0 so the start block is never negative on a low-height chain (e.g. fresh testnet).
+FROM_HEX=$(python3 -c "latest=int('$LATEST',16); print(hex(max(0, latest - 1000)))")
 
 curl -fsSL -X POST https://mainnet.qelt.ai \
   -H "Content-Type: application/json" \
