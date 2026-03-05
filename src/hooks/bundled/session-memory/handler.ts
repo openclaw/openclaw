@@ -303,13 +303,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // can validate containment. Absolute paths are made relative to the
     // canonical workspace root (realpath) to avoid symlink aliasing issues
     // where the same physical directory has different path representations.
+    // Canonicalize both workspace and redirect path to avoid symlink aliasing
+    // where the same physical directory has different path representations.
     const canonicalWorkspace =
       isRedirected && path.isAbsolute(redirectPath)
         ? await fs.realpath(workspaceDir).catch(() => workspaceDir)
         : workspaceDir;
+    const canonicalRedirect =
+      isRedirected && path.isAbsolute(redirectPath)
+        ? await fs.realpath(redirectPath).catch(() => redirectPath)
+        : redirectPath;
     const writeRelativePath = isRedirected
       ? path.isAbsolute(redirectPath)
-        ? path.relative(canonicalWorkspace, redirectPath)
+        ? path.relative(canonicalWorkspace, canonicalRedirect)
         : redirectPath
       : path.join("memory", filename);
 
