@@ -95,16 +95,24 @@ function classifyPrincipal(
   }
 
   if (
+    WORLD_PRINCIPALS.has(normalized) ||
+    WORLD_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+  ) {
+    return "world";
+  }
+
+  if (
     trustedPrincipals.has(normalized) ||
     TRUSTED_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
   ) {
     return "trusted";
   }
-  if (
-    WORLD_PRINCIPALS.has(normalized) ||
-    WORLD_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
-  ) {
-    return "world";
+
+  // Locale/encoding guard: icacls can emit localized NT AUTHORITY account names
+  // with mojibake in non-UTF8 shells. Treat NT AUTHORITY principals as trusted
+  // (after explicit world-principal checks above) to avoid false positives.
+  if (normalized.startsWith("nt authority\\")) {
+    return "trusted";
   }
 
   // Fallback: strip diacritics and re-check for localized SYSTEM variants

@@ -209,10 +209,24 @@ Successfully processed 1 files`;
           rawRights: "(R)",
           canWrite: false,
         }),
+        aclEntry({
+          principal: "NT AUTHORITY\\Authenticated Users",
+          rights: ["R"],
+          rawRights: "(R)",
+          canWrite: false,
+        }),
       ];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(0);
-      expect(summary.untrustedWorld).toHaveLength(2);
+      expect(summary.untrustedWorld).toHaveLength(3);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies mojibake NT AUTHORITY principals as trusted", () => {
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "NT AUTHORITY\\�������" })];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedWorld).toHaveLength(0);
       expect(summary.untrustedGroup).toHaveLength(0);
     });
 
