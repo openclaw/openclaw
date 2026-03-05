@@ -8,6 +8,7 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -1551,6 +1552,34 @@ export async function runEmbeddedAttempt(
             }
           } else {
             throw err;
+          }
+        }
+
+        if (!promptError && !aborted) {
+          const replyMode = params.config?.agents?.defaults?.replyMode ?? "auto";
+          const nonMarkerTexts = assistantTexts.filter((text) => {
+            const trimmed = text.trim();
+            return (
+              trimmed.length > 0 && trimmed !== SILENT_REPLY_TOKEN && trimmed !== HEARTBEAT_TOKEN
+            );
+          });
+          if (
+            replyMode === "tool-only" &&
+            nonMarkerTexts.length > 0 &&
+            !didSendViaMessagingTool()
+          ) {
+            const preview = nonMarkerTexts.join("\n").slice(0, 150);
+            const alert =
+              `⚠️ Your plain text was discarded because replyMode is "tool-only". ` +
+              `If this was a reply intended for the user/customer, resend it using the message tool. ` +
+              `If this was internal reasoning/thinking, ignore this alert.\n\n` +
+              `Discarded text preview: "${preview}"`;
+            try {
+              await abortable(activeSession.prompt(alert));
+              await abortable(waitForCompactionRetry());
+            } catch {
+              // Best effort: dispatch-level suppression still prevents accidental delivery.
+            }
           }
         }
 

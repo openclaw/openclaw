@@ -26,7 +26,7 @@ export default function register(api: OpenClawPluginApi) {
   const client = createSupabaseClient(config);
   const handleUi = createUiHandler(config);
 
-  const log = (msg: string) => console.log(`[iris-dashboard] ${msg}`);
+  const log = (msg: string) => api.logger.info?.(`[iris-dashboard] ${msg}`);
 
   // Handler for all /iris-dashboard/* requests
   api.registerHttpRoute({

@@ -229,6 +229,26 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      // Bundled vs global is the normal "install from bundled" flow — the user
+      // explicitly installed the plugin into the global extensions directory.
+      // Silently prefer global (which has higher precedence than bundled) without
+      // emitting a spurious warning.
+      const isBundledVsGlobal =
+        (existing.candidate.origin === "bundled" && candidate.origin === "global") ||
+        (existing.candidate.origin === "global" && candidate.origin === "bundled");
+      if (isBundledVsGlobal) {
+        if (candidate.origin === "global") {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
