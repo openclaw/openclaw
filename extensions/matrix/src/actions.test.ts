@@ -28,8 +28,8 @@ describe("matrix message actions voice flags", () => {
   });
 
   it("maps asVoice to audioAsVoice for send action", async () => {
-    await matrixMessageActions.handleAction({
-      action: "send",
+    await matrixMessageActions.handleAction!({
+      action: "send" as const,
       params: {
         to: "!room:example.org",
         message: "voice",
@@ -49,8 +49,8 @@ describe("matrix message actions voice flags", () => {
   });
 
   it("accepts audioAsVoice alias for send action", async () => {
-    await matrixMessageActions.handleAction({
-      action: "send",
+    await matrixMessageActions.handleAction!({
+      action: "send" as const,
       params: {
         to: "!room:example.org",
         message: "voice",
