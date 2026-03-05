@@ -668,6 +668,107 @@ export function applyReadLineageCompaction(messages: any[]): ReadLineageCompacti
   };
 }
 
+function parseDedupPointerTargetMessageIndex(text: string): number | undefined {
+  const match = text.match(/Same as context message #(\d+), block #\d+(?: \(toolCallId [^)]+\))?\./);
+  if (!match) {
+    return undefined;
+  }
+  const value = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function resolveRootSourceMessageIndex(messages: any[], startIndex: number): number {
+  let current = startIndex;
+  const visited = new Set<number>();
+
+  while (!visited.has(current) && current >= 0 && current < messages.length) {
+    visited.add(current);
+    const target = parseDedupPointerTargetMessageIndex(extractText(messages[current]?.content));
+    if (typeof target !== "number") {
+      return current;
+    }
+    if (target < 0 || target >= messages.length) {
+      return current;
+    }
+    current = target;
+  }
+
+  return startIndex;
+}
+
+function rewriteLineageSourceHint(text: string, messages: any[]): string {
+  if (!text.includes("Earlier chunk: context message #")) {
+    return text;
+  }
+
+  return text.replace(
+    /Earlier chunk: context message #(\d+)(?: \(toolCallId [^)]+\))?/g,
+    (full, sourceIndexRaw: string) => {
+      const sourceIndex = Number.parseInt(sourceIndexRaw, 10);
+      if (!Number.isFinite(sourceIndex) || sourceIndex < 0 || sourceIndex >= messages.length) {
+        return full;
+      }
+      const resolved = resolveRootSourceMessageIndex(messages, sourceIndex);
+      if (resolved === sourceIndex) {
+        return full;
+      }
+      return `Earlier chunk: context message #${resolved}`;
+    },
+  );
+}
+
+export function rewriteReadLineageSourcePointers(messages: any[]): any[] {
+  let nextMessages: any[] | null = null;
+
+  for (let msgIndex = 0; msgIndex < messages.length; msgIndex++) {
+    const msg = messages[msgIndex];
+    const content = msg?.content;
+
+    if (typeof content === "string") {
+      const rewritten = rewriteLineageSourceHint(content, messages);
+      if (rewritten !== content) {
+        if (!nextMessages) {
+          nextMessages = messages.slice();
+        }
+        nextMessages[msgIndex] = { ...msg, content: rewritten };
+      }
+      continue;
+    }
+
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    let changed = false;
+    const nextContent = content.map((block) => {
+      const text = extractBlockText(block);
+      if (typeof text !== "string") {
+        return block;
+      }
+
+      const rewritten = rewriteLineageSourceHint(text, messages);
+      if (rewritten === text) {
+        return block;
+      }
+
+      changed = true;
+      return setBlockText(block, rewritten);
+    });
+
+    if (changed) {
+      if (!nextMessages) {
+        nextMessages = messages.slice();
+      }
+      nextMessages[msgIndex] = { ...msg, content: nextContent };
+    }
+  }
+
+  return nextMessages ?? messages;
+}
+
 export default function contextDedupExtension(api: ExtensionAPI): void {
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     const runtime = getContextDedupRuntime(ctx.sessionManager);
@@ -691,15 +792,14 @@ export default function contextDedupExtension(api: ExtensionAPI): void {
     const cleanedTable = cleanOrphanedRefs(lineageMessages, runtime.refTable, runtime.settings);
 
     // Run deduplication on normalized messages
-    const result = deduplicateMessages(lineageMessages, runtime.settings, {
-      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
-    });
+    const result = deduplicateMessages(lineageMessages, runtime.settings);
+    const resolvedMessages = rewriteReadLineageSourcePointers(result.messages);
 
     // Merge ref tables (new refs from this turn + cleaned old refs)
     const mergedTable = { ...cleanedTable, ...result.refTable };
 
     // Build candidate context: deduped messages + ref table message (if any refs)
-    let candidateMessages = result.messages;
+    let candidateMessages = resolvedMessages;
     if (Object.keys(mergedTable).length > 0) {
       const refTableText = serializeRefTable(mergedTable, runtime.settings);
       const explanation = buildRefTableExplanation(runtime.settings);

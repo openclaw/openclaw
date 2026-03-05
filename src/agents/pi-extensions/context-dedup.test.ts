@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deduplicateMessages } from "./context-dedup/deduper.js";
-import { applyReadLineageCompaction } from "./context-dedup/extension.js";
+import { applyReadLineageCompaction, rewriteReadLineageSourcePointers } from "./context-dedup/extension.js";
 
 const DEDUP_ON = {
   mode: "on",
@@ -238,7 +238,7 @@ describe("context-dedup", () => {
     expect(hunkCount).toBeLessThanOrEqual(3);
   });
 
-  it("prevents nested dedup by protecting read-lineage source messages", () => {
+  it("rewrites nested lineage source pointers to original dedup source", () => {
     const original = Array.from(
       { length: 40 },
       (_, idx) => `line ${idx + 1} :: ${"z".repeat(48)}`,
@@ -322,18 +322,18 @@ describe("context-dedup", () => {
     ];
 
     const lineage = applyReadLineageCompaction(messages as any[]);
-    expect(lineage.protectedSourceMessageIndexes.has(5)).toBe(true);
 
-    const deduped = deduplicateMessages(lineage.messages as any[], DEDUP_ON, {
-      protectedMessageIndexes: lineage.protectedSourceMessageIndexes,
-    });
-
+    const deduped = deduplicateMessages(lineage.messages as any[], DEDUP_ON);
     const sourceMessageText = String(deduped.messages[5].content);
-    expect(sourceMessageText).toContain("line 1 ::");
-    expect(sourceMessageText).not.toContain("Same as context message #");
+    expect(sourceMessageText).toContain("Same as context message #1");
 
-    const deltaText = String(deduped.messages[7].content);
-    expect(deltaText).toContain("[Read delta from earlier chunk]");
-    expect(deltaText).toContain("context message #5");
+    const preRewriteDeltaText = String(deduped.messages[7].content);
+    expect(preRewriteDeltaText).toContain("[Read delta from earlier chunk]");
+    expect(preRewriteDeltaText).toContain("context message #5");
+
+    const rewritten = rewriteReadLineageSourcePointers(deduped.messages as any[]);
+    const postRewriteDeltaText = String(rewritten[7].content);
+    expect(postRewriteDeltaText).toContain("context message #1");
+    expect(postRewriteDeltaText).not.toContain("context message #5");
   });
 });
