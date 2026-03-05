@@ -100,7 +100,7 @@ export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider)
 /** Build an env-backed SecretRef for a search provider. */
 function buildSearchEnvRef(provider: SearchProvider): SecretRef {
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
-  const envVar = entry?.envKeys[0];
+  const envVar = entry?.envKeys.find((k) => Boolean(process.env[k]?.trim())) ?? entry?.envKeys[0];
   if (!envVar) {
     throw new Error(
       `No env var mapping for search provider "${provider}" in secret-input-mode=ref.`,
