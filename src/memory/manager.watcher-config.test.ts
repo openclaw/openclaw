@@ -114,5 +114,7 @@ describe("memory watcher config", () => {
     const fakeFileStats = { isFile: () => true } as import("fs").Stats;
     expect(ignored?.(path.join(workspaceDir, "memory", "data.json"), fakeFileStats)).toBe(true);
     expect(ignored?.(path.join(workspaceDir, "memory", "notes.md"), fakeFileStats)).toBe(false);
+    // Case-insensitive .md check (macOS/Windows compat).
+    expect(ignored?.(path.join(workspaceDir, "memory", "NOTES.MD"), fakeFileStats)).toBe(false);
   });
 });
