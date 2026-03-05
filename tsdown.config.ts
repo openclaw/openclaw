@@ -18,4 +18,10 @@ export default defineConfig([
     fixedExtension: false,
     platform: "node",
   },
+  {
+    entry: "src/cli/flatten-standalone-deps.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
 ]);
