@@ -9,7 +9,8 @@ type ChannelRegistryValueResolver<TValue> = (
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
-  const cache = new Map<ChannelId, TValue>();
+  const CACHE_MISS = Symbol("channel-registry-loader-miss");
+  const cache = new Map<ChannelId, TValue | typeof CACHE_MISS>();
   let lastRegistry: PluginRegistry | null = null;
 
   return async (id: ChannelId): Promise<TValue | undefined> => {
@@ -18,18 +19,17 @@ export function createChannelRegistryLoader<TValue>(
       cache.clear();
       lastRegistry = registry;
     }
-    const cached = cache.get(id);
-    if (cached) {
-      return cached;
+    if (cache.has(id)) {
+      const cached = cache.get(id);
+      return cached === CACHE_MISS ? undefined : cached;
     }
     const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
     if (!pluginEntry) {
+      cache.set(id, CACHE_MISS);
       return undefined;
     }
     const resolved = resolveValue(pluginEntry);
-    if (resolved) {
-      cache.set(id, resolved);
-    }
+    cache.set(id, resolved === undefined ? CACHE_MISS : resolved);
     return resolved;
   };
 }
