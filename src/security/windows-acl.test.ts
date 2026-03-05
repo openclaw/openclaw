@@ -146,6 +146,13 @@ Successfully processed 1 files`;
       expect(entries[1].principal).toBe("S-1-5-21-1824257776-4070701511-781240313-1001");
     });
 
+    it("parses starred SYSTEM SID principals", () => {
+      const output = "C:\\test\\file.txt NT AUTHORITY\\*S-1-5-18:(F)";
+      const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].principal).toBe("NT AUTHORITY\\*S-1-5-18");
+    });
+
     it("ignores malformed ACL lines that contain ':' but no rights tokens", () => {
       const output = `C:\\test\\file.txt random:message
                      C:\\test\\file.txt BUILTIN\\Administrators:(F)`;
@@ -236,6 +243,16 @@ Successfully processed 1 files`;
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
       const summary = summarizeWindowsAcl(entries, env);
       expect(summary.untrustedGroup).toHaveLength(1);
+    });
+  });
+
+  describe("summarizeWindowsAcl — starred SID trusted entries", () => {
+    it("classifies *S-1-5-18 as trusted", () => {
+      const entries = [aclEntry({ principal: "NT AUTHORITY\\*S-1-5-18" })];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedWorld).toHaveLength(0);
+      expect(summary.untrustedGroup).toHaveLength(0);
     });
   });
 

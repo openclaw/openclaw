@@ -42,7 +42,7 @@ const TRUSTED_BASE = new Set([
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
 
-const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
+const SID_RE = /^\*?s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
   "s-1-5-18",
   "s-1-5-32-544",
@@ -89,6 +89,12 @@ function classifyPrincipal(
   trustedPrincipals: Set<string>,
 ): "trusted" | "world" | "group" {
   const normalized = normalize(principal);
+
+  const extractedSid = normalized.match(/s-\d+-\d+(?:-\d+)+/i)?.[0];
+  if (extractedSid && SID_RE.test(`*${extractedSid}`)) {
+    const sid = extractedSid.toLowerCase();
+    return TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid) ? "trusted" : "group";
+  }
 
   if (SID_RE.test(normalized)) {
     return TRUSTED_SIDS.has(normalized) || trustedPrincipals.has(normalized) ? "trusted" : "group";
