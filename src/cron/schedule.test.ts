@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  coerceFiniteScheduleNumber,
   clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
@@ -74,6 +75,26 @@ describe("cron schedule", () => {
 
     // Should return nowMs + everyMs, not nowMs (which would cause infinite loop)
     expect(next).toBe(now + 30_000);
+  });
+
+  it("handles string-typed everyMs and anchorMs from legacy persisted data", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const now = anchor + 10_000;
+    const next = computeNextRunAtMs(
+      {
+        kind: "every",
+        everyMs: "30000" as unknown as number,
+        anchorMs: `${anchor}` as unknown as number,
+      },
+      now,
+    );
+    expect(next).toBe(anchor + 30_000);
+  });
+
+  it("returns undefined for non-numeric string everyMs", () => {
+    const now = Date.now();
+    const next = computeNextRunAtMs({ kind: "every", everyMs: "abc" as unknown as number }, now);
+    expect(next).toBeUndefined();
   });
 
   it("advances when now matches anchor for every schedule", () => {
@@ -173,5 +194,25 @@ describe("cron schedule", () => {
       const next = computeNextRunAtMs(dailyNoon, completedAtMs);
       expect(next).toBe(noonMs + 86_400_000); // next day
     });
+  });
+});
+
+describe("coerceFiniteScheduleNumber", () => {
+  it("returns finite numbers directly", () => {
+    expect(coerceFiniteScheduleNumber(60_000)).toBe(60_000);
+  });
+
+  it("parses numeric strings", () => {
+    expect(coerceFiniteScheduleNumber("60000")).toBe(60_000);
+    expect(coerceFiniteScheduleNumber(" 60000 ")).toBe(60_000);
+  });
+
+  it("returns undefined for invalid inputs", () => {
+    expect(coerceFiniteScheduleNumber("")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(NaN)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();
   });
 });
