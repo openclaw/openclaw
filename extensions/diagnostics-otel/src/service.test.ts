@@ -323,8 +323,7 @@ describe("diagnostics-otel service", () => {
     });
 
     expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
-    expect(emitCall?.body).toContain("sk-123");
-    expect(emitCall?.body).toContain("…");
+    expect(emitCall?.body).toContain("sk-***");
   });
 
   test("redacts sensitive data from log attributes before export", async () => {
@@ -337,7 +336,7 @@ describe("diagnostics-otel service", () => {
     const tokenAttr = emitCall?.attributes?.["openclaw.token"];
     expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456");
     if (typeof tokenAttr === "string") {
-      expect(tokenAttr).toContain("…");
+      expect(tokenAttr).toContain("ghp_***");
     }
   });
 
@@ -356,7 +355,7 @@ describe("diagnostics-otel service", () => {
     expect(sessionCounter?.add).toHaveBeenCalledWith(
       1,
       expect.objectContaining({
-        "openclaw.reason": expect.stringContaining("…"),
+        "openclaw.reason": expect.stringContaining("ghp_***"),
       }),
     );
     const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
