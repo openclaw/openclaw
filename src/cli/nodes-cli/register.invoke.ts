@@ -117,7 +117,7 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   }
   return {
     security: minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity),
-    ask: maxAsk(configuredAsk, requestedAsk ?? configuredAsk),
+    ask: requestedAsk ?? configuredAsk,
   };
 }
 
