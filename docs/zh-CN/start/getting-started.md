@@ -135,14 +135,14 @@ mkdir -p ~/.openclaw/control-ui-cn
 # cp -R /path/to/your-ui-dist/. ~/.openclaw/control-ui-cn/
 ```
 
-2. 在 `~/.openclaw/config.json` 设置：
+2. 在 `~/.openclaw/config.json` 设置（`root` 使用绝对路径）：
 
 ```json
 {
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "root": "~/.openclaw/control-ui-cn"
+      "root": "/home/<your-username>/.openclaw/control-ui-cn"
     }
   }
 }
@@ -152,7 +152,7 @@ mkdir -p ~/.openclaw/control-ui-cn
 
 ```bash
 openclaw gateway restart
-openclaw dashboard --no-open
+openclaw dashboard
 ```
 
 这样 URL、认证和网关协议都保持官方一致，仅 UI 页面替换为你的中文版本。
