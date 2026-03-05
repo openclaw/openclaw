@@ -522,6 +522,25 @@ export const dispatchTelegramMessage = async ({
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const hasExplicitReplyTag = payload.replyToTag === true;
+
+          // Explicit reply tags (for example [[reply_to_current]]) should bypass
+          // preview lanes so the final message always carries the native reply.
+          if (hasExplicitReplyTag) {
+            if (info.kind !== "final") {
+              return;
+            }
+            await answerLane.stream?.stop();
+            await reasoningLane.stream?.stop();
+            reasoningStepState.resetForNextStep();
+            const canSendAsIs =
+              hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
+            if (!canSendAsIs) {
+              return;
+            }
+            await sendPayload(payload);
+            return;
+          }
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -626,9 +645,11 @@ export const dispatchTelegramMessage = async ({
         onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
-                enqueueDraftLaneEvent(async () => {
-                  await ingestDraftLaneSegments(payload.text);
-                })
+                payload.replyToTag
+                  ? undefined
+                  : enqueueDraftLaneEvent(async () => {
+                      await ingestDraftLaneSegments(payload.text);
+                    })
             : undefined,
         onReasoningStream: reasoningLane.stream
           ? (payload) =>

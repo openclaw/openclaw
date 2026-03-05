@@ -207,6 +207,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("bypasses preview streaming for explicit reply tags and sends only the final reply", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 9001,
+      reasoningMessageId: 9002,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "partial tagged",
+          replyToId: "456",
+          replyToTag: true,
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "final tagged",
+            replyToId: "456",
+            replyToTag: true,
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "final tagged", replyToId: "456" })],
+      }),
+    );
+  });
+
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
