@@ -159,3 +159,28 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export const HooksWorkspaceEventsSchema = z
+  .object({
+    project: z.string().optional(),
+    target: z.string().optional(),
+    eventTypes: z.array(z.string()).optional(),
+    subscription: z.string().optional(),
+    hookUrl: z.string().optional(),
+    pollInterval: z.number().int().positive().optional(),
+    maxMessages: z.number().int().positive().optional(),
+    cleanup: z.boolean().optional(),
+    model: z.string().optional(),
+    thinking: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+      ])
+      .optional(),
+    allowUnsafeExternalContent: z.boolean().optional(),
+  })
+  .strict()
+  .optional();

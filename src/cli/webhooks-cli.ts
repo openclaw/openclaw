@@ -16,6 +16,16 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import {
+  type WsEventsRunOptions,
+  type WsEventsSetupOptions,
+  runWsEventsService,
+  runWsEventsSetup,
+} from "../hooks/ws-events-ops.js";
+import {
+  DEFAULT_WS_EVENTS_MAX_MESSAGES,
+  DEFAULT_WS_EVENTS_POLL_INTERVAL,
+} from "../hooks/ws-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -97,6 +107,63 @@ export function registerWebhooksCli(program: Command) {
       try {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  const events = webhooks.command("events").description("Google Workspace Events hooks (via gws)");
+
+  events
+    .command("setup")
+    .description("Configure workspace events subscription + OpenClaw hooks")
+    .requiredOption(
+      "--target <uri>",
+      "Workspace resource URI (e.g. //chat.googleapis.com/spaces/X)",
+    )
+    .requiredOption(
+      "--event-types <types>",
+      "Comma-separated event types (e.g. google.workspace.chat.message.v1.created)",
+    )
+    .requiredOption("--project <id>", "GCP project id")
+    .option("--subscription <name>", "Reuse existing Pub/Sub subscription")
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
+    .option(
+      "--poll-interval <n>",
+      "Poll interval in seconds",
+      String(DEFAULT_WS_EVENTS_POLL_INTERVAL),
+    )
+    .option("--max-messages <n>", "Max messages per poll", String(DEFAULT_WS_EVENTS_MAX_MESSAGES))
+    .option("--cleanup", "Delete Pub/Sub resources on exit", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      try {
+        const parsed = parseWsEventsSetupOptions(opts);
+        await runWsEventsSetup(parsed);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  events
+    .command("run")
+    .description("Run workspace events subscription service")
+    .option("--target <uri>", "Workspace resource URI")
+    .option("--event-types <types>", "Comma-separated event types")
+    .option("--project <id>", "GCP project id")
+    .option("--subscription <name>", "Reuse existing Pub/Sub subscription")
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
+    .option("--poll-interval <n>", "Poll interval in seconds")
+    .option("--max-messages <n>", "Max messages per poll")
+    .option("--cleanup", "Delete Pub/Sub resources on exit")
+    .action(async (opts) => {
+      try {
+        const parsed = parseWsEventsRunOptions(opts);
+        await runWsEventsService(parsed);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -194,4 +261,56 @@ function booleanOption(value: unknown): boolean | undefined {
     return undefined;
   }
   return Boolean(value);
+}
+
+function parseEventTypes(raw: unknown): string[] {
+  if (typeof raw !== "string") {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseWsEventsSetupOptions(raw: Record<string, unknown>): WsEventsSetupOptions {
+  const target = stringOption(raw.target);
+  if (!target) {
+    throw new Error("--target is required");
+  }
+  const eventTypes = parseEventTypes(raw.eventTypes);
+  if (eventTypes.length === 0) {
+    throw new Error("--event-types is required (comma-separated)");
+  }
+  const project = stringOption(raw.project);
+  if (!project) {
+    throw new Error("--project is required");
+  }
+  return {
+    target,
+    eventTypes,
+    project,
+    subscription: stringOption(raw.subscription),
+    hookUrl: stringOption(raw.hookUrl),
+    hookToken: stringOption(raw.hookToken),
+    pollInterval: numberOption(raw.pollInterval),
+    maxMessages: numberOption(raw.maxMessages),
+    cleanup: booleanOption(raw.cleanup),
+    json: Boolean(raw.json),
+  };
+}
+
+function parseWsEventsRunOptions(raw: Record<string, unknown>): WsEventsRunOptions {
+  const eventTypes = raw.eventTypes ? parseEventTypes(raw.eventTypes) : undefined;
+  return {
+    target: stringOption(raw.target),
+    eventTypes,
+    project: stringOption(raw.project),
+    subscription: stringOption(raw.subscription),
+    hookUrl: stringOption(raw.hookUrl),
+    hookToken: stringOption(raw.hookToken),
+    pollInterval: numberOption(raw.pollInterval),
+    maxMessages: numberOption(raw.maxMessages),
+    cleanup: booleanOption(raw.cleanup),
+  };
 }

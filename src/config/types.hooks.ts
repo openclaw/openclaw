@@ -72,6 +72,23 @@ export type HooksGmailConfig = {
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
 };
 
+export type HooksWorkspaceEventsConfig = {
+  project?: string;
+  target?: string;
+  eventTypes?: string[];
+  subscription?: string;
+  hookUrl?: string;
+  pollInterval?: number;
+  maxMessages?: number;
+  cleanup?: boolean;
+  /** Optional model override for workspace events hook processing. */
+  model?: string;
+  /** Optional thinking level override for workspace events hook processing. */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
+  /** DANGEROUS: Disable external content safety wrapping for workspace events hooks. */
+  allowUnsafeExternalContent?: boolean;
+};
+
 export type InternalHookHandlerConfig = {
   /** Event key to listen for (e.g., 'command:new', 'message:received', 'message:transcribed', 'session:start') */
   event: string;
@@ -136,6 +153,7 @@ export type HooksConfig = {
   transformsDir?: string;
   mappings?: HookMappingConfig[];
   gmail?: HooksGmailConfig;
+  workspaceEvents?: HooksWorkspaceEventsConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
