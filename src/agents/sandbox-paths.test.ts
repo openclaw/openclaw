@@ -277,4 +277,14 @@ describe("resolveSandboxedMediaSource", () => {
     });
     expect(result).toBe("");
   });
+
+  it("does not crash on file URL with malformed percent encoding", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "file:///workspace/data/%ZZbad%path",
+        sandboxRoot: sandboxDir,
+      });
+      expect(typeof result).toBe("string");
+    });
+  });
 });
