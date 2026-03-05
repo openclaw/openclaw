@@ -22,7 +22,13 @@ import {
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
-import { isDiscordSurface, resolveDiscordAccountId } from "../discord-context.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+} from "../discord-context.js";
 import {
   formatRunLabel,
   formatRunStatus,
@@ -31,7 +37,13 @@ import {
 } from "../subagents-utils.js";
 
 export { extractAssistantText, stripToolMessages };
-export { isDiscordSurface, resolveDiscordAccountId };
+export {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveCommandSurfaceChannel,
+  resolveDiscordAccountId,
+  resolveChannelAccountId,
+};
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
