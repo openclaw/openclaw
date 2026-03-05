@@ -315,8 +315,14 @@ export function attachGatewayWsMessageHandler(params: {
 
   const requestForwardedHost = (() => {
     const raw = upgradeReq.headers["x-forwarded-host"];
+    // Handle array (multiple headers)
     if (Array.isArray(raw)) {
       return raw[0];
+    }
+    // Handle comma-separated chain: "client-facing-host, middle-proxy-host"
+    // Use the first (client-facing) host
+    if (typeof raw === "string" && raw.includes(",")) {
+      return raw.split(",")[0].trim();
     }
     return raw;
   })();
