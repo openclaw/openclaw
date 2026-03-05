@@ -41,9 +41,7 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe(
       "imessage:+19257864429",
     );
-    expect(normalizeBlueBubblesMessagingTarget("SMS;-;+15551234567")).toBe(
-      "sms:+15551234567",
-    );
+    expect(normalizeBlueBubblesMessagingTarget("SMS;-;+15551234567")).toBe("sms:+15551234567");
   });
 
   it("preserves group chat_guid format", () => {

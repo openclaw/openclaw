@@ -275,7 +275,8 @@ export async function resolveChatGuidForTarget(params: {
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
-        const targetService = params.target.kind === "handle" ? (params.target.service ?? "auto") : "auto";
+        const targetService =
+          params.target.kind === "handle" ? (params.target.service ?? "auto") : "auto";
         if (directHandle && directHandle === normalizedHandle) {
           if (targetService === "auto") {
             return guid;
