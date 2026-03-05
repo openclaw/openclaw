@@ -5,7 +5,10 @@ import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
-import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
+import {
+  isGatewaySecretRefUnavailableError,
+  resolveGatewayCredentialsFromConfig,
+} from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -300,8 +303,7 @@ export async function runServiceRestart(params: {
         }
       }
     } catch (err) {
-      const detail = String(err);
-      if (detail.includes("gateway.auth.token is configured as a secret reference")) {
+      if (isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
         const warning =
           "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.";
         warnings.push(warning);

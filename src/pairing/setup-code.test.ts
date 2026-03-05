@@ -204,40 +204,35 @@ describe("pairing setup code", () => {
     ).rejects.toThrow(/MISSING_GW_TOKEN/i);
   });
 
-  it("prefers token SecretRef over password SecretRef when auth mode is inferred", async () => {
-    const resolved = await resolvePairingSetupFromConfig(
-      {
-        gateway: {
-          bind: "custom",
-          customBindHost: "gateway.local",
-          auth: {
-            token: { source: "env", provider: "default", id: "GW_TOKEN" },
-            password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+  it("requires explicit auth mode when token and password are both configured", async () => {
+    await expect(
+      resolvePairingSetupFromConfig(
+        {
+          gateway: {
+            bind: "custom",
+            customBindHost: "gateway.local",
+            auth: {
+              token: { source: "env", provider: "default", id: "GW_TOKEN" },
+              password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
           },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
+        {
+          env: {
+            GW_TOKEN: "resolved-token",
+            GW_PASSWORD: "resolved-password",
           },
         },
-      },
-      {
-        env: {
-          GW_TOKEN: "resolved-token",
-        },
-      },
-    );
-
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.authLabel).toBe("token");
-    expect(resolved.payload.token).toBe("resolved-token");
-    expect(resolved.payload.password).toBeUndefined();
+      ),
+    ).rejects.toThrow(/gateway\.auth\.mode is unset/i);
   });
 
-  it("errors when token SecretRef is unresolved in inferred mode", async () => {
+  it("errors when token and password SecretRefs are both configured with inferred mode", async () => {
     await expect(
       resolvePairingSetupFromConfig(
         {
@@ -261,7 +256,7 @@ describe("pairing setup code", () => {
           },
         },
       ),
-    ).rejects.toThrow(/MISSING_GW_TOKEN/i);
+    ).rejects.toThrow(/gateway\.auth\.mode is unset/i);
   });
 
   it("honors env token override", async () => {

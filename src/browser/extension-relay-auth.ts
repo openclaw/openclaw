@@ -6,6 +6,10 @@ const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
 const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
 
+class SecretRefUnavailableError extends Error {
+  readonly isSecretRefUnavailable = true;
+}
+
 function resolveGatewayAuthToken(): string | null {
   const envToken =
     process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
@@ -23,13 +27,12 @@ function resolveGatewayAuthToken(): string | null {
       defaults: cfg.secrets?.defaults,
     }).ref;
     if (tokenRef) {
-      throw new Error(
+      throw new SecretRefUnavailableError(
         "extension relay requires a resolved gateway token, but gateway.auth.token is configured as SecretRef and unavailable. Set OPENCLAW_GATEWAY_TOKEN or resolve your secret provider.",
       );
     }
   } catch (err) {
-    const detail = String(err);
-    if (detail.includes("configured as SecretRef")) {
+    if (err instanceof SecretRefUnavailableError) {
       throw err;
     }
     // ignore config read failures; caller can fallback to per-process random token

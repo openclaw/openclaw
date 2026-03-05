@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
-import type { SecretInput } from "../config/types.secrets.js";
+import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_DOCS_LINES,
@@ -23,7 +23,6 @@ import {
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
-const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
@@ -197,7 +196,7 @@ export async function promptGatewayConfig(
           placeholder: "OPENCLAW_GATEWAY_TOKEN",
           validate: (value) => {
             const candidate = String(value ?? "").trim();
-            if (!ENV_SECRET_REF_ID_RE.test(candidate)) {
+            if (!isValidEnvSecretRefId(candidate)) {
               return "Use an env var name like OPENCLAW_GATEWAY_TOKEN.";
             }
             const resolved = process.env[candidate]?.trim();

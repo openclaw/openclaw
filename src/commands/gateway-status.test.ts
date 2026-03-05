@@ -184,6 +184,40 @@ describe("gateway-status command", () => {
     expect(targets[0]?.summary).toBeTruthy();
   });
 
+  it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
+      loadConfig.mockReturnValueOnce({
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+      } as unknown as ReturnType<typeof loadConfig>);
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    const unresolvedWarning = parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    );
+    expect(unresolvedWarning).toBeTruthy();
+    expect(unresolvedWarning?.targetIds).toContain("localLoopback");
+  });
+
   it("emits stable SecretRef auth configuration booleans in --json output", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     const previousProbeImpl = probeGateway.getMockImplementation();

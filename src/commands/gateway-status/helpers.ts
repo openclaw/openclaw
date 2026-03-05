@@ -150,17 +150,18 @@ export function sanitizeSshTarget(value: unknown): string | null {
 async function resolveConfiguredSecretInputValue(
   cfg: OpenClawConfig,
   value: unknown,
-): Promise<string | undefined> {
+  path: string,
+): Promise<{ value?: string; unresolvedRefReason?: string }> {
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+    return { value: trimmed.length > 0 ? trimmed : undefined };
   }
   const { ref } = resolveSecretInputRef({
     value,
     defaults: cfg.secrets?.defaults,
   });
   if (!ref) {
-    return undefined;
+    return {};
   }
   try {
     const resolved = await resolveSecretRefValues([ref], {
@@ -169,12 +170,15 @@ async function resolveConfiguredSecretInputValue(
     });
     const resolvedValue = resolved.get(secretRefKey(ref));
     if (typeof resolvedValue !== "string") {
-      return undefined;
+      return { unresolvedRefReason: `${path} SecretRef resolved to a non-string value.` };
     }
     const trimmed = resolvedValue.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  } catch {
-    return undefined;
+    if (trimmed.length === 0) {
+      return { unresolvedRefReason: `${path} SecretRef resolved to an empty value.` };
+    }
+    return { value: trimmed };
+  } catch (err) {
+    return { unresolvedRefReason: `${path} SecretRef is unresolved (${String(err)}).` };
   }
 }
 
@@ -182,33 +186,61 @@ export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
-): Promise<{ token?: string; password?: string }> {
+): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
   const tokenOverride = overrides.token?.trim() ? overrides.token.trim() : undefined;
   const passwordOverride = overrides.password?.trim() ? overrides.password.trim() : undefined;
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
+  const diagnostics: string[] = [];
   if (target.kind === "configRemote" || target.kind === "sshTunnel") {
-    const token = await resolveConfiguredSecretInputValue(cfg, cfg.gateway?.remote?.token);
-    const password = await resolveConfiguredSecretInputValue(
+    const tokenResolution = await resolveConfiguredSecretInputValue(
+      cfg,
+      cfg.gateway?.remote?.token,
+      "gateway.remote.token",
+    );
+    const passwordResolution = await resolveConfiguredSecretInputValue(
       cfg,
       (cfg.gateway?.remote as { password?: unknown } | undefined)?.password,
+      "gateway.remote.password",
     );
+    if (tokenResolution.unresolvedRefReason) {
+      diagnostics.push(tokenResolution.unresolvedRefReason);
+    }
+    if (passwordResolution.unresolvedRefReason) {
+      diagnostics.push(passwordResolution.unresolvedRefReason);
+    }
     return {
-      token,
-      password,
+      token: tokenResolution.value,
+      password: passwordResolution.value,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
     };
   }
 
   const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || "";
   const envPassword = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || "";
-  const cfgToken = await resolveConfiguredSecretInputValue(cfg, cfg.gateway?.auth?.token);
-  const cfgPassword = await resolveConfiguredSecretInputValue(cfg, cfg.gateway?.auth?.password);
+  const cfgTokenResolution = await resolveConfiguredSecretInputValue(
+    cfg,
+    cfg.gateway?.auth?.token,
+    "gateway.auth.token",
+  );
+  const cfgPasswordResolution = await resolveConfiguredSecretInputValue(
+    cfg,
+    cfg.gateway?.auth?.password,
+    "gateway.auth.password",
+  );
+  if (cfgTokenResolution.unresolvedRefReason) {
+    diagnostics.push(cfgTokenResolution.unresolvedRefReason);
+  }
+  if (cfgPasswordResolution.unresolvedRefReason) {
+    diagnostics.push(cfgPasswordResolution.unresolvedRefReason);
+  }
 
   return {
-    token: envToken || cfgToken,
-    password: envPassword || cfgPassword,
+    token: envToken || cfgTokenResolution.value,
+    password: envPassword || cfgPasswordResolution.value,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
 }
 

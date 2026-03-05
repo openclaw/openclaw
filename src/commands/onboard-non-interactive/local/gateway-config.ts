@@ -1,10 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
-
-const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 export function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;
@@ -59,7 +58,7 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   if (authMode === "token") {
     if (gatewayTokenRefEnv) {
-      if (!ENV_SECRET_REF_ID_RE.test(gatewayTokenRefEnv)) {
+      if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
         runtime.error(
           "Invalid --gateway-token-ref-env (use env var name like OPENCLAW_GATEWAY_TOKEN).",
         );

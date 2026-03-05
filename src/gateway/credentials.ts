@@ -16,6 +16,38 @@ export type GatewayCredentialPrecedence = "env-first" | "config-first";
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
+const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE";
+
+export class GatewaySecretRefUnavailableError extends Error {
+  readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
+  readonly path: string;
+
+  constructor(path: string) {
+    super(
+      [
+        `${path} is configured as a secret reference but is unavailable in this command path.`,
+        "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+        "or run a gateway command path that resolves secret references before credential selection.",
+      ].join("\n"),
+    );
+    this.name = "GatewaySecretRefUnavailableError";
+    this.path = path;
+  }
+}
+
+export function isGatewaySecretRefUnavailableError(
+  error: unknown,
+  expectedPath?: string,
+): error is GatewaySecretRefUnavailableError {
+  if (!(error instanceof GatewaySecretRefUnavailableError)) {
+    return false;
+  }
+  if (!expectedPath) {
+    return true;
+  }
+  return error.path === expectedPath;
+}
+
 export function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -34,13 +66,7 @@ function firstDefined(values: Array<string | undefined>): string | undefined {
 }
 
 function throwUnresolvedGatewaySecretInput(path: string): never {
-  throw new Error(
-    [
-      `${path} is configured as a secret reference but is unavailable in this command path.`,
-      "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
-      "or run a gateway command path that resolves secret references before credential selection.",
-    ].join("\n"),
-  );
+  throw new GatewaySecretRefUnavailableError(path);
 }
 
 function readGatewayTokenEnv(
