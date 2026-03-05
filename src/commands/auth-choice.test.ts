@@ -624,8 +624,12 @@ describe("applyAuthChoice", () => {
 
   it("uses existing env API keys for selected providers", async () => {
     const scenarios: Array<{
-      authChoice: "synthetic-api-key" | "openrouter-api-key" | "ai-gateway-api-key";
-      envKey: "SYNTHETIC_API_KEY" | "OPENROUTER_API_KEY" | "AI_GATEWAY_API_KEY";
+      authChoice:
+        | "synthetic-api-key"
+        | "openrouter-api-key"
+        | "dgrid-api-key"
+        | "ai-gateway-api-key";
+      envKey: "SYNTHETIC_API_KEY" | "OPENROUTER_API_KEY" | "DGRID_API_KEY" | "AI_GATEWAY_API_KEY";
       envValue: string;
       profileId: string;
       provider: string;
@@ -660,6 +664,17 @@ describe("applyAuthChoice", () => {
         expectedModel: "openrouter/auto",
       },
       {
+        authChoice: "dgrid-api-key",
+        envKey: "DGRID_API_KEY",
+        envValue: "sk-dgrid-test",
+        profileId: "dgrid:default",
+        provider: "dgrid",
+        expectEnvPrompt: true,
+        expectedTextCalls: 0,
+        expectedKey: "sk-dgrid-test",
+        expectedModel: "dgrid/auto",
+      },
+      {
         authChoice: "ai-gateway-api-key",
         envKey: "AI_GATEWAY_API_KEY",
         envValue: "gateway-test-key",
@@ -687,6 +702,7 @@ describe("applyAuthChoice", () => {
       await setupTempState();
       delete process.env.SYNTHETIC_API_KEY;
       delete process.env.OPENROUTER_API_KEY;
+      delete process.env.DGRID_API_KEY;
       delete process.env.AI_GATEWAY_API_KEY;
       process.env[scenario.envKey] = scenario.envValue;
 

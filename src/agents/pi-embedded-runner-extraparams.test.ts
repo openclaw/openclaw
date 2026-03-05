@@ -268,6 +268,30 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
   });
 
+  it("injects reasoning.effort when thinkingLevel is non-off for Dgrid", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "dgrid", "dgrid/auto", undefined, "low");
+
+    const model = {
+      api: "openai-completions",
+      provider: "dgrid",
+      id: "dgrid/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
+  });
+
   it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

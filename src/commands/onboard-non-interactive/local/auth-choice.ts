@@ -21,6 +21,7 @@ import {
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
+  applyDgridConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -44,6 +45,7 @@ import {
   setMistralApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setDgridApiKey,
   setOpenaiApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
@@ -549,6 +551,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "dgrid-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "dgrid",
+      cfg: baseConfig,
+      flagValue: opts.dgridApiKey,
+      flagName: "--dgrid-api-key",
+      envVar: "DGRID_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setDgridApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "dgrid:default",
+      provider: "dgrid",
+      mode: "api_key",
+    });
+    return applyDgridConfig(nextConfig);
   }
 
   if (authChoice === "kilocode-api-key") {

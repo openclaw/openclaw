@@ -90,6 +90,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["byteplus-api-key"],
   },
   {
+    value: "dgrid",
+    label: "Dgrid",
+    hint: "API key",
+    choices: ["dgrid-api-key"],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",

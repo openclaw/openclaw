@@ -5,6 +5,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "anthropicApiKey"
   | "openaiApiKey"
   | "mistralApiKey"
+  | "dgridApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"
   | "aiGatewayApiKey"
@@ -57,6 +58,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--mistral-api-key",
     cliOption: "--mistral-api-key <key>",
     description: "Mistral API key",
+  },
+  {
+    optionKey: "dgridApiKey",
+    authChoice: "dgrid-api-key",
+    cliFlag: "--dgrid-api-key",
+    cliOption: "--dgrid-api-key <key>",
+    description: "Dgrid API key",
   },
   {
     optionKey: "openrouterApiKey",

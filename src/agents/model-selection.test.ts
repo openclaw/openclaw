@@ -141,6 +141,13 @@ describe("model-selection", () => {
       });
     });
 
+    it("should preserve dgrid/ prefix for native models", () => {
+      expect(parseModelRef("dgrid/aurora-alpha", "openai")).toEqual({
+        provider: "dgrid",
+        model: "dgrid/aurora-alpha",
+      });
+    });
+
     it("should pass through openrouter external provider models as-is", () => {
       expect(parseModelRef("openrouter/anthropic/claude-sonnet-4-5", "openai")).toEqual({
         provider: "openrouter",

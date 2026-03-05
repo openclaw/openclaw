@@ -80,8 +80,8 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
 
-  if (provider === "openrouter" || provider === "opencode") {
-    // OpenRouter/opencode are pass-through proxies; accept any model ID
+  if (provider === "openrouter" || provider === "dgrid" || provider === "opencode") {
+    // OpenRouter/dgrid/opencode are pass-through proxies; accept any model ID
     // rather than restricting to a static prefix list.
     return true;
   }

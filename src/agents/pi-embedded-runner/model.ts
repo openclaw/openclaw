@@ -82,9 +82,9 @@ export function resolveModel(
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
     }
-    // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
-    // should work without being pre-registered in the local catalog.
-    if (normalizedProvider === "openrouter") {
+    // OpenRouter-compatible pass-through providers (OpenRouter, Dgrid) accept
+    // dynamic model IDs without pre-registering every upstream model locally.
+    if (normalizedProvider === "openrouter" || normalizedProvider === "dgrid") {
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,

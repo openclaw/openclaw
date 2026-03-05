@@ -23,6 +23,8 @@ export {
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyMoonshotProviderConfigCn,
+  applyDgridConfig,
+  applyDgridProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
@@ -58,6 +60,7 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  DGRID_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -74,6 +77,7 @@ export {
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
+  setDgridApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
