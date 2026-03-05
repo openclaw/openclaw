@@ -10,6 +10,12 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
+
+function loadManagerRuntime() {
+  managerRuntimePromise ??= import("./manager-runtime.js");
+  return managerRuntimePromise;
+}
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -24,8 +30,9 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
-    const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+    let cacheKey: string | undefined;
     if (!statusOnly) {
+      cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
       const cached = QMD_MANAGER_CACHE.get(cacheKey);
       if (cached) {
         return { manager: cached };
@@ -47,13 +54,19 @@ export async function getMemorySearchManager(params: {
           {
             primary,
             fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
+              const { MemoryIndexManager } = await loadManagerRuntime();
               return await MemoryIndexManager.get(params);
             },
           },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
+          () => {
+            if (cacheKey) {
+              QMD_MANAGER_CACHE.delete(cacheKey);
+            }
+          },
         );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+        if (cacheKey) {
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+        }
         return { manager: wrapper };
       }
     } catch (err) {
@@ -63,7 +76,7 @@ export async function getMemorySearchManager(params: {
   }
 
   try {
-    const { MemoryIndexManager } = await import("./manager.js");
+    const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
@@ -217,22 +230,7 @@ class FallbackMemoryManager implements MemorySearchManager {
 }
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
-  return `${agentId}:${stableSerialize(config)}`;
-}
-
-function stableSerialize(value: unknown): string {
-  return JSON.stringify(sortValue(value));
-}
-
-function sortValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => sortValue(entry));
-  }
-  if (value && typeof value === "object") {
-    const sortedEntries = Object.keys(value as Record<string, unknown>)
-      .toSorted((a, b) => a.localeCompare(b))
-      .map((key) => [key, sortValue((value as Record<string, unknown>)[key])]);
-    return Object.fromEntries(sortedEntries);
-  }
-  return value;
+  // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
+  // Fast stringify avoids deep key-sorting overhead on this hot path.
+  return `${agentId}:${JSON.stringify(config)}`;
 }

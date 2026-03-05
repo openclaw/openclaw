@@ -9,7 +9,7 @@ type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/openclaw-telegram-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
@@ -111,6 +111,7 @@ export const botCtorSpy: AnyMock = vi.fn();
 export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const sendChatActionSpy: AnyMock = vi.fn();
 export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 88 }));
+export const sendMessageDraftSpy: AnyAsyncMock = vi.fn(async () => true);
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
@@ -127,6 +128,7 @@ type ApiStub = {
   answerCallbackQuery: typeof answerCallbackQuerySpy;
   sendChatAction: typeof sendChatActionSpy;
   editMessageText: typeof editMessageTextSpy;
+  sendMessageDraft: typeof sendMessageDraftSpy;
   setMessageReaction: typeof setMessageReactionSpy;
   setMyCommands: typeof setMyCommandsSpy;
   getMe: typeof getMeSpy;
@@ -141,6 +143,7 @@ const apiStub: ApiStub = {
   answerCallbackQuery: answerCallbackQuerySpy,
   sendChatAction: sendChatActionSpy,
   editMessageText: editMessageTextSpy,
+  sendMessageDraft: sendMessageDraftSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
   getMe: getMeSpy,
@@ -166,7 +169,6 @@ vi.mock("grammy", () => ({
     }
   },
   InputFile: class {},
-  webhookCallback: vi.fn(),
 }));
 
 const sequentializeMiddleware = vi.fn();
@@ -207,6 +209,17 @@ export const getOnHandler = (event: string) => {
     throw new Error(`Missing handler for event: ${event}`);
   }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
+};
+
+const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
+  agents: {
+    defaults: {
+      envelopeTimezone: "utc",
+    },
+  },
+  channels: {
+    telegram: { dmPolicy: "open", allowFrom: ["*"] },
+  },
 };
 
 export function makeTelegramMessageCtx(params: {
@@ -262,16 +275,7 @@ export function makeForumGroupMessageCtx(params?: {
 beforeEach(() => {
   resetInboundDedupe();
   loadConfig.mockReset();
-  loadConfig.mockReturnValue({
-    agents: {
-      defaults: {
-        envelopeTimezone: "utc",
-      },
-    },
-    channels: {
-      telegram: { dmPolicy: "open", allowFrom: ["*"] },
-    },
-  });
+  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   loadWebMedia.mockReset();
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
@@ -311,6 +315,8 @@ beforeEach(() => {
   });
   editMessageTextSpy.mockReset();
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
+  sendMessageDraftSpy.mockReset();
+  sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

@@ -1,5 +1,5 @@
-import type { LookupFn } from "openclaw/plugin-sdk";
-import { SsrFBlockedError } from "openclaw/plugin-sdk";
+import type { LookupFn } from "openclaw/plugin-sdk/tlon";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/tlon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
