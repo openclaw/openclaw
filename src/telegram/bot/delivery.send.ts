@@ -101,6 +101,7 @@ export async function sendTelegramText(
     plainText?: string;
     linkPreview?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+    traceTag?: string;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
@@ -113,6 +114,7 @@ export async function sendTelegramText(
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
+  const traceTag = opts?.traceTag ? ` trace=${opts.traceTag}` : "";
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {
     const res = await sendTelegramWithThreadFallback({
@@ -127,7 +129,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)${traceTag}`,
+    );
     return res.message_id;
   };
 
@@ -156,7 +160,7 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}${traceTag}`);
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
