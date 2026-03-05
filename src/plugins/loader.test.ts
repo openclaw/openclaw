@@ -1128,7 +1128,7 @@ describe("loadOpenClawPlugins", () => {
     );
 
     // Plugin that loads the CJS helper via globalThis.require and uses it during registration
-    writePlugin({
+    const cjsCompatPlugin = writePlugin({
       id: "cjs-compat",
       body: [
         `const helper = globalThis.require(${JSON.stringify(path.join(dir, "cjs-helper.cjs"))});`,
@@ -1148,15 +1148,14 @@ describe("loadOpenClawPlugins", () => {
       cache: false,
       config: {
         plugins: {
-          load: { paths: [path.join(dir, "cjs-compat.js")] },
+          load: { paths: [cjsCompatPlugin.file] },
           allow: ["cjs-compat"],
         },
       },
     });
 
-    const plugin = registry.plugins.find((entry) => entry.id === "cjs-compat");
+    const plugin = registry.plugins.find((entry) => entry.id === cjsCompatPlugin.id);
     expect(plugin?.status).toBe("loaded");
-  });
   });
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
