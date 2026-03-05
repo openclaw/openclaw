@@ -1433,7 +1433,7 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig, sourceConfig?: OpenClaw
     const sourceChannel = asObjectRecord(sourceChannels?.[channelName]);
     const skipTopLevelAllowlistCheck =
       channelName === "telegram" &&
-      Boolean(sourceChannel) &&
+      sourceChannel !== null &&
       isAccountScopedTelegramSourceConfig(sourceChannel);
 
     if (!skipTopLevelAllowlistCheck) {
