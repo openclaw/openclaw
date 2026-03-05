@@ -405,6 +405,31 @@ describe("POST /tools/invoke", () => {
     expect(profileRes.status).toBe(404);
   });
 
+  it("applies subagent policy depth for /tools/invoke sessions", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        defaults: { subagents: { maxSpawnDepth: 2 } },
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+      },
+      gateway: { tools: { allow: ["sessions_spawn"] } },
+    };
+
+    const orchestratorRes = await invokeToolAuthed({
+      tool: "sessions_spawn",
+      args: { task: "orchestrate" },
+      sessionKey: "agent:main:subagent:orchestrator",
+    });
+    expect(orchestratorRes.status).toBe(200);
+
+    const leafRes = await invokeToolAuthed({
+      tool: "sessions_spawn",
+      args: { task: "recurse" },
+      sessionKey: "agent:main:subagent:orchestrator:subagent:leaf",
+    });
+    expect(leafRes.status).toBe(404);
+  });
+
   it("denies sessions_spawn via HTTP even when agent policy allows", async () => {
     cfg = {
       ...cfg,

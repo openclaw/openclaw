@@ -234,6 +234,65 @@ describe("web_search provider proxy dispatch", () => {
   );
 });
 
+describe("web_search provider fallback", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("falls back from Brave to Perplexity when Brave returns a retryable error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-config-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-config-test");
+
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      if (mockFetch.mock.calls.length === 1) {
+        return new Response("rate limited", { status: 429 });
+      }
+      return new Response(JSON.stringify(createProviderSuccessPayload("perplexity")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    expect(tool).not.toBeNull();
+
+    const result = await tool?.execute?.("call-1", { query: "fallback test" });
+    expect(result?.details).toMatchObject({ provider: "perplexity" });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(new URL(mockFetch.mock.calls[0]?.[0] as string).hostname).toBe("api.search.brave.com");
+    expect(new URL(mockFetch.mock.calls[1]?.[0] as string).hostname).toBe("api.perplexity.ai");
+  });
+
+  it("does not fallback on non-retriable provider errors", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-config-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-config-test");
+
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return new Response("bad request", { status: 400 });
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    expect(tool).not.toBeNull();
+
+    let thrown: unknown;
+    try {
+      await tool?.execute?.("call-1", { query: "no fallback test" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(thrown)).toContain("API error (400)");
+    expect(thrown).toBeInstanceOf(Error);
+  });
+});
+
 describe("web_search perplexity Search API", () => {
   const priorFetch = global.fetch;
 

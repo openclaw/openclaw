@@ -116,6 +116,32 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
+    it("should normalize legacy tool definition with top-level input_schema", async () => {
+      const legacyTool = {
+        type: "function" as const,
+        name: "get_weather",
+        description: "Get the current weather",
+        input_schema: {
+          type: "object",
+          properties: {
+            location: { type: "string" },
+          },
+          required: ["location"],
+        },
+      };
+
+      const result = ToolDefinitionSchema.safeParse(legacyTool);
+      expect(result.success).toBe(true);
+      expect(result.data).toMatchObject({
+        type: "function",
+        function: {
+          name: "get_weather",
+          description: "Get the current weather",
+        },
+      });
+      expect(result.data.function.parameters).toEqual(legacyTool.input_schema);
+    });
+
     it("should reject tool definition without name", async () => {
       const invalidTool = {
         type: "function" as const,
@@ -189,6 +215,39 @@ describe("OpenResponses Feature Parity", () => {
 
       const result = CreateResponseBodySchema.safeParse(validRequest);
       expect(result.success).toBe(true);
+    });
+
+    it("should validate client tools with legacy top-level input_schema", async () => {
+      const validRequest = {
+        model: "claude-sonnet-4-20250514",
+        input: [
+          {
+            type: "message" as const,
+            role: "user" as const,
+            content: "What's the weather?",
+          },
+        ],
+        tools: [
+          {
+            type: "function" as const,
+            name: "get_weather",
+            description: "Get weather for a location",
+            input_schema: {
+              type: "object",
+              properties: {
+                location: { type: "string" },
+              },
+              required: ["location"],
+            },
+          },
+        ],
+      };
+
+      const result = CreateResponseBodySchema.safeParse(validRequest);
+      expect(result.success).toBe(true);
+      expect(result.data.tools?.[0]?.function.parameters).toEqual(
+        validRequest.tools[0]?.input_schema,
+      );
     });
 
     it("should validate request with function_call_output for turn-based tools", async () => {

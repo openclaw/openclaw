@@ -420,6 +420,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(clientTools[0]?.function?.name).toBe("get_time");
       await ensureResponseConsumed(resToolChoice);
 
+      mockAgentOnce([{ text: "ok" }]);
+      const resLegacyToolChoice = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            name: "get_weather",
+            description: "Get weather",
+            input_schema: {
+              type: "object",
+              properties: { location: { type: "string" } },
+              required: ["location"],
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "get_weather" } },
+      });
+      expect(resLegacyToolChoice.status).toBe(200);
+      const optsLegacyToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const legacyChoiceClientTools =
+        (
+          optsLegacyToolChoice as
+            | { clientTools?: Array<{ function?: { name?: string } }> }
+            | undefined
+        )?.clientTools ?? [];
+      expect(legacyChoiceClientTools).toHaveLength(1);
+      expect(legacyChoiceClientTools[0]?.function?.name).toBe("get_weather");
+      await ensureResponseConsumed(resLegacyToolChoice);
+
       const resUnknownTool = await postResponses(port, {
         model: "openclaw",
         input: "hi",
@@ -428,6 +458,32 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       expect(resUnknownTool.status).toBe(400);
       await ensureResponseConsumed(resUnknownTool);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resLegacyToolShape = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            name: "get_weather",
+            description: "Get weather",
+            input_schema: {
+              type: "object",
+              properties: { location: { type: "string" } },
+              required: ["location"],
+            },
+          },
+        ],
+      });
+      expect(resLegacyToolShape.status).toBe(200);
+      const optsLegacyTool = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const legacyClientTools =
+        (optsLegacyTool as { clientTools?: Array<{ function?: { name?: string } }> } | undefined)
+          ?.clientTools ?? [];
+      expect(legacyClientTools).toHaveLength(1);
+      expect(legacyClientTools[0]?.function?.name).toBe("get_weather");
+      await ensureResponseConsumed(resLegacyToolShape);
 
       mockAgentOnce([{ text: "ok" }]);
       const resMaxTokens = await postResponses(port, {

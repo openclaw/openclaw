@@ -141,19 +141,50 @@ export type ItemParam = z.infer<typeof ItemParamSchema>;
 // Tool Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const FunctionToolDefinitionSchema = z
+const FunctionToolShapeSchema = z
   .object({
     type: z.literal("function"),
     function: z.object({
       name: z.string().min(1, "Tool name cannot be empty"),
       description: z.string().optional(),
+      input_schema: z.record(z.string(), z.unknown()).optional(),
       parameters: z.record(z.string(), z.unknown()).optional(),
     }),
   })
-  .strict();
+  .strict()
+  .transform((tool) => ({
+    type: "function" as const,
+    function: {
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters ?? tool.function.input_schema,
+    },
+  }));
 
-// OpenResponses tool definitions match internal ToolDefinition structure
-export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
+export const FunctionToolDefinitionSchema = FunctionToolShapeSchema;
+
+const LegacyFunctionToolDefinitionSchema = z
+  .object({
+    type: z.literal("function"),
+    name: z.string().min(1, "Tool name cannot be empty"),
+    description: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    input_schema: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict()
+  .transform((tool) => ({
+    type: "function" as const,
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters ?? tool.input_schema,
+    },
+  }));
+
+export const ToolDefinitionSchema = z.union([
+  FunctionToolDefinitionSchema,
+  LegacyFunctionToolDefinitionSchema,
+]);
 
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 

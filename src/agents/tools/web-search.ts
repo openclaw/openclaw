@@ -22,6 +22,8 @@ import {
 } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
+const RETRIABLE_SEARCH_HTTP_STATUSES = new Set([410, 402, 429, 500, 502, 503, 504]);
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -83,7 +85,7 @@ function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
-function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function createWebSearchSchema(provider: SearchProvider) {
   const baseSchema = {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
@@ -166,6 +168,116 @@ function createWebSearchSchema(provider: (typeof SEARCH_PROVIDERS)[number]) {
 
   // grok, gemini, kimi, etc.
   return Type.Object(baseSchema);
+}
+
+class WebSearchProviderError extends Error {
+  readonly provider: SearchProvider;
+  readonly status: number;
+  readonly retriable: boolean;
+
+  constructor(params: { provider: SearchProvider; status: number; message: string }) {
+    super(params.message);
+    this.name = "WebSearchProviderError";
+    this.provider = params.provider;
+    this.status = params.status;
+    this.retriable = RETRIABLE_SEARCH_HTTP_STATUSES.has(params.status);
+  }
+}
+
+function isRetriableProviderError(error: unknown): error is WebSearchProviderError {
+  return error instanceof WebSearchProviderError && error.retriable;
+}
+
+function resolveSearchProviderErrorMessage(params: {
+  provider: SearchProvider;
+  status: number;
+  detail: string;
+}) {
+  const labels: Record<SearchProvider, string> = {
+    brave: "Brave Search",
+    perplexity: "Perplexity Search",
+    grok: "xAI",
+    gemini: "Gemini",
+    kimi: "Kimi",
+  };
+  return `${labels[params.provider]} API error (${params.status}): ${params.detail || "request failed"}`;
+}
+
+type SearchProviderPlan = {
+  provider: SearchProvider;
+  apiKey: string;
+};
+
+type SearchProviderCompatibility = {
+  country?: boolean;
+  language?: boolean;
+  freshness?: boolean;
+  dateFilter?: boolean;
+  domainFilter?: boolean;
+};
+
+function isProviderCompatibleWithFilters(
+  provider: SearchProvider,
+  filters: SearchProviderCompatibility,
+): boolean {
+  if (filters.domainFilter && provider !== "perplexity") {
+    return false;
+  }
+
+  const supportsDiscoveryFilters = provider === "brave" || provider === "perplexity";
+  if (
+    (filters.country || filters.language || filters.freshness || filters.dateFilter) &&
+    !supportsDiscoveryFilters
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildSearchProviderPlans(params: {
+  provider: SearchProvider;
+  apiKeys: Record<SearchProvider, string | undefined>;
+  filters: SearchProviderCompatibility;
+}): SearchProviderPlan[] {
+  const ordered = [params.provider, ...SEARCH_PROVIDERS];
+  const plans: SearchProviderPlan[] = [];
+  const seen = new Set<SearchProvider>();
+
+  for (const candidate of ordered) {
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+
+    const key = params.apiKeys[candidate];
+    if (!key) {
+      continue;
+    }
+    if (!isProviderCompatibleWithFilters(candidate, params.filters)) {
+      continue;
+    }
+    plans.push({ provider: candidate, apiKey: key });
+  }
+
+  return plans;
+}
+
+function resolveSearchProviderApiKeys(
+  search?: WebSearchConfig,
+): Record<SearchProvider, string | undefined> {
+  const grokConfig = resolveGrokConfig(search);
+  const geminiConfig = resolveGeminiConfig(search);
+  const kimiConfig = resolveKimiConfig(search);
+  const perplexityConfig = resolvePerplexityConfig(search);
+
+  return {
+    brave: resolveSearchApiKey(search),
+    perplexity: resolvePerplexityApiKey(perplexityConfig).apiKey,
+    grok: resolveGrokApiKey(grokConfig),
+    gemini: resolveGeminiApiKey(geminiConfig),
+    kimi: resolveKimiApiKey(kimiConfig),
+  };
 }
 
 type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -382,7 +494,7 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function missingSearchKeyPayload(provider: SearchProvider) {
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -422,7 +534,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(search?: WebSearchConfig): SearchProvider {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
@@ -849,10 +961,18 @@ function resolveSiteName(url: string | undefined): string | undefined {
   }
 }
 
-async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
+async function throwWebSearchApiError(res: Response, provider: SearchProvider): Promise<never> {
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
-  throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+  throw new WebSearchProviderError({
+    provider,
+    status: res.status,
+    message: resolveSearchProviderErrorMessage({
+      provider,
+      status: res.status,
+      detail: detail || res.statusText,
+    }),
+  });
 }
 
 async function runPerplexitySearchApi(params: {
@@ -919,7 +1039,7 @@ async function runPerplexitySearchApi(params: {
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "Perplexity Search");
+        return await throwWebSearchApiError(res, "perplexity");
       }
 
       const data = (await res.json()) as PerplexitySearchApiResponse;
@@ -983,7 +1103,7 @@ async function runGrokSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        return await throwWebSearchApiError(res, "xAI");
+        return await throwWebSearchApiError(res, "grok");
       }
 
       const data = (await res.json()) as GrokSearchResponse;
@@ -1088,7 +1208,7 @@ async function runKimiSearch(params: {
         res,
       ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
         if (!res.ok) {
-          return await throwWebSearchApiError(res, "Kimi");
+          return await throwWebSearchApiError(res, "kimi");
         }
 
         const data = (await res.json()) as KimiSearchResponse;
@@ -1155,7 +1275,7 @@ async function runWebSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: SearchProvider;
   country?: string;
   language?: string;
   search_lang?: string;
@@ -1347,9 +1467,7 @@ async function runWebSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-        const detail = detailResult.text;
-        throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+        return await throwWebSearchApiError(res, "brave");
       }
 
       const data = (await res.json()) as BraveSearchResponse;
@@ -1387,6 +1505,95 @@ async function runWebSearch(params: {
   return payload;
 }
 
+async function runWebSearchWithFallback(params: {
+  query: string;
+  count: number;
+  apiKeys: Record<SearchProvider, string | undefined>;
+  timeoutSeconds: number;
+  cacheTtlMs: number;
+  provider: SearchProvider;
+  country?: string;
+  language?: string;
+  search_lang?: string;
+  ui_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+  searchDomainFilter?: string[];
+  maxTokens?: number;
+  maxTokensPerPage?: number;
+  grokModel?: string;
+  grokInlineCitations?: boolean;
+  geminiModel?: string;
+  kimiBaseUrl?: string;
+  kimiModel?: string;
+}): Promise<Record<string, unknown>> {
+  const plans = buildSearchProviderPlans({
+    provider: params.provider,
+    apiKeys: params.apiKeys,
+    filters: {
+      country: Boolean(params.country),
+      language: Boolean(params.language),
+      freshness: Boolean(params.freshness),
+      dateFilter: Boolean(params.dateAfter || params.dateBefore),
+      domainFilter: Boolean(params.searchDomainFilter && params.searchDomainFilter.length > 0),
+    },
+  });
+
+  if (plans.length === 0) {
+    throw new Error(
+      `No compatible web search provider available for "${params.provider}". Configure at least one supported API key.`,
+    );
+  }
+
+  for (let idx = 0; idx < plans.length; idx += 1) {
+    const plan = plans[idx];
+    if (!plan) {
+      continue;
+    }
+    try {
+      return await runWebSearch({
+        query: params.query,
+        count: params.count,
+        apiKey: plan.apiKey,
+        timeoutSeconds: params.timeoutSeconds,
+        cacheTtlMs: params.cacheTtlMs,
+        provider: plan.provider,
+        country: params.country,
+        language: params.language,
+        search_lang: params.search_lang,
+        ui_lang: params.ui_lang,
+        freshness: params.freshness,
+        dateAfter: params.dateAfter,
+        dateBefore: params.dateBefore,
+        searchDomainFilter: params.searchDomainFilter,
+        maxTokens: params.maxTokens,
+        maxTokensPerPage: params.maxTokensPerPage,
+        grokModel: params.grokModel,
+        grokInlineCitations: params.grokInlineCitations,
+        geminiModel: params.geminiModel,
+        kimiBaseUrl: params.kimiBaseUrl,
+        kimiModel: params.kimiModel,
+      });
+    } catch (error) {
+      if (!isRetriableProviderError(error)) {
+        throw error;
+      }
+      if (idx >= plans.length - 1) {
+        throw error;
+      }
+      const retriable = error;
+      const status = retriable.status;
+      const fallbackProvider = retriable.provider;
+      logVerbose(
+        `web_search: provider "${fallbackProvider}" failed with retriable error ${status}, trying fallback`,
+      );
+    }
+  }
+
+  throw new Error("No web search provider completed the request.");
+}
+
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
@@ -1397,7 +1604,6 @@ export function createWebSearchTool(options?: {
   }
 
   const provider = resolveSearchProvider(search);
-  const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
@@ -1419,27 +1625,23 @@ export function createWebSearchTool(options?: {
     description,
     parameters: createWebSearchSchema(provider),
     execute: async (_toolCallId, args) => {
-      const perplexityAuth =
-        provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
-      const apiKey =
-        provider === "perplexity"
-          ? perplexityAuth?.apiKey
-          : provider === "grok"
-            ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+      const apiKeys = resolveSearchProviderApiKeys(search);
 
-      if (!apiKey) {
-        return jsonResult(missingSearchKeyPayload(provider));
-      }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+      const filtersUsed: SearchProviderCompatibility = {
+        country: false,
+        language: false,
+        freshness: false,
+        dateFilter: false,
+        domainFilter: false,
+      };
       const country = readStringParam(params, "country");
+      if (country) {
+        filtersUsed.country = true;
+      }
       if (country && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_country",
@@ -1448,6 +1650,9 @@ export function createWebSearchTool(options?: {
         });
       }
       const language = readStringParam(params, "language");
+      if (language) {
+        filtersUsed.language = true;
+      }
       if (language && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_language",
@@ -1487,6 +1692,9 @@ export function createWebSearchTool(options?: {
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
       const rawFreshness = readStringParam(params, "freshness");
+      if (rawFreshness) {
+        filtersUsed.freshness = true;
+      }
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
@@ -1504,6 +1712,9 @@ export function createWebSearchTool(options?: {
       }
       const rawDateAfter = readStringParam(params, "date_after");
       const rawDateBefore = readStringParam(params, "date_before");
+      if (rawDateAfter || rawDateBefore) {
+        filtersUsed.dateFilter = true;
+      }
       if (rawFreshness && (rawDateAfter || rawDateBefore)) {
         return jsonResult({
           error: "conflicting_time_filters",
@@ -1543,6 +1754,9 @@ export function createWebSearchTool(options?: {
         });
       }
       const domainFilter = readStringArrayParam(params, "domain_filter");
+      if (domainFilter && domainFilter.length > 0) {
+        filtersUsed.domainFilter = true;
+      }
       if (domainFilter && domainFilter.length > 0 && provider !== "perplexity") {
         return jsonResult({
           error: "unsupported_domain_filter",
@@ -1574,10 +1788,25 @@ export function createWebSearchTool(options?: {
       const maxTokens = readNumberParam(params, "max_tokens", { integer: true });
       const maxTokensPerPage = readNumberParam(params, "max_tokens_per_page", { integer: true });
 
-      const result = await runWebSearch({
+      const compatiblePlans = buildSearchProviderPlans({
+        provider,
+        apiKeys,
+        filters: {
+          country: filtersUsed.country,
+          language: filtersUsed.language,
+          freshness: filtersUsed.freshness,
+          dateFilter: filtersUsed.dateFilter,
+          domainFilter: filtersUsed.domainFilter,
+        },
+      });
+      if (compatiblePlans.length === 0) {
+        return jsonResult(missingSearchKeyPayload(provider));
+      }
+
+      const result = await runWebSearchWithFallback({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
+        apiKeys,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,

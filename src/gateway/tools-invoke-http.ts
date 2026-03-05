@@ -20,7 +20,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
+import { getSubagentDepth, isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -242,7 +242,7 @@ export async function handleToolsInvokeHttpRequest(
     accountId: accountId ?? null,
   });
   const subagentPolicy = isSubagentSessionKey(sessionKey)
-    ? resolveSubagentToolPolicy(cfg)
+    ? resolveSubagentToolPolicy(cfg, getSubagentDepth(sessionKey))
     : undefined;
 
   // Build tool list (core + plugin tools).
