@@ -27,9 +27,11 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   gpt: "openai/gpt-5.2",
   "gpt-mini": "openai/gpt-5-mini",
 
-  // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
+  // Google Gemini (3.1.x are preview ids in the catalog; 3.0.x kept for compat)
+  gemini: "google/gemini-3.1-pro-preview",
+  "gemini-flash": "google/gemini-3.1-flash-preview",
+  "gemini-3": "google/gemini-3-pro-preview",
+  "gemini-3-flash": "google/gemini-3-flash-preview",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {

@@ -57,6 +57,15 @@ import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
+// Google Gemini CLI OAuth provider — mirrors the google/ model catalog so Gemini
+// 3.x and 3.1.x models are available under the google-gemini-cli/ provider prefix
+// when the user authenticates via the Gemini CLI OAuth flow.
+const GOOGLE_GEMINI_CLI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_GEMINI_CLI_OAUTH_PLACEHOLDER = "google-gemini-oauth";
+const GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW = 1_048_576; // 1M tokens
+const GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS = 65_536;
+const GOOGLE_GEMINI_CLI_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.5";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
@@ -579,6 +588,53 @@ export function normalizeProviders(params: {
   return mutated ? next : providers;
 }
 
+export function buildGoogleGeminiCliProvider(): ProviderConfig {
+  return {
+    baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
+    api: "google-generative-ai",
+    models: [
+      // Gemini 3.0 models — kept for backward-compatibility with existing configs
+      {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      // Gemini 3.1 models — added to fix missing models under google-gemini-cli/
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3.1-flash-preview",
+        name: "Gemini 3.1 Flash",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
@@ -941,6 +997,16 @@ export async function resolveImplicitProviders(params: {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
       apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+    };
+  }
+
+  // google-gemini-cli: explicit model catalog so Gemini 3.1 models are listed
+  // under google-gemini-cli/ alongside the built-in Gemini 3.0 entries.
+  const geminiCliProfiles = listProfilesForProvider(authStore, "google-gemini-cli");
+  if (geminiCliProfiles.length > 0) {
+    providers["google-gemini-cli"] = {
+      ...buildGoogleGeminiCliProvider(),
+      apiKey: GOOGLE_GEMINI_CLI_OAUTH_PLACEHOLDER,
     };
   }
 
