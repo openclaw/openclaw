@@ -94,6 +94,8 @@ export function createGatewayHooksRequestHandler(params: {
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
+        // Errors are always surfaced to the main session regardless of the
+        // `deliver` flag — silent failures are harder to debug than noisy ones.
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
           sessionKey: mainSessionKey,
         });
