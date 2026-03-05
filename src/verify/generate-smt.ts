@@ -9,7 +9,6 @@
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import type { ParsedAll } from "./types.js";
 import { emitOwnerOnlySmt2 } from "./emit-smt/owner-only.js";
 import { emitPipelineSmt2 } from "./emit-smt/pipeline.js";
 import { emitProfilesSmt2 } from "./emit-smt/profiles.js";
@@ -19,6 +18,7 @@ import { emitToolsSmt2 } from "./emit-smt/tools.js";
 import { parsePipeline } from "./parse-pipeline.js";
 import { parsePolicies } from "./parse-policies.js";
 import { parseToolCatalog } from "./parse-tools.js";
+import type { ParsedAll } from "./types.js";
 
 function parseArgs(): { outputDir: string; verify: boolean; srcDir: string; refDir: string } {
   const args = process.argv.slice(2);
