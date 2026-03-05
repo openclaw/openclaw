@@ -51,7 +51,15 @@ function parseGeoUri(value: string): GeoUriParams | null {
       continue;
     }
     const valuePart = rawValue.trim();
-    params.set(key, valuePart ? decodeURIComponent(valuePart) : "");
+    let decodedValue = valuePart;
+    if (valuePart) {
+      try {
+        decodedValue = decodeURIComponent(valuePart);
+      } catch {
+        // malformed percent-encoding; keep raw value
+      }
+    }
+    params.set(key, decodedValue);
   }
 
   const accuracyRaw = params.get("u");
