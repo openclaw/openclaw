@@ -842,7 +842,8 @@
                 "pages": [
                   "start/openclaw",
                   "start/wizard-cli-reference",
-                  "start/wizard-cli-automation"
+                  "start/wizard-cli-automation",
+                  "start/google-workspace"
                 ]
               }
             ]
