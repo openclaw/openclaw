@@ -15,6 +15,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+let nodeCommands: string[] | undefined = ["system.run", "system.run.prepare"];
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
@@ -24,6 +25,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
           nodeId: "mac-1",
           displayName: "Mac",
           platform: "macos",
+          commands: nodeCommands,
           caps: ["canvas"],
           connected: true,
           permissions: { screenRecording: true },
@@ -35,6 +37,11 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
     lastNodeInvokeCall = opts;
     const command = opts.params?.command;
     if (command === "system.run.prepare") {
+      if (!nodeCommands?.includes("system.run.prepare")) {
+        throw new Error(
+          'node command not allowed: the node (platform: macOS 26.2.0) does not support "system.run.prepare"',
+        );
+      }
       const params = (opts.params?.params ?? {}) as {
         command?: unknown[];
         rawCommand?: unknown;
@@ -125,6 +132,7 @@ describe("nodes-cli coverage", () => {
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
     lastApprovalRequestCall = null;
+    nodeCommands = ["system.run", "system.run.prepare"];
   });
 
   it("invokes system.run with parsed params", async () => {
@@ -202,6 +210,51 @@ describe("nodes-cli coverage", () => {
       argv: ["/bin/sh", "-lc", "echo hi"],
       cwd: null,
       rawCommand: "echo hi",
+      agentId: "main",
+      sessionKey: null,
+    });
+  });
+
+  it("falls back to direct system.run when node lacks system.run.prepare", async () => {
+    nodeCommands = ["system.run", "system.which"];
+
+    const invoke = await runNodesCommand([
+      "nodes",
+      "run",
+      "--node",
+      "mac-1",
+      "--cwd",
+      "/tmp",
+      "--invoke-timeout",
+      "5000",
+      "echo",
+      "hi",
+    ]);
+
+    expect(invoke).toBeTruthy();
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0] as NodeInvokeCall)
+      .filter((call) => call.method === "node.invoke");
+    expect(invokeCalls.map((call) => call.params?.command)).toEqual(["system.run"]);
+    expect(invoke?.params?.command).toBe("system.run");
+    expect(invoke?.params?.params).toEqual({
+      command: ["echo", "hi"],
+      rawCommand: null,
+      cwd: "/tmp",
+      env: undefined,
+      timeoutMs: undefined,
+      needsScreenRecording: false,
+      agentId: "main",
+      approved: true,
+      approvalDecision: "allow-once",
+      runId: expect.any(String),
+    });
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
+    expect(approval?.params?.["systemRunPlan"]).toEqual({
+      argv: ["echo", "hi"],
+      cwd: "/tmp",
+      rawCommand: null,
       agentId: "main",
       sessionKey: null,
     });

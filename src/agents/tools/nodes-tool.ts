@@ -96,6 +96,11 @@ function extractPairingRequestId(message: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+function isUnsupportedSystemRunPrepareError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes("system.run.prepare") && message.includes("not support");
+}
+
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
@@ -536,26 +541,50 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-              "node.invoke",
-              gatewayOpts,
-              {
-                nodeId,
-                command: "system.run.prepare",
-                params: {
-                  command,
-                  rawCommand: formatExecCommand(command),
-                  cwd,
-                  agentId,
-                  sessionKey,
-                },
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              },
-            );
-            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            const supportsPrepare = Array.isArray(nodeInfo?.commands)
+              ? nodeInfo.commands.includes("system.run.prepare")
+              : true;
+            let prepared = null as ReturnType<typeof parsePreparedSystemRunPayload>;
+            if (supportsPrepare) {
+              try {
+                const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+                  "node.invoke",
+                  gatewayOpts,
+                  {
+                    nodeId,
+                    command: "system.run.prepare",
+                    params: {
+                      command,
+                      rawCommand: formatExecCommand(command),
+                      cwd,
+                      agentId,
+                      sessionKey,
+                    },
+                    timeoutMs: invokeTimeoutMs,
+                    idempotencyKey: crypto.randomUUID(),
+                  },
+                );
+                prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+                if (!prepared) {
+                  throw new Error("invalid system.run.prepare response");
+                }
+              } catch (err) {
+                if (!isUnsupportedSystemRunPrepareError(err)) {
+                  throw err;
+                }
+              }
+            }
             if (!prepared) {
-              throw new Error("invalid system.run.prepare response");
+              prepared = {
+                cmdText: formatExecCommand(command),
+                plan: {
+                  argv: command,
+                  cwd: cwd ?? null,
+                  rawCommand: null,
+                  agentId: agentId ?? null,
+                  sessionKey: sessionKey ?? null,
+                },
+              };
             }
             const runParams = {
               command: prepared.plan.argv,

@@ -464,6 +464,34 @@ describe("nodes device_status and device_info", () => {
 });
 
 describe("nodes run", () => {
+  it("falls back to direct system.run when node lacks system.run.prepare", async () => {
+    const nodeInvokeCommands: string[] = [];
+    callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
+      if (method === "node.list") {
+        return mockNodeList({ commands: ["system.run", "system.which"] });
+      }
+      if (method === "node.invoke") {
+        const command = (gatewayParams as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          throw new Error(
+            'node command not allowed: the node (platform: macOS 26.2.0) does not support "system.run.prepare"',
+          );
+        }
+        if (command === "system.run") {
+          nodeInvokeCommands.push("system.run");
+          return {
+            payload: { stdout: "ok\n", stderr: "", exitCode: 0, success: true },
+          };
+        }
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes(BASE_RUN_INPUT);
+    expect(nodeInvokeCommands).toEqual(["system.run"]);
+    expectFirstTextContains(result, '"stdout": "ok\\n"');
+  });
+
   it("passes invoke and command timeouts", async () => {
     setupSystemRunGateway({
       prepareCwd: "/tmp",

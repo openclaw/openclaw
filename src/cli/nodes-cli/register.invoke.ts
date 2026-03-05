@@ -13,6 +13,7 @@ import {
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
@@ -41,6 +42,11 @@ type ExecDefaults = {
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
+};
+
+type NodeRuntimeInfo = {
+  platform: string | null;
+  commands: string[] | null;
 };
 
 function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
@@ -85,14 +91,19 @@ function resolveExecDefaults(
   };
 }
 
-async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<string | null> {
+async function resolveNodeRuntimeInfo(opts: NodesRpcOpts, nodeId: string): Promise<NodeRuntimeInfo> {
   try {
     const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
     const match = nodes.find((node) => node.nodeId === nodeId);
-    return typeof match?.platform === "string" ? match.platform : null;
+    return {
+      platform: typeof match?.platform === "string" ? match.platform : null,
+      commands: Array.isArray(match?.commands)
+        ? match.commands.map((command) => String(command))
+        : null,
+    };
   } catch {
-    return null;
+    return { platform: null, commands: null };
   }
 }
 
@@ -102,6 +113,11 @@ function requirePreparedRunPayload(payload: unknown) {
     throw new Error("invalid system.run.prepare response");
   }
   return prepared;
+}
+
+function isUnsupportedSystemRunPrepareError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes("system.run.prepare") && message.includes("not support");
 }
 
 function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
@@ -132,34 +148,59 @@ async function prepareNodesRunContext(params: {
   const env = parseEnvPairs(params.opts.env);
   const timeoutMs = parseTimeoutMs(params.opts.commandTimeout);
   const invokeTimeout = parseTimeoutMs(params.opts.invokeTimeout);
+  const nodeRuntime = await resolveNodeRuntimeInfo(params.opts, params.nodeId);
 
   let argv = Array.isArray(params.command) ? params.command : [];
   let rawCommand: string | undefined;
   if (params.raw) {
     rawCommand = params.raw;
-    const platform = await resolveNodePlatform(params.opts, params.nodeId);
-    argv = buildNodeShellCommand(rawCommand, platform ?? undefined);
+    argv = buildNodeShellCommand(rawCommand, nodeRuntime.platform ?? undefined);
   }
 
   const nodeEnv = env ? { ...env } : undefined;
   if (nodeEnv) {
     applyPathPrepend(nodeEnv, params.execDefaults?.pathPrepend, { requireExisting: true });
   }
-
-  const prepareResponse = (await callGatewayCli("node.invoke", params.opts, {
-    nodeId: params.nodeId,
-    command: "system.run.prepare",
-    params: {
-      command: argv,
-      rawCommand,
-      cwd: params.opts.cwd,
-      agentId: params.agentId,
-    },
-    idempotencyKey: `prepare-${randomIdempotencyKey()}`,
-  })) as { payload?: unknown } | null;
+  const supportsPrepare =
+    nodeRuntime.commands === null || nodeRuntime.commands.includes("system.run.prepare");
+  let prepared: ReturnType<typeof requirePreparedRunPayload> | null = null;
+  if (supportsPrepare) {
+    try {
+      const prepareResponse = (await callGatewayCli("node.invoke", params.opts, {
+        nodeId: params.nodeId,
+        command: "system.run.prepare",
+        params: {
+          command: argv,
+          rawCommand,
+          cwd: params.opts.cwd,
+          agentId: params.agentId,
+        },
+        idempotencyKey: `prepare-${randomIdempotencyKey()}`,
+      })) as { payload?: unknown } | null;
+      prepared = requirePreparedRunPayload(prepareResponse?.payload);
+    } catch (err) {
+      if (!isUnsupportedSystemRunPrepareError(err)) {
+        throw err;
+      }
+    }
+  }
+  if (!prepared) {
+    const trimmedCwd = typeof params.opts.cwd === "string" ? params.opts.cwd.trim() : "";
+    const normalizedRaw = typeof rawCommand === "string" && rawCommand.trim() ? rawCommand : null;
+    prepared = {
+      cmdText: normalizedRaw ?? formatExecCommand(argv),
+      plan: {
+        argv,
+        cwd: trimmedCwd || null,
+        rawCommand: normalizedRaw,
+        agentId: params.agentId ?? null,
+        sessionKey: null,
+      },
+    };
+  }
 
   return {
-    prepared: requirePreparedRunPayload(prepareResponse?.payload),
+    prepared,
     nodeEnv,
     timeoutMs,
     invokeTimeout,
