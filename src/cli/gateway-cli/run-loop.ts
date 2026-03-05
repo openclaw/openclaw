@@ -1,5 +1,5 @@
 import type { startGatewayServer } from "../../gateway/server.js";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
@@ -191,9 +191,14 @@ export async function runGatewayLoop(params: {
       try {
         server = await params.start();
       } catch (err) {
-        // If the server fails to start (e.g. invalid config after a restart),
-        // exit gracefully instead of crashing. An unhandled crash causes the
-        // OS to respawn a new process which on macOS loses TCC permissions
+        // Let GatewayLockError propagate so the outer CLI handler can show
+        // user-facing diagnostics (e.g. "gateway stop" hint).
+        if (err instanceof GatewayLockError) {
+          throw err;
+        }
+        // For other failures (e.g. invalid config after a restart), exit
+        // gracefully instead of crashing. An unhandled crash causes the OS
+        // to respawn a new process which on macOS loses TCC permissions
         // (Full Disk Access) granted to the original process.
         gatewayLog.error(`gateway failed to start: ${String(err)}`);
         exitProcess(1);
