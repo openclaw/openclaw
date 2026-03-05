@@ -1,5 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
@@ -30,8 +31,11 @@ export function buildOutboundSessionContext(params: {
   if (!key && !agentId) {
     return undefined;
   }
+  // When agentId is known but no explicit session key was provided, derive a
+  // default key so that internal hooks (message:sent) can still fire.
+  const effectiveKey = key ?? (agentId ? buildAgentMainSessionKey({ agentId }) : undefined);
   return {
-    ...(key ? { key } : {}),
+    ...(effectiveKey ? { key: effectiveKey } : {}),
     ...(agentId ? { agentId } : {}),
   };
 }
