@@ -110,5 +110,15 @@ describe("feishu policy", () => {
         }),
       ).toBe(true);
     });
+
+    it("treats legacy allowall policy as open", () => {
+      expect(
+        isFeishuGroupAllowed({
+          groupPolicy: "allowall",
+          allowFrom: [],
+          senderId: "oc_group_123",
+        }),
+      ).toBe(true);
+    });
   });
 });

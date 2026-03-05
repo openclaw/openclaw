@@ -92,17 +92,17 @@ export function resolveFeishuGroupToolPolicy(
 }
 
 export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "allowall";
   allowFrom: Array<string | number>;
   senderId: string;
   senderIds?: Array<string | null | undefined>;
   senderName?: string | null;
 }): boolean {
-  const { groupPolicy } = params;
-  if (groupPolicy === "disabled") {
+  const normalizedGroupPolicy = params.groupPolicy === "allowall" ? "open" : params.groupPolicy;
+  if (normalizedGroupPolicy === "disabled") {
     return false;
   }
-  if (groupPolicy === "open") {
+  if (normalizedGroupPolicy === "open") {
     return true;
   }
   return resolveFeishuAllowlistMatch(params).allowed;
