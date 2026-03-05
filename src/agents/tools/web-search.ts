@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "ark"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -36,6 +36,9 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_ARK_MODEL = "doubao-seed-1-6-250615";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -203,6 +206,25 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type ArkConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+};
+
+type ArkSearchResponse = {
+  output?: Array<{
+    type?: string;
+    role?: string;
+    text?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+  output_text?: string;
 };
 
 type GrokSearchResponse = {
@@ -415,6 +437,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "ark") {
+    return {
+      error: "missing_ark_api_key",
+      message:
+        "web_search (ark) needs a Volcengine ARK API key. Set ARK_API_KEY, VOLCENGINE_API_KEY, or VOLCANO_ENGINE_API_KEY in the Gateway environment, configure tools.web.search.ark.apiKey, or set models.providers.volcengine.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -422,7 +452,10 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(
+  search?: WebSearchConfig,
+  fullConfig?: OpenClawConfig,
+): (typeof SEARCH_PROVIDERS)[number] {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
@@ -438,6 +471,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "ark") {
+    return "ark";
   }
   if (raw === "brave") {
     return "brave";
@@ -468,7 +504,13 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "kimi";
     }
-    // 4. Perplexity
+    // 4. Ark
+    const arkConfig = resolveArkConfig(search);
+    if (resolveArkApiKey(arkConfig, fullConfig)) {
+      logVerbose('web_search: no provider configured, auto-detected "ark" from available API keys');
+      return "ark";
+    }
+    // 5. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -477,7 +519,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 6. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       logVerbose(
@@ -586,6 +628,136 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveArkConfig(search?: WebSearchConfig): ArkConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const ark = "ark" in search ? search.ark : undefined;
+  if (!ark || typeof ark !== "object") {
+    return {};
+  }
+  return ark as ArkConfig;
+}
+
+function resolveArkApiKey(ark?: ArkConfig, fullConfig?: OpenClawConfig): string | undefined {
+  const fromConfig = normalizeApiKey(ark?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvArk = normalizeApiKey(process.env.ARK_API_KEY);
+  if (fromEnvArk) {
+    return fromEnvArk;
+  }
+  const fromEnvVolcengine = normalizeApiKey(process.env.VOLCENGINE_API_KEY);
+  if (fromEnvVolcengine) {
+    return fromEnvVolcengine;
+  }
+  const fromEnvVolcanoEngine = normalizeApiKey(process.env.VOLCANO_ENGINE_API_KEY);
+  if (fromEnvVolcanoEngine) {
+    return fromEnvVolcanoEngine;
+  }
+  // Fallback: try to get from models.providers.volcengine.apiKey in main config
+  const volcengineProvider = fullConfig?.models?.providers?.volcengine;
+  if (volcengineProvider && "apiKey" in volcengineProvider) {
+    const fromModelsConfig = normalizeApiKey(volcengineProvider.apiKey);
+    if (fromModelsConfig) {
+      return fromModelsConfig;
+    }
+  }
+  return undefined;
+}
+
+function resolveArkModel(ark?: ArkConfig): string {
+  const fromConfig = ark && "model" in ark && typeof ark.model === "string" ? ark.model.trim() : "";
+  return fromConfig || DEFAULT_ARK_MODEL;
+}
+
+function resolveArkBaseUrl(ark?: ArkConfig): string {
+  const fromConfig =
+    ark && "baseUrl" in ark && typeof ark.baseUrl === "string" ? ark.baseUrl.trim() : "";
+  return fromConfig || DEFAULT_ARK_BASE_URL;
+}
+
+function extractArkContent(data: ArkSearchResponse): { text: string | undefined } {
+  // Ark Responses API format: find the message output with text content
+  for (const output of data.output ?? []) {
+    if (output.type === "message") {
+      for (const block of output.content ?? []) {
+        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
+          return { text: block.text };
+        }
+      }
+    }
+    // Some responses place output_text blocks directly in the output array
+    if (
+      output.type === "output_text" &&
+      "text" in output &&
+      typeof output.text === "string" &&
+      output.text
+    ) {
+      return { text: output.text };
+    }
+  }
+  // Fallback: output_text field
+  const text = typeof data.output_text === "string" ? data.output_text : undefined;
+  return { text };
+}
+
+async function runArkSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: string[] }> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/responses`;
+
+  const body: Record<string, unknown> = {
+    model: params.model,
+    stream: false,
+    tools: [{ type: "web_search" }],
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: params.query,
+          },
+        ],
+      },
+    ],
+  };
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return throwWebSearchApiError(res, "Ark");
+      }
+
+      const data = (await res.json()) as ArkSearchResponse;
+      const { text: extractedText } = extractArkContent(data);
+      const content = extractedText ?? "No response";
+
+      // Ark web_search via responses API doesn't return separate citations yet
+      return { content, citations: [] };
+    },
+  );
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1171,6 +1343,8 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  arkBaseUrl?: string;
+  arkModel?: string;
 }): Promise<Record<string, unknown>> {
   const providerSpecificKey =
     params.provider === "grok"
@@ -1179,7 +1353,9 @@ async function runWebSearch(params: {
         ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : "";
+          : params.provider === "ark"
+            ? `${params.arkBaseUrl ?? DEFAULT_ARK_BASE_URL}:${params.arkModel ?? DEFAULT_ARK_MODEL}`
+            : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
@@ -1264,6 +1440,33 @@ async function runWebSearch(params: {
       query: params.query,
       provider: params.provider,
       model: params.kimiModel ?? DEFAULT_KIMI_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "ark") {
+    const { content, citations } = await runArkSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.arkBaseUrl ?? DEFAULT_ARK_BASE_URL,
+      model: params.arkModel ?? DEFAULT_ARK_MODEL,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.arkModel ?? DEFAULT_ARK_MODEL,
       tookMs: Date.now() - start,
       externalContent: {
         untrusted: true,
@@ -1392,15 +1595,17 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
+  const fullConfig = options?.config;
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
+  const provider = resolveSearchProvider(search, fullConfig);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const arkConfig = resolveArkConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1411,7 +1616,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "ark"
+              ? "Search the web using Volcengine Ark. Returns AI-synthesized answers with citations from real-time web search."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1430,7 +1637,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "ark"
+                  ? resolveArkApiKey(arkConfig, fullConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1596,6 +1805,8 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        arkBaseUrl: resolveArkBaseUrl(arkConfig),
+        arkModel: resolveArkModel(arkConfig),
       });
       return jsonResult(result);
     },
@@ -1619,5 +1830,9 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveArkApiKey,
+  resolveArkModel,
+  resolveArkBaseUrl,
+  extractArkContent,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

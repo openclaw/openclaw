@@ -440,8 +440,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "ark"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "ark";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -482,6 +482,15 @@ export type ToolsConfig = {
         /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
+      };
+      /** Ark (Volcengine)-specific configuration (used when provider="ark"). */
+      ark?: {
+        /** Volcengine ARK API key (defaults to ARK_API_KEY, VOLCENGINE_API_KEY, or VOLCANO_ENGINE_API_KEY env var, or reuses models.providers.volcengine.apiKey). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://ark.cn-beijing.volces.com/api/v3"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "doubao-seed-1-6-250615"). */
         model?: string;
       };
     };
