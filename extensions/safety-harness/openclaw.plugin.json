@@ -1,0 +1,10 @@
+{
+  "id": "safety-harness",
+  "name": "Safety Harness",
+  "description": "Classifies tool calls into allow/confirm/block tiers with taint tracking, chain detection, rate limiting, and audit logging.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
