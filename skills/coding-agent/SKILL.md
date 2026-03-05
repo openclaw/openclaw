@@ -229,6 +229,105 @@ git worktree remove /tmp/issue-99
 
 ---
 
+
+---
+
+## Context Handoff (for persistent coding tools)
+
+When escalating tasks to a coding agent running outside of OpenClaw (e.g., Claude Code on the host, a persistent Codex session), use the structured handoff protocol instead of dumping context into the prompt.
+
+### Pre-flight: Context Snapshot
+
+Before escalating, generate a system state snapshot:
+
+```bash
+bash command:"~/.openclaw/scripts/context-snapshot.sh"
+```
+
+This writes `~/.openclaw/coding-agent/context/current.json` with:
+- Model health (provider status, quarantines, fallback chain)
+- Key drift check results
+- Repo health (GitHub repos, secrets)
+- Recent gateway errors (last 5)
+- Cron job status
+- Active incidents
+- Disk usage
+
+The coding tool reads this one file instead of re-running diagnostics. **Zero tokens, full awareness.**
+
+### Task Handoff: Inbox/Outbox
+
+Write a structured task to the inbox:
+
+```bash
+bash command:"cat > ~/.openclaw/coding-agent/inbox/$(date -u +%Y%m%d-%H%M%S)-task.json << 'TASK'
+{
+  \"agent\": \"<your agent ID>\",
+  \"urgency\": \"routine\",
+  \"task\": \"One-line summary of what you need\",
+  \"context\": \"What happened, what you tried, why you're escalating\",
+  \"files\": [\"/path/to/relevant/file\"],
+  \"errors\": \"Exact error text if any\",
+  \"outcome\": \"What success looks like\"
+}
+TASK"
+```
+
+The coding tool picks up tasks from `inbox/`, reads `context/current.json` for situational awareness, and writes results to `outbox/`:
+
+```json
+{
+  "timestamp": "2026-03-01T21:15:00Z",
+  "task": "Original task summary",
+  "status": "completed",
+  "filesChanged": [{"path": "/path/to/file", "action": "modified"}],
+  "restartNeeded": false,
+  "verify": ["Step 1 to verify", "Step 2 to verify"],
+  "notes": "Anything the agent should know"
+}
+```
+
+### Operational Database
+
+For queryable history, use the `ops-db.sh` wrapper around a local SQLite database:
+
+```bash
+# Record current provider health
+bash command:"~/.openclaw/scripts/ops-db.sh health snapshot"
+
+# Check latest provider status
+bash command:"~/.openclaw/scripts/ops-db.sh health latest"
+
+# Create a task for the coding tool
+bash command:"~/.openclaw/scripts/ops-db.sh task create myagent 'Fix auth handler' --urgency blocking --context 'Getting 500 errors on /api/auth'"
+
+# Log an incident
+bash command:"~/.openclaw/scripts/ops-db.sh incident open 'Provider X down' --provider x --severity high"
+
+# Check what happened recently
+bash command:"~/.openclaw/scripts/ops-db.sh config recent --limit 5"
+```
+
+The database (`~/.openclaw/ops.db`) is readable by both OpenClaw agents and the external coding tool. Run `ops-db.sh init` to set up the schema.
+
+### Setup
+
+The context handoff scripts are in `skills/coding-agent/scripts/`. Copy them to your scripts directory:
+
+```bash
+bash command:"cp ~/.openclaw/skills/coding-agent/scripts/*.sh ~/.openclaw/scripts/ && chmod +x ~/.openclaw/scripts/context-snapshot.sh ~/.openclaw/scripts/ops-db.sh"
+bash command:"cp ~/.openclaw/skills/coding-agent/scripts/ops-db-init.sql ~/.openclaw/scripts/"
+bash command:"~/.openclaw/scripts/ops-db.sh init"
+```
+
+Directory structure (created automatically by `context-snapshot.sh`):
+```
+~/.openclaw/coding-agent/
+├── inbox/    # Agents drop structured task requests
+├── outbox/   # Coding tool drops structured results
+└── context/  # Pre-bundled context snapshots
+```
+
 ## ⚠️ Rules
 
 1. **Use the right execution mode per agent**:
