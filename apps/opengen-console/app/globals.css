@@ -1,16 +1,115 @@
+:root {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --text: #0f172a;
+  --muted: #64748b;
+  --line: #dbe3ef;
+  --brand: #0369a1;
+}
+
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  background: #f7f8fa;
-  color: #111827;
+  min-height: 100%;
 }
 
-main {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 48px 24px;
+body.opengen-app {
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  background: radial-gradient(circle at top right, #dbeafe 0%, var(--bg) 42%, #e2e8f0 100%);
+  color: var(--text);
+}
+
+.console-shell {
+  min-height: 100vh;
+}
+
+.console-header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+}
+
+.console-brand {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.console-body {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: calc(100vh - 64px);
+}
+
+.console-sidebar {
+  padding: 20px;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.console-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.console-nav-link {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.console-nav-link:hover {
+  background: var(--surface-alt);
+  color: var(--brand);
+}
+
+.console-main {
+  padding: 28px;
+}
+
+.console-title {
+  margin: 0 0 18px;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+}
+
+.console-content {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+@media (max-width: 900px) {
+  .console-body {
+    grid-template-columns: 1fr;
+  }
+
+  .console-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .console-sidebar nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .console-main {
+    padding: 18px;
+  }
 }

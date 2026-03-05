@@ -1,8 +1,9 @@
+import { ConsoleShell } from "../components/console-shell";
+
 export default function HomePage() {
   return (
-    <main>
-      <h1>OpenGen Console</h1>
-      <p>Next.js App Router bootstrap complete.</p>
-    </main>
+    <ConsoleShell title="Overview">
+      <p>OpenGen console is ready. Use the side navigation to generate or inspect tasks.</p>
+    </ConsoleShell>
   );
 }

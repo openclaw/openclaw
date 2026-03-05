@@ -13,5 +13,10 @@
     "next": "^15.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.8",
+    "@testing-library/react": "^16.0.1",
+    "jsdom": "^26.0.0"
   }
 }
