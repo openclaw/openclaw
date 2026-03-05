@@ -284,8 +284,8 @@ export function deduplicateMessages(
     toolCallId?: string;
   };
 
-  const counts = new Map<string, number>();
-  const firstByHash = new Map<string, FirstOccurrence>();
+  const countsByCanonicalText = new Map<string, number>();
+  const firstByCanonicalText = new Map<string, FirstOccurrence>();
 
   for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
     const msg = messages[msgIdx];
@@ -307,11 +307,10 @@ export function deduplicateMessages(
         continue;
       }
 
-      const hash = contentHash(canonicalText);
-      counts.set(hash, (counts.get(hash) || 0) + 1);
+      countsByCanonicalText.set(canonicalText, (countsByCanonicalText.get(canonicalText) || 0) + 1);
 
-      if (!firstByHash.has(hash)) {
-        firstByHash.set(hash, {
+      if (!firstByCanonicalText.has(canonicalText)) {
+        firstByCanonicalText.set(canonicalText, {
           text,
           canonicalText,
           messageIndex: msgIdx,
@@ -322,21 +321,21 @@ export function deduplicateMessages(
     }
   }
 
-  const dedupHashes = new Set<string>();
-  const omittedRepeatsByHash = new Map<string, number>();
-  for (const [hash, count] of counts) {
+  const dedupCanonicalTexts = new Set<string>();
+  const omittedRepeatsByCanonicalText = new Map<string, number>();
+  for (const [canonicalText, count] of countsByCanonicalText) {
     if (count <= 1) {
       continue;
     }
-    const first = firstByHash.get(hash);
+    const first = firstByCanonicalText.get(canonicalText);
     if (!first) {
       continue;
     }
-    if (first.canonicalText.length < config.minContentSize) {
+    if (canonicalText.length < config.minContentSize) {
       continue;
     }
-    dedupHashes.add(hash);
-    omittedRepeatsByHash.set(hash, Math.max(1, count - 1));
+    dedupCanonicalTexts.add(canonicalText);
+    omittedRepeatsByCanonicalText.set(canonicalText, Math.max(1, count - 1));
   }
 
   function makePlainPointer(first: FirstOccurrence, omittedRepeats: number): string {
@@ -348,7 +347,7 @@ export function deduplicateMessages(
     );
   }
 
-  const seenOrder = new Map<string, number>();
+  const seenOrderByCanonicalText = new Map<string, number>();
   const newMessages: any[] = messages.map((msg, msgIdx) => {
     if (!isDedupEligibleMessage(msg)) {
       return msg;
@@ -370,13 +369,12 @@ export function deduplicateMessages(
         return block;
       }
 
-      const hash = contentHash(canonicalText);
-      if (!dedupHashes.has(hash)) {
+      if (!dedupCanonicalTexts.has(canonicalText)) {
         return block;
       }
 
-      const seenCount = seenOrder.get(hash) || 0;
-      seenOrder.set(hash, seenCount + 1);
+      const seenCount = seenOrderByCanonicalText.get(canonicalText) || 0;
+      seenOrderByCanonicalText.set(canonicalText, seenCount + 1);
 
       // Keep the first occurrence as full content; only replace repeats.
       if (seenCount === 0) {
@@ -388,12 +386,12 @@ export function deduplicateMessages(
         return block;
       }
 
-      const first = firstByHash.get(hash);
+      const first = firstByCanonicalText.get(canonicalText);
       if (!first) {
         return block;
       }
 
-      const omittedRepeats = omittedRepeatsByHash.get(hash) || 1;
+      const omittedRepeats = omittedRepeatsByCanonicalText.get(canonicalText) || 1;
       const pointer = makePlainPointer(first, omittedRepeats);
       if (pointer.length >= text.length) {
         return block;
