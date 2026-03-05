@@ -40,6 +40,7 @@ export const ConnectParamsSchema = Type.Object(
     pathEnv: Type.Optional(Type.String()),
     role: Type.Optional(NonEmptyString),
     scopes: Type.Optional(Type.Array(NonEmptyString)),
+    nonce: Type.Optional(NonEmptyString),
     device: Type.Optional(
       Type.Object(
         {
