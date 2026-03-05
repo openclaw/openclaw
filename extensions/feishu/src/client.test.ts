@@ -47,10 +47,8 @@ import {
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
-const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
-let priorFeishuHttpTimeoutEnv: string | undefined;
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
@@ -70,8 +68,6 @@ function firstWsClientOptions(): { agent?: unknown } {
 
 beforeEach(() => {
   priorProxyEnv = {};
-  priorFeishuHttpTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
   for (const key of proxyEnvKeys) {
     priorProxyEnv[key] = process.env[key];
     delete process.env[key];
@@ -87,11 +83,6 @@ afterEach(() => {
     } else {
       process.env[key] = value;
     }
-  }
-  if (priorFeishuHttpTimeoutEnv === undefined) {
-    delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  } else {
-    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuHttpTimeoutEnv;
   }
 });
 
@@ -147,10 +138,13 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
-  it("uses env-configured default timeout when provided", async () => {
-    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "45000";
-
-    createFeishuClient({ appId: "app_4", appSecret: "secret_4", accountId: "timeout-env" });
+  it("uses config-configured default timeout when provided", async () => {
+    createFeishuClient({
+      appId: "app_4",
+      appSecret: "secret_4",
+      accountId: "timeout-config",
+      config: { httpTimeoutMs: 45_000 },
+    });
 
     const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
     const lastCall = calls[calls.length - 1][0] as {
@@ -166,10 +160,13 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
-  it("falls back to default timeout when env value is invalid", async () => {
-    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "invalid";
-
-    createFeishuClient({ appId: "app_5", appSecret: "secret_5", accountId: "timeout-env-invalid" });
+  it("falls back to default timeout when configured timeout is invalid", async () => {
+    createFeishuClient({
+      appId: "app_5",
+      appSecret: "secret_5",
+      accountId: "timeout-config-invalid",
+      config: { httpTimeoutMs: -1 },
+    });
 
     const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
     const lastCall = calls[calls.length - 1][0] as {

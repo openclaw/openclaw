@@ -1,18 +1,9 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
-const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
-
-function resolveDefaultHttpTimeoutMs(): number {
-  const raw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  if (!raw) return FEISHU_HTTP_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return FEISHU_HTTP_TIMEOUT_MS;
-  return Math.floor(parsed);
-}
 
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
@@ -48,11 +39,11 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * but injects a default request timeout to prevent indefinite hangs
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
  */
-function createTimeoutHttpInstance(): Lark.HttpInstance {
+function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: resolveDefaultHttpTimeoutMs(), ...opts } as Lark.HttpRequestOptions<D>;
+    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
   }
 
   return {
@@ -76,7 +67,19 @@ export type FeishuClientCredentials = {
   appId?: string;
   appSecret?: string;
   domain?: FeishuDomain;
+  httpTimeoutMs?: number;
+  config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
+
+function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
+  const fromConfig = creds.config?.httpTimeoutMs;
+  const fromDirectField = creds.httpTimeoutMs;
+  const timeout = fromDirectField ?? fromConfig;
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
+    return FEISHU_HTTP_TIMEOUT_MS;
+  }
+  return Math.floor(timeout);
+}
 
 /**
  * Create or get a cached Feishu client for an account.
@@ -101,12 +104,13 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   }
 
   // Create new client with timeout-aware HTTP instance
+  const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
   const client = new Lark.Client({
     appId,
     appSecret,
     appType: Lark.AppType.SelfBuild,
     domain: resolveDomain(domain),
-    httpInstance: createTimeoutHttpInstance(),
+    httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
   });
 
   // Cache it
