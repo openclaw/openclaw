@@ -582,6 +582,22 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
+export function composeSystemPromptWithHookContext(params: {
+  baseSystemPrompt?: string;
+  prependSystemContext?: string;
+  appendSystemContext?: string;
+}): string | undefined {
+  const prependSystem = params.prependSystemContext?.trim();
+  const appendSystem = params.appendSystemContext?.trim();
+  const baseSystem = params.baseSystemPrompt?.trim() ?? "";
+  if (!prependSystem && !appendSystem) {
+    return undefined;
+  }
+  return [prependSystem, baseSystem, appendSystem]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+}
+
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
@@ -1531,20 +1547,18 @@ export async function runEmbeddedAttempt(
             systemPromptText = legacySystemPrompt;
             log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
           }
-          const prependSystem = hookResult?.prependSystemContext?.trim();
-          const appendSystem = hookResult?.appendSystemContext?.trim();
-          if (prependSystem || appendSystem) {
-            let base = systemPromptText ?? "";
-            if (prependSystem) {
-              base = `${prependSystem}\n\n${base}`;
-            }
-            if (appendSystem) {
-              base = `${base}\n\n${appendSystem}`;
-            }
-            applySystemPromptOverrideToSession(activeSession, base);
-            systemPromptText = base;
+          const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
+            baseSystemPrompt: systemPromptText,
+            prependSystemContext: hookResult?.prependSystemContext,
+            appendSystemContext: hookResult?.appendSystemContext,
+          });
+          if (prependedOrAppendedSystemPrompt) {
+            const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
+            const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
+            applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
+            systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
-              `hooks: applied prependSystemContext/appendSystemContext (${prependSystem?.length ?? 0}+${appendSystem?.length ?? 0} chars)`,
+              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
         }

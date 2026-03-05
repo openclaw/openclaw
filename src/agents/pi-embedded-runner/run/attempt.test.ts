@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
@@ -72,6 +73,31 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+});
+
+describe("composeSystemPromptWithHookContext", () => {
+  it("returns undefined when no hook system context is provided", () => {
+    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
+  });
+
+  it("builds prepend/base/append system prompt order", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend  ",
+        appendSystemContext: "  append  ",
+      }),
+    ).toBe("prepend\n\nbase system\n\nappend");
+  });
+
+  it("avoids blank separators when base system prompt is empty", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "   ",
+        appendSystemContext: "  append only  ",
+      }),
+    ).toBe("append only");
   });
 });
 
