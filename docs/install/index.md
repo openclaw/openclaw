@@ -155,6 +155,9 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
   </Card>
+  <Card title="Sealos" href="/install/sealos" icon="cloud">
+    One-click hosted deployment on Sealos.
+  </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     CLI-only usage via the Bun runtime.
   </Card>
