@@ -157,6 +157,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (statusReason) {
     return statusReason;
   }
+  if (status === 500) {
+    return "timeout";
+  }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (
