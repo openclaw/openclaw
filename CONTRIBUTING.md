@@ -58,6 +58,8 @@ Welcome to the lobster tank! 🦞
 
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
   - Github [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
+- **Josh Lehman** - Compaction, Tlon/Urbit subsystem
+  - Github [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
 ## How to Contribute
 
@@ -72,6 +74,7 @@ Welcome to the lobster tank! 🦞
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
 ## Control UI Decorators
 

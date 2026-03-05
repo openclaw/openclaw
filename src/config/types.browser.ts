@@ -5,6 +5,8 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "extension";
+  /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+  attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
@@ -48,6 +50,8 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
+  /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
+  cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */

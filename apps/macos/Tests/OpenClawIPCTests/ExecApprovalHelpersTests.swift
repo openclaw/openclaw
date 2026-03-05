@@ -34,13 +34,13 @@ import Testing
         #expect(ExecApprovalHelpers.isPathPattern(" ~/bin/rg "))
         #expect(!ExecApprovalHelpers.isPathPattern("rg"))
 
-        if case .invalid(let reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
+        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
             #expect(reason == .empty)
         } else {
             Issue.record("Expected empty pattern rejection")
         }
 
-        if case .invalid(let reason) = ExecApprovalHelpers.validateAllowlistPattern("echo") {
+        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("echo") {
             #expect(reason == .missingPathComponent)
         } else {
             Issue.record("Expected basename pattern rejection")

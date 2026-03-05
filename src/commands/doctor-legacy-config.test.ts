@@ -31,4 +31,21 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
       "Normalized channels.discord.streaming boolean → enum (partial).",
     ]);
   });
+
+  it("normalizes slack boolean streaming aliases to enum and native streaming", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        slack: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.config.channels?.slack?.streaming).toBe("off");
+    expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
+    expect(res.config.channels?.slack?.streamMode).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
+    ]);
+  });
 });
