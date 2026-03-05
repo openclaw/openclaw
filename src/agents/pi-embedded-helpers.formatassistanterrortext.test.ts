@@ -120,6 +120,15 @@ describe("formatAssistantErrorText", () => {
     expect(text).toContain("Re-authenticate");
   });
 
+  it("returns the same scope remediation hint for JSON-wrapped missing-scope errors", () => {
+    const msg = makeAssistantError(
+      '{"error":{"message":"Missing scopes: api.responses.write","type":"invalid_request_error"}}',
+    );
+    const text = formatAssistantErrorText(msg);
+    expect(text).toContain("missing required API scopes");
+    expect(text).toContain("Re-authenticate");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
