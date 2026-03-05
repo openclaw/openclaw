@@ -284,7 +284,7 @@ export async function resolveChatGuidForTarget(params: {
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
-        if (directHandle && directHandle === normalizedHandle) {
+        if (guid && directHandle && directHandle === normalizedHandle) {
           if (!targetService) {
             // No service preference ("auto"): return first match immediately.
             return guid;
