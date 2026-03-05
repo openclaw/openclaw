@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
@@ -28,13 +30,22 @@ export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
   const profile = env.OPENCLAW_PROFILE;
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
+      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      if (!existsSync(plistPath)) {
+        return [];
+      }
       return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
+      const unitPath = path.join(home, ".config", "systemd", "user", `${unit}.service`);
+      if (!existsSync(unitPath)) {
+        return [];
+      }
       return [
         `systemctl --user disable --now ${unit}.service`,
         `rm ~/.config/systemd/user/${unit}.service`,
