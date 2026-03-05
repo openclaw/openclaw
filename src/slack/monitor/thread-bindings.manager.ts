@@ -231,14 +231,29 @@ export function createSlackThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => {
-      // For Slack, threadId alone is ambiguous (same ts across channels).
-      // Search all bindings for this account matching the threadId.
+      const normalizedThreadId = normalizeThreadId(threadId);
+      if (!normalizedThreadId) {
+        return undefined;
+      }
+      // For Slack, threadId alone can be ambiguous across channels.
+      // Return a binding only when there is a single match for this account.
+      let match: ThreadBindingRecord | undefined;
       for (const entry of BINDINGS_BY_BINDING_KEY.values()) {
-        if (entry.accountId === accountId && entry.threadId === threadId) {
-          return entry;
+        if (entry.accountId !== accountId || entry.threadId !== normalizedThreadId) {
+          continue;
+        }
+        if (!match) {
+          match = entry;
+          continue;
+        }
+        if (match.channelId !== entry.channelId) {
+          logVerbose(
+            `slack thread binding: ambiguous thread_ts ${normalizedThreadId} across channels; require channelId`,
+          );
+          return undefined;
         }
       }
-      return undefined;
+      return match;
     },
     getBySessionKey: (targetSessionKey) => {
       const all = manager.listBySessionKey(targetSessionKey);
@@ -256,8 +271,10 @@ export function createSlackThreadBindingManager(
     listBindings: () =>
       [...BINDINGS_BY_BINDING_KEY.values()].filter((entry) => entry.accountId === accountId),
     touchThread: (touchParams) => {
-      // For Slack, we search by threadId across this account's bindings
-      const binding = manager.getByThreadId(touchParams.threadId);
+      const channelId = touchParams.channelId?.trim();
+      const binding = channelId
+        ? getByChannelThread(channelId, touchParams.threadId)
+        : manager.getByThreadId(touchParams.threadId);
       if (!binding) {
         return null;
       }
@@ -359,8 +376,10 @@ export function createSlackThreadBindingManager(
       return record;
     },
     unbindThread: (unbindParams) => {
-      // For Slack, find the binding by threadId
-      const binding = manager.getByThreadId(unbindParams.threadId);
+      const channelId = unbindParams.channelId?.trim();
+      const binding = channelId
+        ? getByChannelThread(channelId, unbindParams.threadId)
+        : manager.getByThreadId(unbindParams.threadId);
       if (!binding) {
         return null;
       }
@@ -413,6 +432,7 @@ export function createSlackThreadBindingManager(
           continue;
         }
         const entry = manager.unbindThread({
+          channelId: binding.channelId,
           threadId: binding.threadId,
           reason: unbindParams.reason,
           sendFarewell: unbindParams.sendFarewell,
@@ -446,7 +466,7 @@ export function createSlackThreadBindingManager(
       }
       for (const snapshotBinding of bindings) {
         // Re-read live state to avoid unbinding based on stale snapshot
-        const binding = manager.getByThreadId(snapshotBinding.threadId);
+        const binding = getByChannelThread(snapshotBinding.channelId, snapshotBinding.threadId);
         if (!binding) {
           continue;
         }
@@ -473,6 +493,7 @@ export function createSlackThreadBindingManager(
           expirationCandidates.sort((a, b) => a.at - b.at);
           const reason = expirationCandidates[0]?.reason ?? "idle-expired";
           manager.unbindThread({
+            channelId: binding.channelId,
             threadId: binding.threadId,
             reason,
             sendFarewell: true,
@@ -584,7 +605,12 @@ export function createSlackThreadBindingManager(
       if (!binding) {
         return;
       }
-      manager.touchThread({ threadId: binding.threadId, at, persist: true });
+      manager.touchThread({
+        channelId: binding.channelId,
+        threadId: binding.threadId,
+        at,
+        persist: true,
+      });
     },
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
@@ -606,6 +632,7 @@ export function createSlackThreadBindingManager(
         return [];
       }
       const removed = manager.unbindThread({
+        channelId: binding.channelId,
         threadId: binding.threadId,
         reason: input.reason,
       });
