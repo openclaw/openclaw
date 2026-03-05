@@ -120,6 +120,35 @@ function createAbortError(): Error {
   return error;
 }
 
+/**
+ * Kill an entire process tree by sending a signal to the process group.
+ * On Unix, uses negative PID to target the process group (requires detached spawn).
+ * On Windows, falls back to single process kill.
+ */
+export function killProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+): boolean {
+  const pid = child.pid;
+  if (pid == null) {
+    return false;
+  }
+  try {
+    if (process.platform !== "win32") {
+      // Kill the entire process group using negative PID.
+      // This works because we spawn with detached: true on Unix,
+      // making the child the process group leader (PGID = PID).
+      process.kill(-pid, signal);
+    } else {
+      child.kill(signal);
+    }
+    return true;
+  } catch {
+    // Process may have already exited
+    return false;
+  }
+}
+
 export function spawnWithResolvedCommand(
   params: {
     command: string;
@@ -142,6 +171,10 @@ export function spawnWithResolvedCommand(
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
+    // Create a new process group on Unix so we can kill the entire tree
+    // when the session expires. The child becomes the process group leader
+    // with PGID = PID, allowing killProcessTree to use kill(-pid).
+    detached: process.platform !== "win32",
   });
 }
 
@@ -215,20 +248,15 @@ export async function spawnAndCollect(
   let aborted = false;
   const onAbort = () => {
     aborted = true;
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Ignore kill races when child already exited.
-    }
+    // Kill the entire process tree, not just the immediate child.
+    // This ensures child processes (e.g., metabase-mcp, claude-agent-acp)
+    // are also terminated when the session is aborted.
+    killProcessTree(child, "SIGTERM");
     abortKillTimer = setTimeout(() => {
       if (child.exitCode !== null || child.signalCode !== null) {
         return;
       }
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Ignore kill races when child already exited.
-      }
+      killProcessTree(child, "SIGKILL");
     }, 250);
     abortKillTimer.unref?.();
   };

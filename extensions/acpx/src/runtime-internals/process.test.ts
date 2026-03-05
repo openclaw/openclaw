@@ -290,3 +290,54 @@ describe("spawnAndCollect", () => {
     expect(result.error?.name).toBe("AbortError");
   });
 });
+
+describe("killProcessTree", () => {
+  it("kills the entire process group on Unix", async () => {
+    // Skip on Windows as process groups work differently
+    if (process.platform === "win32") {
+      return;
+    }
+
+    // Spawn a parent that spawns a child, then test that both are killed
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+        const { spawn } = require('child_process');
+        // Spawn a grandchild that sleeps forever
+        const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+          detached: false,
+          stdio: 'inherit'
+        });
+        // Parent also waits forever
+        setTimeout(() => {}, 60000);
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+        detached: true, // Create a new process group
+      },
+    );
+
+    // Wait a moment for the grandchild to spawn
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Import killProcessTree dynamically to test it
+    const { killProcessTree } = await import("./process.js");
+
+    // Kill the process tree
+    const killed = killProcessTree(child, "SIGTERM");
+    expect(killed).toBe(true);
+
+    // Wait for the child to exit
+    const exitPromise = new Promise<number | null>((resolve) => {
+      child.once("close", (code) => resolve(code));
+    });
+
+    const exitCode = await exitPromise;
+    // Process was killed by signal, so exit code is null and signal is SIGTERM
+    expect(exitCode).toBeNull();
+  });
+});

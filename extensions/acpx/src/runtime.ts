@@ -25,6 +25,7 @@ import {
   type SpawnCommandOptions,
   type SpawnResolutionEvent,
   spawnAndCollect,
+  killProcessTree,
   spawnWithResolvedCommand,
   waitForExit,
 } from "./runtime-internals/process.js";
@@ -250,25 +251,17 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
     });
 
-    const cancelOnAbort = async () => {
+    // Handle already-aborted signal before spawning
+    if (input.signal?.aborted) {
       await this.cancel({
         handle: input.handle,
         reason: "abort-signal",
       }).catch((err) => {
         this.logger?.warn?.(`acpx runtime abort-cancel failed: ${String(err)}`);
       });
-    };
-    const onAbort = () => {
-      void cancelOnAbort();
-    };
-
-    if (input.signal?.aborted) {
-      await cancelOnAbort();
       return;
     }
-    if (input.signal) {
-      input.signal.addEventListener("abort", onAbort, { once: true });
-    }
+
     const child = spawnWithResolvedCommand(
       {
         command: this.config.command,
@@ -277,6 +270,36 @@ export class AcpxRuntime implements AcpRuntime {
       },
       this.spawnCommandOptions,
     );
+
+    // Set up abort handler with access to child process
+    let abortKillTimer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      // First, kill the entire process tree to ensure all child processes
+      // (e.g., metabase-mcp, claude-agent-acp) are terminated
+      killProcessTree(child, "SIGTERM");
+
+      // Escalate to SIGKILL if process doesn't exit gracefully
+      abortKillTimer = setTimeout(() => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return;
+        }
+        killProcessTree(child, "SIGKILL");
+      }, 500);
+      abortKillTimer.unref?.();
+
+      // Also send cancel command to acpx for graceful cleanup
+      void this.cancel({
+        handle: input.handle,
+        reason: "abort-signal",
+      }).catch((err) => {
+        this.logger?.warn?.(`acpx runtime abort-cancel failed: ${String(err)}`);
+      });
+    };
+
+    if (input.signal) {
+      input.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -346,9 +369,11 @@ export class AcpxRuntime implements AcpRuntime {
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
       }
+      if (abortKillTimer) {
+        clearTimeout(abortKillTimer);
+      }
     }
   }
-
   getCapabilities(): AcpRuntimeCapabilities {
     return ACPX_CAPABILITIES;
   }
