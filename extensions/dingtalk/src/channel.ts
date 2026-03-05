@@ -103,6 +103,22 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
         },
         requireMention: { type: "boolean" },
         groupSessionScope: { type: "string", enum: ["group", "group_sender"] },
+        groups: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              enabled: { type: "boolean" },
+              requireMention: { type: "boolean" },
+              allowFrom: {
+                type: "array",
+                items: { oneOf: [{ type: "string" }, { type: "number" }] },
+              },
+              systemPrompt: { type: "string" },
+              groupSessionScope: { type: "string", enum: ["group", "group_sender"] },
+            },
+          },
+        },
         textChunkLimit: { type: "integer", minimum: 1 },
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },

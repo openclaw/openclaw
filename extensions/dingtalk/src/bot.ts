@@ -14,6 +14,7 @@ import type {
   DingtalkMessageContext,
   ResolvedDingtalkAccount,
   DingtalkConfig,
+  DingtalkGroupConfig,
 } from "./types.js";
 
 /**
@@ -53,6 +54,29 @@ function parseDingtalkMessageEvent(msg: DingtalkRobotMessage): DingtalkMessageCo
 }
 
 /**
+ * Resolve per-group config: exact match > wildcard "*" > undefined.
+ */
+function resolveDingtalkGroupConfig(params: {
+  cfg?: DingtalkConfig;
+  groupId?: string | null;
+}): DingtalkGroupConfig | undefined {
+  const groups = params.cfg?.groups ?? {};
+  const wildcard = groups["*"];
+  const groupId = params.groupId?.trim();
+  if (!groupId) return undefined;
+
+  const direct = groups[groupId];
+  if (direct) return direct;
+
+  const ciMatch = Object.entries(groups).find(
+    ([k, v]) => k !== "*" && v && k.toLowerCase() === groupId.toLowerCase(),
+  );
+  if (ciMatch) return ciMatch[1];
+
+  return wildcard;
+}
+
+/**
  * 检查群组是否在白名单中 / Check if group is in allowlist
  */
 function isGroupAllowed(params: {
@@ -64,6 +88,26 @@ function isGroupAllowed(params: {
   if (groupPolicy === "open") return true;
   if (groupPolicy === "disabled") return false;
   return allowFrom.some((entry) => String(entry).trim() === groupId);
+}
+
+type GroupSessionScope = "group" | "group_sender";
+
+/**
+ * Derive the peer ID based on groupSessionScope.
+ */
+function resolveGroupPeerId(params: {
+  conversationId: string;
+  senderStaffId: string;
+  groupConfig?: DingtalkGroupConfig;
+  dingtalkCfg?: DingtalkConfig;
+}): string {
+  const scope: GroupSessionScope =
+    params.groupConfig?.groupSessionScope ?? params.dingtalkCfg?.groupSessionScope ?? "group";
+
+  if (scope === "group_sender") {
+    return `${params.conversationId}:sender:${params.senderStaffId}`;
+  }
+  return params.conversationId;
 }
 
 /**
@@ -89,7 +133,16 @@ export async function handleDingtalkMessage(params: {
   );
 
   // --- 群组策略检查 / Group policy check ---
+  const groupConfig = isGroup
+    ? resolveDingtalkGroupConfig({ cfg: dingtalkCfg, groupId: ctx.conversationId })
+    : undefined;
+
   if (isGroup) {
+    if (groupConfig?.enabled === false) {
+      log(`dingtalk[${account.accountId}]: group ${ctx.conversationId} is disabled`);
+      return;
+    }
+
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
     const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.dingtalk !== undefined,
@@ -115,8 +168,7 @@ export async function handleDingtalkMessage(params: {
       return;
     }
 
-    // 群聊中检查 @机器人要求 / Check mention requirement in group chat
-    const requireMention = dingtalkCfg?.requireMention ?? true;
+    const requireMention = groupConfig?.requireMention ?? dingtalkCfg?.requireMention ?? true;
     if (requireMention && !ctx.mentionedBot) {
       log(`dingtalk[${account.accountId}]: message in group did not mention bot, skipping`);
       return;
@@ -204,7 +256,14 @@ export async function handleDingtalkMessage(params: {
 
   const dingtalkFrom = `dingtalk:${ctx.senderStaffId}`;
   const dingtalkTo = isGroup ? `chat:${ctx.conversationId}` : `user:${ctx.senderStaffId}`;
-  const peerId = isGroup ? ctx.conversationId : ctx.senderStaffId;
+  const peerId = isGroup
+    ? resolveGroupPeerId({
+        conversationId: ctx.conversationId,
+        senderStaffId: ctx.senderStaffId,
+        groupConfig,
+        dingtalkCfg,
+      })
+    : ctx.senderStaffId;
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,

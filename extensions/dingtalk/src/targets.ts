@@ -48,8 +48,8 @@ export function looksLikeDingtalkId(raw: string): boolean {
   // cidXXXXXX 格式的 conversationId / conversationId in cidXXXXXX format
   if (/^cid[A-Za-z0-9+/=]+$/.test(trimmed)) return true;
 
-  // 纯数字的 staffId / Numeric staffId
-  if (/^\d{5,}$/.test(trimmed)) return true;
+  // Numeric staffId or alphanumeric staffId (e.g. manager1234)
+  if (/^[A-Za-z0-9_]{3,}$/.test(trimmed)) return true;
 
   return false;
 }

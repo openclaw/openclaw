@@ -12,10 +12,14 @@ export function sameFileIdentity(
     return false;
   }
 
-  // On Windows, path-based stat (lstatSync) and fd-based stat (fstatSync)
-  // can report different dev values for the same file: one may be zero, or
-  // both may be non-zero but differ (volume serial encoding varies by call
-  // type). When ino already matches, accept dev mismatch on win32.
+  // On Windows, lstatSync (path-based) and fstatSync (fd-based) report
+  // different dev values for the same file — one may be zero while the other
+  // holds a volume serial, or both may be non-zero but differ due to encoding
+  // differences between the two syscall paths. Cross-volume inode collision is
+  // theoretically possible but astronomically unlikely on NTFS (file reference
+  // numbers are 64-bit per-volume). Accepting dev mismatch when ino matches is
+  // a pragmatic trade-off: without it, plugin manifest validation rejects every
+  // plugin on Windows.
   if (left.dev === right.dev) {
     return true;
   }
