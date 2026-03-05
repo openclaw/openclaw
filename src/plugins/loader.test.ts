@@ -1111,6 +1111,155 @@ describe("loadOpenClawPlugins", () => {
     expect(resolved).toBe(distFile);
   });
 
+  it("isolates plugin config: each plugin sees only its own entry", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    // Use custom schemas that accept a credential field
+    const schemaWithApiKey = {
+      type: "object",
+      additionalProperties: false,
+      properties: { apiKey: { type: "string" } },
+    };
+    const schemaWithToken = {
+      type: "object",
+      additionalProperties: false,
+      properties: { token: { type: "string" } },
+    };
+
+    const pluginADir = makeTempDir();
+    const pluginAFile = path.join(pluginADir, "plugin-a.js");
+    fs.writeFileSync(
+      pluginAFile,
+      `export default {
+        id: "plugin-a",
+        register(api) {
+          globalThis.__capturedConfigs = globalThis.__capturedConfigs || {};
+          globalThis.__capturedConfigs["plugin-a"] = JSON.parse(JSON.stringify(api.config.plugins || {}));
+        },
+      };`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginADir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "plugin-a", configSchema: schemaWithApiKey }, null, 2),
+      "utf-8",
+    );
+
+    const pluginBDir = makeTempDir();
+    const pluginBFile = path.join(pluginBDir, "plugin-b.js");
+    fs.writeFileSync(
+      pluginBFile,
+      `export default {
+        id: "plugin-b",
+        register(api) {
+          globalThis.__capturedConfigs = globalThis.__capturedConfigs || {};
+          globalThis.__capturedConfigs["plugin-b"] = JSON.parse(JSON.stringify(api.config.plugins || {}));
+        },
+      };`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginBDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "plugin-b", configSchema: schemaWithToken }, null, 2),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginAFile, pluginBFile] },
+          allow: ["plugin-a", "plugin-b"],
+          entries: {
+            "plugin-a": { enabled: true, config: { apiKey: "secret-a" } },
+            "plugin-b": { enabled: true, config: { token: "secret-b" } },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((p) => p.id === "plugin-a")?.status).toBe("loaded");
+    expect(registry.plugins.find((p) => p.id === "plugin-b")?.status).toBe("loaded");
+
+    const captured = (globalThis as Record<string, unknown>).__capturedConfigs as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    // Plugin A should see its own entry but NOT plugin B's
+    const aEntries = captured["plugin-a"]?.entries as Record<string, unknown> | undefined;
+    expect(aEntries).toBeDefined();
+    expect(aEntries?.["plugin-a"]).toBeDefined();
+    expect(aEntries?.["plugin-b"]).toBeUndefined();
+
+    // Plugin B should see its own entry but NOT plugin A's
+    const bEntries = captured["plugin-b"]?.entries as Record<string, unknown> | undefined;
+    expect(bEntries).toBeDefined();
+    expect(bEntries?.["plugin-b"]).toBeDefined();
+    expect(bEntries?.["plugin-a"]).toBeUndefined();
+
+    // Cleanup
+    delete (globalThis as Record<string, unknown>).__capturedConfigs;
+  });
+
+  it("strips secrets.providers from config passed to plugins", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginDir = makeTempDir();
+    const pluginFile = path.join(pluginDir, "spy-plugin.js");
+    fs.writeFileSync(
+      pluginFile,
+      `export default {
+        id: "spy-plugin",
+        register(api) {
+          globalThis.__spySecretsConfig = JSON.parse(JSON.stringify(api.config.secrets || {}));
+        },
+      };`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "spy-plugin", configSchema: EMPTY_PLUGIN_SCHEMA }, null, 2),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginFile] },
+          allow: ["spy-plugin"],
+          entries: {
+            "spy-plugin": { enabled: true },
+          },
+        },
+        secrets: {
+          providers: {
+            myVault: {
+              source: "exec",
+              command: "/usr/bin/vault-helper",
+              args: ["get"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((p) => p.id === "spy-plugin")?.status).toBe("loaded");
+
+    const captured = (globalThis as Record<string, unknown>).__spySecretsConfig as Record<
+      string,
+      unknown
+    >;
+    // The providers field should be stripped
+    expect(captured?.providers).toBeUndefined();
+
+    // Cleanup
+    delete (globalThis as Record<string, unknown>).__spySecretsConfig;
+  });
+
   it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
     const { root, srcFile } = createPluginSdkAliasFixture();
 

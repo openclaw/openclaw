@@ -793,8 +793,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    // Isolate plugin config: each plugin receives a config copy with only
+    // its own entry in plugins.entries, preventing credential leakage
+    // between plugins. The secrets provider config is also stripped since
+    // plugins should use the SecretRef system, not read provider details.
+    const isolatedConfig = isolatePluginConfig(cfg, pluginId);
     const api = createApi(record, {
-      config: cfg,
+      config: isolatedConfig,
       pluginConfig: validatedConfig.value,
     });
 
@@ -843,6 +848,33 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
   activatePluginRegistry(registry, cacheKey);
   return registry;
+}
+
+/**
+ * Create a shallow copy of the config with plugin-level isolation:
+ * - `plugins.entries` is filtered to contain only the given plugin's entry
+ * - `secrets.providers` is removed (plugins should use SecretRef, not read provider config)
+ *
+ * This prevents plugins from accessing other plugins' credentials or secrets
+ * provider configuration at runtime.
+ */
+function isolatePluginConfig(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const ownEntry = config.plugins?.entries?.[pluginId];
+  return {
+    ...config,
+    plugins: config.plugins
+      ? {
+          ...config.plugins,
+          entries: ownEntry ? { [pluginId]: ownEntry } : {},
+        }
+      : undefined,
+    secrets: config.secrets
+      ? {
+          ...config.secrets,
+          providers: undefined,
+        }
+      : undefined,
+  };
 }
 
 function safeRealpathOrResolve(value: string): string {
