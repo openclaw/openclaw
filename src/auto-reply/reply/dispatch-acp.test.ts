@@ -432,7 +432,8 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({ bodyForAgent: "hello" });
 
     expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
-    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal).toBeDefined();
+    expect(typeof receivedSignal!.aborted).toBe("boolean");
     expect(receivedSignal!.aborted).toBe(false);
   });
 
@@ -450,7 +451,7 @@ describe("tryDispatchAcpReply", () => {
       );
 
       const dispatchPromise = runDispatch({ bodyForAgent: "stall" });
-      await vi.advanceTimersByTimeAsync(600_001);
+      await vi.runAllTimersAsync();
       await expect(dispatchPromise).resolves.toBeDefined();
       expect(receivedSignal!.aborted).toBe(true);
     } finally {

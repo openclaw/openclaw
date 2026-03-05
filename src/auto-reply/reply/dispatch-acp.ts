@@ -35,6 +35,8 @@ import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
+const MIN_ACP_TURN_TIMEOUT_MS = 30_000;
+
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
   opts?: {
@@ -306,7 +308,10 @@ export async function tryDispatchAcpReply(params: {
     // Guard against stalled upstream streams: abort the turn after the configured
     // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
     // a silently hung SSE connection blocks the session queue forever. refs #17258
-    const turnTimeoutMs = resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
+    const turnTimeoutMs = resolveAgentTimeoutMs({
+      cfg: params.cfg,
+      minMs: MIN_ACP_TURN_TIMEOUT_MS,
+    });
     await withTimeout(
       (signal) =>
         acpManager.runTurn({
