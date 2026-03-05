@@ -22,3 +22,5 @@ The following sound effects are available:
 - `https://remotion.media/mouse-click.wav`
 - `https://remotion.media/shutter-modern.wav`
 - `https://remotion.media/shutter-old.wav`
+
+For more sound effects, search the internet. A good resource is https://github.com/kapishdima/soundcn/tree/main/assets.
