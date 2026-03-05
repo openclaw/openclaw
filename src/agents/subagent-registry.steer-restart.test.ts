@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -83,12 +83,15 @@ vi.mock("./subagent-registry.store.js", () => ({
 
 describe("subagent registry steer restarts", () => {
   let mod: typeof import("./subagent-registry.js");
+  let runtimeLogSpy: ReturnType<typeof vi.spyOn>;
   type RegisterSubagentRunInput = Parameters<typeof mod.registerSubagentRun>[0];
   const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
   const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
   beforeAll(async () => {
     mod = await import("./subagent-registry.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    runtimeLogSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   });
 
   const flushAnnounce = async () => {
@@ -218,8 +221,13 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockClear();
+    runtimeLogSpy.mockClear();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
+  });
+
+  afterAll(() => {
+    runtimeLogSpy.mockRestore();
   });
 
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
@@ -521,6 +529,98 @@ describe("subagent registry steer restarts", () => {
         vi.useRealTimers();
       }
     });
+  });
+
+  it("reconciles cleanup-before-timeout by notifying parent deterministically", async () => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    let resolveWait!: (value: unknown) => void;
+    callGateway.mockImplementationOnce(async (request: unknown) => {
+      const typed = request as { method?: string };
+      if (typed.method === "agent.wait") {
+        return new Promise<unknown>((resolve) => {
+          resolveWait = resolve;
+        });
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-cleanup-timeout",
+      childSessionKey: "agent:main:subagent:cleanup-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "cleanup timeout",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    mod.releaseSubagentRun("run-cleanup-timeout");
+    resolveWait({ status: "timeout", startedAt: Date.now() - 100, endedAt: Date.now() });
+    await flushAnnounce();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const payload = (announceSpy.mock.calls[0]?.[0] ?? {}) as { outcome?: { status?: string } };
+    expect(payload.outcome?.status).toBe("timeout");
+    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+    expect(runtimeLogSpy).toHaveBeenCalledWith(expect.stringContaining("cleanup_before_timeout"));
+    expect(runtimeLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining("missing_run_entry_reconciled"),
+    );
+  });
+
+  it("reconciles missing wait run entry with synthetic failure notification", async () => {
+    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
+    callGateway.mockImplementationOnce(async (request: unknown) => {
+      const typed = request as { method?: string };
+      if (typed.method === "agent.wait") {
+        return { status: "error", error: "missing run" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-missing-entry",
+      childSessionKey: "agent:main:subagent:missing-entry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "missing entry",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    mod.releaseSubagentRun("run-missing-entry");
+    await flushAnnounce();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const payload = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
+      outcome?: { status?: string; error?: string };
+    };
+    expect(payload.outcome?.status).toBe("error");
+    expect(payload.outcome?.error).toBe("missing run");
+    expect(runtimeLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining("missing_run_entry_reconciled"),
+    );
+  });
+
+  it("keeps normal completion path unchanged", async () => {
+    mod.registerSubagentRun({
+      runId: "run-normal-completion",
+      childSessionKey: "agent:main:subagent:normal",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "normal",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await flushAnnounce();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const payload = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    expect(payload.childRunId).toBe("run-normal-completion");
+    expect(runtimeLogSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("missing_run_entry_reconciled"),
+    );
   });
 
   it("keeps completion cleanup pending while descendants are still active", async () => {

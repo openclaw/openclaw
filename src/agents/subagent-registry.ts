@@ -227,6 +227,7 @@ const pendingLifecycleErrorByRunId = new Map<
     error?: string;
   }
 >();
+const skipMissingWaitReconcileRunIds = new Set<string>();
 
 function clearPendingLifecycleError(runId: string) {
   const pending = pendingLifecycleErrorByRunId.get(runId);
@@ -495,7 +496,7 @@ function resumeSubagentRun(runId: string) {
   // Wait for completion again after restart.
   const cfg = loadConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
-  void waitForSubagentCompletion(runId, waitTimeoutMs);
+  void waitForSubagentCompletion(runId, waitTimeoutMs, { ...entry });
   resumedRuns.add(runId);
 }
 
@@ -922,6 +923,7 @@ export function replaceSubagentRunAfterSteer(params: {
     clearPendingLifecycleError(previousRunId);
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
+    skipMissingWaitReconcileRunIds.add(previousRunId);
   }
 
   const now = Date.now();
@@ -957,7 +959,7 @@ export function replaceSubagentRunAfterSteer(params: {
   if (archiveAtMs) {
     startSweeper();
   }
-  void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
+  void waitForSubagentCompletion(nextRunId, waitTimeoutMs, { ...next });
   return true;
 }
 
@@ -987,7 +989,7 @@ export function registerSubagentRun(params: {
   const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  subagentRuns.set(params.runId, {
+  const runRecord: SubagentRunRecord = {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
@@ -1007,7 +1009,8 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
-  });
+  };
+  subagentRuns.set(params.runId, runRecord);
   ensureListener();
   persistSubagentRuns();
   if (archiveAtMs) {
@@ -1015,10 +1018,92 @@ export function registerSubagentRun(params: {
   }
   // Wait for subagent completion via gateway RPC (cross-process).
   // The in-process lifecycle listener is a fallback for embedded runs.
-  void waitForSubagentCompletion(params.runId, waitTimeoutMs);
+  void waitForSubagentCompletion(params.runId, waitTimeoutMs, { ...runRecord });
 }
 
-async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
+async function reconcileMissingRunEntryFromWait(params: {
+  runId: string;
+  wait: { status?: string; startedAt?: number; endedAt?: number; error?: string };
+  fallbackEntry: SubagentRunRecord;
+}) {
+  const waitStatus = params.wait.status;
+  if (waitStatus !== "ok" && waitStatus !== "error" && waitStatus !== "timeout") {
+    return;
+  }
+  if (suppressAnnounceForSteerRestart(params.fallbackEntry)) {
+    return;
+  }
+  if (typeof params.fallbackEntry.endedAt === "number") {
+    return;
+  }
+
+  const outcome: SubagentRunOutcome =
+    waitStatus === "error"
+      ? {
+          status: "error",
+          error: typeof params.wait.error === "string" ? params.wait.error : undefined,
+        }
+      : waitStatus === "timeout"
+        ? { status: "timeout" }
+        : { status: "ok" };
+
+  const endedAt = typeof params.wait.endedAt === "number" ? params.wait.endedAt : Date.now();
+  const syntheticEntry: SubagentRunRecord = {
+    ...params.fallbackEntry,
+    runId: params.runId,
+    startedAt:
+      typeof params.wait.startedAt === "number"
+        ? params.wait.startedAt
+        : params.fallbackEntry.startedAt,
+    endedAt,
+    outcome,
+    endedReason:
+      waitStatus === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+    cleanupHandled: false,
+    cleanupCompletedAt: undefined,
+    suppressAnnounceReason: undefined,
+  };
+
+  if (waitStatus === "timeout") {
+    defaultRuntime.log(
+      `[warn] subagent wait reconciliation reason=cleanup_before_timeout run=${params.runId} child=${syntheticEntry.childSessionKey} requester=${syntheticEntry.requesterSessionKey}`,
+    );
+  }
+  defaultRuntime.log(
+    `[warn] subagent wait reconciliation reason=missing_run_entry_reconciled run=${params.runId} child=${syntheticEntry.childSessionKey} requester=${syntheticEntry.requesterSessionKey} status=${waitStatus}`,
+  );
+
+  await emitSubagentEndedHookForRun({
+    entry: syntheticEntry,
+    reason: syntheticEntry.endedReason,
+    sendFarewell: true,
+    accountId: syntheticEntry.requesterOrigin?.accountId,
+  });
+
+  await runSubagentAnnounceFlow({
+    childSessionKey: syntheticEntry.childSessionKey,
+    childRunId: syntheticEntry.runId,
+    requesterSessionKey: syntheticEntry.requesterSessionKey,
+    requesterOrigin: normalizeDeliveryContext(syntheticEntry.requesterOrigin),
+    requesterDisplayKey: syntheticEntry.requesterDisplayKey,
+    task: syntheticEntry.task,
+    timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+    cleanup: syntheticEntry.cleanup,
+    waitForCompletion: false,
+    startedAt: syntheticEntry.startedAt,
+    endedAt: syntheticEntry.endedAt,
+    label: syntheticEntry.label,
+    outcome: syntheticEntry.outcome,
+    spawnMode: syntheticEntry.spawnMode,
+    expectsCompletionMessage: syntheticEntry.expectsCompletionMessage,
+  });
+}
+
+async function waitForSubagentCompletion(
+  runId: string,
+  waitTimeoutMs: number,
+  fallbackEntry?: SubagentRunRecord,
+) {
   try {
     const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
     const wait = await callGateway<{
@@ -1039,8 +1124,15 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     }
     const entry = subagentRuns.get(runId);
     if (!entry) {
+      if (skipMissingWaitReconcileRunIds.delete(runId)) {
+        return;
+      }
+      if (fallbackEntry) {
+        await reconcileMissingRunEntryFromWait({ runId, wait, fallbackEntry });
+      }
       return;
     }
+    skipMissingWaitReconcileRunIds.delete(runId);
     let mutated = false;
     if (typeof wait.startedAt === "number") {
       entry.startedAt = wait.startedAt;
@@ -1088,6 +1180,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
+  skipMissingWaitReconcileRunIds.clear();
   resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;
