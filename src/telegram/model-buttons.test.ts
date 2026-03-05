@@ -223,6 +223,19 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("does not mark same model id as selected when current model is from another provider", () => {
+    const result = buildModelsKeyboard({
+      provider: "nexus-a",
+      models: ["claude-opus-4-6", "claude-sonnet-4-6"],
+      currentModel: "nexus-d/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    expect(result[0]?.[0]?.text).toBe("claude-opus-4-6");
+    expect(result[1]?.[0]?.text).toBe("claude-sonnet-4-6");
+  });
+
   it("renders pagination controls for first, middle, and last pages", () => {
     const cases = [
       {
