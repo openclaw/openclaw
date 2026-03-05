@@ -70,13 +70,6 @@ const discordComponentButtonSchema = Type.Object({
   url: Type.Optional(Type.String()),
   emoji: Type.Optional(discordComponentEmojiSchema),
   disabled: Type.Optional(Type.Boolean()),
-  allowedUsers: Type.Optional(
-    Type.Array(
-      Type.String({
-        description: "Discord user ids or names allowed to interact with this button.",
-      }),
-    ),
-  ),
 });
 
 const discordComponentSelectSchema = Type.Object({
@@ -137,34 +130,19 @@ const discordComponentModalSchema = Type.Object({
   fields: Type.Array(discordComponentModalFieldSchema),
 });
 
-const discordComponentMessageSchema = Type.Object(
-  {
-    text: Type.Optional(Type.String()),
-    reusable: Type.Optional(
-      Type.Boolean({
-        description: "Allow components to be used multiple times until they expire.",
-      }),
-    ),
-    container: Type.Optional(
-      Type.Object({
-        accentColor: Type.Optional(Type.String()),
-        spoiler: Type.Optional(Type.Boolean()),
-      }),
-    ),
-    blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
-    modal: Type.Optional(discordComponentModalSchema),
-  },
-  {
-    description:
-      "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
-  },
-);
+const discordComponentMessageSchema = Type.Object({
+  text: Type.Optional(Type.String()),
+  container: Type.Optional(
+    Type.Object({
+      accentColor: Type.Optional(Type.String()),
+      spoiler: Type.Optional(Type.Boolean()),
+    }),
+  ),
+  blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+  modal: Type.Optional(discordComponentModalSchema),
+});
 
-function buildSendSchema(options: {
-  includeButtons: boolean;
-  includeCards: boolean;
-  includeComponents: boolean;
-}) {
+function buildSendSchema(options: { includeButtons: boolean; includeCards: boolean }) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -230,9 +208,6 @@ function buildSendSchema(options: {
   }
   if (!options.includeCards) {
     delete props.card;
-  }
-  if (!options.includeComponents) {
-    delete props.components;
   }
   return props;
 }
@@ -421,11 +396,7 @@ function buildChannelManagementSchema() {
   };
 }
 
-function buildMessageToolSchemaProps(options: {
-  includeButtons: boolean;
-  includeCards: boolean;
-  includeComponents: boolean;
-}) {
+function buildMessageToolSchemaProps(options: { includeButtons: boolean; includeCards: boolean }) {
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
@@ -445,7 +416,7 @@ function buildMessageToolSchemaProps(options: {
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean; includeCards: boolean; includeComponents: boolean },
+  options: { includeButtons: boolean; includeCards: boolean },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -457,7 +428,6 @@ function buildMessageToolSchemaFromActions(
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
-  includeComponents: true,
 });
 
 type MessageToolOptions = {
@@ -507,36 +477,22 @@ function resolveMessageToolSchemaActions(params: {
   return actions.length > 0 ? actions : ["send"];
 }
 
-function resolveIncludeComponents(params: {
-  cfg: OpenClawConfig;
-  currentChannelProvider?: string;
-}): boolean {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    return currentChannel === "discord";
-  }
-  // Components are currently Discord-specific.
-  return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
-}
-
 function buildMessageToolSchema(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
   currentChannelId?: string;
 }) {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   const actions = resolveMessageToolSchemaActions(params);
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   const includeButtons = currentChannel
     ? supportsChannelMessageButtonsForChannel({ cfg: params.cfg, channel: currentChannel })
     : supportsChannelMessageButtons(params.cfg);
   const includeCards = currentChannel
     ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
     : supportsChannelMessageCards(params.cfg);
-  const includeComponents = resolveIncludeComponents(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
-    includeComponents,
   });
 }
 

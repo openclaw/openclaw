@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-web
+  namespace: retro-games
+spec:
+  type: NodePort
+  selector:
+    app: openclaw-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 6080
+      nodePort: 30080

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-web
+  namespace: retro-games
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-web
+  template:
+    metadata:
+      labels:
+        app: openclaw-web
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: openclaw-web
+          image: ghcr.io/your-org/openclaw:web
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6080
+              name: novnc
+          env:
+            - name: XVFB_WHD
+              value: 1280x720x24
+            - name: NOVNC_PORT
+              value: "6080"
+            - name: VNC_PORT
+              value: "5900"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: game-data
+              mountPath: /game
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: game-data
+          persistentVolumeClaim:
+            claimName: openclaw-game-data
+        - name: tmp
+          emptyDir: {}

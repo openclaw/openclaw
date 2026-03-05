@@ -1,0 +1,29 @@
+services:
+  openclaw-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        OPENCLAW_SOURCE_REPO: ${OPENCLAW_SOURCE_REPO:-https://github.com/pstagner/OpenClaw.git}
+        OPENCLAW_SOURCE_REF: ${OPENCLAW_SOURCE_REF:-}
+    image: openclaw:gpu
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      XDG_RUNTIME_DIR: /tmp/runtime
+      PULSE_SERVER: ${PULSE_SERVER:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-graphics,utility,display}
+    volumes:
+      - ${GAME_DATA_DIR:-$HOME/games/claw-data}:/game:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/dri:/dev/dri
+    gpus: ${OPENCLAW_GPUS:-all}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run

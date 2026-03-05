@@ -266,7 +266,6 @@ export async function handleDiscordMessagingAction(
         readStringParam(params, "mediaUrl", { trim: false }) ??
         readStringParam(params, "path", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false });
-      const filename = readStringParam(params, "filename");
       const replyTo = readStringParam(params, "replyTo");
       const rawEmbeds = params.embeds;
       const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
@@ -278,6 +277,9 @@ export async function handleDiscordMessagingAction(
       if (componentSpec) {
         if (asVoice) {
           throw new Error("Discord components cannot be sent as voice messages.");
+        }
+        if (mediaUrl) {
+          throw new Error("Discord components cannot include media attachments.");
         }
         if (embeds?.length) {
           throw new Error("Discord components cannot include embeds.");
@@ -293,8 +295,6 @@ export async function handleDiscordMessagingAction(
           replyTo: replyTo ?? undefined,
           sessionKey: sessionKey ?? undefined,
           agentId: agentId ?? undefined,
-          mediaUrl: mediaUrl ?? undefined,
-          filename: filename ?? undefined,
         });
         return jsonResult({ ok: true, result, components: true });
       }

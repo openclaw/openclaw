@@ -1,0 +1,26 @@
+services:
+  openclaw-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        OPENCLAW_SOURCE_REPO: ${OPENCLAW_SOURCE_REPO:-https://github.com/pstagner/OpenClaw.git}
+        OPENCLAW_SOURCE_REF: ${OPENCLAW_SOURCE_REF:-}
+    image: openclaw:web
+    ports:
+      - ${OPENCLAW_WEB_PORT:-6080}:6080
+    environment:
+      XVFB_WHD: ${XVFB_WHD:-1280x720x24}
+      NOVNC_PORT: 6080
+      VNC_PORT: 5900
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+    volumes:
+      - ${GAME_DATA_DIR:-$HOME/games/claw-data}:/game:rw
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run

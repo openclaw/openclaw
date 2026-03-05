@@ -114,6 +114,7 @@ Common signatures:
 - `device signature invalid` / `device signature expired` → client signed the wrong
   payload (or stale timestamp) for the current handshake.
 - `unauthorized` / reconnect loop → token/password mismatch.
+- `unauthorized: device token mismatch` → stale or instance-mismatched device token; rotate/reissue for that device/role.
 - `gateway connect failed:` → wrong host/port/url target.
 
 Device auth v2 migration check:
@@ -135,6 +136,7 @@ Related:
 - [/web/control-ui](/web/control-ui)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/remote](/gateway/remote)
+- [/gateway/cluster-update-reload](/gateway/cluster-update-reload)
 
 ## Gateway service not running
 

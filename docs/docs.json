@@ -1193,6 +1193,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/multiple-gateways",
+                      "gateway/cluster-update-reload",
                       "gateway/troubleshooting"
                     ]
                   },

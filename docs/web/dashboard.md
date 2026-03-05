@@ -44,3 +44,4 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 - Ensure the gateway is reachable (local: `openclaw status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
 - Retrieve the token from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
 - In the dashboard settings, paste the token into the auth field, then connect.
+- If the error includes `device token mismatch`, follow [Cluster update and reload](/gateway/cluster-update-reload) to rotate/reissue the device token and reload instances safely.

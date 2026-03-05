@@ -1,4 +1,4 @@
-import type { Guild, Message, User } from "@buape/carbon";
+import type { Message, User } from "@buape/carbon";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
@@ -44,7 +44,7 @@ export function buildDirectLabel(author: User, tagOverride?: string) {
 }
 
 export function buildGuildLabel(params: {
-  guild?: Guild<true> | Guild;
+  guild?: { name?: string } | null;
   channelName: string;
   channelId: string;
 }) {

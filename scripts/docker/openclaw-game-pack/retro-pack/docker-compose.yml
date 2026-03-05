@@ -1,0 +1,65 @@
+services:
+  openclaw-web:
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+      args:
+        OPENCLAW_SOURCE_REPO: ${OPENCLAW_SOURCE_REPO:-https://github.com/pstagner/OpenClaw.git}
+        OPENCLAW_SOURCE_REF: ${OPENCLAW_SOURCE_REF:-}
+    image: retro/openclaw:web
+    ports:
+      - ${OPENCLAW_PORT:-6080}:6080
+    environment:
+      XVFB_WHD: ${XVFB_WHD:-1280x720x24}
+    volumes:
+      - ${OPENCLAW_DATA_DIR:-$HOME/games/claw-data}:/game:rw
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+  opentyrian-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GAME_PACKAGES: opentyrian
+        GAME_CMD: opentyrian
+    image: retro/opentyrian:web
+    ports:
+      - ${OPENTYRIAN_PORT:-6081}:6080
+    environment:
+      XVFB_WHD: ${XVFB_WHD:-1280x720x24}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+
+  supertuxkart-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GAME_PACKAGES: supertuxkart
+        GAME_CMD: supertuxkart
+    image: retro/supertuxkart:web
+    ports:
+      - ${SUPERTUXKART_PORT:-6082}:6080
+    environment:
+      XVFB_WHD: ${XVFB_WHD:-1280x720x24}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run

@@ -1,0 +1,92 @@
+# syntax=docker/dockerfile:1.7
+############################################
+# Stage 1: Build OpenClaw (Ubuntu LTS)
+############################################
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG OPENCLAW_SOURCE_REPO="https://github.com/pstagner/OpenClaw.git"
+ARG OPENCLAW_SOURCE_REF=""
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      git \
+      cmake \
+      build-essential \
+      pkg-config \
+      libsdl2-dev \
+      libsdl2-image-dev \
+      libsdl2-mixer-dev \
+      libsdl2-ttf-dev \
+      libsdl2-net-dev \
+      libopenal-dev \
+      libgl1-mesa-dev \
+      ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN if [ -n "$OPENCLAW_SOURCE_REF" ]; then \
+      git clone --depth 1 --branch "$OPENCLAW_SOURCE_REF" "$OPENCLAW_SOURCE_REPO" source; \
+    else \
+      git clone --depth 1 "$OPENCLAW_SOURCE_REPO" source; \
+    fi
+
+WORKDIR /build/source
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --target OpenClaw --parallel "$(nproc)" \
+    && strip build/OpenClaw
+
+############################################
+# Stage 2: GPU-capable runtime (Debian slim)
+############################################
+FROM debian:bookworm-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      tini \
+      libsdl2-2.0-0 \
+      libsdl2-image-2.0-0 \
+      libsdl2-mixer-2.0-0 \
+      libsdl2-ttf-2.0-0 \
+      libsdl2-net-2.0-0 \
+      libopenal1 \
+      libgl1 \
+      libgl1-mesa-dri \
+      mesa-vulkan-drivers \
+      libdrm2 \
+      libgbm1 \
+      libx11-6 \
+      libxext6 \
+      libxrandr2 \
+      libxcursor1 \
+      libxi6 \
+      libxinerama1 \
+      libxss1 \
+      fonts-dejavu \
+      ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 game \
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/game --shell /usr/sbin/nologin game \
+    && mkdir -p /game /tmp/runtime \
+    && chown -R game:game /game /tmp/runtime /home/game
+
+COPY --from=builder /build/source/build/OpenClaw /usr/local/bin/OpenClaw
+RUN chmod 0755 /usr/local/bin/OpenClaw
+
+WORKDIR /game
+
+ENV HOME=/home/game
+ENV XDG_RUNTIME_DIR=/tmp/runtime
+ENV LIBGL_ALWAYS_SOFTWARE=0
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,display
+
+USER 10001:10001
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["OpenClaw"]

@@ -2512,6 +2512,7 @@ Fix:
 - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
 - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
 - In the Control UI settings, paste the same token.
+- If the error includes `device token mismatch`, run the token rotation rollout in [Cluster update and reload](/gateway/cluster-update-reload).
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
 ### I set gatewaybind tailnet but it can't bind nothing listens

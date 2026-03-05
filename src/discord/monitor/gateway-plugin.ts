@@ -1,11 +1,26 @@
+import { createRequire } from "node:module";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
 import type { DiscordAccountConfig } from "../../config/types.js";
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
+
+const requireFromHere = createRequire(import.meta.url);
+type ProxyAgentCtor = new (proxy: string) => import("http").Agent;
+
+function resolveHttpsProxyAgentCtor(): ProxyAgentCtor | null {
+  try {
+    const mod = requireFromHere("https-proxy-agent") as { HttpsProxyAgent?: unknown };
+    if (typeof mod.HttpsProxyAgent !== "function") {
+      return null;
+    }
+    return mod.HttpsProxyAgent as ProxyAgentCtor;
+  } catch {
+    return null;
+  }
+}
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
@@ -44,7 +59,14 @@ export function createDiscordGatewayPlugin(params: {
   }
 
   try {
-    const wsAgent = new HttpsProxyAgent<string>(proxy);
+    const HttpsProxyAgent = resolveHttpsProxyAgentCtor();
+    if (!HttpsProxyAgent) {
+      params.runtime.error?.(
+        danger("discord: gateway proxy requested but https-proxy-agent is unavailable"),
+      );
+      return new GatewayPlugin(options);
+    }
+    const wsAgent = new HttpsProxyAgent(proxy);
     const fetchAgent = new ProxyAgent(proxy);
 
     params.runtime.log?.("discord: gateway proxy enabled");

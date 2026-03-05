@@ -10,6 +10,7 @@ import {
   buildDiscordComponentMessage,
   buildDiscordComponentMessageFlags,
   readDiscordComponentSpec,
+  resolveDiscordComponentAttachmentName,
 } from "./components.js";
 
 describe("discord components", () => {
@@ -52,17 +53,40 @@ describe("discord components", () => {
     ).toThrow("options");
   });
 
-  it("requires attachment references for file blocks", () => {
+  it("validates file blocks require attachment:// prefix", () => {
     expect(() =>
       readDiscordComponentSpec({
-        blocks: [{ type: "file", file: "https://example.com/report.pdf" }],
+        blocks: [{ type: "file", file: "https://example.com/image.png" }],
       }),
-    ).toThrow("attachment://");
+    ).toThrow("attachment reference");
     expect(() =>
       readDiscordComponentSpec({
         blocks: [{ type: "file", file: "attachment://" }],
       }),
     ).toThrow("filename");
+    const spec = readDiscordComponentSpec({
+      blocks: [{ type: "file", file: "attachment://myfile.png" }],
+    });
+    expect(spec?.blocks?.[0]).toMatchObject({ type: "file", file: "attachment://myfile.png" });
+  });
+
+  it("validates link buttons require url", () => {
+    expect(() =>
+      buildDiscordComponentMessage({
+        spec: {
+          blocks: [{ type: "actions", buttons: [{ label: "Link", style: "link" }] }],
+        },
+      }),
+    ).toThrow("Link buttons require a url");
+  });
+
+  it("resolveDiscordComponentAttachmentName extracts filename and rejects invalid refs", () => {
+    expect(resolveDiscordComponentAttachmentName("attachment://doc.pdf")).toBe("doc.pdf");
+    expect(resolveDiscordComponentAttachmentName("attachment://myfile.png")).toBe("myfile.png");
+    expect(() => resolveDiscordComponentAttachmentName("https://example.com/x.png")).toThrow(
+      "attachment://",
+    );
+    expect(() => resolveDiscordComponentAttachmentName("attachment://")).toThrow("filename");
   });
 });
 

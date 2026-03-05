@@ -1,0 +1,11 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: openclaw-web
+          env:
+            - name: LIBGL_ALWAYS_SOFTWARE
+              value: "0"
+          resources:
+            limits:
+              nvidia.com/gpu: 1
