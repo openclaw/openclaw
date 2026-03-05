@@ -36,6 +36,7 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import { addInflightAgentRun, removeInflightAgentRun } from "../inflight-agent-runs.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -167,58 +168,6 @@ async function runSessionResetFromAgent(params: {
       }
     })();
   });
-}
-
-function dispatchAgentRunFromGateway(params: {
-  ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
-  runId: string;
-  idempotencyKey: string;
-  respond: GatewayRequestHandlerOptions["respond"];
-  context: GatewayRequestHandlerOptions["context"];
-}) {
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
-    .then((result) => {
-      const payload = {
-        runId: params.runId,
-        status: "ok" as const,
-        summary: "completed",
-        result,
-      };
-      setGatewayDedupeEntry({
-        dedupe: params.context.dedupe,
-        key: `agent:${params.idempotencyKey}`,
-        entry: {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        },
-      });
-      // Send a second res frame (same id) so TS clients with expectFinal can wait.
-      // Swift clients will typically treat the first res as the result and ignore this.
-      params.respond(true, payload, undefined, { runId: params.runId });
-    })
-    .catch((err) => {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-      const payload = {
-        runId: params.runId,
-        status: "error" as const,
-        summary: String(err),
-      };
-      setGatewayDedupeEntry({
-        dedupe: params.context.dedupe,
-        key: `agent:${params.idempotencyKey}`,
-        entry: {
-          ts: Date.now(),
-          ok: false,
-          payload,
-          error,
-        },
-      });
-      params.respond(false, payload, error, {
-        runId: params.runId,
-        error: formatForLog(err),
-      });
-    });
 }
 
 export const agentHandlers: GatewayRequestHandlers = {
@@ -671,51 +620,104 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    dispatchAgentRunFromGateway({
-      ingressOpts: {
-        message,
-        images,
-        to: resolvedTo,
-        sessionId: resolvedSessionId,
-        sessionKey: resolvedSessionKey,
-        thinking: request.thinking,
-        deliver,
-        deliveryTargetMode,
-        channel: resolvedChannel,
+    const shouldPersistInflight = cfg.gateway?.restartRecovery?.resumeInflightAgentRuns === true;
+    const runOpts = {
+      message,
+      images,
+      to: resolvedTo,
+      sessionId: resolvedSessionId,
+      sessionKey: resolvedSessionKey,
+      thinking: request.thinking,
+      deliver,
+      deliveryTargetMode,
+      channel: resolvedChannel,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+      runContext: {
+        messageChannel: originMessageChannel,
         accountId: resolvedAccountId,
-        threadId: resolvedThreadId,
-        runContext: {
-          messageChannel: originMessageChannel,
-          accountId: resolvedAccountId,
-          groupId: resolvedGroupId,
-          groupChannel: resolvedGroupChannel,
-          groupSpace: resolvedGroupSpace,
-          currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
-        },
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
         groupSpace: resolvedGroupSpace,
-        spawnedBy: spawnedByValue,
-        timeout: request.timeout?.toString(),
-        bestEffortDeliver,
-        messageChannel: originMessageChannel,
-        runId,
-        lane: request.lane,
-        extraSystemPrompt: request.extraSystemPrompt,
-        internalEvents: request.internalEvents,
-        inputProvenance,
-        // Internal-only: allow workspace override for spawned subagent runs.
-        workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
-          spawnedBy: spawnedByValue,
-          workspaceDir: request.workspaceDir,
-        }),
-        senderIsOwner,
+        currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
       },
+      groupId: resolvedGroupId,
+      groupChannel: resolvedGroupChannel,
+      groupSpace: resolvedGroupSpace,
+      spawnedBy: spawnedByValue,
+      timeout: request.timeout?.toString(),
+      bestEffortDeliver,
+      messageChannel: originMessageChannel,
       runId,
-      idempotencyKey: idem,
-      respond,
-      context,
-    });
+      lane: request.lane,
+      extraSystemPrompt: request.extraSystemPrompt,
+      internalEvents: request.internalEvents,
+      inputProvenance,
+      // Internal-only: allow workspace override for spawned subagent runs.
+      workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
+        spawnedBy: spawnedByValue,
+        workspaceDir: request.workspaceDir,
+      }),
+      senderIsOwner,
+    } as const;
+
+    if (shouldPersistInflight) {
+      void addInflightAgentRun({
+        runId,
+        acceptedAt: accepted.acceptedAt,
+        opts: runOpts,
+      }).catch(() => {});
+    }
+
+    void agentCommandFromIngress(runOpts, defaultRuntime, context.deps)
+      .then((result) => {
+        const payload = {
+          runId,
+          status: "ok" as const,
+          summary: "completed",
+          result,
+        };
+        if (shouldPersistInflight) {
+          void removeInflightAgentRun(runId).catch(() => {});
+        }
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload,
+          },
+        });
+        // Send a second res frame (same id) so TS clients with expectFinal can wait.
+        // Swift clients will typically treat the first res as the result and ignore this.
+        respond(true, payload, undefined, { runId });
+      })
+      .catch((err) => {
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        const payload = {
+          runId,
+          status: "error" as const,
+          summary: String(err),
+        };
+        if (shouldPersistInflight) {
+          void removeInflightAgentRun(runId).catch(() => {});
+        }
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload,
+            error,
+          },
+        });
+        respond(false, payload, error, {
+          runId,
+          error: formatForLog(err),
+        });
+      });
   },
   "agent.identity.get": ({ params, respond }) => {
     if (!validateAgentIdentityParams(params)) {
