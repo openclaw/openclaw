@@ -459,7 +459,16 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "sessionTarget",
               "wakeMode",
               "failureAlert",
+              "message",
+              "model",
+              "thinking",
+              "timeoutSeconds",
+              "lightContext",
               "allowUnsafeExternalContent",
+              "deliver",
+              "channel",
+              "to",
+              "bestEffortDeliver",
             ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
@@ -470,6 +479,34 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
             if (found) {
+              if (!("payload" in synthetic) || typeof synthetic.payload !== "object") {
+                const agentTurnPatch = {
+                  kind: "agentTurn",
+                  ...(typeof synthetic.message === "string" ? { message: synthetic.message } : {}),
+                  ...(typeof synthetic.model === "string" ? { model: synthetic.model } : {}),
+                  ...(typeof synthetic.thinking === "string"
+                    ? { thinking: synthetic.thinking }
+                    : {}),
+                  ...(typeof synthetic.timeoutSeconds === "number"
+                    ? { timeoutSeconds: synthetic.timeoutSeconds }
+                    : {}),
+                  ...(typeof synthetic.lightContext === "boolean"
+                    ? { lightContext: synthetic.lightContext }
+                    : {}),
+                  ...(typeof synthetic.allowUnsafeExternalContent === "boolean"
+                    ? { allowUnsafeExternalContent: synthetic.allowUnsafeExternalContent }
+                    : {}),
+                  ...(typeof synthetic.deliver === "boolean" ? { deliver: synthetic.deliver } : {}),
+                  ...(typeof synthetic.channel === "string" ? { channel: synthetic.channel } : {}),
+                  ...(typeof synthetic.to === "string" ? { to: synthetic.to } : {}),
+                  ...(typeof synthetic.bestEffortDeliver === "boolean"
+                    ? { bestEffortDeliver: synthetic.bestEffortDeliver }
+                    : {}),
+                };
+                if (Object.keys(agentTurnPatch).length > 1) {
+                  synthetic.payload = agentTurnPatch;
+                }
+              }
               params.patch = synthetic;
             }
           }

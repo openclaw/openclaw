@@ -546,4 +546,38 @@ describe("cron tool", () => {
     expect(params?.patch?.sessionTarget).toBe("main");
     expect(params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
   });
+
+  it("recovers flat model/thinking/timeout patch params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-flat-model", {
+      action: "update",
+      id: "job-3",
+      model: "openai/gpt-4o-mini",
+      thinking: "low",
+      timeoutSeconds: 30,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string;
+              thinking?: string;
+              timeoutSeconds?: number;
+            };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-3");
+    expect(params?.patch?.payload).toMatchObject({
+      kind: "agentTurn",
+      model: "openai/gpt-4o-mini",
+      thinking: "low",
+      timeoutSeconds: 30,
+    });
+  });
 });
