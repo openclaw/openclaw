@@ -1,94 +1,84 @@
 import { Type, type Static } from "@sinclair/typebox";
 
+const CHAT_ACTION_VALUES = [
+  "members",
+  "info",
+  "get_announcement",
+  "list_announcement_blocks",
+  "get_announcement_block",
+  "write_announcement",
+  "append_announcement",
+  "update_announcement_block",
+  "create_chat",
+  "add_members",
+  "check_bot_in_chat",
+  "delete_chat",
+  "create_session_chat",
+] as const;
+
 const MEMBER_ID_TYPE_VALUES = ["open_id", "user_id", "union_id"] as const;
 
-export const FeishuChatSchema = Type.Union([
-  // ── Existing actions ──────────────────────────────────────────────────────
-  Type.Object({
-    action: Type.Literal("members"),
-    chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-    page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
-    page_token: Type.Optional(Type.String({ description: "Pagination token" })),
-    member_id_type: Type.Optional(
-      Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({
-        type: "string",
-        enum: [...MEMBER_ID_TYPE_VALUES],
-        description: "Member ID type (default: open_id)",
-      }),
-    ),
+export const FeishuChatSchema = Type.Object({
+  action: Type.Unsafe<(typeof CHAT_ACTION_VALUES)[number]>({
+    type: "string",
+    enum: [...CHAT_ACTION_VALUES],
+    description:
+      "Action to run. Chat queries: members | info. Announcements: get_announcement | list_announcement_blocks | get_announcement_block | write_announcement | append_announcement | update_announcement_block. Group management: create_chat | add_members | check_bot_in_chat | delete_chat | create_session_chat",
   }),
-  Type.Object({
-    action: Type.Literal("info"),
-    chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-  }),
-  // ── Announcement read actions ─────────────────────────────────────────────
-  Type.Object({
-    action: Type.Literal("get_announcement"),
-    chat_id: Type.String({ description: "Chat ID to get announcement from" }),
-  }),
-  Type.Object({
-    action: Type.Literal("list_announcement_blocks"),
-    chat_id: Type.String({ description: "Chat ID to list announcement blocks from" }),
-  }),
-  Type.Object({
-    action: Type.Literal("get_announcement_block"),
-    chat_id: Type.String({ description: "Chat ID to get announcement block from" }),
-    block_id: Type.String({ description: "Block ID (from list_announcement_blocks)" }),
-  }),
-  // ── Announcement write actions ────────────────────────────────────────────
-  Type.Object({
-    action: Type.Literal("write_announcement"),
-    chat_id: Type.String({ description: "Chat ID to write announcement to" }),
-    content: Type.String({
+  // ── fields used by chat query actions ────────────────────────────────────
+  chat_id: Type.Optional(
+    Type.String({
       description:
-        "Content to write. For doc format: replaces the entire announcement. For docx format: appends a new text block under the page root.",
+        "Chat ID (from URL or event payload). Required for: members, info, get_announcement, list_announcement_blocks, get_announcement_block, write_announcement, append_announcement, update_announcement_block, add_members, check_bot_in_chat, delete_chat",
     }),
-  }),
-  Type.Object({
-    action: Type.Literal("append_announcement"),
-    chat_id: Type.String({ description: "Chat ID to append announcement to" }),
-    content: Type.String({ description: "Markdown content to append to announcement" }),
-  }),
-  Type.Object({
-    action: Type.Literal("update_announcement_block"),
-    chat_id: Type.String({ description: "Chat ID to update announcement block in" }),
-    block_id: Type.String({ description: "Block ID (from list_announcement_blocks)" }),
-    content: Type.String({ description: "New text content" }),
-  }),
-  // ── Chat management actions ───────────────────────────────────────────────
-  Type.Object({
-    action: Type.Literal("create_chat"),
-    name: Type.String({ description: "Group chat name" }),
-    user_ids: Type.Optional(
-      Type.Array(Type.String(), { description: "List of user IDs to add to the group" }),
-    ),
-    description: Type.Optional(Type.String({ description: "Group chat description" })),
-  }),
-  Type.Object({
-    action: Type.Literal("add_members"),
-    chat_id: Type.String({ description: "Chat ID to add members to" }),
-    user_ids: Type.Array(Type.String(), { description: "List of user IDs to add" }),
-  }),
-  Type.Object({
-    action: Type.Literal("check_bot_in_chat"),
-    chat_id: Type.String({ description: "Chat ID to check" }),
-  }),
-  Type.Object({
-    action: Type.Literal("delete_chat"),
-    chat_id: Type.String({ description: "Chat ID to delete/dismiss" }),
-  }),
-  Type.Object({
-    action: Type.Literal("create_session_chat"),
-    name: Type.String({ description: "Session group name" }),
-    user_ids: Type.Array(Type.String(), { description: "List of user IDs to invite" }),
-    greeting: Type.Optional(
-      Type.String({
-        description:
-          "Greeting message to send (default: Hello! I've created this group chat for us to collaborate.)",
-      }),
-    ),
-    description: Type.Optional(Type.String({ description: "Group description" })),
-  }),
-]);
+  ),
+  page_size: Type.Optional(
+    Type.Number({ description: "Page size (1-100, default 50). Used by: members" }),
+  ),
+  page_token: Type.Optional(Type.String({ description: "Pagination token. Used by: members" })),
+  member_id_type: Type.Optional(
+    Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({
+      type: "string",
+      enum: [...MEMBER_ID_TYPE_VALUES],
+      description: "Member ID type (default: open_id). Used by: members",
+    }),
+  ),
+  // ── fields used by announcement actions ──────────────────────────────────
+  block_id: Type.Optional(
+    Type.String({
+      description:
+        "Block ID from list_announcement_blocks. Required for: get_announcement_block, update_announcement_block",
+    }),
+  ),
+  content: Type.Optional(
+    Type.String({
+      description:
+        "Text content. Required for: write_announcement, append_announcement, update_announcement_block",
+    }),
+  ),
+  // ── fields used by group management actions ───────────────────────────────
+  name: Type.Optional(
+    Type.String({
+      description: "Group chat name. Required for: create_chat, create_session_chat",
+    }),
+  ),
+  user_ids: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "List of user open_ids. Required for: add_members, create_session_chat. Optional for: create_chat",
+    }),
+  ),
+  description: Type.Optional(
+    Type.String({
+      description: "Group chat description. Optional for: create_chat, create_session_chat",
+    }),
+  ),
+  greeting: Type.Optional(
+    Type.String({
+      description:
+        "Greeting message sent on creation. Optional for: create_session_chat (default: Hello! I've created this group chat for us to collaborate.)",
+    }),
+  ),
+});
 
 export type FeishuChatParams = Static<typeof FeishuChatSchema>;
