@@ -189,6 +189,24 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runPromptCacheKeyMutationCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"openai-responses"> | Model<"openai-completions">;
+    initialKey: string;
+  }) {
+    const payload: Record<string, unknown> = { prompt_cache_key: params.initialKey };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return payload.prompt_cache_key;
+  }
+
   function runAnthropicHeaderCase(params: {
     cfg: Record<string, unknown>;
     modelId: string;
@@ -1242,4 +1260,65 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("clamps oversized prompt_cache_key payloads to provider-safe length", () => {
+    const original = "agent-main-discord-channel-1470195561645740114-1771662332-1c5699eb";
+    const normalized = runPromptCacheKeyMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-responses">,
+      initialKey: original,
+    });
+
+    expect(typeof normalized).toBe("string");
+    expect((normalized as string).length).toBeLessThanOrEqual(64);
+    expect(normalized).not.toBe(original);
+    expect(normalized).toMatch(/-[0-9a-f]{12}$/);
+  });
+
+  it("keeps prompt_cache_key unchanged when already within limit", () => {
+    const original = "session-main-abc123";
+    const normalized = runPromptCacheKeyMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-completions">,
+      initialKey: original,
+    });
+
+    expect(normalized).toBe(original);
+  });
+
+  it("normalizes oversized prompt_cache_key deterministically", () => {
+    const original = "agent-main-discord-channel-1470195561645740114-1771662332-1c5699eb";
+    const first = runPromptCacheKeyMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-completions">,
+      initialKey: original,
+    });
+    const second = runPromptCacheKeyMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-completions">,
+      initialKey: original,
+    });
+
+    expect(first).toBe(second);
+  });
 });
