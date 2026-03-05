@@ -383,4 +383,92 @@ describe("gateway server hooks", () => {
       expect(failAfterSuccess.status).toBe(401);
     });
   });
+
+  test("applies identity scope gate and decorates allowed hook messages", async () => {
+    const previousGate = process.env.OPENCLAW_IDENTITY_SCOPE_GATE;
+    process.env.OPENCLAW_IDENTITY_SCOPE_GATE = "1";
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    try {
+      await withGatewayServer(async ({ port }) => {
+        cronIsolatedRun.mockClear();
+        cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "done" });
+
+        const response = await postHook(
+          port,
+          "/hooks/agent",
+          { message: "Please update the work order", name: "Ops" },
+          {
+            headers: {
+              "x-openclaw-subject-id": "vendor_1",
+              "x-openclaw-role": "vendor",
+              "x-openclaw-unit-ids": "402",
+              "x-openclaw-auth-scope": "workorder:write",
+              "x-openclaw-action-type": "write",
+              "x-openclaw-intent-slug": "update_work_order_status",
+              "x-openclaw-channel-identity": "vendor@example.com",
+            },
+          },
+        );
+
+        expect(response.status).toBe(200);
+        await waitForSystemEvent();
+
+        const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+          | { message?: string }
+          | undefined;
+        expect(call?.message).toContain("[RUNTIME_SCOPE_CONTEXT_JSON]");
+        expect(call?.message).toContain('"decision":"allow"');
+        drainSystemEvents(resolveMainKey());
+      });
+    } finally {
+      if (previousGate === undefined) {
+        delete process.env.OPENCLAW_IDENTITY_SCOPE_GATE;
+      } else {
+        process.env.OPENCLAW_IDENTITY_SCOPE_GATE = previousGate;
+      }
+    }
+  });
+
+  test("blocks hook dispatch when identity scope gate denies access", async () => {
+    const previousGate = process.env.OPENCLAW_IDENTITY_SCOPE_GATE;
+    process.env.OPENCLAW_IDENTITY_SCOPE_GATE = "1";
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    try {
+      await withGatewayServer(async ({ port }) => {
+        cronIsolatedRun.mockClear();
+
+        const response = await postHook(
+          port,
+          "/hooks/agent",
+          { message: "What is the current balance?", name: "Ops" },
+          {
+            headers: {
+              "x-openclaw-subject-id": "vendor_1",
+              "x-openclaw-role": "vendor",
+              "x-openclaw-unit-ids": "402",
+              "x-openclaw-auth-scope": "ledger:read",
+              "x-openclaw-action-type": "read",
+              "x-openclaw-is-financial": "true",
+              "x-openclaw-intent-slug": "what_is_my_current_balance",
+              "x-openclaw-channel-identity": "vendor@example.com",
+            },
+          },
+        );
+
+        expect(response.status).toBe(403);
+        expect(cronIsolatedRun).not.toHaveBeenCalled();
+        const body = (await response.json()) as { error?: string; decision?: string };
+        expect(body.error).toBe("action_permission_denied");
+        expect(body.decision).toBe("deny");
+      });
+    } finally {
+      if (previousGate === undefined) {
+        delete process.env.OPENCLAW_IDENTITY_SCOPE_GATE;
+      } else {
+        process.env.OPENCLAW_IDENTITY_SCOPE_GATE = previousGate;
+      }
+    }
+  });
 });
