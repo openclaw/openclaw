@@ -492,6 +492,7 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
         // Keep alive until tunnel dies or abort fires.
         // addon.start() resolves immediately after Express binds, so we
         // need a separate hold promise to prevent connectOnce from returning.
+        let removeHoldAbort: (() => void) | undefined;
         await Promise.race([
           tunnel.died.then((err) => {
             throw new Error(`tunnel lost: ${err.message}`);
@@ -501,10 +502,13 @@ export async function monitorPumbleProvider(opts: MonitorPumbleOpts = {}): Promi
               resolve();
               return;
             }
-            opts.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+            const onHoldAbort = () => resolve();
+            removeHoldAbort = () => opts.abortSignal?.removeEventListener("abort", onHoldAbort);
+            opts.abortSignal?.addEventListener("abort", onHoldAbort, { once: true });
           }),
         ]);
 
+        removeHoldAbort?.();
         opts.abortSignal?.removeEventListener("abort", onAbort);
         opts.statusSink?.({ connected: false });
       } finally {

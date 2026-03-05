@@ -15,6 +15,7 @@ export function applyPumbleCredentials(params: {
   creds: {
     appId?: string;
     appKey?: string;
+    botToken?: string;
     clientSecret?: string;
     signingSecret?: string;
   };
@@ -39,6 +40,7 @@ export function applyPumbleCredentials(params: {
   const credFields = {
     ...(creds.appId ? { appId: creds.appId } : {}),
     ...(creds.appKey ? { appKey: creds.appKey } : {}),
+    ...(creds.botToken ? { botToken: creds.botToken } : {}),
     ...(creds.clientSecret ? { clientSecret: creds.clientSecret } : {}),
     ...(creds.signingSecret ? { signingSecret: creds.signingSecret } : {}),
   };

@@ -27,6 +27,7 @@ async function notePumbleSetup(prompter: WizardPrompter): Promise<void> {
 async function promptPumbleCredentials(prompter: WizardPrompter): Promise<{
   appId: string;
   appKey: string;
+  botToken: string;
   clientSecret: string;
   signingSecret: string;
 }> {
@@ -54,7 +55,13 @@ async function promptPumbleCredentials(prompter: WizardPrompter): Promise<{
       validate: (value) => (value?.trim() ? undefined : "Required"),
     }),
   ).trim();
-  return { appId, appKey, clientSecret, signingSecret };
+  const botToken = String(
+    await prompter.text({
+      message: "Enter Pumble Bot Token (from tokens.json after OAuth)",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  return { appId, appKey, botToken, clientSecret, signingSecret };
 }
 
 export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
@@ -62,7 +69,7 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg }) => {
     const configured = listPumbleAccountIds(cfg).some((accountId) => {
       const account = resolvePumbleAccount({ cfg, accountId });
-      return Boolean(account.appId && account.appKey);
+      return Boolean(account.appId && account.appKey && account.botToken);
     });
     return {
       channel,
@@ -92,7 +99,9 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId,
     });
-    const accountConfigured = Boolean(resolvedAccount.appId && resolvedAccount.appKey);
+    const accountConfigured = Boolean(
+      resolvedAccount.appId && resolvedAccount.appKey && resolvedAccount.botToken,
+    );
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv =
       allowEnv &&
@@ -103,6 +112,7 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
 
     let appId: string | null = null;
     let appKey: string | null = null;
+    let botToken: string | null = null;
     let clientSecret: string | null = null;
     let signingSecret: string | null = null;
 
@@ -130,6 +140,7 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
         const entered = await promptPumbleCredentials(prompter);
         appId = entered.appId;
         appKey = entered.appKey;
+        botToken = entered.botToken;
         clientSecret = entered.clientSecret;
         signingSecret = entered.signingSecret;
       }
@@ -142,6 +153,7 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
         const entered = await promptPumbleCredentials(prompter);
         appId = entered.appId;
         appKey = entered.appKey;
+        botToken = entered.botToken;
         clientSecret = entered.clientSecret;
         signingSecret = entered.signingSecret;
       }
@@ -160,6 +172,7 @@ export const pumbleOnboardingAdapter: ChannelOnboardingAdapter = {
         creds: {
           ...(appId ? { appId } : {}),
           ...(appKey ? { appKey } : {}),
+          ...(botToken ? { botToken } : {}),
           ...(clientSecret ? { clientSecret } : {}),
           ...(signingSecret ? { signingSecret } : {}),
         },

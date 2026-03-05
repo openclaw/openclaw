@@ -275,27 +275,33 @@ export const pumblePlugin: ChannelPlugin<ResolvedPumbleAccount> = {
       if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
         return "Pumble env vars can only be used for the default account.";
       }
-      // token = appId, botToken = appKey (mapped from standard setup fields)
+      // --token maps to appId, --bot-token maps to botToken
       const appId = input.token;
-      const appKey = input.botToken;
-      if (!input.useEnv && (!appId || !appKey)) {
-        return "Pumble requires app credentials (--token for appId and --bot-token for appKey, or --use-env).";
+      const botToken = input.botToken;
+      if (!input.useEnv && (!appId || !botToken)) {
+        return "Pumble requires app credentials (--token for appId and --bot-token for botToken, or --use-env).";
       }
       return null;
     },
     applyAccountConfig: ({ cfg, accountId, input }) => {
-      // token = appId, botToken = appKey (mapped from standard setup fields).
-      // clientSecret + signingSecret are Pumble-specific extras not on ChannelSetupInput.
+      // --token → appId, --bot-token → botToken.
+      // appKey, clientSecret, signingSecret are Pumble-specific extras not on
+      // ChannelSetupInput; use the onboarding wizard or manual config for those.
       if (input.useEnv) {
         return applyPumbleCredentials({ cfg, accountId, creds: {}, name: input.name });
       }
-      const extra = input as typeof input & { clientSecret?: string; signingSecret?: string };
+      const extra = input as typeof input & {
+        appKey?: string;
+        clientSecret?: string;
+        signingSecret?: string;
+      };
       return applyPumbleCredentials({
         cfg,
         accountId,
         creds: {
           appId: input.token,
-          appKey: input.botToken,
+          botToken: input.botToken,
+          appKey: extra.appKey,
           clientSecret: extra.clientSecret,
           signingSecret: extra.signingSecret,
         },
