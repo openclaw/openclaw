@@ -26,7 +26,7 @@ type RestartPostCheckContext = {
   json: boolean;
   stdout: Writable;
   warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
+  fail: (message: string, hints?: string[]) => never;
 };
 
 type NotLoadedActionResult = {
@@ -60,13 +60,14 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     }
     emitDaemonActionJson({ action: params.action, ...payload });
   };
-  const fail = (message: string, hints?: string[]) => {
+  const fail = (message: string, hints?: string[]): never => {
     if (params.json) {
       emit({ ok: false, error: message, hints });
     } else {
       defaultRuntime.error(message);
     }
     defaultRuntime.exit(1);
+    throw new Error("unreachable");
   };
   return { stdout, emit, fail };
 }
@@ -317,6 +318,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
+  preRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }): Promise<boolean> {
@@ -334,9 +336,11 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  // Pre-flight config validation: check before any restart action (including
-  // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
-  {
+  if (params.preRestartCheck) {
+    await params.preRestartCheck({ json, stdout, warnings, fail });
+  } else {
+    // Pre-flight config validation: check before any restart action (including
+    // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
     const configError = await getConfigValidationError();
     if (configError) {
       fail(

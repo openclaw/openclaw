@@ -395,6 +395,7 @@ Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">
     Validates + writes the full config and restarts the Gateway in one step.
+    Writes run as a transaction (`prepare -> commit -> verify -> rollback`).
 
     <Warning>
     `config.apply` replaces the **entire config**. Use `config.patch` for partial updates, or `openclaw config set` for single keys.
@@ -435,6 +436,8 @@ Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate
     - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
 
     Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
+    Failed writes return transaction failure details (`transactionId`, `stage`,
+    `rolledBack`, and validation `issues` when available).
 
     ```bash
     openclaw gateway call config.patch --params '{
