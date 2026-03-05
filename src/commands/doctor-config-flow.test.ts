@@ -850,4 +850,35 @@ describe("doctor config flow", () => {
       topAllowFrom === undefined || !Array.isArray(topAllowFrom) || topAllowFrom.length === 0,
     ).toBe(true);
   });
+
+  it("repairs inherited dmPolicy=open for accounts when policy is only on top level (#35560)", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "fake:token",
+                // dmPolicy inherited from top level
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        telegram: {
+          accounts: { default: { allowFrom: string[] } };
+        };
+      };
+    };
+    // Account should get "*" added even though dmPolicy is inherited from parent
+    expect(cfg.channels.telegram.accounts.default.allowFrom).toContain("*");
+  });
 });

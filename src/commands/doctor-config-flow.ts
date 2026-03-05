@@ -1054,14 +1054,24 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     account: Record<string, unknown>,
     prefix: string,
     mode: OpenPolicyAllowFromMode,
+    parent?: Record<string, unknown>,
   ) => {
     const dmEntry = account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
         ? (dmEntry as Record<string, unknown>)
         : undefined;
+    const parentDmEntry = parent?.dm;
+    const parentDm =
+      parentDmEntry && typeof parentDmEntry === "object" && !Array.isArray(parentDmEntry)
+        ? (parentDmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
+      (account.dmPolicy as string | undefined) ??
+      (dm?.policy as string | undefined) ??
+      (parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined) ??
+      undefined;
 
     if (dmPolicy !== "open") {
       return;
@@ -1142,6 +1152,7 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
             accountConfig,
             `channels.${channelName}.accounts.${accountName}`,
             allowFromMode,
+            channelConfig,
           );
         }
       }
@@ -1232,14 +1243,23 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
     account: Record<string, unknown>;
     accountId?: string;
     prefix: string;
+    parent?: Record<string, unknown>;
   }) => {
     const dmEntry = params.account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
         ? (dmEntry as Record<string, unknown>)
         : undefined;
+    const parentDmEntry = params.parent?.dm;
+    const parentDm =
+      parentDmEntry && typeof parentDmEntry === "object" && !Array.isArray(parentDmEntry)
+        ? (parentDmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (params.account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined);
+      (params.account.dmPolicy as string | undefined) ??
+      (dm?.policy as string | undefined) ??
+      (params.parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined);
     if (dmPolicy !== "allowlist") {
       return;
     }
@@ -1307,6 +1327,7 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
           account: accountConfig,
           accountId,
           prefix: `channels.${channelName}.accounts.${accountId}`,
+          parent: channelConfig,
         });
       }
     }
