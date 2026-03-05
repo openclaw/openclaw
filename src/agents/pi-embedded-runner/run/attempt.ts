@@ -260,6 +260,64 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   return caseInsensitiveMatch ?? trimmed;
 }
 
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function normalizeToolCallIdsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  const usedIds = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+      continue;
+    }
+    const trimmedId = typedBlock.id.trim();
+    if (!trimmedId) {
+      continue;
+    }
+    usedIds.add(trimmedId);
+  }
+
+  let fallbackIndex = 1;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (typeof typedBlock.id === "string") {
+      const trimmedId = typedBlock.id.trim();
+      if (trimmedId) {
+        if (typedBlock.id !== trimmedId) {
+          typedBlock.id = trimmedId;
+        }
+        usedIds.add(trimmedId);
+        continue;
+      }
+    }
+
+    let fallbackId = "";
+    while (!fallbackId || usedIds.has(fallbackId)) {
+      fallbackId = `call_auto_${fallbackIndex++}`;
+    }
+    typedBlock.id = fallbackId;
+    usedIds.add(fallbackId);
+  }
+}
+
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
   providerBaseUrl?: string;
@@ -299,6 +357,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = normalized;
     }
   }
+  normalizeToolCallIdsInMessage(message);
 }
 
 function wrapStreamTrimToolCallNames(
@@ -585,7 +644,9 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -752,7 +813,7 @@ export async function runEmbeddedAttempt(
       sandbox: (() => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg: params.config,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
         });
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
@@ -859,7 +920,9 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -1194,7 +1257,9 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
       });
 
       const {
@@ -1300,6 +1365,8 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
+          trigger: params.trigger,
+          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,

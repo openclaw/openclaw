@@ -5,6 +5,10 @@ import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.j
 import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
 const VIEW_PREFIX = "/plugins/diffs/view/";
+const VIEWER_MAX_FAILURES_PER_WINDOW = 40;
+const VIEWER_FAILURE_WINDOW_MS = 60_000;
+const VIEWER_LOCKOUT_MS = 60_000;
+const VIEWER_LIMITER_MAX_KEYS = 2_048;
 const VIEWER_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
@@ -20,7 +24,10 @@ const VIEWER_CONTENT_SECURITY_POLICY = [
 export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
   logger?: PluginLogger;
+  allowRemoteViewer?: boolean;
 }) {
+  const viewerFailureLimiter = new ViewerFailureLimiter();
+
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const parsed = parseRequestUrl(req.url);
     if (!parsed) {
@@ -35,9 +42,27 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
+    const remoteKey = normalizeRemoteClientKey(req.socket?.remoteAddress);
+    const localRequest = isLoopbackClientIp(remoteKey);
+    if (!localRequest && params.allowRemoteViewer !== true) {
+      respondText(res, 404, "Diff not found");
+      return true;
+    }
+
     if (req.method !== "GET" && req.method !== "HEAD") {
       respondText(res, 405, "Method not allowed");
       return true;
+    }
+
+    if (!localRequest) {
+      const throttled = viewerFailureLimiter.check(remoteKey);
+      if (!throttled.allowed) {
+        res.statusCode = 429;
+        setSharedHeaders(res, "text/plain; charset=utf-8");
+        res.setHeader("Retry-After", String(Math.max(1, Math.ceil(throttled.retryAfterMs / 1000))));
+        res.end("Too Many Requests");
+        return true;
+      }
     }
 
     const pathParts = parsed.pathname.split("/").filter(Boolean);
@@ -49,18 +74,27 @@ export function createDiffsHttpHandler(params: {
       !DIFF_ARTIFACT_ID_PATTERN.test(id) ||
       !DIFF_ARTIFACT_TOKEN_PATTERN.test(token)
     ) {
+      if (!localRequest) {
+        viewerFailureLimiter.recordFailure(remoteKey);
+      }
       respondText(res, 404, "Diff not found");
       return true;
     }
 
     const artifact = await params.store.getArtifact(id, token);
     if (!artifact) {
+      if (!localRequest) {
+        viewerFailureLimiter.recordFailure(remoteKey);
+      }
       respondText(res, 404, "Diff not found or expired");
       return true;
     }
 
     try {
       const html = await params.store.readHtml(id);
+      if (!localRequest) {
+        viewerFailureLimiter.reset(remoteKey);
+      }
       res.statusCode = 200;
       setSharedHeaders(res, "text/html; charset=utf-8");
       res.setHeader("content-security-policy", VIEWER_CONTENT_SECURITY_POLICY);
@@ -71,6 +105,9 @@ export function createDiffsHttpHandler(params: {
       }
       return true;
     } catch (error) {
+      if (!localRequest) {
+        viewerFailureLimiter.recordFailure(remoteKey);
+      }
       params.logger?.warn(`Failed to serve diff artifact ${id}: ${String(error)}`);
       respondText(res, 500, "Failed to load diff");
       return true;
@@ -133,4 +170,91 @@ function setSharedHeaders(res: ServerResponse, contentType: string): void {
   res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
+}
+
+function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
+  const normalized = remoteAddress?.trim().toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+}
+
+function isLoopbackClientIp(clientIp: string): boolean {
+  return clientIp === "127.0.0.1" || clientIp === "::1";
+}
+
+type RateLimitCheckResult = {
+  allowed: boolean;
+  retryAfterMs: number;
+};
+
+type ViewerFailureState = {
+  windowStartMs: number;
+  failures: number;
+  lockUntilMs: number;
+};
+
+class ViewerFailureLimiter {
+  private readonly failures = new Map<string, ViewerFailureState>();
+
+  check(key: string): RateLimitCheckResult {
+    this.prune();
+    const state = this.failures.get(key);
+    if (!state) {
+      return { allowed: true, retryAfterMs: 0 };
+    }
+    const now = Date.now();
+    if (state.lockUntilMs > now) {
+      return { allowed: false, retryAfterMs: state.lockUntilMs - now };
+    }
+    if (now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS) {
+      this.failures.delete(key);
+      return { allowed: true, retryAfterMs: 0 };
+    }
+    return { allowed: true, retryAfterMs: 0 };
+  }
+
+  recordFailure(key: string): void {
+    this.prune();
+    const now = Date.now();
+    const current = this.failures.get(key);
+    const next =
+      !current || now - current.windowStartMs >= VIEWER_FAILURE_WINDOW_MS
+        ? {
+            windowStartMs: now,
+            failures: 1,
+            lockUntilMs: 0,
+          }
+        : {
+            ...current,
+            failures: current.failures + 1,
+          };
+    if (next.failures >= VIEWER_MAX_FAILURES_PER_WINDOW) {
+      next.lockUntilMs = now + VIEWER_LOCKOUT_MS;
+    }
+    this.failures.set(key, next);
+  }
+
+  reset(key: string): void {
+    this.failures.delete(key);
+  }
+
+  private prune(): void {
+    if (this.failures.size < VIEWER_LIMITER_MAX_KEYS) {
+      return;
+    }
+    const now = Date.now();
+    for (const [key, state] of this.failures) {
+      if (state.lockUntilMs <= now && now - state.windowStartMs >= VIEWER_FAILURE_WINDOW_MS) {
+        this.failures.delete(key);
+      }
+      if (this.failures.size < VIEWER_LIMITER_MAX_KEYS) {
+        return;
+      }
+    }
+    if (this.failures.size >= VIEWER_LIMITER_MAX_KEYS) {
+      this.failures.clear();
+    }
+  }
 }

@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
-  type DeviceAuthStore,
-  normalizeDeviceAuthRole,
-  normalizeDeviceAuthScopes,
-} from "../shared/device-auth.js";
+  loadDeviceAuthTokenFromStore,
+  storeDeviceAuthTokenInStore,
+} from "../shared/device-auth-store.js";
+import type { DeviceAuthStore } from "../shared/device-auth.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
 
@@ -49,19 +50,11 @@ export function loadDeviceAuthToken(params: {
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry | null {
   const filePath = resolveDeviceAuthPath(params.env);
-  const store = readStore(filePath);
-  if (!store) {
-    return null;
-  }
-  if (store.deviceId !== params.deviceId) {
-    return null;
-  }
-  const role = normalizeDeviceAuthRole(params.role);
-  const entry = store.tokens[role];
-  if (!entry || typeof entry.token !== "string") {
-    return null;
-  }
-  return entry;
+  return loadDeviceAuthTokenFromStore({
+    adapter: { readStore: () => readStore(filePath), writeStore: (_store) => {} },
+    deviceId: params.deviceId,
+    role: params.role,
+  });
 }
 
 export function storeDeviceAuthToken(params: {
@@ -72,25 +65,16 @@ export function storeDeviceAuthToken(params: {
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry {
   const filePath = resolveDeviceAuthPath(params.env);
-  const existing = readStore(filePath);
-  const role = normalizeDeviceAuthRole(params.role);
-  const next: DeviceAuthStore = {
-    version: 1,
+  return storeDeviceAuthTokenInStore({
+    adapter: {
+      readStore: () => readStore(filePath),
+      writeStore: (store) => writeStore(filePath, store),
+    },
     deviceId: params.deviceId,
-    tokens:
-      existing && existing.deviceId === params.deviceId && existing.tokens
-        ? { ...existing.tokens }
-        : {},
-  };
-  const entry: DeviceAuthEntry = {
+    role: params.role,
     token: params.token,
-    role,
-    scopes: normalizeDeviceAuthScopes(params.scopes),
-    updatedAtMs: Date.now(),
-  };
-  next.tokens[role] = entry;
-  writeStore(filePath, next);
-  return entry;
+    scopes: params.scopes,
+  });
 }
 
 export function clearDeviceAuthToken(params: {
@@ -99,19 +83,12 @@ export function clearDeviceAuthToken(params: {
   env?: NodeJS.ProcessEnv;
 }): void {
   const filePath = resolveDeviceAuthPath(params.env);
-  const store = readStore(filePath);
-  if (!store || store.deviceId !== params.deviceId) {
-    return;
-  }
-  const role = normalizeDeviceAuthRole(params.role);
-  if (!store.tokens[role]) {
-    return;
-  }
-  const next: DeviceAuthStore = {
-    version: 1,
-    deviceId: store.deviceId,
-    tokens: { ...store.tokens },
-  };
-  delete next.tokens[role];
-  writeStore(filePath, next);
+  clearDeviceAuthTokenFromStore({
+    adapter: {
+      readStore: () => readStore(filePath),
+      writeStore: (store) => writeStore(filePath, store),
+    },
+    deviceId: params.deviceId,
+    role: params.role,
+  });
 }

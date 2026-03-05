@@ -19,6 +19,26 @@ export type TelegramGroupBaseAccessResult =
   | { allowed: true }
   | { allowed: false; reason: TelegramGroupBaseBlockReason };
 
+function isGroupAllowOverrideAuthorized(params: {
+  effectiveGroupAllow: NormalizedAllowFrom;
+  senderId?: string;
+  senderUsername?: string;
+  requireSenderForAllowOverride: boolean;
+}): boolean {
+  if (!params.effectiveGroupAllow.hasEntries) {
+    return false;
+  }
+  const senderId = params.senderId ?? "";
+  if (params.requireSenderForAllowOverride && !senderId) {
+    return false;
+  }
+  return isSenderAllowed({
+    allow: params.effectiveGroupAllow,
+    senderId,
+    senderUsername: params.senderUsername ?? "",
+  });
+}
+
 export const evaluateTelegramGroupBaseAccess = (params: {
   isGroup: boolean;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
@@ -40,19 +60,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   if (!params.isGroup) {
     // For DMs, check allowFrom override if present
     if (params.enforceAllowOverride && params.hasGroupAllowOverride) {
-      if (!params.effectiveGroupAllow.hasEntries) {
-        return { allowed: false, reason: "group-override-unauthorized" };
-      }
-      const senderId = params.senderId ?? "";
-      if (params.requireSenderForAllowOverride && !senderId) {
-        return { allowed: false, reason: "group-override-unauthorized" };
-      }
-      const allowed = isSenderAllowed({
-        allow: params.effectiveGroupAllow,
-        senderId,
-        senderUsername: params.senderUsername ?? "",
-      });
-      if (!allowed) {
+      if (
+        !isGroupAllowOverrideAuthorized({
+          effectiveGroupAllow: params.effectiveGroupAllow,
+          senderId: params.senderId,
+          senderUsername: params.senderUsername,
+          requireSenderForAllowOverride: params.requireSenderForAllowOverride,
+        })
+      ) {
         return { allowed: false, reason: "group-override-unauthorized" };
       }
     }
@@ -62,22 +77,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
     return { allowed: true };
   }
 
-  // Explicit per-group/topic allowFrom override must fail closed when empty.
-  if (!params.effectiveGroupAllow.hasEntries) {
-    return { allowed: false, reason: "group-override-unauthorized" };
-  }
-
-  const senderId = params.senderId ?? "";
-  if (params.requireSenderForAllowOverride && !senderId) {
-    return { allowed: false, reason: "group-override-unauthorized" };
-  }
-
-  const allowed = isSenderAllowed({
-    allow: params.effectiveGroupAllow,
-    senderId,
-    senderUsername: params.senderUsername ?? "",
-  });
-  if (!allowed) {
+  if (
+    !isGroupAllowOverrideAuthorized({
+      effectiveGroupAllow: params.effectiveGroupAllow,
+      senderId: params.senderId,
+      senderUsername: params.senderUsername,
+      requireSenderForAllowOverride: params.requireSenderForAllowOverride,
+    })
+  ) {
     return { allowed: false, reason: "group-override-unauthorized" };
   }
   return { allowed: true };

@@ -73,6 +73,22 @@ private struct ExecHostResponse: Codable {
     var error: ExecHostError?
 }
 
+private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> String? {
+    var buffer = Data()
+    while buffer.count < maxBytes {
+        let chunk = try handle.read(upToCount: 4096) ?? Data()
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        if buffer.contains(0x0A) { break }
+    }
+    guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
+        guard !buffer.isEmpty else { return nil }
+        return String(data: buffer, encoding: .utf8)
+    }
+    let lineData = buffer.subdata(in: 0..<newlineIndex)
+    return String(data: lineData, encoding: .utf8)
+}
+
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
@@ -159,27 +175,11 @@ enum ExecApprovalsSocketClient {
         payload.append(0x0A)
         try handle.write(contentsOf: payload)
 
-        guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+        guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
               let lineData = line.data(using: .utf8)
         else { return nil }
         let response = try JSONDecoder().decode(ExecApprovalSocketDecision.self, from: lineData)
         return response.decision
-    }
-
-    private static func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 }
 
@@ -781,7 +781,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
-            guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+            guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
                   let data = line.data(using: .utf8)
             else {
                 return
@@ -813,22 +813,6 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         } catch {
             self.logger.error("exec approvals socket handling failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 
     private func sendApprovalResponse(

@@ -1,7 +1,0 @@
-upstream_tag: v2026.3.2
-status: conflict
-created: 2026-03-03T07:12:52Z
-
-This file was created by the upstream-release-sync workflow.
-The merge of upstream tag v2026.3.2 into main produced conflicts.
-Resolve them, delete this file, and push to this branch.
