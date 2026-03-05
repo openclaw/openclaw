@@ -430,6 +430,40 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
   });
 
+  it("strips reply tags from cron completion direct-send messages", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-cron-direct",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-cron-direct",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-reply-tag-strip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "imessage", to: "imessage:+15550001111" },
+      ...defaultOutcomeAnnounce,
+      announceType: "cron job",
+      expectsCompletionMessage: true,
+      roundOneReply:
+        "[[reply_to:6100]] this is a hype post + a gentle callout for the NYC meet. In short:",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(call?.params?.channel).toBe("imessage");
+    expect(msg).toBe("this is a hype post + a gentle callout for the NYC meet. In short:");
+    expect(msg).not.toContain("[[reply_to:");
+  });
+
   it("keeps direct completion send when only the announcing run itself is pending", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
