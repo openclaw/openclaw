@@ -276,7 +276,19 @@ export async function resolveChatGuidForTarget(params: {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+          const targetService =
+            params.target.kind === "handle" ? (params.target.service ?? "auto") : "auto";
+          const guidService = guid?.split(";")[0]?.toLowerCase() ?? "";
+          if (targetService === "imessage" && guidService !== "imessage") {
+            if (!participantMatch) participantMatch = guid;
+          } else if (targetService === "sms" && guidService !== "sms") {
+            if (!participantMatch) participantMatch = guid;
+          } else if (targetService === "auto" && guidService !== "imessage") {
+            if (!participantMatch) participantMatch = guid;
+          } else {
+            return guid;
+          }
+          continue;
         }
         if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
