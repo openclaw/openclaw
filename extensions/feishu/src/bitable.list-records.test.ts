@@ -69,12 +69,12 @@ describe("feishu_bitable_list_records filter/sort/field_names passthrough", () =
     await tool.execute("call-2", {
       app_token: "tok",
       table_id: "tbl",
-      sort: ["Score:desc", "Name:asc"],
+      sort: ["Score DESC", "Name ASC"],
     });
 
     expect(mockListRecords).toHaveBeenCalledWith(
       expect.objectContaining({
-        params: expect.objectContaining({ sort: JSON.stringify(["Score:desc", "Name:asc"]) }),
+        params: expect.objectContaining({ sort: JSON.stringify(["Score DESC", "Name ASC"]) }),
       }),
     );
   });

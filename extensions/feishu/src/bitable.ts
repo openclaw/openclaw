@@ -478,8 +478,7 @@ const ListRecordsSchema = Type.Object({
   sort: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        'Array of sort expressions. Example: ["Score:desc", "Name:asc"]. Each entry is "field_name:asc" or "field_name:desc".',
-      items: { description: 'Sort expression as "field_name:asc" or "field_name:desc"' },
+        'Array of sort expressions. Example: ["Score DESC", "Name ASC"]. Each entry is "field_name DESC" or "field_name ASC".',
     }),
   ),
   field_names: Type.Optional(
