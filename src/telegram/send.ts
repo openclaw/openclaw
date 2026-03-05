@@ -5,7 +5,7 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -468,6 +468,11 @@ export async function sendMessageTelegram(
   const trimmedText = text?.trim() ?? "";
   if (isSilentReplyText(trimmedText) && !opts.mediaUrl && !opts.buttons) {
     logVerbose("telegram send: suppressed NO_REPLY token before API call");
+    return { messageId: "suppressed", chatId: "" };
+  }
+  // Also suppress streaming prefixes like "NO" from "NO_REPLY"
+  if (isSilentReplyPrefixText(trimmedText) && !opts.mediaUrl && !opts.buttons) {
+    logVerbose("telegram send: suppressed NO_REPLY prefix token before API call");
     return { messageId: "suppressed", chatId: "" };
   }
 
