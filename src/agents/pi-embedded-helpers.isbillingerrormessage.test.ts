@@ -811,6 +811,14 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(sample)).toBe(null);
     expect(isFailoverErrorMessage(sample)).toBe(false);
   });
+
+  it("matches google INTERNAL status errors as timeout", () => {
+    const sample =
+      "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500";
+    expect(isTimeoutErrorMessage(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBe("timeout");
+    expect(isFailoverErrorMessage(sample)).toBe(true);
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -1229,5 +1237,18 @@ describe("classifyProviderRuntimeFailureKind", () => {
         'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
       ),
     ).not.toBe("proxy");
+  });
+
+  it("classifies google-style INTERNAL status payloads as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        'ERROR provider=google model=gemini-3.1-flash-lite-preview: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'got status: INTERNAL. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
+      ),
+    ).toBe("timeout");
   });
 });
