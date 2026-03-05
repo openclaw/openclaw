@@ -9,7 +9,7 @@ metadata:
 
 Create charts using React code - HTML, SVG, and D3.js are all supported.
 
-Disable all animations from third party libraries - they cause flickering.  
+Disable all animations from third party libraries - they cause flickering.
 Drive all animations from `useCurrentFrame()`.
 
 ## Bar Chart
@@ -62,7 +62,7 @@ const offset = interpolate(progress, [0, 1], [segmentLength, 0]);
 
 Use `@remotion/paths` for animating SVG paths (line charts, stock graphs, signatures).
 
-Install: `npx remotion add @remotion/paths`  
+Install: `npx remotion add @remotion/paths`
 Docs: https://remotion.dev/docs/paths.md
 
 ### Convert data points to SVG path
