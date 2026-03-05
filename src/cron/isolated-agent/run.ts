@@ -64,6 +64,11 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import {
+  buildSelfImproveConversationHistorySummary,
+  buildSelfImproveRunbookText,
+  isSelfImproveCronRun,
+} from "./self-improve.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -378,6 +383,24 @@ export async function runCronIsolatedAgentTurn(params: {
   } else {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
+  }
+  if (
+    isSelfImproveCronRun({
+      jobId: params.job.id,
+      jobName: params.job.name,
+      message: params.message,
+    })
+  ) {
+    let historySummary: string | undefined;
+    try {
+      historySummary = await buildSelfImproveConversationHistorySummary({ agentId });
+    } catch (err) {
+      logWarn(
+        `[cron:${params.job.id}] failed to load self-improve conversation history: ${String(err)}`,
+      );
+    }
+    commandBody =
+      `${commandBody}\n\n${buildSelfImproveRunbookText({ agentId, historySummary })}`.trim();
   }
   if (deliveryRequested) {
     commandBody =
