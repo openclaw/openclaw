@@ -75,25 +75,39 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
     }
   | { ok: false; message: string } {
   const requestedCwd = path.resolve(cwd);
+
+  // Split try/catch: lstatSync failure (path truly absent) vs post-lstat failures (dangling symlink, etc.)
   let cwdLstat: fs.Stats;
-  let cwdStat: fs.Stats;
-  let cwdReal: string;
-  let cwdRealStat: fs.Stats;
   try {
     cwdLstat = fs.lstatSync(requestedCwd);
-    cwdStat = fs.statSync(requestedCwd);
-    cwdReal = fs.realpathSync(requestedCwd);
-    cwdRealStat = fs.statSync(cwdReal);
   } catch (err: unknown) {
-    // Distinguish ENOENT (path doesn't exist) from other fs errors (EACCES, ELOOP, etc.)
-    // Only ENOENT should trigger cross-platform cwd fallback; other errors are security-relevant
+    // lstatSync failed — path truly doesn't exist (or access error)
     const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined;
     if (code === "ENOENT") {
+      // Path genuinely absent — this is the only case that should trigger cross-platform fallback
       return {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
       };
     }
+    return {
+      ok: false,
+      message: `SYSTEM_RUN_DENIED: cwd access error (${code ?? "unknown"})`,
+    };
+  }
+
+  // lstatSync succeeded — the path entry exists. Any ENOENT from here means dangling symlink,
+  // which should NOT trigger fallback (it's a security-relevant failure, not "path absent")
+  let cwdStat: fs.Stats;
+  let cwdReal: string;
+  let cwdRealStat: fs.Stats;
+  try {
+    cwdStat = fs.statSync(requestedCwd);
+    cwdReal = fs.realpathSync(requestedCwd);
+    cwdRealStat = fs.statSync(cwdReal);
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : undefined;
+    // ENOENT here = dangling symlink; treat as security failure, NOT "path absent"
     return {
       ok: false,
       message: `SYSTEM_RUN_DENIED: cwd access error (${code ?? "unknown"})`,
