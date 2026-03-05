@@ -1,5 +1,3 @@
-import { formatCliCommand } from "../cli/command-format.js";
-
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   if (!detail) {
     return false;
@@ -52,9 +50,9 @@ export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): 
     "  sudo loginctl enable-linger $(whoami)",
     "  export XDG_RUNTIME_DIR=/run/user/$(id -u)  # add to ~/.bashrc for persistence",
     "",
-    `Then retry: ${formatCliCommand("openclaw gateway install --force")}`,
+    "Then retry the command you were running.",
     "",
-    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
-    "Alternatively, run the gateway under your own process supervisor (systemd system-level, supervisord, etc.).",
+    "If you're in a container, run the service in the foreground instead of user-level systemd.",
+    "Alternatively, run it under your own process supervisor (systemd system-level, supervisord, etc.).",
   ];
 }
