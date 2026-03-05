@@ -108,7 +108,7 @@ export async function createTargetViaCdp(opts: {
 
   let wsUrl: string;
   if (isWebSocketUrl(opts.cdpUrl)) {
-    // Direct WebSocket URL (e.g. Browserbase) — skip /json/version discovery.
+    // Direct WebSocket URL — skip /json/version discovery.
     wsUrl = opts.cdpUrl;
   } else {
     // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.

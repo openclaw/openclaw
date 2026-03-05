@@ -9,7 +9,7 @@ export { isLoopbackHost };
 
 /**
  * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
- * Used to distinguish direct-WebSocket CDP endpoints (e.g. Browserbase)
+ * Used to distinguish direct-WebSocket CDP endpoints
  * from HTTP(S) endpoints that require /json/version discovery.
  */
 export function isWebSocketUrl(url: string): boolean {
