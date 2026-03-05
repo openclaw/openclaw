@@ -168,15 +168,19 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
+const GOOGLE_GEMINI_31_ELIGIBLE_PROVIDERS = new Set(["google-gemini-cli", "google"]);
+
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
-// google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
-// "Unknown model" errors when Google Gemini CLI gains new minor-version models.
-function resolveGoogleGeminiCli31ForwardCompatModel(
+// catalog yet.  Clone the nearest gemini-3 template so users don't get "Unknown model"
+// errors when Google releases a new minor version.  Applies to both the google-gemini-cli
+// provider (CLI tool-use key) and the google provider (Gemini API key).
+function resolveGoogleGemini31ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!GOOGLE_GEMINI_31_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -192,7 +196,7 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   }
 
   return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
+    normalizedProvider,
     trimmedModelId: trimmed,
     templateIds: [...templateIds],
     modelRegistry,
@@ -252,6 +256,6 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogleGemini31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
