@@ -130,6 +130,9 @@
       "autoCapture": {
         "type": "boolean"
       },
+      "autoCaptureAssistant": {
+        "type": "boolean"
+      },
       "autoRecall": {
         "type": "boolean"
       },
@@ -197,7 +200,19 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "auto": { "type": "boolean" }
+          "auto": { "type": "boolean" },
+          "autoIntervalMs": { "type": "number", "minimum": 1 }
+        }
+      },
+      "conflictDetection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "model": { "type": "string" },
+          "similarityThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+          "maxCandidates": { "type": "number", "minimum": 1 },
+          "sleepScanBatchSize": { "type": "number", "minimum": 1 }
         }
       }
     },

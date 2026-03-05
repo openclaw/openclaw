@@ -148,11 +148,11 @@ describe("memoryNeo4jConfigSchema.parse", () => {
 
   describe("environment variable resolution", () => {
     it("should resolve ${ENV_VAR} in neo4j.password", () => {
-      process.env.TEST_NEO4J_PASSWORD = "resolved-password";
+      process.env.NEO4J_TEST_PASSWORD = "resolved-password";
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: {
           uri: "bolt://localhost:7687",
-          password: "${TEST_NEO4J_PASSWORD}",
+          password: "${NEO4J_TEST_PASSWORD}",
         },
         embedding: { provider: "ollama" },
       });
@@ -160,20 +160,20 @@ describe("memoryNeo4jConfigSchema.parse", () => {
     });
 
     it("should resolve ${ENV_VAR} in embedding.apiKey", () => {
-      process.env.TEST_OPENAI_KEY = "sk-from-env";
+      process.env.OPENAI_TEST_KEY = "sk-from-env";
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: { uri: "bolt://localhost:7687", password: "" },
-        embedding: { provider: "openai", apiKey: "${TEST_OPENAI_KEY}" },
+        embedding: { provider: "openai", apiKey: "${OPENAI_TEST_KEY}" },
       });
       expect(config.embedding.apiKey).toBe("sk-from-env");
     });
 
     it("should resolve ${ENV_VAR} in neo4j.user (username)", () => {
-      process.env.TEST_NEO4J_USER = "resolved-user";
+      process.env.NEO4J_TEST_USER = "resolved-user";
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: {
           uri: "bolt://localhost:7687",
-          user: "${TEST_NEO4J_USER}",
+          user: "${NEO4J_TEST_USER}",
           password: "",
         },
         embedding: { provider: "ollama" },
@@ -182,11 +182,11 @@ describe("memoryNeo4jConfigSchema.parse", () => {
     });
 
     it("should resolve ${ENV_VAR} in neo4j.username", () => {
-      process.env.TEST_NEO4J_USERNAME = "resolved-username";
+      process.env.NEO4J_TEST_USERNAME = "resolved-username";
       const config = memoryNeo4jConfigSchema.parse({
         neo4j: {
           uri: "bolt://localhost:7687",
-          username: "${TEST_NEO4J_USERNAME}",
+          username: "${NEO4J_TEST_USERNAME}",
           password: "",
         },
         embedding: { provider: "ollama" },
@@ -195,16 +195,28 @@ describe("memoryNeo4jConfigSchema.parse", () => {
     });
 
     it("should throw when referenced env var is not set", () => {
-      delete process.env.NONEXISTENT_VAR;
+      delete process.env.NEO4J_NONEXISTENT_VAR;
       expect(() =>
         memoryNeo4jConfigSchema.parse({
           neo4j: {
             uri: "bolt://localhost:7687",
-            password: "${NONEXISTENT_VAR}",
+            password: "${NEO4J_NONEXISTENT_VAR}",
           },
           embedding: { provider: "ollama" },
         }),
-      ).toThrow("Environment variable NONEXISTENT_VAR is not set");
+      ).toThrow("Environment variable NEO4J_NONEXISTENT_VAR is not set");
+    });
+
+    it("should throw when a non-allowlisted env var is referenced", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: {
+            uri: "bolt://localhost:7687",
+            password: "${SECRET_TOKEN}",
+          },
+          embedding: { provider: "ollama" },
+        }),
+      ).toThrow("resolveEnvVars blocked non-allowlisted env var: SECRET_TOKEN");
     });
   });
 
