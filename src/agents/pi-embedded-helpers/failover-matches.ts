@@ -3,9 +3,6 @@ type ErrorPattern = RegExp | string;
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
-    // Internal cooldown marker emitted by fallback/auth-profile routing.
-    // Keep this exact token, but avoid broad "cooling down" matching that
-    // can misclassify unrelated healthy responses as rate-limit failures.
     "model_cooldown",
     "exceeded your current quota",
     "resource has been exhausted",
