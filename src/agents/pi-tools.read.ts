@@ -480,6 +480,30 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
+const BINARY_DOC_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".xlsx",
+  ".xls",
+  ".pptx",
+  ".ppt",
+  ".odt",
+  ".ods",
+  ".odp",
+  ".rtf",
+  ".epub",
+  ".mobi",
+  ".pages",
+  ".numbers",
+  ".key",
+]);
+
+function isBinaryDocumentPath(filePath: string): { ext: string } | null {
+  const ext = path.extname(filePath).toLowerCase();
+  return BINARY_DOC_EXTENSIONS.has(ext) ? { ext } : null;
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -493,6 +517,27 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+
+      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+      const binaryDoc = isBinaryDocumentPath(filePath);
+      if (binaryDoc) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `This file appears to be a binary document (${binaryDoc.ext}). ` +
+                `The read tool cannot extract meaningful text from binary document formats. ` +
+                `Raw binary content would be garbled and waste tokens.\n\n` +
+                `To work with this file, consider:\n` +
+                `- For .pdf files: use a PDF extraction tool or convert to text first\n` +
+                `- For Office formats (.docx, .xlsx, .pptx): convert to plain text, CSV, or Markdown first\n` +
+                `- Ask the user to provide the content in a text-based format`,
+            },
+          ],
+          details: undefined,
+        } satisfies AgentToolResult<unknown>;
+      }
+
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
@@ -500,7 +545,6 @@ export function createOpenClawReadTool(
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       return sanitizeToolResultImages(
