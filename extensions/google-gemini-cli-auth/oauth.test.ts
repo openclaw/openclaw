@@ -6,7 +6,7 @@ const mockFetchWithSsrFGuard = vi.hoisted(() =>
     async (params: {
       url: string;
       init?: RequestInit;
-      policy?: { allowedHostnames?: string[] };
+      policy?: { hostnameAllowlist?: string[] };
       fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     }) => {
       const fetchImpl = params.fetchImpl ?? globalThis.fetch;
@@ -462,9 +462,9 @@ describe("loginGeminiCliOAuth", () => {
       (call) => call[0]?.url === TOKEN_URL,
     )?.[0];
     expect(tokenCall).toBeDefined();
-    const allowedHostnames = tokenCall?.policy?.allowedHostnames as string[] | undefined;
-    expect(allowedHostnames).toHaveLength(5);
-    expect(allowedHostnames).toEqual(
+    const hostnameAllowlist = tokenCall?.policy?.hostnameAllowlist as string[] | undefined;
+    expect(hostnameAllowlist).toHaveLength(5);
+    expect(hostnameAllowlist).toEqual(
       expect.arrayContaining([
         "oauth2.googleapis.com",
         "www.googleapis.com",

@@ -254,10 +254,9 @@ async function fetchWithTimeout(
     init,
     timeoutMs,
     policy: {
-      // Explicitly trust fixed Google OAuth/Code Assist hostnames used by this plugin.
-      // This prevents false-positive private-IP blocks on misconfigured DNS while
-      // keeping the trust boundary narrow to known endpoints.
-      allowedHostnames: GEMINI_OAUTH_ALLOWED_HOSTNAMES,
+      // Restrict requests to the fixed Google OAuth/Code Assist hostnames used by this plugin
+      // without disabling the SSRF guard's private-network protections.
+      hostnameAllowlist: GEMINI_OAUTH_ALLOWED_HOSTNAMES,
     },
   });
   try {
