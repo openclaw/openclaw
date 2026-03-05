@@ -123,7 +123,8 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: false,
+    // Anthropic-style APIs require assistant thinking signatures to round-trip unchanged.
+    preserveSignatures: isAnthropic,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,

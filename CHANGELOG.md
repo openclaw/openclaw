@@ -20,6 +20,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/daemon lifecycle in containers: when no system service is loaded, `openclaw gateway stop` and `openclaw gateway restart` now attempt port-based gateway PID signaling (`SIGTERM`/`SIGUSR1`) instead of exiting early as not-loaded. (related to #36137)
+- Queue/followup collect metadata: include trusted queued-message `message_id` metadata in `[Queued messages while agent was busy]` prompts so agents can use original provider message ids for native reply APIs instead of placeholder ids from untrusted context blocks. (#36212)
+- Control UI/chat final-event reload gating: skip automatic `chat.history` reload when a `final` event belongs to the currently active run, preventing in-progress fallback/compaction transitions from replacing already-rendered chat messages mid-read. (#36221)
+- Agents/transcript signature preservation: keep `preserveSignatures` enabled for Anthropic-compatible transcript policy so thinking/redacted thinking blocks round-trip without signature mutation during history sanitization and compaction-adjacent turns. (#36229)
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
