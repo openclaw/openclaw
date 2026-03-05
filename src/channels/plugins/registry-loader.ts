@@ -1,5 +1,5 @@
-import type { PluginChannelRegistration, PluginRegistry } from "../../plugins/registry.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginChannelRegistration } from "../../plugins/registry.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import type { ChannelId } from "./types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -9,27 +9,34 @@ type ChannelRegistryValueResolver<TValue> = (
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
-  const cache = new Map<ChannelId, TValue>();
-  let lastRegistry: PluginRegistry | null = null;
+  const MISSING = Symbol("channel-registry-loader-missing");
+  const cache = new Map<ChannelId, TValue | typeof MISSING>();
+  let lastRegistryVersion = -1;
 
   return async (id: ChannelId): Promise<TValue | undefined> => {
-    const registry = getActivePluginRegistry();
-    if (registry !== lastRegistry) {
+    const registryVersion = getActivePluginRegistryVersion();
+    if (registryVersion !== lastRegistryVersion) {
       cache.clear();
-      lastRegistry = registry;
+      lastRegistryVersion = registryVersion;
     }
-    const cached = cache.get(id);
-    if (cached) {
+
+    if (cache.has(id)) {
+      const cached = cache.get(id);
+      if (cached === MISSING) {
+        return undefined;
+      }
       return cached;
     }
+
+    const registry = getActivePluginRegistry();
     const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
     if (!pluginEntry) {
+      cache.set(id, MISSING);
       return undefined;
     }
+
     const resolved = resolveValue(pluginEntry);
-    if (resolved) {
-      cache.set(id, resolved);
-    }
+    cache.set(id, resolved === undefined ? MISSING : resolved);
     return resolved;
   };
 }

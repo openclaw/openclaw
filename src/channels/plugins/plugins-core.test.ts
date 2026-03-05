@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
@@ -261,6 +261,36 @@ describe("channel plugin loader", () => {
     expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutbound);
     setActivePluginRegistry(registryWithMSTeamsV2);
     expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutboundV2);
+  });
+
+  it("refreshes cached loader values when the same registry instance is re-activated", async () => {
+    const registry = createTestRegistry([
+      { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
+    ]);
+
+    setActivePluginRegistry(registry, "loader-same-instance");
+    expect(await loadChannelPlugin("msteams")).toBe(msteamsPlugin);
+    expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutbound);
+
+    registry.channels = [
+      { pluginId: "msteams", plugin: msteamsPluginV2, source: "test-v2" },
+    ] as typeof registry.channels;
+    setActivePluginRegistry(registry, "loader-same-instance");
+
+    expect(await loadChannelPlugin("msteams")).toBe(msteamsPluginV2);
+    expect(await loadChannelOutboundAdapter("msteams")).toBe(msteamsOutboundV2);
+  });
+
+  it("caches undefined outbound lookups within the active registry version", async () => {
+    const channels = [
+      { pluginId: "msteams", plugin: mstNoOutboundPlugin, source: "test-no-outbound" },
+    ];
+    const findSpy = vi.spyOn(channels, "find");
+    setActivePluginRegistry(createTestRegistry(channels));
+
+    expect(await loadChannelOutboundAdapter("msteams")).toBeUndefined();
+    expect(await loadChannelOutboundAdapter("msteams")).toBeUndefined();
+    expect(findSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns undefined when plugin has no outbound adapter", async () => {
