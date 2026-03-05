@@ -703,18 +703,52 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
+  // Recover pending outbound deliveries from previous crash/restart, then keep
+  // draining in the background so failed sends are retried without requiring a
+  // full gateway restart.
+  let deliveryRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+  let deliveryRecoveryInFlight = false;
+  let deliveryRecoveryClosed = false;
+  const DELIVERY_RECOVERY_INTERVAL_MS = 30_000;
+  const DELIVERY_RECOVERY_STARTUP_BUDGET_MS = 60_000;
+  const DELIVERY_RECOVERY_TICK_BUDGET_MS = 10_000;
   if (!minimalTestGateway) {
     void (async () => {
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
-      await recoverPendingDeliveries({
-        deliver: deliverOutboundPayloads,
-        log: logRecovery,
-        cfg: cfgAtStart,
-      });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+
+      const runDeliveryRecovery = async (maxRecoveryMs: number) => {
+        if (deliveryRecoveryClosed || deliveryRecoveryInFlight) {
+          return;
+        }
+        deliveryRecoveryInFlight = true;
+        try {
+          await recoverPendingDeliveries({
+            deliver: deliverOutboundPayloads,
+            log: logRecovery,
+            cfg: loadConfig(),
+            maxRecoveryMs,
+          });
+        } finally {
+          deliveryRecoveryInFlight = false;
+        }
+      };
+
+      await runDeliveryRecovery(DELIVERY_RECOVERY_STARTUP_BUDGET_MS);
+      if (deliveryRecoveryClosed) {
+        return;
+      }
+      deliveryRecoveryInterval = setInterval(() => {
+        void runDeliveryRecovery(DELIVERY_RECOVERY_TICK_BUDGET_MS).catch((err) => {
+          log.error(`Delivery recovery failed: ${String(err)}`);
+        });
+      }, DELIVERY_RECOVERY_INTERVAL_MS);
+    })().catch((err) => {
+      if (!deliveryRecoveryClosed) {
+        log.error(`Delivery recovery failed: ${String(err)}`);
+      }
+    });
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -988,6 +1022,11 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      deliveryRecoveryClosed = true;
+      if (deliveryRecoveryInterval) {
+        clearInterval(deliveryRecoveryInterval);
+        deliveryRecoveryInterval = null;
+      }
       clearSecretsRuntimeSnapshot();
       await close(opts);
     },
