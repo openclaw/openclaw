@@ -184,4 +184,20 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts browser profile driver openclaw in strict schema validation", () => {
+    const res = validateConfigObject({
+      browser: {
+        profiles: {
+          default: {
+            cdpPort: 9222,
+            driver: "openclaw",
+            color: "#FF4500",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

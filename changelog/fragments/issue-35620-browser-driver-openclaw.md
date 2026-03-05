@@ -1,0 +1,1 @@
+- Config/Browser: `browser.profiles.*.driver` now accepts the canonical `"openclaw"` value in strict schema validation while still allowing legacy `"clawd"` for compatibility, so modern profile configs no longer fail validation. Fixes #35620. Thanks @ingyukoh.

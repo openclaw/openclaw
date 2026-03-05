@@ -309,7 +309,11 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
-                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                // Keep legacy "clawd" for backward compatibility, but accept
+                // the canonical "openclaw" value used by runtime/types/tests.
+                driver: z
+                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("extension")])
+                  .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
