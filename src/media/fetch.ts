@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import { retryAsync } from "../infra/retry.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -22,6 +23,47 @@ export class MediaFetchError extends Error {
   }
 }
 
+/**
+ * Returns true if the error is a transient network error that should be retried.
+ * Returns false for permanent errors like "file too big" (413) or client errors (4xx).
+ */
+function isTransientMediaFetchError(err: unknown): boolean {
+  // Retry MediaFetchError with fetch_failed code (network issues)
+  if (err instanceof MediaFetchError) {
+    if (err.code === "fetch_failed") {
+      return true;
+    }
+    // Don't retry http_error or max_bytes - they're permanent
+    return false;
+  }
+
+  // Retry generic fetch errors that might be network-related
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    // Check for common transient network error patterns
+    const transientPatterns = [
+      "fetch failed",
+      "econnreset",
+      "econnrefused",
+      "etimedout",
+      "enotfound",
+      "enetunreach",
+      "ehostunreach",
+      "socket hang up",
+      "network error",
+      "connection error",
+      "connection reset",
+      "connection refused",
+      "connection timeout",
+      "dns error",
+    ];
+    return transientPatterns.some((pattern) => message.includes(pattern));
+  }
+
+  // Default to not retry for unknown error types
+  return false;
+}
+
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type FetchMediaOptions = {
@@ -33,6 +75,8 @@ type FetchMediaOptions = {
   maxRedirects?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  /** Number of retry attempts for transient network errors (default: 2) */
+  retryCount?: number;
 };
 
 function stripQuotes(value: string): string {
@@ -89,7 +133,20 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     maxRedirects,
     ssrfPolicy,
     lookupFn,
+    retryCount = 2,
   } = options;
+
+  // If retryCount > 0, wrap the fetch in retry logic for transient errors
+  if (retryCount > 0) {
+    return retryAsync(async () => fetchRemoteMedia({ ...options, retryCount: 0 }), {
+      attempts: retryCount + 1, // +1 for the initial attempt
+      minDelayMs: 500,
+      maxDelayMs: 2000,
+      jitter: 0.3,
+      label: "media:fetch",
+      shouldRetry: isTransientMediaFetchError,
+    });
+  }
 
   let res: Response;
   let finalUrl = url;
