@@ -70,7 +70,7 @@ async function sendFallbackDirect(
       msg_type: params.msgType,
     },
   });
-  assertFeishuMessageApiSuccess(response, errorPrefix);
+  assertFeishuMessageApiSuccess(response, errorPrefix, { receiveIdType: params.receiveIdType });
   return toFeishuSendResult(response, params.receiveId);
 }
 
@@ -316,7 +316,7 @@ export async function sendMessageFeishu(
     if (shouldFallbackFromReplyTarget(response)) {
       return sendFallbackDirect(client, directParams, "Feishu send failed");
     }
-    assertFeishuMessageApiSuccess(response, "Feishu reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu reply failed", { receiveIdType });
     return toFeishuSendResult(response, receiveId);
   }
 
@@ -360,7 +360,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     if (shouldFallbackFromReplyTarget(response)) {
       return sendFallbackDirect(client, directParams, "Feishu card send failed");
     }
-    assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu card reply failed", { receiveIdType });
     return toFeishuSendResult(response, receiveId);
   }
 

@@ -305,7 +305,7 @@ export async function sendImageFeishu(params: {
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu image reply failed", { receiveIdType });
     return toFeishuSendResult(response, receiveId);
   }
 
@@ -317,7 +317,7 @@ export async function sendImageFeishu(params: {
       msg_type: "image",
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  assertFeishuMessageApiSuccess(response, "Feishu image send failed", { receiveIdType });
   return toFeishuSendResult(response, receiveId);
 }
 
@@ -352,7 +352,7 @@ export async function sendFileFeishu(params: {
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu file reply failed", { receiveIdType });
     return toFeishuSendResult(response, receiveId);
   }
 
@@ -364,7 +364,7 @@ export async function sendFileFeishu(params: {
       msg_type: msgType,
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+  assertFeishuMessageApiSuccess(response, "Feishu file send failed", { receiveIdType });
   return toFeishuSendResult(response, receiveId);
 }
 
