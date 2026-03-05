@@ -639,7 +639,18 @@ export function renderApp(state: AppViewState) {
                     void state.loadCron();
                   }
                 },
-                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onLoadFiles: async (agentId) => {
+                  const active = state.agentFileActive;
+                  await loadAgentFiles(state, agentId);
+                  // Re-fetch the active file so external edits (e.g. CLI writes)
+                  // become visible after the user clicks Refresh. (#35428)
+                  if (active && resolvedAgentId === agentId) {
+                    await loadAgentFileContent(state, agentId, active, {
+                      force: true,
+                      preserveDraft: false,
+                    });
+                  }
+                },
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {
