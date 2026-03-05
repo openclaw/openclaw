@@ -117,7 +117,13 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     nativeCommands: true,
     blockStreaming: true,
   },
-  reload: { configPrefixes: ["channels.telegram"] },
+  reload: {
+    configPrefixes: ["channels.telegram"],
+    // Note: reloadGroups not implemented - group config changes trigger channel restart
+    // TODO: Implement true hot-reload by updating runtime config reference
+    // The bot uses a config snapshot at startup; to hot-reload groups we need
+    // to either: (A) pass fresh config to bot, or (B) store groups in runtime
+  },
   configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
