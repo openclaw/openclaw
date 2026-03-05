@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { deliverWorkflowReport } from "../../workflow/delivery.js";
+import { deliverWorkflowReport, resolveWorkflowDeliveryConfig } from "../../workflow/delivery.js";
 import { formatWorkflowSummary, getWorkflowProgress } from "../../workflow/types.js";
 import type { WorkflowSource, WorkflowPlan } from "../../workflow/types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -299,10 +299,13 @@ The workflow system helps track progress and will auto-report to Discord when co
           let discordDelivered = false;
           let discordError: string | undefined;
 
-          // Default to true if Discord channel is configured in settings
-          const shouldReport = discordReportRequested ?? discordChannel !== undefined;
+          // Check if we should report: explicit request, explicit channel, or configured default
+          const defaultConfig = resolveWorkflowDeliveryConfig();
+          const hasConfiguredChannel = defaultConfig?.enabled && !!defaultConfig?.to;
+          const shouldReport =
+            discordReportRequested ?? (discordChannel !== undefined || hasConfiguredChannel);
 
-          if (shouldReport && discordChannel) {
+          if (shouldReport) {
             try {
               const deliveryResult = await deliverWorkflowReport({
                 plan,

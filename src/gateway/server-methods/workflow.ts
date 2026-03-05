@@ -1,6 +1,10 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
-import { createWorkflowStoreManager, type WorkflowStoreManager } from "../../workflow/store.js";
+import {
+  createWorkflowStoreManager,
+  isValidPlanId,
+  type WorkflowStoreManager,
+} from "../../workflow/store.js";
 import type {
   WorkflowPlan,
   WorkflowPlanCreate,
@@ -39,6 +43,7 @@ function isValidTaskUpdate(params: unknown): params is WorkflowTaskUpdate {
   const p = params as Record<string, unknown>;
   return (
     typeof p.planId === "string" &&
+    isValidPlanId(p.planId) &&
     typeof p.taskId === "string" &&
     typeof p.status === "string" &&
     ["pending", "in_progress", "completed", "skipped", "failed"].includes(p.status)
@@ -98,6 +103,11 @@ export const workflowHandlers: GatewayRequestHandlers = {
 
     if (!p.planId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "missing planId"));
+      return;
+    }
+
+    if (!isValidPlanId(p.planId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid planId format"));
       return;
     }
 
@@ -178,6 +188,11 @@ export const workflowHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    if (!isValidPlanId(p.planId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid planId format"));
+      return;
+    }
+
     const manager = getWorkflowManager(p.agentId);
 
     try {
@@ -251,6 +266,11 @@ export const workflowHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    if (!isValidPlanId(p.planId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid planId format"));
+      return;
+    }
+
     const manager = getWorkflowManager(p.agentId);
 
     try {
@@ -283,6 +303,11 @@ export const workflowHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    if (!isValidPlanId(p.planId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid planId format"));
+      return;
+    }
+
     const manager = getWorkflowManager(p.agentId);
 
     try {
@@ -311,6 +336,11 @@ export const workflowHandlers: GatewayRequestHandlers = {
 
     if (!p.planId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "missing planId"));
+      return;
+    }
+
+    if (!isValidPlanId(p.planId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid planId format"));
       return;
     }
 

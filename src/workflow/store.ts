@@ -33,7 +33,16 @@ export function resolveWorkflowHistoryDir(agentId?: string): string {
   return path.join(resolveWorkflowDir(agentId), "history");
 }
 
+const VALID_PLAN_ID_RE = /^wfp_[a-f0-9]+$/;
+
+export function isValidPlanId(planId: string): boolean {
+  return VALID_PLAN_ID_RE.test(planId);
+}
+
 export function resolveWorkflowHistoryPath(agentId: string, planId: string): string {
+  if (!isValidPlanId(planId)) {
+    throw new Error(`Invalid plan ID format: ${planId}`);
+  }
   return path.join(resolveWorkflowHistoryDir(agentId), `${planId}.json`);
 }
 

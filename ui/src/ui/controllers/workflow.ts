@@ -24,7 +24,7 @@ export async function loadWorkflow(state: WorkflowState): Promise<void> {
   state.workflowError = null;
   try {
     const result = await state.client.request("workflow.list", {
-      scope: state.workflowScope === "all" ? undefined : state.workflowScope,
+      scope: state.workflowScope,
       limit: state.workflowHistoryLimit,
       offset: 0,
     });
