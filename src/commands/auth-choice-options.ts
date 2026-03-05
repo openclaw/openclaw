@@ -180,6 +180,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["cloudflare-ai-gateway-api-key"],
   },
   {
+    value: "cli-backends",
+    label: "CLI Backends",
+    hint: "Claude CLI / Codex CLI (local install)",
+    choices: ["claude-cli", "codex-cli"],
+  },
+  {
     value: "custom",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
@@ -296,6 +302,16 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Highspeed",
     hint: "Official fast tier (legacy: Lightning)",
+  },
+  {
+    value: "claude-cli",
+    label: "Claude CLI",
+    hint: "Uses locally installed claude binary",
+  },
+  {
+    value: "codex-cli",
+    label: "Codex CLI",
+    hint: "Uses locally installed codex binary",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

@@ -1,6 +1,7 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveCliBackendConfig } from "./cli-backends.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -120,6 +121,48 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
   return out;
 }
 
+function injectCliBackendModels(params: {
+  config: OpenClawConfig;
+  models: ModelCatalogEntry[];
+}): void {
+  const seen = new Set(
+    params.models.map(
+      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+    ),
+  );
+
+  const claudeBackend = resolveCliBackendConfig("claude-cli", params.config);
+  if (claudeBackend) {
+    const aliases = claudeBackend.config.modelAliases ?? {};
+    // Deduplicate: modelAliases maps many inputs to the same canonical name.
+    const canonicalModels = new Set(Object.values(aliases));
+    for (const modelId of canonicalModels) {
+      const key = `claude-cli::${modelId.toLowerCase().trim()}`;
+      if (!seen.has(key)) {
+        params.models.push({
+          id: modelId,
+          name: modelId,
+          provider: "claude-cli",
+        });
+        seen.add(key);
+      }
+    }
+  }
+
+  const codexBackend = resolveCliBackendConfig("codex-cli", params.config);
+  if (codexBackend) {
+    const key = "codex-cli::codex";
+    if (!seen.has(key)) {
+      params.models.push({
+        id: "codex",
+        name: "codex",
+        provider: "codex-cli",
+      });
+      seen.add(key);
+    }
+  }
+}
+
 function mergeConfiguredOptInProviderModels(params: {
   config: OpenClawConfig;
   models: ModelCatalogEntry[];
@@ -218,6 +261,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
+      injectCliBackendModels({ config: cfg, models });
       applyOpenAICodexSparkFallback(models);
 
       if (models.length === 0) {

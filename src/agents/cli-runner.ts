@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -47,6 +50,145 @@ import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+
+type TranscriptMessage = Parameters<SessionManager["appendMessage"]>[0];
+
+type CliUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+async function ensureCliTranscriptHeader(params: { sessionFile: string; sessionId: string }) {
+  try {
+    await fs.access(params.sessionFile);
+    return;
+  } catch {
+    // File missing; create a header so SessionManager can append safely.
+  }
+  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: params.sessionId,
+    timestamp: new Date().toISOString(),
+    cwd: process.cwd(),
+  };
+  await fs.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+}
+
+function toTranscriptUsage(usage: CliUsage | undefined) {
+  const input = usage?.input ?? 0;
+  const output = usage?.output ?? 0;
+  const cacheRead = usage?.cacheRead ?? 0;
+  const cacheWrite = usage?.cacheWrite ?? 0;
+  const totalTokens = usage?.total ?? input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function toAgentLastCallUsage(usage: CliUsage | undefined): CliUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const total = usage.total ?? input + output + cacheRead + cacheWrite;
+  if (total <= 0 && input <= 0 && output <= 0 && cacheRead <= 0 && cacheWrite <= 0) {
+    return undefined;
+  }
+  return {
+    ...(input > 0 ? { input } : {}),
+    ...(output > 0 ? { output } : {}),
+    ...(cacheRead > 0 ? { cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cacheWrite } : {}),
+    ...(total > 0 ? { total } : {}),
+  };
+}
+
+function derivePromptTokensFromUsage(usage: CliUsage | undefined): number | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const input = usage.input ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  if (promptTokens > 0) {
+    return promptTokens;
+  }
+  const total = usage.total ?? 0;
+  const output = usage.output ?? 0;
+  const inferredPromptTokens = total - output;
+  return inferredPromptTokens > 0 ? inferredPromptTokens : undefined;
+}
+
+async function persistCliTranscriptTurn(params: {
+  sessionFile: string;
+  sessionId: string;
+  prompt: string;
+  replyText: string;
+  provider: string;
+  model: string;
+  runId: string;
+  usage?: CliUsage;
+}) {
+  const assistantText = params.replyText.trim();
+  if (!assistantText) {
+    return;
+  }
+  try {
+    await ensureCliTranscriptHeader({
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+    });
+    const sessionManager = SessionManager.open(params.sessionFile);
+    const now = Date.now();
+    const userText = params.prompt.trim();
+    if (userText) {
+      const userMessage: TranscriptMessage & Record<string, unknown> = {
+        role: "user",
+        content: [{ type: "text", text: userText }],
+        timestamp: now,
+        idempotencyKey: `${params.runId}:user`,
+      };
+      sessionManager.appendMessage(userMessage);
+    }
+    const assistantMessage: TranscriptMessage & Record<string, unknown> = {
+      role: "assistant",
+      content: [{ type: "text", text: assistantText }],
+      timestamp: now,
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: params.provider,
+      model: params.model,
+      usage: toTranscriptUsage(params.usage),
+      idempotencyKey: `${params.runId}:assistant`,
+    };
+    sessionManager.appendMessage(assistantMessage);
+  } catch (err) {
+    log.warn(`cli transcript persist failed: ${String(err)}`);
+  }
+}
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -409,6 +551,21 @@ export async function runCliAgent(params: {
     const output = await executeCliWithSession(params.cliSessionId);
     const text = output.text?.trim();
     const payloads = text ? [{ text }] : undefined;
+    if (text) {
+      await persistCliTranscriptTurn({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        prompt: params.prompt,
+        replyText: text,
+        provider: params.provider,
+        model: modelId,
+        runId: params.runId,
+        usage: output.usage,
+      });
+    }
+    const lastCallUsage = toAgentLastCallUsage(output.usage);
+    // Keep CLI metadata shape aligned with embedded runs so session usage/UI logic is shared.
+    const promptTokens = derivePromptTokensFromUsage(lastCallUsage);
 
     return {
       payloads,
@@ -420,6 +577,8 @@ export async function runCliAgent(params: {
           provider: params.provider,
           model: modelId,
           usage: output.usage,
+          lastCallUsage,
+          promptTokens,
         },
       },
     };

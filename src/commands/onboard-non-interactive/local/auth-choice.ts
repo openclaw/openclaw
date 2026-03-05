@@ -136,14 +136,24 @@ export async function applyNonInteractiveAuthChoice(params: {
   };
 
   if (authChoice === "claude-cli" || authChoice === "codex-cli") {
-    runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
+    const { checkCliBackendAvailability } =
+      await import("../../../agents/cli-backend-availability.js");
+    const availability = await checkCliBackendAvailability(authChoice);
+    if (!availability.binaryFound) {
+      runtime.error(`${availability.binaryName} CLI not found in PATH. Install it and retry.`);
+      runtime.exit(1);
+      return null;
+    }
+    if (!availability.credentialsFound) {
+      runtime.error(
+        `${availability.binaryName} credentials not found at ${availability.credentialsPath}. Run \`${availability.binaryName} auth login\` first.`,
+      );
+      runtime.exit(1);
+      return null;
+    }
+    const model = authChoice === "claude-cli" ? "claude-cli/sonnet" : "codex-cli/codex";
+    nextConfig = applyPrimaryModel(nextConfig, model);
+    return nextConfig;
   }
 
   if (authChoice === "setup-token") {
