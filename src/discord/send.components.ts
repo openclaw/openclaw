@@ -6,6 +6,7 @@ import {
 } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -14,6 +15,7 @@ import {
   buildDiscordComponentMessage,
   buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
+  type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
 import {
@@ -38,6 +40,52 @@ function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): str
     }
   }
   return names;
+}
+
+function buildComponentTranscriptMirrorText(
+  spec: DiscordComponentMessageSpec,
+  buildResult: DiscordComponentBuildResult,
+): string | undefined {
+  const lines: string[] = [];
+  const text = spec.text?.trim();
+  if (text) {
+    lines.push(text);
+  }
+
+  const buttonLabels: string[] = [];
+  const selectLabels: string[] = [];
+  const modalTriggerLabels: string[] = [];
+  for (const entry of buildResult.entries) {
+    const label = entry.label?.trim();
+    if (!label) {
+      continue;
+    }
+    if (entry.kind === "button") {
+      buttonLabels.push(label);
+    } else if (entry.kind === "select") {
+      selectLabels.push(label);
+    } else if (entry.kind === "modal-trigger") {
+      modalTriggerLabels.push(label);
+    }
+  }
+  if (buttonLabels.length > 0) {
+    lines.push(`Buttons: ${buttonLabels.join(", ")}`);
+  }
+  if (selectLabels.length > 0) {
+    lines.push(`Select menus: ${selectLabels.join(", ")}`);
+  }
+  if (modalTriggerLabels.length > 0) {
+    lines.push(`Modal triggers: ${modalTriggerLabels.join(", ")}`);
+  }
+
+  const modalTitles = buildResult.modals
+    .map((modal) => modal.title?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (modalTitles.length > 0) {
+    lines.push(`Modals: ${modalTitles.join(", ")}`);
+  }
+
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 type DiscordComponentSendOpts = {
@@ -144,6 +192,23 @@ export async function sendDiscordComponentMessage(
     modals: buildResult.modals,
     messageId: result.id,
   });
+
+  const sessionKey = opts.sessionKey?.trim();
+  if (sessionKey) {
+    const transcriptText = buildComponentTranscriptMirrorText(spec, buildResult);
+    if (transcriptText) {
+      try {
+        await appendAssistantMessageToSessionTranscript({
+          agentId: opts.agentId,
+          sessionKey,
+          text: transcriptText,
+          mediaUrls: opts.mediaUrl ? [opts.mediaUrl] : undefined,
+        });
+      } catch {
+        // Outbound delivery already succeeded; transcript mirroring is best-effort.
+      }
+    }
+  }
 
   recordChannelActivity({
     channel: "discord",
