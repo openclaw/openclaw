@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create or update AgentSkills. Use when designing, structuring, or packaging skills with scripts, references, and assets.
+description: Create, update, or refactor AgentSkills. Use when designing, structuring, or packaging, splitting, or merging skills with scripts, references, and assets.
 ---
 
 # Skill Creator
