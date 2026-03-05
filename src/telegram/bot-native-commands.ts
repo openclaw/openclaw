@@ -682,7 +682,10 @@ export const registerTelegramNativeCommands = ({
           await recordInboundSessionMetaSafe({
             cfg,
             agentId: route.agentId,
-            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            // Native slash commands run on a synthetic slash session key,
+            // but session metadata (last route/thread) must be recorded on
+            // the actual command target session to preserve topic routing.
+            sessionKey,
             ctx: ctxPayload,
             onError: (err) =>
               runtime.error?.(

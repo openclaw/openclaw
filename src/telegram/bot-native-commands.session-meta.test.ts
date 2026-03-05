@@ -201,6 +201,24 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.sessionKey).toBeDefined();
   });
 
+  it("records native slash session metadata on the topic target session", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(buildStatusTopicCommandContext());
+
+    const call = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string; ctx?: { CommandTargetSessionKey?: string; SessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(call?.ctx?.SessionKey).toBe("telegram:slash:200");
+    expect(call?.ctx?.CommandTargetSessionKey).toContain(":topic:42");
+    expect(call?.sessionKey).toBe(call?.ctx?.CommandTargetSessionKey);
+  });
+
   it("awaits session metadata persistence before dispatch", async () => {
     const deferred = createDeferred<void>();
     sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
