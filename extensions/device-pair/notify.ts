@@ -427,7 +427,7 @@ export async function handleNotifyCommand(params: {
         `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
         `Mode: ${mode}`,
         `Subscribers: ${state.subscribers.length}`,
-        `Pending requests: ${pending.pending.length}`,
+        `Pending requests: ${coercePendingPairingRequests(pending.pending).length}`,
         "",
         "Use /pair notify on|off|once",
       ].join("\n"),
