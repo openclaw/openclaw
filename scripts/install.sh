@@ -16,6 +16,9 @@ MUTED='\033[38;2;90;100;128m'       # text-muted    #5a6480
 NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=12
+NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1247,16 +1250,50 @@ install_homebrew() {
 }
 
 # Check Node.js version
-node_major_version() {
+parse_node_version_components() {
     if ! command -v node &> /dev/null; then
         return 1
     fi
-    local version major
+    local version major minor
     version="$(node -v 2>/dev/null || true)"
     major="${version#v}"
     major="${major%%.*}"
-    if [[ "$major" =~ ^[0-9]+$ ]]; then
+    minor="${version#v}"
+    minor="${minor#*.}"
+    minor="${minor%%.*}"
+
+    if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    echo "${major} ${minor}"
+    return 0
+}
+
+node_major_version() {
+    local version_components major minor
+    version_components="$(parse_node_version_components || true)"
+    read -r major minor <<< "$version_components"
+    if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
         echo "$major"
+        return 0
+    fi
+    return 1
+}
+
+node_is_at_least_required() {
+    local version_components major minor
+    version_components="$(parse_node_version_components || true)"
+    read -r major minor <<< "$version_components"
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
         return 0
     fi
     return 1
@@ -1313,18 +1350,53 @@ ensure_macos_node22_active() {
     return 1
 }
 
+ensure_node22_active_shell() {
+    if node_is_at_least_required; then
+        return 0
+    fi
+
+    local active_path active_version
+    active_path="$(command -v node 2>/dev/null || echo "not found")"
+    active_version="$(node -v 2>/dev/null || echo "missing")"
+
+    ui_error "Active Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+    print_active_node_paths || true
+
+    local nvm_detected=0
+    if [[ -n "${NVM_DIR:-}" || "$active_path" == *"/.nvm/"* ]]; then
+        nvm_detected=1
+    fi
+    if command -v nvm >/dev/null 2>&1; then
+        nvm_detected=1
+    fi
+
+    if [[ "$nvm_detected" -eq 1 ]]; then
+        echo "nvm appears to be managing Node for this shell."
+        echo "Run:"
+        echo "  nvm install 22"
+        echo "  nvm use 22"
+        echo "  nvm alias default 22"
+        echo "Then open a new shell and rerun:"
+        echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+    else
+        echo "Install/select Node.js 22+ and ensure it is first on PATH, then rerun installer."
+    fi
+
+    return 1
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if [[ -n "$NODE_VERSION" && "$NODE_VERSION" -ge 22 ]]; then
+        if node_is_at_least_required; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
         else
             if [[ -n "$NODE_VERSION" ]]; then
-                ui_info "Node.js $(node -v) found, upgrading to v22+"
+                ui_info "Node.js $(node -v) found, upgrading to v${NODE_MIN_VERSION}+"
             else
-                ui_info "Node.js found but version could not be parsed; reinstalling v22+"
+                ui_info "Node.js found but version could not be parsed; reinstalling v${NODE_MIN_VERSION}+"
             fi
             return 1
         fi
@@ -2156,6 +2228,9 @@ main() {
     # Step 2: Node.js
     if ! check_node; then
         install_node
+    fi
+    if ! ensure_node22_active_shell; then
+        exit 1
     fi
 
     ui_stage "Installing OpenClaw"

@@ -324,7 +324,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -343,7 +343,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */
@@ -452,11 +452,11 @@ export type ToolsConfig = {
       cacheTtlMinutes?: number;
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
-        /** API key for Perplexity or OpenRouter (defaults to PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). */
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
         apiKey?: string;
-        /** Base URL for API requests (defaults to OpenRouter: https://openrouter.ai/api/v1). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         baseUrl?: string;
-        /** Model to use (defaults to "perplexity/sonar-pro"). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */

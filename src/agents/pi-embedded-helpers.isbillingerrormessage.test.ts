@@ -269,6 +269,21 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches model_context_window_exceeded stop reason surfaced by pi-ai", () => {
+    // Anthropic API (and some OpenAI-compatible providers like ZhipuAI/GLM) return
+    // stop_reason: "model_context_window_exceeded" when the context window is hit.
+    // The pi-ai library surfaces this as "Unhandled stop reason: model_context_window_exceeded".
+    const samples = [
+      "Unhandled stop reason: model_context_window_exceeded",
+      "model_context_window_exceeded",
+      "context_window_exceeded",
+      "Unhandled stop reason: context_window_exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Chinese context overflow error messages from proxy providers", () => {
     const samples = [
       "上下文过长",
@@ -415,6 +430,7 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
+      "Connection error.",
       "invalid request format",
     ];
     for (const sample of samples) {
@@ -423,7 +439,14 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "Unhandled stop reason: error",
+      "stop reason: abort",
+      "stop reason: error",
+      "reason: abort",
+      "reason: error",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -475,9 +498,7 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
-      "rate_limit",
-    );
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -487,6 +508,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
+    expect(
+      classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
+    ).toBe("timeout");
+    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",

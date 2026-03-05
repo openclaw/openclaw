@@ -1,4 +1,8 @@
 import type { Bot, Context } from "grammy";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
@@ -170,6 +174,11 @@ async function resolveTelegramCommandAuth(params: {
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup,
+    isForum,
+    messageThreadId,
+  });
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -205,9 +214,10 @@ async function resolveTelegramCommandAuth(params: {
   const senderUsername = msg.from?.username ?? "";
 
   const sendAuthMessage = async (text: string) => {
+    const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, text),
+      fn: () => bot.api.sendMessage(chatId, text, threadParams),
     });
     return null;
   };
@@ -409,12 +419,19 @@ export const registerTelegramNativeCommands = ({
     botIdentity: opts.token,
   });
 
-  const resolveCommandRuntimeContext = (params: {
+  const resolveCommandRuntimeContext = async (params: {
     msg: NonNullable<TelegramNativeCommandContext["message"]>;
     isGroup: boolean;
     isForum: boolean;
     resolvedThreadId?: number;
-  }) => {
+  }): Promise<{
+    chatId: number;
+    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+    route: ReturnType<typeof resolveAgentRoute>;
+    mediaLocalRoots: readonly string[] | undefined;
+    tableMode: ReturnType<typeof resolveMarkdownTableMode>;
+    chunkMode: ReturnType<typeof resolveChunkMode>;
+  } | null> => {
     const { msg, isGroup, isForum, resolvedThreadId } = params;
     const chatId = msg.chat.id;
     const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
@@ -424,16 +441,49 @@ export const registerTelegramNativeCommands = ({
       messageThreadId,
     });
     const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-    const route = resolveAgentRoute({
+    const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+    let route = resolveAgentRoute({
       cfg,
       channel: "telegram",
       accountId,
       peer: {
         kind: isGroup ? "group" : "direct",
-        id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
+        id: peerId,
       },
       parentPeer,
     });
+    const configuredRoute = resolveConfiguredAcpRoute({
+      cfg,
+      route,
+      channel: "telegram",
+      accountId,
+      conversationId: peerId,
+      parentConversationId: isGroup ? String(chatId) : undefined,
+    });
+    const configuredBinding = configuredRoute.configuredBinding;
+    route = configuredRoute.route;
+    if (configuredBinding) {
+      const ensured = await ensureConfiguredAcpRouteReady({
+        cfg,
+        configuredBinding,
+      });
+      if (!ensured.ok) {
+        logVerbose(
+          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+        );
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              chatId,
+              "Configured ACP binding is unavailable right now. Please try again.",
+              buildTelegramThreadParams(threadSpec) ?? {},
+            ),
+        });
+        return null;
+      }
+    }
     const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
     const tableMode = resolveMarkdownTableMode({
       cfg,
@@ -445,12 +495,14 @@ export const registerTelegramNativeCommands = ({
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
+    accountId: string;
     mediaLocalRoots?: readonly string[];
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
   }) => ({
     chatId: String(params.chatId),
+    accountId: params.accountId,
     token: opts.token,
     runtime,
     bot,
@@ -502,17 +554,22 @@ export const registerTelegramNativeCommands = ({
             senderUsername,
             groupConfig,
             topicConfig,
-            commandAuthorized,
+            commandAuthorized: initialCommandAuthorized,
           } = auth;
-          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } =
-            resolveCommandRuntimeContext({
-              msg,
-              isGroup,
-              isForum,
-              resolvedThreadId,
-            });
+          let commandAuthorized = initialCommandAuthorized;
+          const runtimeContext = await resolveCommandRuntimeContext({
+            msg,
+            isGroup,
+            isForum,
+            resolvedThreadId,
+          });
+          if (!runtimeContext) {
+            return;
+          }
+          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId: route.accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,
@@ -726,15 +783,19 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { senderId, commandAuthorized, isGroup, isForum, resolvedThreadId } = auth;
-          const { threadSpec, mediaLocalRoots, tableMode, chunkMode } =
-            resolveCommandRuntimeContext({
-              msg,
-              isGroup,
-              isForum,
-              resolvedThreadId,
-            });
+          const runtimeContext = await resolveCommandRuntimeContext({
+            msg,
+            isGroup,
+            isForum,
+            resolvedThreadId,
+          });
+          if (!runtimeContext) {
+            return;
+          }
+          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId: route.accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,

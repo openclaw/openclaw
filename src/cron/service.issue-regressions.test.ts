@@ -1,10 +1,19 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import * as schedule from "./schedule.js";
+import {
+  createAbortAwareIsolatedRunner,
+  createDefaultIsolatedRunner,
+  createDueIsolatedJob,
+  createIsolatedRegressionJob,
+  noopLogger,
+  setupCronIssueRegressionFixtures,
+  startCronForStore,
+  topOfHourOffsetMs,
+  writeCronJobs,
+  writeCronStoreSnapshot,
+} from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
 import { createDeferred, createRunningCronServiceState } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
@@ -19,152 +28,10 @@ import {
 } from "./service/timer.js";
 import type { CronJob, CronJobState } from "./types.js";
 
-const noopLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-  trace: () => {},
-};
-const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
 const FAST_TIMEOUT_SECONDS = 0.0025;
-type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
-
-function topOfHourOffsetMs(jobId: string) {
-  const digest = crypto.createHash("sha256").update(jobId).digest();
-  return digest.readUInt32BE(0) % TOP_OF_HOUR_STAGGER_MS;
-}
-
-let fixtureRoot = "";
-let fixtureCount = 0;
-
-function makeStorePath() {
-  const storePath = path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`);
-  return {
-    storePath,
-  };
-}
-
-function createDueIsolatedJob(params: {
-  id: string;
-  nowMs: number;
-  nextRunAtMs: number;
-  deleteAfterRun?: boolean;
-}): CronJob {
-  return {
-    id: params.id,
-    name: params.id,
-    enabled: true,
-    deleteAfterRun: params.deleteAfterRun ?? false,
-    createdAtMs: params.nowMs,
-    updatedAtMs: params.nowMs,
-    schedule: { kind: "at", at: new Date(params.nextRunAtMs).toISOString() },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: params.id },
-    delivery: { mode: "none" },
-    state: { nextRunAtMs: params.nextRunAtMs },
-  };
-}
-
-function createDefaultIsolatedRunner(): CronServiceOptions["runIsolatedAgentJob"] {
-  return vi.fn().mockResolvedValue({
-    status: "ok",
-    summary: "ok",
-  }) as CronServiceOptions["runIsolatedAgentJob"];
-}
-
-function createAbortAwareIsolatedRunner(summary = "late") {
-  let observedAbortSignal: AbortSignal | undefined;
-  const runIsolatedAgentJob = vi.fn(async ({ abortSignal }) => {
-    observedAbortSignal = abortSignal;
-    await new Promise<void>((resolve) => {
-      if (!abortSignal) {
-        return;
-      }
-      if (abortSignal.aborted) {
-        resolve();
-        return;
-      }
-      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    return { status: "ok" as const, summary };
-  }) as CronServiceOptions["runIsolatedAgentJob"];
-
-  return {
-    runIsolatedAgentJob,
-    getObservedAbortSignal: () => observedAbortSignal,
-  };
-}
-
-function createIsolatedRegressionJob(params: {
-  id: string;
-  name: string;
-  scheduledAt: number;
-  schedule: CronJob["schedule"];
-  payload: CronJob["payload"];
-  state?: CronJobState;
-}): CronJob {
-  return {
-    id: params.id,
-    name: params.name,
-    enabled: true,
-    createdAtMs: params.scheduledAt - 86_400_000,
-    updatedAtMs: params.scheduledAt - 86_400_000,
-    schedule: params.schedule,
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: params.payload,
-    delivery: { mode: "announce" },
-    state: params.state ?? {},
-  };
-}
-
-async function writeCronJobs(storePath: string, jobs: CronJob[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
-}
-
-async function startCronForStore(params: {
-  storePath: string;
-  cronEnabled?: boolean;
-  enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
-  requestHeartbeatNow?: CronServiceOptions["requestHeartbeatNow"];
-  runIsolatedAgentJob?: CronServiceOptions["runIsolatedAgentJob"];
-  onEvent?: CronServiceOptions["onEvent"];
-}) {
-  const enqueueSystemEvent =
-    params.enqueueSystemEvent ?? (vi.fn() as unknown as CronServiceOptions["enqueueSystemEvent"]);
-  const requestHeartbeatNow =
-    params.requestHeartbeatNow ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeatNow"]);
-  const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
-
-  const cron = new CronService({
-    cronEnabled: params.cronEnabled ?? true,
-    storePath: params.storePath,
-    log: noopLogger,
-    enqueueSystemEvent,
-    requestHeartbeatNow,
-    runIsolatedAgentJob,
-    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
-  });
-  await cron.start();
-  return cron;
-}
 
 describe("Cron issue regressions", () => {
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cron-issues-"));
-  });
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
-  });
-
-  afterAll(async () => {
-    vi.useRealTimers();
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
+  const { makeStorePath } = setupCronIssueRegressionFixtures();
 
   it("covers schedule updates and payload patching", async () => {
     const store = makeStorePath();
@@ -214,26 +81,20 @@ describe("Cron issue regressions", () => {
 
   it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
     const store = makeStorePath();
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          {
-            id: "legacy-isolated",
-            agentId: "feature-dev_planner",
-            sessionKey: "agent:main:main",
-            name: "legacy isolated",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 300_000 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "poll workflow queue" },
-            state: {},
-          },
-        ],
-      }),
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "legacy-isolated",
+        agentId: "feature-dev_planner",
+        sessionKey: "agent:main:main",
+        name: "legacy isolated",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "poll workflow queue" },
+        state: {},
+      },
+    ]);
 
     const cron = new CronService({
       cronEnabled: true,
@@ -330,30 +191,19 @@ describe("Cron issue regressions", () => {
   it("treats persisted jobs with missing enabled as enabled during update()", async () => {
     const store = makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "missing-enabled-update",
-              name: "legacy missing enabled",
-              createdAtMs: now - 60_000,
-              updatedAtMs: now - 60_000,
-              schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "legacy" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "missing-enabled-update",
+        name: "legacy missing enabled",
+        createdAtMs: now - 60_000,
+        updatedAtMs: now - 60_000,
+        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "legacy" },
+        state: {},
+      },
+    ]);
 
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
@@ -374,30 +224,19 @@ describe("Cron issue regressions", () => {
     const store = makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const dueAt = now - 30_000;
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "missing-enabled-due",
-              name: "legacy due job",
-              createdAtMs: dueAt - 60_000,
-              updatedAtMs: dueAt,
-              schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "missing-enabled-due" },
-              state: { nextRunAtMs: dueAt },
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "missing-enabled-due",
+        name: "legacy due job",
+        createdAtMs: dueAt - 60_000,
+        updatedAtMs: dueAt,
+        schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "missing-enabled-due" },
+        state: { nextRunAtMs: dueAt },
+      },
+    ]);
 
     const enqueueSystemEvent = vi.fn();
     const cron = await startCronForStore({
@@ -584,10 +423,11 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("does not advance unrelated due jobs after manual cron.run", async () => {
+  it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
     const store = makeStorePath();
     const nowMs = Date.now();
     const dueNextRunAtMs = nowMs - 1_000;
+    const staleExecutedNextRunAtMs = nowMs - 2_000;
 
     await writeCronJobs(store.storePath, [
       createIsolatedRegressionJob({
@@ -606,6 +446,17 @@ describe("Cron issue regressions", () => {
         payload: { kind: "agentTurn", message: "unrelated due" },
         state: { nextRunAtMs: dueNextRunAtMs },
       }),
+      createIsolatedRegressionJob({
+        id: "unrelated-stale-executed",
+        name: "unrelated stale executed",
+        scheduledAt: nowMs,
+        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+        payload: { kind: "agentTurn", message: "unrelated stale executed" },
+        state: {
+          nextRunAtMs: staleExecutedNextRunAtMs,
+          lastRunAtMs: staleExecutedNextRunAtMs + 1,
+        },
+      }),
     ]);
 
     const cron = await startCronForStore({
@@ -619,8 +470,11 @@ describe("Cron issue regressions", () => {
 
     const jobs = await cron.list({ includeDisabled: true });
     const unrelated = jobs.find((entry) => entry.id === "unrelated-due");
+    const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
     expect(unrelated).toBeDefined();
     expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
+    expect(staleExecuted).toBeDefined();
+    expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
 
     cron.stop();
   });
@@ -1402,36 +1256,25 @@ describe("Cron issue regressions", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
 
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "stale-running",
-              name: "stale-running",
-              enabled: true,
-              createdAtMs: now - 3_600_000,
-              updatedAtMs: now - 3_600_000,
-              schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "stale-running" },
-              state: {
-                runningAtMs: staleRunningAtMs,
-                lastRunAtMs: now - 3_600_000,
-                lastStatus: "ok",
-                nextRunAtMs: now - 60_000,
-              },
-            },
-          ],
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "stale-running",
+        name: "stale-running",
+        enabled: true,
+        createdAtMs: now - 3_600_000,
+        updatedAtMs: now - 3_600_000,
+        schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "stale-running" },
+        state: {
+          runningAtMs: staleRunningAtMs,
+          lastRunAtMs: now - 3_600_000,
+          lastStatus: "ok",
+          nextRunAtMs: now - 60_000,
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    ]);
 
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
@@ -1670,5 +1513,42 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastError).toMatch(/^schedule error:/);
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
+  });
+
+  it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
+    const nowMs = Date.now();
+    const everyMs = 24 * 60 * 60 * 1_000;
+    const lastScheduledRunMs = nowMs - 6 * 60 * 60 * 1_000;
+    const expectedNextMs = lastScheduledRunMs + everyMs;
+
+    const job: CronJob = {
+      id: "daily-job",
+      name: "Daily job",
+      enabled: true,
+      createdAtMs: lastScheduledRunMs - everyMs,
+      updatedAtMs: lastScheduledRunMs,
+      schedule: { kind: "every", everyMs, anchorMs: lastScheduledRunMs - everyMs },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "daily check-in" },
+      state: {
+        lastRunAtMs: lastScheduledRunMs,
+        nextRunAtMs: expectedNextMs,
+      },
+    };
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-force-run-anchor-test.json",
+      log: noopLogger as never,
+      nowMs: () => nowMs,
+      jobs: [job],
+    });
+
+    const startedAt = nowMs;
+    const endedAt = nowMs + 2_000;
+
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { preserveSchedule: true });
+
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    expect(job.state.nextRunAtMs).toBe(expectedNextMs);
   });
 });
