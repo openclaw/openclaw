@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findExtraGatewayServices } from "./inspect.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+let findExtraGatewayServices: typeof import("./inspect.js").findExtraGatewayServices;
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -8,6 +12,111 @@ const { execSchtasksMock } = vi.hoisted(() => ({
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
+
+beforeAll(async () => {
+  ({ findExtraGatewayServices } = await import("./inspect.js"));
+});
+
+describe("findExtraGatewayServices (linux)", () => {
+  const originalPlatform = process.platform;
+  const originalHome = process.env.HOME;
+  let tempHome: string;
+
+  beforeEach(async () => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "linux",
+    });
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+    process.env.HOME = tempHome;
+    await fs.mkdir(path.join(tempHome, ".config", "systemd", "user"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+    process.env.HOME = originalHome;
+    if (tempHome) {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores markers that only appear inside the HOME path", async () => {
+    const servicePath = path.join(
+      tempHome,
+      ".config",
+      "systemd",
+      "user",
+      "wishlist-staging.service",
+    );
+    await fs.writeFile(
+      servicePath,
+      [
+        "[Service]",
+        `WorkingDirectory=${tempHome}/projects/wishlist`,
+        `ExecStart=${tempHome}/projects/wishlist/dev-cargo.sh`,
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: tempHome });
+    expect(result).toEqual([]);
+  });
+
+  it("still detects markers outside the HOME path", async () => {
+    const servicePath = path.join(tempHome, ".config", "systemd", "user", "legacy-moltbot.service");
+    await fs.writeFile(
+      servicePath,
+      ["[Service]", "ExecStart=/opt/moltbot/bin/moltbot run"].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: tempHome });
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "legacy-moltbot.service",
+        detail: `unit: ${path.join(tempHome, ".config", "systemd", "user", "legacy-moltbot.service")}`,
+        scope: "user",
+        marker: "moltbot",
+        legacy: true,
+      },
+    ]);
+  });
+
+  it("does not scrub HOME when it appears mid-path", async () => {
+    const servicePath = path.join(tempHome, ".config", "systemd", "user", "openclaw.service");
+    await fs.writeFile(
+      servicePath,
+      ["[Service]", `ExecStart=${tempHome}openclaw/bin/openclaw gateway run`].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: tempHome });
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: `unit: ${path.join(tempHome, ".config", "systemd", "user", "openclaw.service")}`,
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
+  it("handles windows HOME paths", async () => {
+    const windowsHome = "C:\\Users\\MoltBot";
+    const userDir = path.join(windowsHome, ".config", "systemd", "user");
+    const servicePath = path.join(userDir, "legacy-moltbot.service");
+    await fs.mkdir(userDir, { recursive: true });
+    await fs.writeFile(
+      servicePath,
+      ["[Service]", "ExecStart=C:\\Users\\MoltBot\\tools\\helper.exe"].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: windowsHome });
+    expect(result).toEqual([]);
+  });
+});
 
 describe("findExtraGatewayServices (win32)", () => {
   const originalPlatform = process.platform;
