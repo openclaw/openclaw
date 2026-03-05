@@ -290,14 +290,12 @@ export async function gatherDaemonStatus(
         explicitPassword: opts.rpc.password,
       })
     : undefined;
+  const configuredToken = normalizeSecretInputString(daemonCfg.gateway?.auth?.token);
 
   const rpc = opts.probe
     ? await probeGatewayStatus({
         url: probeUrl,
-        token:
-          opts.rpc.token ||
-          mergedDaemonEnv.OPENCLAW_GATEWAY_TOKEN ||
-          daemonCfg.gateway?.auth?.token,
+        token: opts.rpc.token || mergedDaemonEnv.OPENCLAW_GATEWAY_TOKEN || configuredToken,
         password: daemonProbePassword,
         tlsFingerprint:
           shouldUseLocalTlsRuntime && tlsRuntime?.enabled

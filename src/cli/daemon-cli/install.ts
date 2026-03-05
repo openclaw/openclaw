@@ -11,9 +11,12 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultRuntime } from "../../runtime.js";
+import { secretRefKey } from "../../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   buildDaemonServiceSnapshot,
@@ -83,12 +86,52 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
   const needsToken =
     resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
+  const tokenRef = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.token,
+    defaults: cfg.secrets?.defaults,
+  }).ref;
+
+  const resolveConfiguredTokenRef = async (): Promise<string | undefined> => {
+    if (!tokenRef) {
+      return undefined;
+    }
+    const resolved = await resolveSecretRefValues([tokenRef], {
+      config: cfg,
+      env: process.env,
+    });
+    const value = resolved.get(secretRefKey(tokenRef));
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error("gateway.auth.token resolved to an empty or non-string value.");
+    }
+    return value.trim();
+  };
 
   let token: string | undefined =
-    opts.token ||
-    cfg.gateway?.auth?.token ||
-    process.env.OPENCLAW_GATEWAY_TOKEN ||
-    process.env.CLAWDBOT_GATEWAY_TOKEN;
+    opts.token?.trim() ||
+    (typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined) ||
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+
+  if (!token && tokenRef) {
+    try {
+      token = await resolveConfiguredTokenRef();
+    } catch (err) {
+      if (needsToken) {
+        fail(
+          `Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (${String(
+            err,
+          )}). Resolve the SecretRef or provide --token.`,
+        );
+        return;
+      }
+      const warning = `Warning: gateway.auth.token SecretRef could not be resolved for install (${String(err)}).`;
+      if (json) {
+        warnings.push(warning);
+      } else {
+        defaultRuntime.log(warning);
+      }
+    }
+  }
 
   if (!token && needsToken) {
     token = randomToken();
@@ -115,7 +158,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         }
       } else {
         const baseConfig = snapshot.exists ? snapshot.config : {};
-        if (!baseConfig.gateway?.auth?.token) {
+        const existingTokenRef = resolveSecretInputRef({
+          value: baseConfig.gateway?.auth?.token,
+          defaults: baseConfig.secrets?.defaults,
+        }).ref;
+        const baseConfigToken =
+          typeof baseConfig.gateway?.auth?.token === "string"
+            ? baseConfig.gateway.auth.token.trim()
+            : undefined;
+        if (!existingTokenRef && !baseConfigToken) {
           await writeConfigFile({
             ...baseConfig,
             gateway: {
@@ -127,9 +178,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
               },
             },
           });
-        } else {
+        } else if (baseConfigToken) {
           // Another process wrote a token between loadConfig() and now.
-          token = baseConfig.gateway.auth.token;
+          token = baseConfigToken;
+        } else {
+          // Preserve configured SecretRef and avoid writing plaintext over it.
+          const msg =
+            "Warning: gateway.auth.token is SecretRef-managed; skipping plaintext token persistence.";
+          if (json) {
+            warnings.push(msg);
+          } else {
+            defaultRuntime.log(msg);
+          }
         }
       }
     } catch (err) {

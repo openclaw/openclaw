@@ -12,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -130,39 +131,54 @@ export async function doctorCommand(
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
   if (resolveMode(cfg) === "local" && sourceConfigValid) {
+    const gatewayTokenRef = resolveSecretInputRef({
+      value: cfg.gateway?.auth?.token,
+      defaults: cfg.secrets?.defaults,
+    }).ref;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     });
     const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
-      note(
-        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
-        "Gateway auth",
-      );
-      const shouldSetToken =
-        options.generateGatewayToken === true
-          ? true
-          : options.nonInteractive === true
-            ? false
-            : await prompter.confirmRepair({
-                message: "Generate and configure a gateway token now?",
-                initialValue: true,
-              });
-      if (shouldSetToken) {
-        const nextToken = randomToken();
-        cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            auth: {
-              ...cfg.gateway?.auth,
-              mode: "token",
-              token: nextToken,
+      if (gatewayTokenRef) {
+        note(
+          [
+            "Gateway token is managed via SecretRef and is currently unavailable.",
+            "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+            "Resolve/rotate the external secret source, then rerun doctor.",
+          ].join("\n"),
+          "Gateway auth",
+        );
+      } else {
+        note(
+          "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
+          "Gateway auth",
+        );
+        const shouldSetToken =
+          options.generateGatewayToken === true
+            ? true
+            : options.nonInteractive === true
+              ? false
+              : await prompter.confirmRepair({
+                  message: "Generate and configure a gateway token now?",
+                  initialValue: true,
+                });
+        if (shouldSetToken) {
+          const nextToken = randomToken();
+          cfg = {
+            ...cfg,
+            gateway: {
+              ...cfg.gateway,
+              auth: {
+                ...cfg.gateway?.auth,
+                mode: "token",
+                token: nextToken,
+              },
             },
-          },
-        };
-        note("Gateway token configured.", "Gateway auth");
+          };
+          note("Gateway token configured.", "Gateway auth");
+        }
       }
     }
   }

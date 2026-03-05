@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveNodeLaunchAgentLabel,
@@ -175,7 +176,9 @@ export async function maybeRepairGatewayDaemon(params: {
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port,
-          token: params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+          token:
+            normalizeSecretInputString(params.cfg.gateway?.auth?.token) ??
+            process.env.OPENCLAW_GATEWAY_TOKEN,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: params.cfg,

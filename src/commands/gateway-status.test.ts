@@ -184,6 +184,101 @@ describe("gateway-status command", () => {
     expect(targets[0]?.summary).toBeTruthy();
   });
 
+  it("emits stable SecretRef auth configuration booleans in --json output", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    const previousProbeImpl = probeGateway.getMockImplementation();
+    probeGateway.mockImplementation(async (opts: { url: string }) => ({
+      ok: true,
+      url: opts.url,
+      connectLatencyMs: 20,
+      error: null,
+      close: null,
+      health: { ok: true },
+      status: {
+        linkChannel: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          linked: true,
+          authAgeMs: 1_000,
+        },
+        sessions: { count: 1 },
+      },
+      presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
+      configSnapshot: {
+        path: "/tmp/secretref-config.json",
+        exists: true,
+        valid: true,
+        config: {
+          secrets: {
+            defaults: {
+              env: "default",
+            },
+          },
+          gateway: {
+            mode: "remote",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+            remote: {
+              url: "wss://remote.example:18789",
+              token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+            },
+          },
+          discovery: {
+            wideArea: { enabled: true },
+          },
+        },
+        issues: [],
+        legacyIssues: [],
+      },
+    }));
+
+    try {
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    } finally {
+      if (previousProbeImpl) {
+        probeGateway.mockImplementation(previousProbeImpl);
+      } else {
+        probeGateway.mockReset();
+      }
+    }
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      targets?: Array<Record<string, unknown>>;
+    };
+    const configRemoteTarget = parsed.targets?.find((target) => target.kind === "configRemote");
+    expect(configRemoteTarget?.config).toMatchInlineSnapshot(`
+      {
+        "discovery": {
+          "wideAreaEnabled": true,
+        },
+        "exists": true,
+        "gateway": {
+          "authMode": "token",
+          "authPasswordConfigured": true,
+          "authTokenConfigured": true,
+          "bind": null,
+          "controlUiBasePath": null,
+          "controlUiEnabled": null,
+          "mode": "remote",
+          "port": null,
+          "remotePasswordConfigured": true,
+          "remoteTokenConfigured": true,
+          "remoteUrl": "wss://remote.example:18789",
+          "tailscaleMode": null,
+        },
+        "issues": [],
+        "legacyIssues": [],
+        "path": "/tmp/secretref-config.json",
+        "valid": true,
+      }
+    `);
+  });
+
   it("supports SSH tunnel targets", async () => {
     const { runtime, runtimeLogs } = createRuntimeCapture();
 

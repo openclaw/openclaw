@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 
 const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
 const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
@@ -13,11 +14,24 @@ function resolveGatewayAuthToken(): string | null {
   }
   try {
     const cfg = loadConfig();
-    const configToken = cfg.gateway?.auth?.token?.trim();
+    const configToken = normalizeSecretInputString(cfg.gateway?.auth?.token);
     if (configToken) {
       return configToken;
     }
-  } catch {
+    const tokenRef = resolveSecretInputRef({
+      value: cfg.gateway?.auth?.token,
+      defaults: cfg.secrets?.defaults,
+    }).ref;
+    if (tokenRef) {
+      throw new Error(
+        "extension relay requires a resolved gateway token, but gateway.auth.token is configured as SecretRef and unavailable. Set OPENCLAW_GATEWAY_TOKEN or resolve your secret provider.",
+      );
+    }
+  } catch (err) {
+    const detail = String(err);
+    if (detail.includes("configured as SecretRef")) {
+      throw err;
+    }
     // ignore config read failures; caller can fallback to per-process random token
   }
   return null;

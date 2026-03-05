@@ -293,6 +293,34 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
+  it("does not resolve local password SecretRef when token SecretRef is configured in inferred mode", async () => {
+    vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: {
+          token: { source: "env", provider: "default", id: "QR_INFERRED_GATEWAY_TOKEN" },
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await runQr(["--setup-code-only"]);
+
+    const expected = encodePairingSetupCode({
+      url: "ws://gateway.local:18789",
+      token: "inferred-token",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expected);
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
   it("exits with error when gateway config is not pairable", async () => {
     loadConfig.mockReturnValue({
       gateway: {

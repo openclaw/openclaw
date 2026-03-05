@@ -155,7 +155,7 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
   const token =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
     env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-    cfg.gateway?.auth?.token?.trim();
+    normalizeSecretInputString(cfg.gateway?.auth?.token);
   const password =
     env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
@@ -180,6 +180,48 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
     return { password, label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
+}
+
+async function resolveGatewayTokenSecretRef(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<OpenClawConfig> {
+  const authToken = cfg.gateway?.auth?.token;
+  const { ref } = resolveSecretInputRef({
+    value: authToken,
+    defaults: cfg.secrets?.defaults,
+  });
+  if (!ref) {
+    return cfg;
+  }
+  const hasTokenEnvCandidate = Boolean(
+    env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim(),
+  );
+  if (hasTokenEnvCandidate) {
+    return cfg;
+  }
+  const mode = cfg.gateway?.auth?.mode;
+  if (mode === "password" || mode === "none" || mode === "trusted-proxy") {
+    return cfg;
+  }
+  const resolved = await resolveSecretRefValues([ref], {
+    config: cfg,
+    env,
+  });
+  const value = resolved.get(secretRefKey(ref));
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("gateway.auth.token resolved to an empty or non-string value.");
+  }
+  return {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      auth: {
+        ...cfg.gateway?.auth,
+        token: value.trim(),
+      },
+    },
+  };
 }
 
 async function resolveGatewayPasswordSecretRef(
@@ -207,7 +249,7 @@ async function resolveGatewayPasswordSecretRef(
   if (mode !== "password") {
     const hasTokenCandidate =
       Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim()) ||
-      Boolean(cfg.gateway?.auth?.token?.trim());
+      Boolean(normalizeSecretInputString(cfg.gateway?.auth?.token));
     if (hasTokenCandidate) {
       return cfg;
     }
@@ -305,7 +347,8 @@ export async function resolvePairingSetupFromConfig(
   options: ResolvePairingSetupOptions = {},
 ): Promise<PairingSetupResolution> {
   const env = options.env ?? process.env;
-  const cfgForAuth = await resolveGatewayPasswordSecretRef(cfg, env);
+  const cfgWithToken = await resolveGatewayTokenSecretRef(cfg, env);
+  const cfgForAuth = await resolveGatewayPasswordSecretRef(cfgWithToken, env);
   const auth = resolveAuth(cfgForAuth, env);
   if (auth.error) {
     return { ok: false, error: auth.error };

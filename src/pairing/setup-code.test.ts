@@ -147,6 +147,123 @@ describe("pairing setup code", () => {
     expect(resolved.payload.token).toBe("tok_123");
   });
 
+  it("resolves gateway.auth.token SecretRef for pairing payload", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GW_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          GW_TOKEN: "resolved-token",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.authLabel).toBe("token");
+    expect(resolved.payload.token).toBe("resolved-token");
+  });
+
+  it("errors when gateway.auth.token SecretRef is unresolved in token mode", async () => {
+    await expect(
+      resolvePairingSetupFromConfig(
+        {
+          gateway: {
+            bind: "custom",
+            customBindHost: "gateway.local",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+        {
+          env: {},
+        },
+      ),
+    ).rejects.toThrow(/MISSING_GW_TOKEN/i);
+  });
+
+  it("prefers token SecretRef over password SecretRef when auth mode is inferred", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            token: { source: "env", provider: "default", id: "GW_TOKEN" },
+            password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          GW_TOKEN: "resolved-token",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.authLabel).toBe("token");
+    expect(resolved.payload.token).toBe("resolved-token");
+    expect(resolved.payload.password).toBeUndefined();
+  });
+
+  it("errors when token SecretRef is unresolved in inferred mode", async () => {
+    await expect(
+      resolvePairingSetupFromConfig(
+        {
+          gateway: {
+            bind: "custom",
+            customBindHost: "gateway.local",
+            auth: {
+              token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+              password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+        {
+          env: {
+            GW_PASSWORD: "resolved-password",
+          },
+        },
+      ),
+    ).rejects.toThrow(/MISSING_GW_TOKEN/i);
+  });
+
   it("honors env token override", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {

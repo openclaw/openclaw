@@ -299,8 +299,16 @@ export async function runServiceRestart(params: {
           }
         }
       }
-    } catch {
-      // Non-fatal: token drift check is best-effort
+    } catch (err) {
+      const detail = String(err);
+      if (detail.includes("gateway.auth.token is configured as a secret reference")) {
+        const warning =
+          "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.";
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
+        }
+      }
     }
   }
 

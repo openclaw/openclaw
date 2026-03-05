@@ -148,6 +148,10 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const remotePassword = trimToUndefined(remote?.password);
   const localToken = trimToUndefined(params.cfg.gateway?.auth?.token);
   const localPassword = trimToUndefined(params.cfg.gateway?.auth?.password);
+  const localTokenRef = resolveSecretInputRef({
+    value: params.cfg.gateway?.auth?.token,
+    defaults,
+  }).ref;
 
   const localTokenPrecedence = params.localTokenPrecedence ?? "env-first";
   const localPasswordPrecedence = params.localPasswordPrecedence ?? "env-first";
@@ -172,10 +176,19 @@ export function resolveGatewayCredentialsFromConfig(params: {
         authMode !== "none" &&
         authMode !== "trusted-proxy" &&
         !localResolved.token);
+    const localTokenCanWin =
+      authMode === "token" ||
+      (authMode !== "password" &&
+        authMode !== "none" &&
+        authMode !== "trusted-proxy" &&
+        !localResolved.password);
     const localPasswordRef = resolveSecretInputRef({
       value: params.cfg.gateway?.auth?.password,
       defaults,
     }).ref;
+    if (localTokenRef && !localResolved.token && !envToken && localTokenCanWin) {
+      throwUnresolvedGatewaySecretInput("gateway.auth.token");
+    }
     if (localPasswordRef && !localResolved.password && !envPassword && localPasswordCanWin) {
       throwUnresolvedGatewaySecretInput("gateway.auth.password");
     }
@@ -216,6 +229,9 @@ export function resolveGatewayCredentialsFromConfig(params: {
   }
   if (remotePasswordRef && !password && !envPassword && !localPasswordFallback && !token) {
     throwUnresolvedGatewaySecretInput("gateway.remote.password");
+  }
+  if (localTokenRef && !token && !password && !envToken && !remoteToken) {
+    throwUnresolvedGatewaySecretInput("gateway.auth.token");
   }
 
   return { token, password };

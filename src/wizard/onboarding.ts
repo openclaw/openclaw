@@ -306,7 +306,9 @@ export async function runOnboardingWizard(
 
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    token:
+      normalizeSecretInputString(baseConfig.gateway?.auth?.token) ??
+      process.env.OPENCLAW_GATEWAY_TOKEN,
     password: localGatewayPassword,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";

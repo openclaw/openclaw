@@ -8,6 +8,7 @@ const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
 const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
+const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -25,6 +26,10 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
+vi.mock("../secrets/resolve.js", () => ({
+  resolveSecretRefValues: resolveSecretRefValuesMock,
+}));
+
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -37,7 +42,7 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
-function mockSnapshot(token = "abc") {
+function mockSnapshot(token: unknown = "abc") {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
@@ -53,6 +58,7 @@ function mockSnapshot(token = "abc") {
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
   });
+  resolveSecretRefValuesMock.mockReset();
 }
 
 describe("dashboardCommand", () => {
@@ -113,6 +119,25 @@ describe("dashboardCommand", () => {
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
+    );
+  });
+
+  it("prints non-tokenized URL with guidance when token SecretRef is unresolved", async () => {
+    mockSnapshot({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GATEWAY_TOKEN",
+    });
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Token auto-auth unavailable"),
     );
   });
 });

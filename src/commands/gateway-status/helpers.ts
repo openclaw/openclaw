@@ -1,5 +1,6 @@
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -191,6 +192,10 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 
   const cfg = (snap?.config ?? {}) as Record<string, unknown>;
   const gateway = (cfg.gateway ?? {}) as Record<string, unknown>;
+  const secrets = (cfg.secrets ?? {}) as Record<string, unknown>;
+  const secretDefaults = (secrets.defaults ?? undefined) as
+    | { env?: string; file?: string; exec?: string }
+    | undefined;
   const discovery = (cfg.discovery ?? {}) as Record<string, unknown>;
   const wideArea = (discovery.wideArea ?? {}) as Record<string, unknown>;
 
@@ -200,15 +205,12 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   const tailscale = (gateway.tailscale ?? {}) as Record<string, unknown>;
 
   const authMode = typeof auth.mode === "string" ? auth.mode : null;
-  const authTokenConfigured = typeof auth.token === "string" ? auth.token.trim().length > 0 : false;
-  const authPasswordConfigured =
-    typeof auth.password === "string" ? auth.password.trim().length > 0 : false;
+  const authTokenConfigured = hasConfiguredSecretInput(auth.token, secretDefaults);
+  const authPasswordConfigured = hasConfiguredSecretInput(auth.password, secretDefaults);
 
   const remoteUrl = typeof remote.url === "string" ? normalizeWsUrl(remote.url) : null;
-  const remoteTokenConfigured =
-    typeof remote.token === "string" ? remote.token.trim().length > 0 : false;
-  const remotePasswordConfigured =
-    typeof remote.password === "string" ? String(remote.password).trim().length > 0 : false;
+  const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
+  const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
 
   const wideAreaEnabled = typeof wideArea.enabled === "boolean" ? wideArea.enabled : null;
 

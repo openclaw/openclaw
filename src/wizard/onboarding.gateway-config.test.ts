@@ -28,9 +28,13 @@ describe("configureGatewayForOnboarding", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
-    const select = vi.fn(
-      async (_params: WizardSelectParams<unknown>) => selectQueue.shift() as unknown,
-    ) as unknown as WizardPrompter["select"];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      const next = selectQueue.shift();
+      if (next !== undefined) {
+        return next;
+      }
+      return params.initialValue ?? params.options[0]?.value;
+    }) as unknown as WizardPrompter["select"];
 
     return buildWizardPrompter({
       select,
@@ -171,6 +175,43 @@ describe("configureGatewayForOnboarding", () => {
         delete process.env.OPENCLAW_GATEWAY_PASSWORD;
       } else {
         process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+      }
+    }
+  });
+
+  it("stores gateway token as SecretRef when secretInputMode=ref", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
+    try {
+      const prompter = createPrompter({
+        selectQueue: ["loopback", "token", "off", "env"],
+        textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
+      });
+      const runtime = createRuntime();
+
+      const result = await configureGatewayForOnboarding({
+        flow: "advanced",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway: createQuickstartGateway("token"),
+        secretInputMode: "ref",
+        prompter,
+        runtime,
+      });
+
+      expect(result.nextConfig.gateway?.auth?.mode).toBe("token");
+      expect(result.nextConfig.gateway?.auth?.token).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(result.settings.gatewayToken).toBe("token-from-env");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
       }
     }
   });

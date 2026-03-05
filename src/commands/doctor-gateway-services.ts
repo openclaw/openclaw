@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
@@ -19,6 +20,8 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -55,14 +58,44 @@ function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
 }
 
-function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
-  const configToken = cfg.gateway?.auth?.token?.trim();
+async function resolveGatewayAuthToken(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<{ token?: string; unavailableReason?: string }> {
+  const configToken =
+    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
   if (configToken) {
-    return configToken;
+    return { token: configToken };
+  }
+  const { ref } = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.token,
+    defaults: cfg.secrets?.defaults,
+  });
+  if (ref) {
+    try {
+      const resolved = await resolveSecretRefValues([ref], {
+        config: cfg,
+        env,
+      });
+      const value = resolved.get(secretRefKey(ref));
+      if (typeof value === "string" && value.trim().length > 0) {
+        return { token: value.trim() };
+      }
+      return { unavailableReason: "gateway.auth.token SecretRef resolved to an empty value." };
+    } catch (err) {
+      const envToken = env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
+      const trimmedEnvToken = envToken?.trim();
+      if (trimmedEnvToken) {
+        return { token: trimmedEnvToken };
+      }
+      return {
+        unavailableReason: `gateway.auth.token SecretRef is configured but unresolved (${String(err)}).`,
+      };
+    }
   }
   const envToken = env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
   const trimmedEnvToken = envToken?.trim();
-  return trimmedEnvToken || undefined;
+  return { token: trimmedEnvToken || undefined };
 }
 
 function extractDetailPath(detail: string, prefix: string): string | null {
@@ -219,7 +252,14 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const expectedGatewayToken = resolveGatewayAuthToken(cfg, process.env);
+  const gatewayTokenResolution = await resolveGatewayAuthToken(cfg, process.env);
+  if (gatewayTokenResolution.unavailableReason) {
+    note(
+      `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,
+      "Gateway service config",
+    );
+  }
+  const expectedGatewayToken = gatewayTokenResolution.token;
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
