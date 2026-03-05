@@ -347,10 +347,10 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_user_missing" };
   }
 
-  const user = userHeaderValue.trim();
+  const user = normalizeLogin(userHeaderValue);
 
   const allowUsers = trustedProxyConfig.allowUsers ?? [];
-  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+  if (allowUsers.length > 0 && !allowUsers.map(normalizeLogin).includes(user)) {
     return { reason: "trusted_proxy_user_not_allowed" };
   }
 

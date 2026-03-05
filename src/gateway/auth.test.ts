@@ -469,6 +469,26 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 
+  it("accepts user in allowlist with case-insensitive match", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          allowUsers: ["nick@example.com"],
+        },
+      },
+      headers: {
+        "x-forwarded-user": "NICK@EXAMPLE.COM",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
+  });
+
   it("rejects when no trustedProxies configured", async () => {
     const res = await authorizeTrustedProxy({
       trustedProxies: [],

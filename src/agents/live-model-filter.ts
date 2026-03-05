@@ -19,6 +19,7 @@ const CODEX_MODELS = [
   "gpt-5.1-codex",
   "gpt-5.1-codex-mini",
   "gpt-5.1-codex-max",
+  "gpt-5-nano",
 ];
 const GOOGLE_PREFIXES = ["gemini-3"];
 const ZAI_PREFIXES = ["glm-5", "glm-4.7", "glm-4.7-flash", "glm-4.7-flashx"];
