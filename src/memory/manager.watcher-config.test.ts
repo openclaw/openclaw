@@ -87,23 +87,32 @@ describe("memory watcher config", () => {
       string[],
       Record<string, unknown>,
     ];
+    // chokidar v4+ removed glob support, so we watch directories directly
+    // and filter non-.md files via the `ignored` callback.
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory.md"),
-        path.join(workspaceDir, "memory", "**", "*.md"),
-        path.join(extraDir, "**", "*.md"),
+        path.join(workspaceDir, "memory"),
+        extraDir,
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
-    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
+    const ignored = options.ignored as
+      | ((watchPath: string, stats?: import("fs").Stats) => boolean)
+      | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
+    // Directory paths should not be ignored (chokidar needs to descend into them).
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    // Non-.md files should be ignored when stats indicate a file.
+    const fakeFileStats = { isFile: () => true } as import("fs").Stats;
+    expect(ignored?.(path.join(workspaceDir, "memory", "data.json"), fakeFileStats)).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "notes.md"), fakeFileStats)).toBe(false);
   });
 });

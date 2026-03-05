@@ -367,7 +367,9 @@ export abstract class MemoryManagerSyncOps {
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
+      // Watch the directory instead of a glob pattern — chokidar v4+ removed
+      // glob support, so "memory/**/*.md" is silently ignored.
+      path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -377,7 +379,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(path.join(entry, "**", "*.md"));
+          watchPaths.add(entry);
           continue;
         }
         if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
@@ -389,7 +391,9 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
+      ignored: (watchPath: string, stats?: import("fs").Stats) =>
+        shouldIgnoreMemoryWatchPath(String(watchPath)) ||
+        (stats?.isFile() === true && !String(watchPath).endsWith(".md")),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
