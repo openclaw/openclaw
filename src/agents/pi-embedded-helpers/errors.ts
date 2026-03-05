@@ -659,7 +659,15 @@ function isJsonApiInternalServerError(raw: string): boolean {
   const value = raw.toLowerCase();
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  if (value.includes('"type":"api_error"') && value.includes("internal server error")) {
+    return true;
+  }
+  // OpenAI/Codex wraps transient 500s in JSON payloads like:
+  // {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred..."}}
+  if (value.includes('"type":"server_error"') && value.includes('"code":"server_error"')) {
+    return true;
+  }
+  return false;
 }
 
 export function parseImageDimensionError(raw: string): {

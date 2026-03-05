@@ -547,4 +547,21 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies OpenAI/Codex JSON server_error 500 responses as timeout so fallback triggers", () => {
+    // OpenAI and Codex return {"type":"error","error":{"type":"server_error","code":"server_error",...}}
+    // for transient 500 failures. Without this check, classifyFailoverReason returns null and
+    // the model fallback chain is never triggered. Refs #35160.
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. Please try again."}}',
+      ),
+    ).toBe("timeout");
+    // Verify that a missing "code":"server_error" field does NOT produce a false positive
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","message":"Some other error"}}',
+      ),
+    ).not.toBe("timeout");
+  });
 });
