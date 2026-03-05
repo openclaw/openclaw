@@ -458,15 +458,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Filter all sync messages (sentTranscript, readReceipts, etc.).
-    // signal-cli may set syncMessage to null instead of omitting it, so
-    // check property existence rather than truthiness to avoid replaying
-    // the bot's own sent messages on daemon restart.
-    if ("syncMessage" in envelope) {
+    const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+    const maybeGroupId = dataMessage?.groupInfo?.groupId ?? undefined;
+
+    // Filter sync messages (sentTranscript, readReceipts, etc.).
+    // signal-cli can include `syncMessage: null` on regular group envelopes,
+    // so only apply the presence-based drop to non-group traffic.
+    if ("syncMessage" in envelope && !maybeGroupId) {
       return;
     }
 
-    const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)

@@ -226,4 +226,31 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
+
+  it("accepts inbound group envelopes when syncMessage is present but null", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        syncMessage: null,
+        dataMessage: {
+          message: "group hello",
+          attachments: [],
+          groupInfo: { groupId: "g1", groupName: "Ops" },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ChatType).toBe("group");
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+  });
 });
