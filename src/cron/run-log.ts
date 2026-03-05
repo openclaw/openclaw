@@ -141,7 +141,10 @@ export async function appendCronRunLog(
     .catch(() => undefined)
     .then(async () => {
       await fs.mkdir(path.dirname(resolved), { recursive: true });
-      await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, "utf-8");
+      await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
       await fs.chmod(resolved, 0o600).catch(() => {});
       await pruneIfNeeded(resolved, {
         maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
