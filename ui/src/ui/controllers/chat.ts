@@ -309,6 +309,20 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    // Preserve any visible streamed text before clearing the stream.
+    // This prevents the in-progress bubble from disappearing when a run errors/aborts
+    // without emitting a final/aborted message payload.
+    const streamedText = state.chatStream ?? "";
+    if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      state.chatMessages = [
+        ...state.chatMessages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: streamedText }],
+          timestamp: Date.now(),
+        },
+      ];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

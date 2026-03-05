@@ -288,7 +288,7 @@ export type AgentEventHandlerOptions = {
 
 export function createAgentEventHandler({
   broadcast,
-  broadcastToConnIds: _broadcastToConnIds,
+  broadcastToConnIds,
   nodeSendToSession,
   agentRunSeq,
   chatRunState,
@@ -495,10 +495,16 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
-      // Always broadcast tool events over WS (filtered by tool-events capability).
-      // Drop only update frames for slow consumers; keep start/result best-effort.
+      // Tool events can be noisy and may include sensitive output.
+      // Only deliver them to WebSocket connection(s) that registered interest
+      // for this run (per-run recipient isolation).
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      broadcast("agent", toolPayloadForWs, { dropIfSlow: toolPhase === "update" });
+      const connIds = toolEventRecipients.get(evt.runId);
+      if (connIds && connIds.size > 0) {
+        broadcastToConnIds("agent", toolPayloadForWs, connIds, {
+          dropIfSlow: toolPhase === "update",
+        });
+      }
     } else {
       broadcast("agent", agentPayload);
     }

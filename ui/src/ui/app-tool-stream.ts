@@ -169,6 +169,24 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
+function limitDiffText(text: string, opts?: { maxChars?: number; maxLines?: number }): string {
+  const maxChars = Math.max(1000, opts?.maxChars ?? 40_000);
+  const maxLines = Math.max(50, opts?.maxLines ?? 400);
+  const normalized = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const lines = normalized.split("\n");
+  const slicedLines = lines.slice(0, maxLines);
+  let out = slicedLines.join("\n");
+  let truncated = slicedLines.length < lines.length;
+  if (out.length > maxChars) {
+    out = out.slice(0, maxChars);
+    truncated = true;
+  }
+  if (truncated) {
+    out += "\n\n… (diff truncated)";
+  }
+  return out;
+}
+
 function formatEditDiff(args: unknown): string | null {
   if (!args || typeof args !== "object") {
     return null;
@@ -193,8 +211,10 @@ function formatEditDiff(args: unknown): string | null {
   }
 
   const normalize = (s: string) => s.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
-  const oldLines = normalize(oldText).split("\n");
-  const newLines = normalize(newText).split("\n");
+  const oldLimited = limitDiffText(oldText);
+  const newLimited = limitDiffText(newText);
+  const oldLines = normalize(oldLimited).split("\n");
+  const newLines = normalize(newLimited).split("\n");
 
   const headerPath = (path ?? "<unknown>").replaceAll("\\", "/");
   const body = [...oldLines.map((l) => `-${l}`), ...newLines.map((l) => `+${l}`)].join("\n");

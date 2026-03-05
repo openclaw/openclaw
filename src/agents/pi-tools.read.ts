@@ -567,6 +567,13 @@ function toTrimmedStringOrNull(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+function toStringOrNull(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return value;
+}
+
 function limitDiffText(text: string, opts?: { maxChars?: number; maxLines?: number }): string {
   const maxChars = Math.max(1000, opts?.maxChars ?? 40_000);
   const maxLines = Math.max(50, opts?.maxLines ?? 400);
@@ -587,8 +594,10 @@ function limitDiffText(text: string, opts?: { maxChars?: number; maxLines?: numb
 
 function buildEditUnifiedDiff(params: Record<string, unknown>): string | null {
   const filePath = toTrimmedStringOrNull(params.path ?? params.file_path);
-  const oldText = toTrimmedStringOrNull(params.oldText ?? params.old_string);
-  const newText = toTrimmedStringOrNull(params.newText ?? params.new_string);
+  // NOTE: don't trim old/new text: whitespace-only edits are still meaningful and
+  // should produce a diff (we cap size below).
+  const oldText = toStringOrNull(params.oldText ?? params.old_string);
+  const newText = toStringOrNull(params.newText ?? params.new_string);
   if (oldText === null || newText === null) {
     return null;
   }
