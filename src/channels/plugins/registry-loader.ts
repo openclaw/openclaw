@@ -6,10 +6,12 @@ type ChannelRegistryValueResolver<TValue> = (
   entry: PluginChannelRegistration,
 ) => TValue | undefined;
 
+const MISSING = Symbol("missing");
+
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
-  const cache = new Map<ChannelId, TValue>();
+  const cache = new Map<ChannelId, TValue | typeof MISSING>();
   let lastRegistry: PluginRegistry | null = null;
 
   return async (id: ChannelId): Promise<TValue | undefined> => {
@@ -18,18 +20,20 @@ export function createChannelRegistryLoader<TValue>(
       cache.clear();
       lastRegistry = registry;
     }
-    const cached = cache.get(id);
-    if (cached) {
-      return cached;
+
+    if (cache.has(id)) {
+      const cached = cache.get(id);
+      return cached === MISSING ? undefined : cached;
     }
+
     const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
     if (!pluginEntry) {
+      cache.set(id, MISSING);
       return undefined;
     }
+
     const resolved = resolveValue(pluginEntry);
-    if (resolved) {
-      cache.set(id, resolved);
-    }
+    cache.set(id, resolved === undefined ? MISSING : resolved);
     return resolved;
   };
 }
