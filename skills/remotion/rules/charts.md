@@ -121,4 +121,3 @@ const angle = Math.atan2(tangent.y, tangent.x);
 >
   <polygon points="0,0 -20,-10 -20,10" fill="#FF3232" />
 </g>;
-```
