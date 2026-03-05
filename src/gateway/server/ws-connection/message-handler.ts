@@ -653,7 +653,9 @@ export function attachGatewayWsMessageHandler(params: {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
-              details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+              details: {
+                code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+              },
             });
             close(1008, errorMessage);
             return false;
@@ -666,7 +668,9 @@ export function attachGatewayWsMessageHandler(params: {
 
           markHandshakeFailure("device-required");
           sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "device identity required", {
-            details: { code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED },
+            details: {
+              code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+            },
           });
           close(1008, "device identity required");
           return false;
@@ -856,7 +860,9 @@ export function attachGatewayWsMessageHandler(params: {
                 );
               }
             } else if (pairing.created) {
-              context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+              context.broadcast("device.pair.requested", pairing.request, {
+                dropIfSlow: true,
+              });
             }
             if (pairing.request.silent !== true) {
               setHandshakeState("failed");
