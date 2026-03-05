@@ -88,21 +88,62 @@ export async function ensureMediaDir() {
   return mediaDir;
 }
 
-export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
+export type CleanOldMediaErrorContext = {
+  error: unknown;
+  path: string;
+  operation: "readdir" | "stat" | "rm";
+};
+
+export type CleanOldMediaOptions = {
+  onCleanupError?: (context: CleanOldMediaErrorContext) => void;
+};
+
+function shouldReportCleanupError(error: unknown): boolean {
+  const rawCode =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  const code =
+    typeof rawCode === "string" ? rawCode : typeof rawCode === "number" ? String(rawCode) : "";
+  return code !== "ENOENT";
+}
+
+function reportCleanupError(
+  options: CleanOldMediaOptions | undefined,
+  context: CleanOldMediaErrorContext,
+) {
+  if (!shouldReportCleanupError(context.error)) {
+    return;
+  }
+  options?.onCleanupError?.(context);
+}
+
+export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options?: CleanOldMediaOptions) {
   const mediaDir = await ensureMediaDir();
-  const entries = await fs.readdir(mediaDir).catch(() => []);
+  const entries = await fs.readdir(mediaDir).catch((error) => {
+    reportCleanupError(options, { error, path: mediaDir, operation: "readdir" });
+    return [];
+  });
   const now = Date.now();
   const removeExpiredFilesInDir = async (dir: string) => {
-    const dirEntries = await fs.readdir(dir).catch(() => []);
+    const dirEntries = await fs.readdir(dir).catch((error) => {
+      reportCleanupError(options, { error, path: dir, operation: "readdir" });
+      return [];
+    });
     await Promise.all(
       dirEntries.map(async (entry) => {
         const full = path.join(dir, entry);
-        const stat = await fs.stat(full).catch(() => null);
+        const stat = await fs.stat(full).catch((error) => {
+          reportCleanupError(options, { error, path: full, operation: "stat" });
+          return null;
+        });
         if (!stat || !stat.isFile()) {
           return;
         }
         if (now - stat.mtimeMs > ttlMs) {
-          await fs.rm(full).catch(() => {});
+          await fs.rm(full).catch((error) => {
+            reportCleanupError(options, { error, path: full, operation: "rm" });
+          });
         }
       }),
     );
@@ -111,7 +152,10 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
   await Promise.all(
     entries.map(async (file) => {
       const full = path.join(mediaDir, file);
-      const stat = await fs.stat(full).catch(() => null);
+      const stat = await fs.stat(full).catch((error) => {
+        reportCleanupError(options, { error, path: full, operation: "stat" });
+        return null;
+      });
       if (!stat) {
         return;
       }
@@ -120,7 +164,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
         return;
       }
       if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
-        await fs.rm(full).catch(() => {});
+        await fs.rm(full).catch((error) => {
+          reportCleanupError(options, { error, path: full, operation: "rm" });
+        });
       }
     }),
   );

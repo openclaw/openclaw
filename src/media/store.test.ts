@@ -116,6 +116,50 @@ describe("media store", () => {
     });
   });
 
+  it("reports cleanup rm failures via onCleanupError callback", async () => {
+    await withTempStore(async (store) => {
+      const saved = await store.saveMediaBuffer(Buffer.from("stale"), "text/plain");
+      const past = Date.now() - 10_000;
+      await fs.utimes(saved.path, past / 1000, past / 1000);
+
+      const cleanupError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      const onCleanupError = vi.fn();
+      const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
+      try {
+        await store.cleanOldMedia(1, { onCleanupError });
+      } finally {
+        rmSpy.mockRestore();
+      }
+
+      expect(onCleanupError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: cleanupError,
+          path: saved.path,
+          operation: "rm",
+        }),
+      );
+    });
+  });
+
+  it("skips onCleanupError for expected ENOENT cleanup races", async () => {
+    await withTempStore(async (store) => {
+      const saved = await store.saveMediaBuffer(Buffer.from("stale"), "text/plain");
+      const past = Date.now() - 10_000;
+      await fs.utimes(saved.path, past / 1000, past / 1000);
+
+      const cleanupError = Object.assign(new Error("already removed"), { code: "ENOENT" });
+      const onCleanupError = vi.fn();
+      const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
+      try {
+        await store.cleanOldMedia(1, { onCleanupError });
+      } finally {
+        rmSpy.mockRestore();
+      }
+
+      expect(onCleanupError).not.toHaveBeenCalled();
+    });
+  });
+
   it("sets correct mime for xlsx by extension", async () => {
     await withTempStore(async (store, home) => {
       const xlsxPath = path.join(home, "sheet.xlsx");
