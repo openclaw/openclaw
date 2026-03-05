@@ -27,8 +27,10 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
+    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationHours: Number.NaN })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
   });
 
   it("treats string-encoded boolean poll params as poll creation intent when true", () => {

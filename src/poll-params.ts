@@ -71,7 +71,7 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number.parseFloat(trimmed))) {
+        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
           return true;
         }
       }
