@@ -955,7 +955,14 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("kimi-coding") ??
     resolveApiKeyFromProfiles({ provider: "kimi-coding", store: authStore });
   if (kimiCodingKey) {
-    providers["kimi-coding"] = { ...buildKimiCodingProvider(), apiKey: kimiCodingKey };
+    // Preserve user-configured baseUrl when present so alternate Kimi endpoints
+    // (e.g. proxies or regional hosts) can be used with implicit provider setup.
+    const explicitKimiCoding = params.explicitProviders?.["kimi-coding"];
+    providers["kimi-coding"] = {
+      ...buildKimiCodingProvider(),
+      ...(explicitKimiCoding?.baseUrl ? { baseUrl: explicitKimiCoding.baseUrl } : {}),
+      apiKey: kimiCodingKey,
+    };
   }
 
   const syntheticKey =

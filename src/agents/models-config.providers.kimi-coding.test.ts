@@ -21,6 +21,29 @@ describe("kimi-coding implicit provider (#22409)", () => {
     }
   });
 
+  it("should preserve explicit baseUrl for kimi-coding provider", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
+    process.env.KIMI_API_KEY = "test-key";
+
+    try {
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          "kimi-coding": {
+            baseUrl: "https://api.kimi.com/custom/coding/",
+            api: "anthropic-messages",
+            models: [{ id: "k2p5", name: "Kimi for Coding" }],
+          },
+        },
+      });
+      expect(providers?.["kimi-coding"]).toBeDefined();
+      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/custom/coding/");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("should build kimi-coding provider with anthropic-messages API", () => {
     const provider = buildKimiCodingProvider();
     expect(provider.api).toBe("anthropic-messages");
