@@ -61,16 +61,27 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled?: "all" | "enabled" | "disabled";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
+      agentId?: string;
+      sessionKey?: string;
+      ownerOverride?: boolean;
     };
-    const page = await context.cron.listPage({
-      includeDisabled: p.includeDisabled,
-      limit: p.limit,
-      offset: p.offset,
-      query: p.query,
-      enabled: p.enabled,
-      sortBy: p.sortBy,
-      sortDir: p.sortDir,
-    });
+    const callerContext = {
+      agentId: p.agentId,
+      sessionKey: p.sessionKey,
+      ownerOverride: p.ownerOverride,
+    };
+    const page = await context.cron.listPage(
+      {
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        offset: p.offset,
+        query: p.query,
+        enabled: p.enabled,
+        sortBy: p.sortBy,
+        sortDir: p.sortDir,
+      },
+      callerContext,
+    );
     respond(true, page, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
@@ -136,6 +147,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       id?: string;
       jobId?: string;
       patch: Record<string, unknown>;
+      agentId?: string;
+      sessionKey?: string;
+      ownerOverride?: boolean;
     };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
@@ -158,7 +172,12 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const job = await context.cron.update(jobId, patch);
+    const callerContext = {
+      agentId: p.agentId,
+      sessionKey: p.sessionKey,
+      ownerOverride: p.ownerOverride,
+    };
+    const job = await context.cron.update(jobId, patch, callerContext);
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },
@@ -174,7 +193,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string };
+    const p = params as {
+      id?: string;
+      jobId?: string;
+      agentId?: string;
+      sessionKey?: string;
+      ownerOverride?: boolean;
+    };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -184,7 +209,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.remove(jobId);
+    const callerContext = {
+      agentId: p.agentId,
+      sessionKey: p.sessionKey,
+      ownerOverride: p.ownerOverride,
+    };
+    const result = await context.cron.remove(jobId, callerContext);
     if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
     }
@@ -202,7 +232,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
+    const p = params as {
+      id?: string;
+      jobId?: string;
+      mode?: "due" | "force";
+      agentId?: string;
+      sessionKey?: string;
+      ownerOverride?: boolean;
+    };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -212,7 +249,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
+    const callerContext = {
+      agentId: p.agentId,
+      sessionKey: p.sessionKey,
+      ownerOverride: p.ownerOverride,
+    };
+    const result = await context.cron.run(jobId, p.mode ?? "force", callerContext);
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {
