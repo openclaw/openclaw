@@ -7,10 +7,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
   randomIdempotencyKey: () => "idem-1",
 }));
+vi.mock("../browser/control-service.js", () => ({
+  stopBrowserControlService: vi.fn(async () => {}),
+}));
 vi.mock("./agent.js", () => ({
   agentCommand: vi.fn(),
 }));
 
+import { stopBrowserControlService } from "../browser/control-service.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
@@ -103,6 +107,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).not.toHaveBeenCalled();
+      expect(stopBrowserControlService).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
   });
@@ -116,6 +121,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(stopBrowserControlService).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -135,7 +141,27 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(stopBrowserControlService).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("runs browser cleanup even when local embedded run throws", async () => {
+    await withTempStore(async () => {
+      vi.mocked(agentCommand).mockRejectedValueOnce(new Error("embedded failed"));
+
+      await expect(
+        agentCliCommand(
+          {
+            message: "hi",
+            to: "+1555",
+            local: true,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("embedded failed");
+
+      expect(stopBrowserControlService).toHaveBeenCalledTimes(1);
     });
   });
 });

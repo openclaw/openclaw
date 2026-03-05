@@ -1,4 +1,5 @@
 import { listAgentIds } from "../agents/agent-scope.js";
+import { stopBrowserControlService } from "../browser/control-service.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
@@ -183,14 +184,25 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
   };
+  const runEmbeddedWithCleanup = async () => {
+    try {
+      return await agentCommand(localOpts, runtime, deps);
+    } finally {
+      try {
+        await stopBrowserControlService();
+      } catch (err) {
+        runtime.error?.(`Local browser service cleanup failed after agent run: ${String(err)}`);
+      }
+    }
+  };
   if (opts.local === true) {
-    return await agentCommand(localOpts, runtime, deps);
+    return await runEmbeddedWithCleanup();
   }
 
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
-    return await agentCommand(localOpts, runtime, deps);
+    return await runEmbeddedWithCleanup();
   }
 }
