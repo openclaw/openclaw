@@ -100,7 +100,7 @@ function createOpenGroupReplayContext(
       channelAccessToken: "token",
       channelSecret: "secret",
       tokenSource: "config",
-      config: { groupPolicy: "open" },
+      config: { groupPolicy: "open", groups: { "*": { requireMention: false } } },
     },
     runtime: createRuntime(),
     mediaMaxBytes: 1,
@@ -213,7 +213,7 @@ describe("handleLineWebhookEvents", () => {
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-3"] },
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-3"], groups: { "*": { requireMention: false } } },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
@@ -511,7 +511,7 @@ describe("handleLineWebhookEvents", () => {
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] },
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"], groups: { "*": { requireMention: false } } },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
@@ -584,6 +584,78 @@ describe("handleLineWebhookEvents", () => {
 
     expect(buildLinePostbackContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips group messages by default when requireMention is not configured", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m-default-skip", type: "text", text: "hi there" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-default", userId: "user-default" },
+      mode: "active",
+      webhookEventId: "evt-default-skip",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("records unmentioned group messages as pending history", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, import("../auto-reply/reply/history.js").HistoryEntry[]>();
+    const event = {
+      type: "message",
+      message: { id: "m-hist-1", type: "text", text: "hello history" },
+      replyToken: "reply-token",
+      timestamp: 1700000000000,
+      source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
+      mode: "active",
+      webhookEventId: "evt-hist-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      groupHistories,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const entries = groupHistories.get("group-hist-1");
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0]).toMatchObject({
+      sender: "user:user-hist",
+      body: "hello history",
+      timestamp: 1700000000000,
+    });
   });
 
   it("skips group messages without mention when requireMention is set", async () => {
