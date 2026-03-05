@@ -341,6 +341,13 @@ async function acquireSharedBrowser(params: {
   config: OpenClawConfig;
   idleMs: number;
 }): Promise<BrowserLease> {
+  const attachOnly = params.config.browser?.attachOnly === true;
+  if (attachOnly) {
+    throw new Error(
+      "Local Playwright launch is disabled by configuration (browser.attachOnly: true). " +
+        "Diff rendering requires a local browser.",
+    );
+  }
   const executablePath = await resolveBrowserExecutablePath(params.config);
   const desiredKey = executablePath || SHARED_BROWSER_KEY;
   if (sharedBrowserState && sharedBrowserState.key !== desiredKey) {

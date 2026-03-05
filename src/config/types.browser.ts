@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
+  /** If true, lock OpenClaw to the first/selected tab and prevent switching. */
+  lockTab?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
@@ -48,7 +50,7 @@ export type BrowserConfig = {
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;
-  /** If true: never launch; only attach to an existing browser. Default: false */
+  /** If true: prevent all browser launches (via local Chrome or Playwright) and only allow attaching. Default: false */
   attachOnly?: boolean;
   /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
   cdpPortRangeStart?: number;

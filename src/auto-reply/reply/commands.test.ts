@@ -70,7 +70,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
     { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+    { provider: "google", id: "gemini-2.5-flash-lite", name: "Gemini Flash" },
   ]),
 }));
 
