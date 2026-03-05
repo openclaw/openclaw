@@ -122,10 +122,10 @@ function estimateMessageChars(message: AgentMessage): number {
     let chars = 0;
     for (const b of message.content) {
       if (b.type === "text") {
-        chars += b.text.length;
+        chars += typeof b.text === "string" ? b.text.length : 0;
       }
       if (b.type === "thinking") {
-        chars += b.thinking.length;
+        chars += typeof b.thinking === "string" ? b.thinking.length : 0;
       }
       if (b.type === "toolCall") {
         try {

@@ -423,4 +423,23 @@ describe("context-pruning", () => {
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
   });
+
+  it("handles malformed thinking blocks in assistant messages without crashing", () => {
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      {
+        role: "assistant",
+        content: [{ type: "thinking" }],
+      } as unknown as AgentMessage,
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(20_000),
+      }),
+    ];
+
+    const next = pruneWithAggressiveDefaults(messages);
+    expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
+  });
 });
