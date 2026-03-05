@@ -255,7 +255,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
       "cron: job added",
     );
 
-    emit(state, {
+    await emit(state, {
       jobId: job.id,
       action: "added",
       nextRunAtMs: job.state.nextRunAtMs,
@@ -309,7 +309,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     await persist(state);
     armTimer(state);
-    emit(state, {
+    await emit(state, {
       jobId: id,
       action: "updated",
       nextRunAtMs: job.state.nextRunAtMs,
@@ -331,7 +331,7 @@ export async function remove(state: CronServiceState, id: string) {
     await persist(state);
     armTimer(state);
     if (removed) {
-      emit(state, { jobId: id, action: "removed" });
+      await emit(state, { jobId: id, action: "removed" });
     }
     return { ok: true, removed } as const;
   });
@@ -362,7 +362,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: now });
+    await emit(state, { jobId: job.id, action: "started", runAtMs: now });
     const executionJob = JSON.parse(JSON.stringify(job)) as typeof job;
     return {
       ok: true,
@@ -411,7 +411,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       { preserveSchedule: mode === "force" },
     );
 
-    emit(state, {
+    await emit(state, {
       jobId: job.id,
       action: "finished",
       status: coreResult.status,
@@ -432,7 +432,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
 
     if (shouldDelete && state.store) {
       state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-      emit(state, { jobId: job.id, action: "removed" });
+      await emit(state, { jobId: job.id, action: "removed" });
     }
 
     // Manual runs should not advance other due jobs without executing them.

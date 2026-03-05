@@ -352,7 +352,9 @@ describe("Cron issue regressions", () => {
     targetJobId = job.id;
     await vi.advanceTimersByTimeAsync(2);
     await started.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    });
 
     const manualResult = await cron.run(job.id, "force");
     expect(manualResult).toEqual({ ok: true, ran: false, reason: "already-running" });
@@ -1513,6 +1515,57 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastError).toMatch(/^schedule error:/);
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
+  });
+
+  it("awaits async finished event handlers before completing due-job ticks", async () => {
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-03-02T12:05:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "await-finished-event",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await writeCronStoreSnapshot(store.storePath, [job]);
+
+    const releaseFinished = createDeferred<void>();
+    let finishedSeen = false;
+    let timerSettled = false;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: async (evt: CronEvent) => {
+        if (evt.jobId !== job.id || evt.action !== "finished") {
+          return;
+        }
+        finishedSeen = true;
+        await releaseFinished.promise;
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+    });
+
+    const timerPromise = onTimer(state).then(() => {
+      timerSettled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(finishedSeen).toBe(true);
+    });
+    expect(timerSettled).toBe(false);
+
+    releaseFinished.resolve();
+    await timerPromise;
+
+    expect(timerSettled).toBe(true);
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: CronJobState }>;
+    };
+    const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+    expect(persistedJob?.state?.lastStatus).toBe("ok");
   });
 
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {

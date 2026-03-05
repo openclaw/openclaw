@@ -454,7 +454,10 @@ export function applyJobResult(
   return shouldDelete;
 }
 
-function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+async function applyOutcomeToStoredJob(
+  state: CronServiceState,
+  result: TimedCronRunOutcome,
+): Promise<void> {
   const store = state.store;
   if (!store) {
     return;
@@ -477,11 +480,11 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     endedAt: result.endedAt,
   });
 
-  emitJobFinished(state, job, result, result.startedAt);
+  await emitJobFinished(state, job, result, result.startedAt);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed" });
+    await emit(state, { jobId: job.id, action: "removed" });
   }
 }
 
@@ -609,7 +612,7 @@ export async function onTimer(state: CronServiceState) {
       const { id, job } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
-      emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+      await emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
@@ -658,7 +661,7 @@ export async function onTimer(state: CronServiceState) {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
         for (const result of completedResults) {
-          applyOutcomeToStoredJob(state, result);
+          await applyOutcomeToStoredJob(state, result);
         }
 
         // Use maintenance-only recompute to avoid advancing past-due
@@ -860,7 +863,7 @@ export async function runMissedJobs(
   const outcomes: Array<TimedCronRunOutcome> = [];
   for (const candidate of startupCandidates) {
     const startedAt = state.deps.nowMs();
-    emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+    await emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
     try {
       const result = await executeJobCoreWithTimeout(state, candidate.job);
       outcomes.push({
@@ -895,7 +898,7 @@ export async function runMissedJobs(
     }
 
     for (const result of outcomes) {
-      applyOutcomeToStoredJob(state, result);
+      await applyOutcomeToStoredJob(state, result);
     }
 
     // Preserve any new past-due nextRunAtMs values that became due while
@@ -1125,7 +1128,7 @@ export async function executeJob(
   const startedAt = state.deps.nowMs();
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
-  emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+  await emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
   let coreResult: {
     status: CronRunStatus;
@@ -1147,15 +1150,15 @@ export async function executeJob(
     endedAt,
   });
 
-  emitJobFinished(state, job, coreResult, startedAt);
+  await emitJobFinished(state, job, coreResult, startedAt);
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed" });
+    await emit(state, { jobId: job.id, action: "removed" });
   }
 }
 
-function emitJobFinished(
+async function emitJobFinished(
   state: CronServiceState,
   job: CronJob,
   result: {
@@ -1165,7 +1168,7 @@ function emitJobFinished(
     CronRunTelemetry,
   runAtMs: number,
 ) {
-  emit(state, {
+  await emit(state, {
     jobId: job.id,
     action: "finished",
     status: result.status,
@@ -1207,9 +1210,9 @@ export function stopTimer(state: CronServiceState) {
   state.timer = null;
 }
 
-export function emit(state: CronServiceState, evt: CronEvent) {
+export async function emit(state: CronServiceState, evt: CronEvent): Promise<void> {
   try {
-    state.deps.onEvent?.(evt);
+    await state.deps.onEvent?.(evt);
   } catch {
     /* ignore */
   }
