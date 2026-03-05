@@ -617,6 +617,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
+  if (gateway?.isConnected) {
+    gateway.disconnect();
+    gateway.connect(false);
+    runtime.log?.("discord: reconnected gateway after listener registration");
+  }
   if (gateway) {
     registerGateway(account.accountId, gateway);
   }
