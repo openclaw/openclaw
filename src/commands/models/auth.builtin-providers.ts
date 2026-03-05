@@ -36,9 +36,11 @@ export const BUILTIN_AUTH_PROVIDERS: ProviderPlugin[] = [
             providerId: "openai-codex",
             defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
             access: creds.access,
-            refresh: creds.refresh ?? undefined,
-            expires: creds.expires ?? undefined,
-            email: creds.email ?? undefined,
+            refresh: creds.refresh,
+            expires: creds.expires,
+            // openai-codex tokens use accountId not email; profile id becomes "openai-codex:default"
+            credentialExtra:
+              typeof creds.accountId === "string" ? { accountId: creds.accountId } : undefined,
           });
         },
       },
