@@ -133,7 +133,34 @@ describe("TelnyxProvider.verifyWebhook", () => {
 
     expect(first.ok).toBe(true);
     expect(first.isReplay).toBeFalsy();
+    expect(first.verifiedRequestKey).toBeTruthy();
     expect(second.ok).toBe(true);
     expect(second.isReplay).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+  });
+});
+
+describe("TelnyxProvider.parseWebhookEvent", () => {
+  it("uses verified request key for manager dedupe", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-123",
+            event_type: "call.initiated",
+            payload: { call_control_id: "call-1" },
+          },
+        }),
+      }),
+      { verifiedRequestKey: "telnyx:req:abc" },
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.dedupeKey).toBe("telnyx:req:abc");
   });
 });

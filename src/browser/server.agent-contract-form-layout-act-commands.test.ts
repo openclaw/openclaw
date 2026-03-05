@@ -58,16 +58,35 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
 
-      const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "fill",
-        fields: [{ ref: "6", type: "textbox", value: "hello" }],
-      });
-      expect(fill.ok).toBe(true);
-      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        fields: [{ ref: "6", type: "textbox", value: "hello" }],
-      });
+      const fillCases: Array<{
+        input: Record<string, unknown>;
+        expected: Record<string, unknown>;
+      }> = [
+        {
+          input: { ref: "6", type: "textbox", value: "hello" },
+          expected: { ref: "6", type: "textbox", value: "hello" },
+        },
+        {
+          input: { ref: "7", value: "world" },
+          expected: { ref: "7", type: "text", value: "world" },
+        },
+        {
+          input: { ref: "8", type: "   ", value: "trimmed-default" },
+          expected: { ref: "8", type: "text", value: "trimmed-default" },
+        },
+      ];
+      for (const { input, expected } of fillCases) {
+        const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
+          kind: "fill",
+          fields: [input],
+        });
+        expect(fill.ok).toBe(true);
+        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          fields: [expected],
+        });
+      }
 
       const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "resize",

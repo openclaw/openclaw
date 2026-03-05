@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 
 export type NodeHostGatewayConfig = {
   host?: string;
@@ -54,14 +55,7 @@ export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
 
 export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
   const filePath = resolveNodeHostConfigPath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const payload = JSON.stringify(config, null, 2);
-  await fs.writeFile(filePath, `${payload}\n`, { mode: 0o600 });
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
+  await writeJsonAtomic(filePath, config, { mode: 0o600 });
 }
 
 export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {

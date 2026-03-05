@@ -51,7 +51,7 @@ function resolvePrimaryIPv4(): string | undefined {
 function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
-  const version = resolveRuntimeServiceVersion(process.env, "unknown");
+  const version = resolveRuntimeServiceVersion(process.env);
   const modelIdentifier = (() => {
     const p = os.platform();
     if (p === "darwin") {

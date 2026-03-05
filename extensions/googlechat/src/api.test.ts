@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia } from "./api.js";
+import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 
 vi.mock("./auth.js", () => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
@@ -57,5 +57,52 @@ describe("downloadGoogleChatMedia", () => {
     await expect(
       downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
     ).rejects.toThrow(/max bytes/i);
+  });
+});
+
+describe("sendGoogleChatMessage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("adds messageReplyOption when sending to an existing thread", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/123" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "hello",
+      thread: "spaces/AAA/threads/xyz",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      text: "hello",
+      thread: { name: "spaces/AAA/threads/xyz" },
+    });
+  });
+
+  it("does not set messageReplyOption for non-thread sends", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/124" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "hello",
+    });
+
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).not.toContain("messageReplyOption=");
   });
 });

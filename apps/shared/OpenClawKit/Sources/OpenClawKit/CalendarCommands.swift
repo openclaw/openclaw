@@ -5,17 +5,7 @@ public enum OpenClawCalendarCommand: String, Codable, Sendable {
     case add = "calendar.add"
 }
 
-public struct OpenClawCalendarEventsParams: Codable, Sendable, Equatable {
-    public var startISO: String?
-    public var endISO: String?
-    public var limit: Int?
-
-    public init(startISO: String? = nil, endISO: String? = nil, limit: Int? = nil) {
-        self.startISO = startISO
-        self.endISO = endISO
-        self.limit = limit
-    }
-}
+public typealias OpenClawCalendarEventsParams = OpenClawDateRangeLimitParams
 
 public struct OpenClawCalendarAddParams: Codable, Sendable, Equatable {
     public var title: String
