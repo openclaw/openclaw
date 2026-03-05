@@ -8,7 +8,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { deleteAgent, loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -574,6 +574,46 @@ export function renderApp(state: AppViewState) {
                 toolsCatalogError: state.toolsCatalogError,
                 toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
+                agentDeleteConfirmOpen: state.agentDeleteConfirmOpen,
+                agentDeleteConfirmInput: state.agentDeleteConfirmInput,
+                agentDeleteBusy: state.agentDeleteBusy,
+                agentDeleteError: state.agentDeleteError,
+                onDeleteConfirmOpen: () => {
+                  state.agentDeleteConfirmOpen = true;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
+                },
+                onDeleteConfirmClose: () => {
+                  state.agentDeleteConfirmOpen = false;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
+                },
+                onDeleteConfirmInputChange: (value) => {
+                  state.agentDeleteConfirmInput = value;
+                },
+                onDeleteConfirm: async (agentId) => {
+                  await deleteAgent(state, agentId);
+                  if (!state.agentDeleteError) {
+                    state.agentDeleteConfirmOpen = false;
+                    state.agentDeleteConfirmInput = "";
+                    // Reset agent-specific panel state since the agent no longer exists
+                    state.agentFilesList = null;
+                    state.agentFilesError = null;
+                    state.agentFilesLoading = false;
+                    state.agentFileActive = null;
+                    state.agentFileContents = {};
+                    state.agentFileDrafts = {};
+                    state.agentSkillsReport = null;
+                    state.agentSkillsError = null;
+                    state.agentSkillsAgentId = null;
+                    // loadAgents already re-selects the first available agent
+                    const nextId = state.agentsSelectedId;
+                    if (nextId) {
+                      void loadAgentIdentity(state, nextId);
+                      void loadToolsCatalog(state, nextId);
+                    }
+                  }
+                },
                 onRefresh: async () => {
                   await loadAgents(state);
                   const nextSelected =
@@ -592,6 +632,9 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
+                  state.agentDeleteConfirmOpen = false;
+                  state.agentDeleteConfirmInput = "";
+                  state.agentDeleteError = null;
                   state.agentFilesList = null;
                   state.agentFilesError = null;
                   state.agentFilesLoading = false;

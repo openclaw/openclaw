@@ -39,6 +39,42 @@ export async function loadAgents(state: AgentsState) {
   }
 }
 
+export type AgentDeleteState = {
+  agentDeleteBusy: boolean;
+  agentDeleteError: string | null;
+};
+
+export async function deleteAgent(state: AgentsState & AgentDeleteState, agentId: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.agentDeleteBusy = true;
+  state.agentDeleteError = null;
+  try {
+    await state.client.request<{ ok: true; agentId: string }>("agents.delete", {
+      agentId,
+      deleteFiles: true,
+    });
+    // Refresh agent list, retrying with back-off if the deleted agent still appears
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, attempt * 500));
+      }
+      state.agentsLoading = false; // clear guard so loadAgents can proceed
+      await loadAgents(state);
+      const stillPresent = state.agentsList?.agents.some((a) => a.id === agentId);
+      if (!stillPresent) {
+        break;
+      }
+    }
+  } catch (err) {
+    state.agentDeleteError = String(err);
+  } finally {
+    state.agentDeleteBusy = false;
+  }
+}
+
 export async function loadToolsCatalog(state: AgentsState, agentId?: string | null) {
   if (!state.client || !state.connected) {
     return;
