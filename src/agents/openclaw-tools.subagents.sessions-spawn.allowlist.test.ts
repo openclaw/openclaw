@@ -147,22 +147,19 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("sessions_spawn allows configured cross-agent when allowlist is unset", async () => {
+  it("sessions_spawn forbids configured cross-agent when allowlist is unset", async () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
         list: [{ id: "main" }, { id: "beta" }],
       },
     });
-    const getChildSessionKey = mockAcceptedSpawn(5050);
-
     const result = await executeSpawn("call6b", "beta");
 
     expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
+      status: "forbidden",
     });
-    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("sessions_spawn forbids configured cross-agent when requester is not configured and allowlist is unset", async () => {

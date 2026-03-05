@@ -353,24 +353,9 @@ export async function spawnSubagentDirect(
         .filter((value) => value.trim() && value.trim() !== "*")
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
-    const configuredSet = new Set(
-      (Array.isArray(cfg.agents?.list) ? cfg.agents.list : []).map((entry) =>
-        normalizeAgentId(entry.id).toLowerCase(),
-      ),
-    );
-    const normalizedRequesterId = requesterAgentId.toLowerCase();
-    const isAllowed = allowAny
-      ? true
-      : explicitAllowAgents === undefined
-        ? configuredSet.has(normalizedRequesterId) && configuredSet.has(normalizedTargetId)
-        : allowSet.has(normalizedTargetId);
+    const isAllowed = allowAny ? true : allowSet.has(normalizedTargetId);
     if (!isAllowed) {
-      const allowedText =
-        explicitAllowAgents === undefined
-          ? Array.from(configuredSet).join(", ") || "none"
-          : allowSet.size > 0
-            ? Array.from(allowSet).join(", ")
-            : "none";
+      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,

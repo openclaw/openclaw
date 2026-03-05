@@ -50,7 +50,7 @@ describe("agents_list", () => {
     };
   });
 
-  it("falls back to configured agents when no allowlist is defined", async () => {
+  it("keeps requester-only visibility when no allowlist is defined", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -69,7 +69,7 @@ describe("agents_list", () => {
       allowAny: false,
     });
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
   it("keeps requester-only visibility when allowlist is explicitly empty", async () => {
