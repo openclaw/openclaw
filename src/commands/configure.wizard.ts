@@ -244,7 +244,9 @@ async function promptWebToolsConfig(
     const keyInput = guardCancel(
       await text({
         message: keyConfigured
-          ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
+          ? envAvailable
+            ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
+            : `${entry.label} API key (leave blank to keep current)`
           : envAvailable
             ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
             : `${entry.label} API key`,
