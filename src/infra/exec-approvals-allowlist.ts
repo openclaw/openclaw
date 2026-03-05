@@ -98,6 +98,22 @@ function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
+function isTrustedAbsoluteShellWrapperPath(rawExecutable: string, resolvedPath?: string): boolean {
+  const raw = rawExecutable.trim();
+  if (!path.isAbsolute(raw)) {
+    return false;
+  }
+  if (!resolvedPath || resolvedPath !== raw) {
+    return false;
+  }
+  if (!isShellWrapperExecutable(raw)) {
+    return false;
+  }
+  return (
+    raw.startsWith("/bin/") || raw.startsWith("/usr/bin/") || raw.startsWith("/usr/local/bin/")
+  );
+}
+
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
@@ -216,18 +232,38 @@ function evaluateSegments(
       segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
         ? segment.resolution.effectiveArgv
         : segment.argv;
-    const shellScriptPath = resolveShellWrapperScriptPath(segment, params.cwd);
+
+    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(segment.argv);
+    const allowlistSegment =
+      dispatchUnwrap.kind === "unwrapped" && dispatchUnwrap.argv.length > 0
+        ? {
+            raw: dispatchUnwrap.argv.join(" "),
+            argv: dispatchUnwrap.argv,
+            resolution: resolveCommandResolutionFromArgv(
+              dispatchUnwrap.argv,
+              params.cwd,
+              params.env,
+            ),
+          }
+        : segment;
+
+    const shellScriptPath = resolveShellWrapperScriptPath(allowlistSegment, params.cwd);
+    const rawExecutable = allowlistSegment.resolution?.rawExecutable?.trim() ?? "";
     const canUseShellScriptPath =
       shellScriptPath &&
-      Boolean(segment.resolution?.rawExecutable) &&
-      !isPathScopedExecutableToken(segment.resolution.rawExecutable.trim());
+      rawExecutable.length > 0 &&
+      (!isPathScopedExecutableToken(rawExecutable) ||
+        isTrustedAbsoluteShellWrapperPath(
+          rawExecutable,
+          allowlistSegment.resolution?.resolvedPath,
+        ));
     const candidatePath =
       (canUseShellScriptPath ? shellScriptPath : null) ??
-      resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+      resolveAllowlistCandidatePath(allowlistSegment.resolution, params.cwd);
     const candidateResolution =
-      candidatePath && segment.resolution
-        ? { ...segment.resolution, resolvedPath: candidatePath }
-        : segment.resolution;
+      candidatePath && allowlistSegment.resolution
+        ? { ...allowlistSegment.resolution, resolvedPath: candidatePath }
+        : allowlistSegment.resolution;
     const match = matchAllowlist(params.allowlist, candidateResolution);
     if (match) {
       matches.push(match);
