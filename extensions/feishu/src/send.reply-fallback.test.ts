@@ -176,4 +176,37 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("times out hung reply requests so queue can continue", async () => {
+    vi.useFakeTimers();
+    replyMock.mockImplementation(() => new Promise(() => {}));
+
+    const promise = sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+      replyToMessageId: "om_parent",
+    });
+    const assertion = expect(promise).rejects.toThrow("Feishu reply timed out");
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    await assertion;
+    vi.useRealTimers();
+  });
+
+  it("times out hung direct send requests", async () => {
+    vi.useFakeTimers();
+    createMock.mockImplementation(() => new Promise(() => {}));
+
+    const promise = sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+    });
+    const assertion = expect(promise).rejects.toThrow("Feishu send timed out");
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    await assertion;
+    vi.useRealTimers();
+  });
 });
