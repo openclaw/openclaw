@@ -715,6 +715,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Multi-account config: when adding a non-default channel account to a single-account top-level channel setup, move existing account-scoped top-level single-account values into `channels.<channel>.accounts.default` before writing the new account so the original account keeps working without duplicated account values at channel root; `openclaw doctor --fix` now repairs previously mixed channel account shapes the same way. (#27334) thanks @gumadeiras.
 - iOS/Talk mode: stop injecting the voice directive hint into iOS Talk prompts and remove the Voice Directive Hint setting, reducing model bias toward tool-style TTS directives and keeping relay responses text-first by default. (#27543) thanks @ngutman.
 - CI/Windows: shard the Windows `checks-windows` test lane into two matrix jobs and honor explicit shard index overrides in `scripts/test-parallel.mjs` to reduce CI critical-path wall time. (#27234) Thanks @joshavant.
+- Mattermost/mention gating: honor `chatmode: "onmessage"` account override in inbound group/channel mention-gate resolution, while preserving explicit group `requireMention` config precedence and adding verbose drop diagnostics for skipped inbound posts. (#27160) thanks @turian.
 
 ## 2026.2.25
 

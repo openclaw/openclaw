@@ -156,6 +156,89 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
   return "channel";
 }
 
+export type MattermostRequireMentionResolverInput = {
+  cfg: OpenClawConfig;
+  channel: "mattermost";
+  accountId: string;
+  groupId: string;
+  requireMentionOverride?: boolean;
+};
+
+export type MattermostMentionGateInput = {
+  kind: ChatType;
+  cfg: OpenClawConfig;
+  accountId: string;
+  channelId: string;
+  threadRootId?: string;
+  requireMentionOverride?: boolean;
+  resolveRequireMention: (params: MattermostRequireMentionResolverInput) => boolean;
+  wasMentioned: boolean;
+  isControlCommand: boolean;
+  commandAuthorized: boolean;
+  oncharEnabled: boolean;
+  oncharTriggered: boolean;
+  canDetectMention: boolean;
+};
+
+type MattermostMentionGateDecision = {
+  shouldRequireMention: boolean;
+  shouldBypassMention: boolean;
+  effectiveWasMentioned: boolean;
+  dropReason: "onchar-not-triggered" | "missing-mention" | null;
+};
+
+export function evaluateMattermostMentionGate(
+  params: MattermostMentionGateInput,
+): MattermostMentionGateDecision {
+  const shouldRequireMention =
+    params.kind !== "direct" &&
+    params.resolveRequireMention({
+      cfg: params.cfg,
+      channel: "mattermost",
+      accountId: params.accountId,
+      groupId: params.channelId,
+      requireMentionOverride: params.requireMentionOverride,
+    });
+  const shouldBypassMention =
+    params.isControlCommand &&
+    shouldRequireMention &&
+    !params.wasMentioned &&
+    params.commandAuthorized;
+  const effectiveWasMentioned =
+    params.wasMentioned || shouldBypassMention || params.oncharTriggered;
+  if (
+    params.oncharEnabled &&
+    !params.oncharTriggered &&
+    !params.wasMentioned &&
+    !params.isControlCommand
+  ) {
+    return {
+      shouldRequireMention,
+      shouldBypassMention,
+      effectiveWasMentioned,
+      dropReason: "onchar-not-triggered",
+    };
+  }
+  if (
+    params.kind !== "direct" &&
+    shouldRequireMention &&
+    params.canDetectMention &&
+    !effectiveWasMentioned
+  ) {
+    return {
+      shouldRequireMention,
+      shouldBypassMention,
+      effectiveWasMentioned,
+      dropReason: "missing-mention",
+    };
+  }
+  return {
+    shouldRequireMention,
+    shouldBypassMention,
+    effectiveWasMentioned,
+    dropReason: null,
+  };
+}
 type MattermostMediaInfo = {
   path: string;
   contentType?: string;
@@ -485,28 +568,36 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   ) => {
     const channelId = post.channel_id ?? payload.data?.channel_id ?? payload.broadcast?.channel_id;
     if (!channelId) {
+      logVerboseMessage("mattermost: drop post (missing channel id)");
       return;
     }
 
     const allMessageIds = messageIds?.length ? messageIds : post.id ? [post.id] : [];
     if (allMessageIds.length === 0) {
+      logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
     const dedupeEntries = allMessageIds.map((id) =>
       recentInboundMessages.check(`${account.accountId}:${id}`),
     );
     if (dedupeEntries.length > 0 && dedupeEntries.every(Boolean)) {
+      logVerboseMessage(
+        `mattermost: drop post (dedupe account=${account.accountId} ids=${allMessageIds.length})`,
+      );
       return;
     }
 
     const senderId = post.user_id ?? payload.broadcast?.user_id;
     if (!senderId) {
+      logVerboseMessage("mattermost: drop post (missing sender id)");
       return;
     }
     if (senderId === botUserId) {
+      logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;
     }
     if (isSystemPost(post)) {
+      logVerboseMessage(`mattermost: drop post (system post type=${post.type ?? "unknown"})`);
       return;
     }
 
@@ -707,30 +798,38 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ? stripOncharPrefix(rawText, oncharPrefixes)
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
-
-    const shouldRequireMention =
-      kind !== "direct" &&
-      core.channel.groups.resolveRequireMention({
-        cfg,
-        channel: "mattermost",
-        accountId: account.accountId,
-        groupId: channelId,
-      });
-    const shouldBypassMention =
-      isControlCommand && shouldRequireMention && !wasMentioned && commandAuthorized;
-    const effectiveWasMentioned = wasMentioned || shouldBypassMention || oncharTriggered;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+    const mentionDecision = evaluateMattermostMentionGate({
+      kind,
+      cfg,
+      accountId: account.accountId,
+      channelId,
+      threadRootId,
+      requireMentionOverride: account.requireMention,
+      resolveRequireMention: core.channel.groups.resolveRequireMention,
+      wasMentioned,
+      isControlCommand,
+      commandAuthorized,
+      oncharEnabled,
+      oncharTriggered,
+      canDetectMention,
+    });
+    const { shouldRequireMention, shouldBypassMention } = mentionDecision;
 
-    if (oncharEnabled && !oncharTriggered && !wasMentioned && !isControlCommand) {
+    if (mentionDecision.dropReason === "onchar-not-triggered") {
+      logVerboseMessage(
+        `mattermost: drop group message (onchar not triggered channel=${channelId} sender=${senderId})`,
+      );
       recordPendingHistory();
       return;
     }
 
-    if (kind !== "direct" && shouldRequireMention && canDetectMention) {
-      if (!effectiveWasMentioned) {
-        recordPendingHistory();
-        return;
-      }
+    if (mentionDecision.dropReason === "missing-mention") {
+      logVerboseMessage(
+        `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
+      );
+      recordPendingHistory();
+      return;
     }
     const mediaList = await resolveMattermostMedia(post.file_ids);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
@@ -738,6 +837,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
     const bodyText = normalizeMention(baseText, botUsername);
     if (!bodyText) {
+      logVerboseMessage(
+        `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
+      );
       return;
     }
 
@@ -841,7 +943,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ReplyToId: threadRootId,
       MessageThreadId: threadRootId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-      WasMentioned: kind !== "direct" ? effectiveWasMentioned : undefined,
+      WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "mattermost" as const,
       OriginatingTo: to,
