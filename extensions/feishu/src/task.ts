@@ -525,6 +525,8 @@ async function uploadTaskAttachment(
   }
 
   try {
+    // NOTE: attachment.upload SDK method returns the response data directly (no { code, msg, data }
+    // envelope) unlike other task v2 endpoints. Access items at top level, not via res.data.
     const data = await client.task.v2.attachment.upload({
       data: {
         resource_type: "task",

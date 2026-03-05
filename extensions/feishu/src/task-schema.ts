@@ -1,6 +1,15 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 
+// NOTE: Avoid Type.Union([Type.Literal(...)]) which compiles to anyOf.
+// Some providers reject anyOf in tool schemas; a flat string enum is safer.
+function stringEnum<T extends readonly string[]>(
+  values: T,
+  options: { description?: string; default?: T[number] } = {},
+) {
+  return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...options });
+}
+
 type TaskCreatePayload = NonNullable<Parameters<Lark.Client["task"]["v2"]["task"]["create"]>[0]>;
 type TaskUpdatePayload = NonNullable<Parameters<Lark.Client["task"]["v2"]["task"]["patch"]>[0]>;
 type TaskDeletePayload = NonNullable<Parameters<Lark.Client["task"]["v2"]["task"]["delete"]>[0]>;
@@ -79,6 +88,7 @@ export const TASK_UPDATE_FIELD_VALUES = [
   "mode",
   "is_milestone",
 ] as const;
+export const TASK_COMMENT_UPDATE_FIELD_VALUES = ["content"] as const;
 export const TASKLIST_UPDATE_FIELD_VALUES = ["name", "owner", "archive_tasklist"] as const;
 
 export type CreateTaskParams = {
@@ -219,23 +229,17 @@ const TasklistRefSchema = Type.Object({
   section_guid: Type.Optional(Type.String({ description: "Section GUID in tasklist" })),
 });
 
-const TaskUpdateFieldSchema = Type.Union(
-  TASK_UPDATE_FIELD_VALUES.map((field) => Type.Literal(field)),
-);
+const TaskUpdateFieldSchema = stringEnum(TASK_UPDATE_FIELD_VALUES);
 
-const TasklistMemberRoleSchema = Type.Union(
-  [Type.Literal("owner"), Type.Literal("editor"), Type.Literal("viewer")],
-  { description: "Member role (owner/editor/viewer)" },
-);
+const TasklistMemberRoleSchema = stringEnum(["owner", "editor", "viewer"] as const, {
+  description: "Member role (owner/editor/viewer)",
+});
 
-const TasklistUpdateFieldSchema = Type.Union(
-  TASKLIST_UPDATE_FIELD_VALUES.map((field) => Type.Literal(field)),
-);
+const TasklistUpdateFieldSchema = stringEnum(TASKLIST_UPDATE_FIELD_VALUES);
 
-const TasklistOriginOwnerRoleSchema = Type.Union(
-  [Type.Literal("editor"), Type.Literal("viewer"), Type.Literal("none")],
-  { description: "Role for original owner after owner transfer" },
-);
+const TasklistOriginOwnerRoleSchema = stringEnum(["editor", "viewer", "none"] as const, {
+  description: "Role for original owner after owner transfer",
+});
 
 const TasklistMemberSchema = Type.Object({
   id: Type.String({ description: "Member ID (with type controlled by user_id_type)" }),
@@ -523,9 +527,7 @@ export const ListTaskCommentsSchema = Type.Object({
     Type.Number({ description: "Page size (1-100)", minimum: 1, maximum: 100 }),
   ),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
-  direction: Type.Optional(
-    Type.Union([Type.Literal("asc"), Type.Literal("desc")], { description: "Sort direction" }),
-  ),
+  direction: Type.Optional(stringEnum(["asc", "desc"] as const, { description: "Sort direction" })),
   user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
 });
 
@@ -543,9 +545,10 @@ export const UpdateTaskCommentSchema = Type.Object({
   comment_id: Type.String({ description: "Comment ID to update" }),
   comment: TaskCommentUpdateContentSchema,
   update_fields: Type.Optional(
-    Type.Array(Type.String(), {
+    Type.Array(stringEnum(TASK_COMMENT_UPDATE_FIELD_VALUES), {
       description: "Fields to update. If omitted, infers from keys in comment (content)",
       minItems: 1,
+      uniqueItems: true,
     }),
   ),
   user_id_type: Type.Optional(Type.String({ description: "User ID type for returned creators" })),
