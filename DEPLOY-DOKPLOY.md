@@ -123,7 +123,7 @@ networks:
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax/minimax-m2.5"
+        "primary": "google/gemini-2.5-pro"
       },
       "compaction": {
         "mode": "safeguard"
@@ -159,14 +159,15 @@ networks:
 
 ### Modelos disponibles (ejemplos)
 
-| Modelo                | Valor                             |
-| --------------------- | --------------------------------- |
-| Minimax M2.5 (actual) | `openrouter/minimax/minimax-m2.5` |
-| GPT-4o                | `openai/gpt-4o`                   |
-| GPT-4o Mini           | `openai/gpt-4o-mini`              |
-| Claude Opus           | `anthropic/claude-opus-4`         |
-| Claude Sonnet         | `anthropic/claude-sonnet-4.5`     |
-| Gemini Pro            | `google/gemini-2.5-pro`           |
+| Modelo                  | Valor                             |
+| ----------------------- | --------------------------------- |
+| Gemini 2.5 Pro (actual) | `google/gemini-2.5-pro`           |
+| Minimax M2.5            | `openrouter/minimax/minimax-m2.5` |
+| GPT-4o                  | `openai/gpt-4o`                   |
+| GPT-4o Mini             | `openai/gpt-4o-mini`              |
+| Claude Opus             | `anthropic/claude-opus-4`         |
+| Claude Sonnet           | `anthropic/claude-sonnet-4.5`     |
+| Gemini Pro              | `google/gemini-2.5-pro`           |
 
 ## 6. Personalidad del agente (workspace/)
 

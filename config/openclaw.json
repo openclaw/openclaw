@@ -17,7 +17,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax/minimax-m2.5"
+        "primary": "google/gemini-2.5-pro"
       },
       "userTimezone": "America/Santiago",
       "compaction": {
