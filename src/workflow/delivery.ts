@@ -27,8 +27,8 @@ export function resolveWorkflowDeliveryConfig(): WorkflowDeliveryConfig | null {
     }
     return {
       enabled: true,
-      channel: discordConfig.channel ?? "discord",
-      to: discordConfig.to,
+      channel: "discord",
+      to: discordConfig.channel,
       accountId: discordConfig.accountId,
     };
   } catch {

@@ -351,6 +351,7 @@ export class OpenClawApp extends LitElement {
   @state() workflowSelectedPlanId: string | null = null;
   @state() workflowSelectedPlan: import("./views/workflow.js").WorkflowPlan | null = null;
   @state() workflowScope: "active" | "history" | "all" = "active";
+  @state() workflowViewMode: "list" | "graph" = "list";
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 

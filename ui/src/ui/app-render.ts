@@ -63,8 +63,7 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-// Resources/Docs section hidden, so external-link imports not needed
-// import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
@@ -240,14 +239,12 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="Immunocorp" />
+              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
-            <img 
-              src=${basePath ? `${basePath}/immunocorp-logo.svg` : "/immunocorp-logo.svg"} 
-              alt="IMMUNOCORP" 
-              class="brand-logo-text"
-              style="height: 24px; width: auto;"
-            />
+            <div class="brand-text">
+              <div class="brand-title">OPENCLAW</div>
+              <div class="brand-sub">Gateway Dashboard</div>
+            </div>
           </div>
         </div>
         <div class="topbar-status">
@@ -291,8 +288,6 @@ export function renderApp(state: AppViewState) {
             </div>
           `;
         })}
-        ${
-          /* Resources/Docs section hidden
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
             <span class="nav-label__text">${t("common.resources")}</span>
@@ -310,8 +305,6 @@ export function renderApp(state: AppViewState) {
             </a>
           </div>
         </div>
-        */ ""
-        }
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${

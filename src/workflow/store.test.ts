@@ -30,7 +30,7 @@ describe("WorkflowStoreManager", () => {
       agentId: testAgentId,
       title: "Test Workflow",
       description: "Testing all operations",
-      source: "vitest",
+      source: "manual",
       tasks: [{ content: "Task 1" }, { content: "Task 2" }, { content: "Task 3" }],
     });
 
@@ -142,7 +142,7 @@ describe("WorkflowStoreManager", () => {
     const plan = await manager.createPlan({
       agentId: testAgentId,
       title: "Failure Test",
-      source: "vitest",
+      source: "manual",
       tasks: [{ content: "Will fail" }],
     });
 
