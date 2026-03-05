@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
@@ -203,6 +204,21 @@ function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
   return false;
 }
 
+function isInsideGitRepo(startDir: string): string | null {
+  let dir = path.resolve(startDir);
+  while (true) {
+    if (existsSync(path.resolve(dir, ".git"))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return null;
+}
+
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
@@ -329,6 +345,25 @@ async function collectFilesystemFindings(params: {
         }),
       });
     }
+  }
+
+  const configDir = path.dirname(params.configPath);
+  const gitRoot = isInsideGitRepo(configDir);
+  if (gitRoot) {
+    const rel = path.relative(gitRoot, configDir).replace(/\\/g, "/");
+    const gitignoreEntry = rel === "" ? "openclaw.json" : rel + "/";
+    findings.push({
+      checkId: "fs.config.inside_git_repo",
+      severity: "warn",
+      title: "Config directory is inside a git repo",
+      detail:
+        configDir +
+        " is inside a git repository (root: " +
+        gitRoot +
+        "). " +
+        "Tokens in openclaw.json may be accidentally committed and pushed.",
+      remediation: "Add " + gitignoreEntry + " to your .gitignore file.",
+    });
   }
 
   return findings;
@@ -609,6 +644,28 @@ function collectGatewayConfigFindings(
     });
   }
 
+  // T-PERSIST-004: tokens do not expire by default
+  if (
+    auth.mode === "token" &&
+    tokenConfigured &&
+    !asRecord(cfg.gateway?.auth)?.tokenExpiry &&
+    !asRecord(cfg.gateway?.auth)?.tokenRotation
+  ) {
+    findings.push({
+      checkId: "gateway.token_no_expiry",
+      severity: "warn",
+      title: "Gateway token has no expiry or rotation configured",
+      detail:
+        "gateway.auth.token is configured but no gateway.auth.tokenExpiry or " +
+        "gateway.auth.tokenRotation is set. Stolen tokens grant indefinite access " +
+        "until manually revoked (T-PERSIST-004).",
+      remediation:
+        "Consider setting gateway.auth.tokenExpiry to auto-expire tokens, " +
+        "or implement a token rotation policy. At minimum, rotate tokens after " +
+        "any suspected compromise.",
+    });
+  }
+
   if (auth.mode === "trusted-proxy") {
     const trustedProxies = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
@@ -678,6 +735,28 @@ function collectGatewayConfigFindings(
         "Without rate limiting, brute-force auth attacks are not mitigated.",
       remediation:
         "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
+    });
+  }
+
+  // T-IMPACT-002: per-sender message rate limiting
+  if (
+    bind !== "loopback" &&
+    !asRecord(asRecord(cfg.gateway)?.rateLimit)?.enabled &&
+    !asRecord(cfg.gateway)?.messageRateLimit
+  ) {
+    findings.push({
+      checkId: "gateway.no_message_rate_limit",
+      severity: "warn",
+      title: "No per-sender message rate limit configured",
+      detail:
+        "gateway.bind is not loopback but no per-sender message rate limiting " +
+        "is configured (gateway.rateLimit or gateway.messageRateLimit). " +
+        "An attacker can flood the gateway with messages, exhausting API " +
+        "credits and compute resources (T-IMPACT-002).",
+      remediation:
+        "Configure gateway.rateLimit or gateway.messageRateLimit to limit " +
+        "per-sender request volume. Consider adding cost budgets and circuit " +
+        "breakers for model API calls.",
     });
   }
 
@@ -1214,6 +1293,69 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       detail: deep.gateway.error ?? "gateway unreachable",
       remediation: `Run "${formatCliCommand("openclaw status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
     });
+  }
+
+  // T-DISC-004: check for dangerous env vars in current environment
+  const DANGEROUS_ENV_VARS = [
+    "NODE_OPTIONS",
+    "GLIBC_TUNABLES",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "LD_AUDIT",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "RUBYOPT",
+    "PERL5OPT",
+    "BASH_ENV",
+    "SSLKEYLOGFILE",
+  ];
+  const dangerousVarsSet = DANGEROUS_ENV_VARS.filter(
+    (v) => typeof env[v] === "string" && env[v].trim().length > 0,
+  );
+  if (dangerousVarsSet.length > 0) {
+    findings.push({
+      checkId: "env.dangerous_vars_set",
+      severity: "warn",
+      title: dangerousVarsSet.length + " dangerous environment variable(s) set",
+      detail:
+        "The following variables are set in the current environment: " +
+        dangerousVarsSet.join(", ") +
+        ". " +
+        "These can be used for code injection or behavior modification if an attacker " +
+        "gains exec tool access (T-DISC-004).",
+      remediation:
+        "Unset these variables unless intentionally configured. " +
+        "If required, ensure they are in host-env-security-policy.json blocklist.",
+    });
+  }
+
+  // T-EXFIL-001: web_fetch without URL allowlist
+  {
+    const webFetchPolicy = asRecord(cfg.tools)?.webFetch ?? asRecord(cfg.tools)?.web_fetch;
+    const webFetchEnabled = webFetchPolicy !== false && webFetchPolicy?.enabled !== false;
+    const webFetchAllowlist = Array.isArray(webFetchPolicy?.allowedUrls)
+      ? webFetchPolicy.allowedUrls
+      : [];
+    const gwBind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+    if (webFetchEnabled && webFetchAllowlist.length === 0) {
+      const exposed = gwBind !== "loopback";
+      findings.push({
+        checkId: "tools.web_fetch.no_url_allowlist",
+        severity: exposed ? "warn" : "info",
+        title: "web_fetch has no outbound URL restrictions",
+        detail:
+          "The web_fetch tool can reach any external URL. SSRF protection blocks " +
+          "internal networks, but an attacker who achieves prompt injection can " +
+          "exfiltrate data to any external server (T-EXFIL-001).",
+        remediation:
+          "Consider configuring tools.webFetch.allowedUrls to restrict outbound " +
+          "requests to known-good domains.",
+      });
+    }
   }
 
   const summary = countBySeverity(findings);
