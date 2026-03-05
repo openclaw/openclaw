@@ -43,6 +43,24 @@ describe("resolveRuntimeGroupPolicy", () => {
     expect(resolved.groupPolicy).toBe(expectedPolicy);
     expect(resolved.providerMissingFallbackApplied).toBe(expectedFallbackApplied);
   });
+
+  it("normalizes legacy allowall alias to open", () => {
+    const resolved = resolveRuntimeGroupPolicy({
+      providerConfigPresent: true,
+      groupPolicy: "allowall" as unknown as "open",
+    });
+    expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.providerMissingFallbackApplied).toBe(false);
+  });
+
+  it("normalizes legacy allowall default alias to open", () => {
+    const resolved = resolveRuntimeGroupPolicy({
+      providerConfigPresent: true,
+      defaultGroupPolicy: "allowall" as unknown as "open",
+    });
+    expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.providerMissingFallbackApplied).toBe(false);
+  });
 });
 
 describe("resolveOpenProviderRuntimeGroupPolicy", () => {

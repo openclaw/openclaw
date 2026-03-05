@@ -13,16 +13,31 @@ export type RuntimeGroupPolicyParams = {
   missingProviderFallbackPolicy?: GroupPolicy;
 };
 
+function normalizeLegacyGroupPolicyAlias(policy: GroupPolicy | undefined): GroupPolicy | undefined {
+  if (policy === undefined) {
+    return undefined;
+  }
+  const normalized = String(policy).trim().toLowerCase();
+  if (normalized === "allowall") {
+    return "open";
+  }
+  return policy;
+}
+
 export function resolveRuntimeGroupPolicy(
   params: RuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
-  const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
-  const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
+  const configuredGroupPolicy = normalizeLegacyGroupPolicyAlias(params.groupPolicy);
+  const defaultGroupPolicy = normalizeLegacyGroupPolicyAlias(params.defaultGroupPolicy);
+  const configuredFallbackPolicy =
+    normalizeLegacyGroupPolicyAlias(params.configuredFallbackPolicy) ?? "open";
+  const missingProviderFallbackPolicy =
+    normalizeLegacyGroupPolicyAlias(params.missingProviderFallbackPolicy) ?? "allowlist";
   const groupPolicy = params.providerConfigPresent
-    ? (params.groupPolicy ?? params.defaultGroupPolicy ?? configuredFallbackPolicy)
-    : (params.groupPolicy ?? missingProviderFallbackPolicy);
+    ? (configuredGroupPolicy ?? defaultGroupPolicy ?? configuredFallbackPolicy)
+    : (configuredGroupPolicy ?? missingProviderFallbackPolicy);
   const providerMissingFallbackApplied =
-    !params.providerConfigPresent && params.groupPolicy === undefined;
+    !params.providerConfigPresent && configuredGroupPolicy === undefined;
   return { groupPolicy, providerMissingFallbackApplied };
 }
 
