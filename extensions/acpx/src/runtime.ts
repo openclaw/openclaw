@@ -129,6 +129,10 @@ export class AcpxRuntime implements AcpRuntime {
     return this.healthy;
   }
 
+  private isCodexHarness(): boolean {
+    return this.config.codexHarness;
+  }
+
   private logSpawnResolution(event: SpawnResolutionEvent): void {
     const key = `${event.command}::${event.strictWindowsCmdWrapper ? "strict" : "compat"}::${event.resolution}`;
     if (event.cacheHit || this.loggedSpawnResolutions.has(key)) {
@@ -553,6 +557,10 @@ export class AcpxRuntime implements AcpRuntime {
       args.push("--timeout", String(this.config.timeoutSeconds));
     }
     args.push("--ttl", String(this.queueOwnerTtlSeconds));
+    if (this.isCodexHarness()) {
+      args.push("--env", "OPENCLAW_CODEX_HARNESS=1");
+      args.push("--env", `X_CODEX_HARNESS_ID=acpx-harness-${Date.now()}`);
+    }
     args.push(params.agent, "prompt", "--session", params.sessionName, "--file", "-");
     return args;
   }

@@ -88,9 +88,19 @@ const openaiCodexPlugin = {
                         api: "openai-completions",
                         models: [
                           buildModelDefinition({
+                            id: "gpt-5.3-codex",
+                            name: "Codex GPT-5.3",
+                            input: ["text"],
+                          }),
+                          buildModelDefinition({
                             id: "gpt-5.2",
                             name: "Codex GPT-5.2",
                             input: ["text"],
+                          }),
+                          buildModelDefinition({
+                            id: "gpt-5.4",
+                            name: "Codex GPT-5.4",
+                            input: ["text", "image"],
                           }),
                           buildModelDefinition({
                             id: "gpt-4o",
@@ -104,7 +114,9 @@ const openaiCodexPlugin = {
                   agents: {
                     defaults: {
                       models: {
-                        "openai-codex/gpt-5.2": { alias: "codex" },
+                        "openai-codex/gpt-5.3-codex": { alias: "codex" },
+                        "openai-codex/gpt-5.2": {},
+                        "openai-codex/gpt-5.4": {},
                         "openai-codex/gpt-4o": {},
                       },
                     },

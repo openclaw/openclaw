@@ -27,6 +27,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  codexHarness?: boolean;
 };
 
 export type ResolvedAcpxPluginConfig = {
@@ -40,6 +41,7 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  codexHarness: boolean;
 };
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
@@ -81,6 +83,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "strictWindowsCmdWrapper",
     "timeoutSeconds",
     "queueOwnerTtlSeconds",
+    "codexHarness",
   ]);
   for (const key of Object.keys(value)) {
     if (!allowedKeys.has(key)) {
@@ -152,6 +155,8 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
   }
 
+  const codexHarness = value.codexHarness;
+
   return {
     ok: true,
     value: {
@@ -166,6 +171,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
         typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
+      codexHarness: typeof codexHarness === "boolean" ? codexHarness : undefined,
     },
   };
 }
@@ -219,6 +225,7 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
         strictWindowsCmdWrapper: { type: "boolean" },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         queueOwnerTtlSeconds: { type: "number", minimum: 0 },
+        codexHarness: { type: "boolean" },
       },
     },
   };
@@ -260,5 +267,6 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    codexHarness: normalized.codexHarness ?? false,
   };
 }
