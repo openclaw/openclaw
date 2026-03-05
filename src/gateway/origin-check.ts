@@ -31,20 +31,20 @@ function normalizeHostToMatchUrlHost(host: string | undefined): string | undefin
   if (!normalized) {
     return undefined;
   }
-  // Use URL parsing to exactly match URL.host semantics
-  // This strips default ports (:80 for http, :443 for https) but keeps non-standard ports
-  // e.g., "gateway.ts.net:443" with https:// becomes "gateway.ts.net"
-  // e.g., "gateway.ts.net:80" with http:// becomes "gateway.ts.net"
-  // e.g., "gateway.ts.net:8080" stays "gateway.ts.net:8080"
-  // e.g., "gateway.ts.net:443" with http:// stays "gateway.ts.net:443"
+  // If it looks like a host:port without scheme, don't use URL parsing
+  // (new URL("gateway.tailnet.ts.net:443") treats hostname as scheme, returning empty host)
+  // Instead, strip default HTTPS port (:443) directly
+  if (!normalized.includes("://") && /^[a-zA-Z0-9.-]+:\d+$/.test(normalized)) {
+    // It's a bare host:port - strip :443 if present (common for HTTPS gateways)
+    return normalized.replace(/:443$/, "").toLowerCase();
+  }
+  // Use URL parsing for full URLs with scheme
   try {
-    // Try as full URL first
     const url = new URL(normalized);
     return url.host.toLowerCase();
   } catch {
-    // Fallback: if it's just a host:port without scheme, assume https (common for X-Forwarded-Host)
-    // and strip :443 only (common case for HTTPS gateways)
-    return normalized.replace(/:443$/, "").toLowerCase();
+    // Fallback: just return the normalized value
+    return normalized.toLowerCase();
   }
 }
 

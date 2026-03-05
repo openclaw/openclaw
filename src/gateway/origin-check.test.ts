@@ -210,5 +210,29 @@ describe("checkBrowserOrigin", () => {
       });
       expect(result.ok).toBe(false);
     });
+
+    it("accepts forwarded-host with explicit port (nginx $host:$server_port)", () => {
+      // Greptile fix: X-Forwarded-Host with explicit port from nginx should work
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net:443",
+        origin: "https://gateway.tailnet.ts.net",
+        allowedOrigins: ["https://gateway.tailnet.ts.net"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.matchedBy).toBe("allowlist");
+      }
+    });
+
+    it("accepts forwarded-host with non-standard port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "127.0.0.1:18789",
+        requestForwardedHost: "gateway.tailnet.ts.net:8443",
+        origin: "https://gateway.tailnet.ts.net:8443",
+        allowedOrigins: ["https://gateway.tailnet.ts.net:8443"],
+      });
+      expect(result.ok).toBe(true);
+    });
   });
 });
