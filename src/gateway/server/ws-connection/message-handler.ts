@@ -143,6 +143,7 @@ function shouldAllowSilentLocalPairing(params: {
 function shouldSkipBackendSelfPairing(params: {
   connectParams: ConnectParams;
   isLocalClient: boolean;
+  isLoopbackClientIp: boolean;
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
@@ -155,7 +156,7 @@ function shouldSkipBackendSelfPairing(params: {
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
-    params.isLocalClient &&
+    (params.isLocalClient || params.isLoopbackClientIp) &&
     !params.hasBrowserOriginHeader &&
     params.sharedAuthOk &&
     usesSharedSecretAuth
@@ -757,6 +758,7 @@ export function attachGatewayWsMessageHandler(params: {
           shouldSkipBackendSelfPairing({
             connectParams,
             isLocalClient,
+            isLoopbackClientIp: isLoopbackAddress(clientIp),
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
