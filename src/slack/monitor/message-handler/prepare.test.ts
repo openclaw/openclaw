@@ -375,7 +375,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
-  it("respects replyToModeByChatType.direct override for DMs", async () => {
+  it("forces DM replies to thread mode even when direct override is off", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
       createSlackAccount({ replyToMode: "all", replyToModeByChatType: { direct: "off" } }),
@@ -383,8 +383,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.replyToMode).toBe("off");
-    expect(prepared!.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared!.replyToMode).toBe("all");
+    expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
   it("still threads channel messages when replyToModeByChatType.direct is off", async () => {
@@ -403,7 +403,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
-  it("respects dm.replyToMode legacy override for DMs", async () => {
+  it("forces DM replies to thread mode even when dm.replyToMode is off", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
       createSlackAccount({ replyToMode: "all", dm: { replyToMode: "off" } }),
@@ -411,8 +411,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.replyToMode).toBe("off");
-    expect(prepared!.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared!.replyToMode).toBe("all");
+    expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
   it("marks first thread turn and injects thread history for a new thread session", async () => {

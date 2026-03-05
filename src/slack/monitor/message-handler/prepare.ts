@@ -274,24 +274,30 @@ function resolveSlackRoutingContext(params: {
   });
 
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
-  const replyToMode = resolveSlackReplyToMode(account, chatType);
+  const configuredReplyToMode = resolveSlackReplyToMode(account, chatType);
+  // Slack DMs are always thread-scoped: each top-level inbound message gets its
+  // own thread/session lane, which keeps DM turns context-isolated by default.
+  const replyToMode = isDirectMessage ? "all" : configuredReplyToMode;
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   // Keep true thread replies thread-scoped, but preserve channel-level sessions
   // for top-level room turns when replyToMode is off.
-  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  // Only fork channel/group messages into thread-specific sessions when they are
-  // actual thread replies (thread_ts present, different from message ts).
-  // Top-level channel messages must stay on the per-channel session for continuity.
-  // Before this fix, every channel message used its own ts as threadId, creating
-  // isolated sessions per message (regression from #10686).
+  // For channel/group rooms:
+  // - true thread replies always use the parent thread_ts key
+  // - top-level turns only become thread-scoped when replyToMode=all
+  //   (one Slack thread = one session lane)
+  // - replyToMode=off|first keep channel-scoped continuity
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  const canonicalThreadId = isRoomish
+    ? (roomThreadId ?? autoThreadId)
+    : isThreadReply
+      ? threadTs
+      : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
