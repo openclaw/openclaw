@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isTransientNetworkError,
+  isTransientSqliteError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -156,4 +160,48 @@ describe("isTransientNetworkError", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
   });
+});
+
+describe("isTransientSqliteError", () => {
+  it("returns true for SQLITE_CANTOPEN (#34678)", () => {
+    const err = Object.assign(new Error("unable to open database file"), {
+      code: "SQLITE_CANTOPEN",
+    });
+    expect(isTransientSqliteError(err)).toBe(true);
+  });
+
+  it("returns true for SQLITE_BUSY", () => {
+    const err = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    expect(isTransientSqliteError(err)).toBe(true);
+  });
+
+  it("returns true for SQLITE_LOCKED", () => {
+    const err = Object.assign(new Error("database table is locked"), { code: "SQLITE_LOCKED" });
+    expect(isTransientSqliteError(err)).toBe(true);
+  });
+
+  it("returns true for SQLITE_IOERR", () => {
+    const err = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+    expect(isTransientSqliteError(err)).toBe(true);
+  });
+
+  it("returns true when SQLite error is nested in cause", () => {
+    const cause = Object.assign(new Error("SQLITE_CANTOPEN"), { code: "SQLITE_CANTOPEN" });
+    const outer = Object.assign(new Error("wrapped"), { cause });
+    expect(isTransientSqliteError(outer)).toBe(true);
+  });
+
+  it("returns false for non-SQLite errors", () => {
+    expect(isTransientSqliteError(new Error("something else"))).toBe(false);
+    expect(
+      isTransientSqliteError(Object.assign(new Error("network"), { code: "ECONNRESET" })),
+    ).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42])(
+    "returns false for non-error input %#",
+    (value) => {
+      expect(isTransientSqliteError(value)).toBe(false);
+    },
+  );
 });

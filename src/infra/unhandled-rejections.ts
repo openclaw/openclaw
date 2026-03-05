@@ -20,6 +20,20 @@ const FATAL_ERROR_CODES = new Set([
 
 const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
 
+// SQLite error codes that indicate transient I/O or locking conditions.
+// These should not crash the gateway — they are recoverable and can occur
+// from routine filesystem operations (temp directory issues, file locking,
+// brief unavailability) especially on macOS LaunchAgent deployments.
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_CANTOPEN",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_IOERR",
+  "SQLITE_IOERR_READ",
+  "SQLITE_IOERR_WRITE",
+  "SQLITE_IOERR_FSYNC",
+]);
+
 // Network error codes that indicate transient failures (shouldn't crash the gateway)
 const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET",
@@ -180,6 +194,30 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient SQLite error that shouldn't crash the gateway.
+ * SQLite I/O and locking errors are recoverable — crashing on them creates a
+ * crash loop under launchd/systemd where a restart immediately hits the same
+ * condition (e.g. temp-dir permissions, brief file lock contention).
+ */
+export function isTransientSqliteError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+  ])) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -233,6 +271,11 @@ export function installUnhandledRejectionHandler(): void {
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
+      return;
+    }
+
+    if (isTransientSqliteError(reason)) {
+      console.warn("[openclaw] Non-fatal SQLite error (continuing):", formatUncaughtError(reason));
       return;
     }
 
