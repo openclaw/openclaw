@@ -586,6 +586,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
+    let preservedTurnsSection = "";
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
@@ -705,7 +706,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -777,12 +778,31 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Compaction summarization failed; using emergency fallback to avoid stuck session: ${errorMessage}`,
       );
-      return { cancel: true };
+      // Emergency fallback: return a static summary instead of cancelling.
+      // Cancelling leaves the session at its current (oversized) context,
+      // causing a compaction-fail-retry loop on every subsequent message.
+      const priorContext = preparation.previousSummary
+        ? `\n\nPrior summary (carried forward):\n${preparation.previousSummary}`
+        : "";
+      const emergencySummary =
+        `Emergency compaction: summarization failed (${errorMessage}). ` +
+        `History was cut at the SDK-computed boundary; content before that point is not summarized.` +
+        priorContext +
+        preservedTurnsSection +
+        toolFailureSection +
+        fileOpsSummary;
+      return {
+        compaction: {
+          summary: emergencySummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
   });
 }
