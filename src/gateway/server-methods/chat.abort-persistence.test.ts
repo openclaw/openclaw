@@ -273,6 +273,69 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
+  it("keeps abort idempotency dedupe even when prior key is outside tail window", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-idem-tail-",
+    );
+    const runId = "idem-abort-tail-window";
+    await fs.appendFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Existing partial" }],
+          timestamp: Date.now(),
+          stopReason: "stop",
+          idempotencyKey: `${runId}:assistant`,
+          openclawAbort: { aborted: true, origin: "rpc", runId },
+        },
+      })}
+`,
+      "utf-8",
+    );
+
+    const filler = "x".repeat(8_192);
+    for (let i = 0; i < 40; i += 1) {
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `${i}:${filler}` }],
+            timestamp: Date.now(),
+            stopReason: "stop",
+          },
+        })}
+`,
+        "utf-8",
+      );
+    }
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      chatRunBuffers: new Map([[runId, "Partial from retry"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-retry" }),
+      agentRunSeq: new Map<string, number>([[runId, 1]]),
+    });
+
+    await invokeChatAbort(context, { sessionKey: "main", runId }, respond);
+
+    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: true, runIds: [runId] });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .filter((message) => message?.idempotencyKey === `${runId}:assistant`);
+
+    expect(persisted).toHaveLength(1);
+  });
+
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-run-blank-",

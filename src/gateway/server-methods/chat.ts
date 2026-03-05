@@ -71,6 +71,7 @@ type AbortedPartialSnapshot = {
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const TRANSCRIPT_IDEMPOTENCY_TAIL_BYTES = 256 * 1024;
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -371,19 +372,81 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
-function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
-  try {
-    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
+function transcriptChunkHasIdempotencyKey(chunk: string, idempotencyKey: string): boolean {
+  const lines = chunk.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line || !line.includes('"idempotencyKey"')) {
+      continue;
+    }
+    try {
       const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
       if (parsed?.message?.idempotencyKey === idempotencyKey) {
         return true;
       }
+    } catch {
+      continue;
     }
-    return false;
+  }
+  return false;
+}
+
+function readTranscriptTail(params: {
+  transcriptPath: string;
+  maxBytes: number;
+}): { text: string; complete: boolean } | null {
+  const { transcriptPath, maxBytes } = params;
+  if (maxBytes <= 0) {
+    return { text: "", complete: true };
+  }
+  let fd: number | undefined;
+  try {
+    const stat = fs.statSync(transcriptPath);
+    const size = Number.isFinite(stat.size) ? Math.max(0, Math.floor(stat.size)) : 0;
+    if (size <= 0) {
+      return { text: "", complete: true };
+    }
+    const bytes = Math.min(size, maxBytes);
+    const offset = size - bytes;
+    const buffer = Buffer.allocUnsafe(bytes);
+    fd = fs.openSync(transcriptPath, "r");
+    const readBytes = fs.readSync(fd, buffer, 0, bytes, offset);
+    return {
+      text: buffer.subarray(0, Math.max(0, readBytes)).toString("utf-8"),
+      complete: bytes === size,
+    };
+  } catch {
+    return null;
+  } finally {
+    if (typeof fd === "number") {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best effort
+      }
+    }
+  }
+}
+
+function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
+  try {
+    const tail = readTranscriptTail({
+      transcriptPath,
+      maxBytes: TRANSCRIPT_IDEMPOTENCY_TAIL_BYTES,
+    });
+    if (tail === null) {
+      return false;
+    }
+    if (tail.text && transcriptChunkHasIdempotencyKey(tail.text, idempotencyKey)) {
+      return true;
+    }
+    if (tail.complete) {
+      return false;
+    }
+    return transcriptChunkHasIdempotencyKey(
+      fs.readFileSync(transcriptPath, "utf-8"),
+      idempotencyKey,
+    );
   } catch {
     return false;
   }
