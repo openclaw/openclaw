@@ -107,6 +107,9 @@ export async function runCli(argv: string[] = process.argv) {
         "[openclaw] Suppressed transient uncaught exception:",
         formatUncaughtError(error),
       );
+      // Ensure one-shot CLI commands still surface a non-zero status if the
+      // event loop drains; long-running gateway processes keep running normally.
+      process.exitCode = 1;
       return;
     }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
