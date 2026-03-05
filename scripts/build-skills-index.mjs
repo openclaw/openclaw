@@ -44,6 +44,23 @@ function readDescription(markdown) {
   return undefined;
 }
 
+function isSkillDirectoryEntry(entry) {
+  if (entry.name.startsWith(".") || entry.name === "node_modules") {
+    return false;
+  }
+  if (entry.isDirectory()) {
+    return true;
+  }
+  if (entry.isSymbolicLink()) {
+    try {
+      return fs.statSync(path.join(skillsRoot, entry.name)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 const skillsRoot = resolveSkillsRoot();
 
 if (!fs.existsSync(skillsRoot) || !fs.statSync(skillsRoot).isDirectory()) {
@@ -53,9 +70,7 @@ if (!fs.existsSync(skillsRoot) || !fs.statSync(skillsRoot).isDirectory()) {
 
 const entries = fs
   .readdirSync(skillsRoot, { withFileTypes: true })
-  .filter(
-    (entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
-  )
+  .filter((entry) => isSkillDirectoryEntry(entry))
   .map((entry) => {
     const skillDir = path.join(skillsRoot, entry.name);
     const skillMd = path.join(skillDir, "SKILL.md");
