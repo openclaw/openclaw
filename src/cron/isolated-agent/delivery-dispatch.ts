@@ -21,6 +21,21 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
+function normalizeDeliveryTarget(channel: string, to: string): string {
+  const channelLower = channel.trim().toLowerCase();
+  const toTrimmed = to.trim();
+  if (channelLower === "feishu" || channelLower === "lark") {
+    const lowered = toTrimmed.toLowerCase();
+    if (lowered.startsWith("user:")) {
+      return toTrimmed.slice("user:".length).trim();
+    }
+    if (lowered.startsWith("chat:")) {
+      return toTrimmed.slice("chat:".length).trim();
+    }
+  }
+  return toTrimmed;
+}
+
 export function matchesMessagingToolDeliveryTarget(
   target: { provider?: string; to?: string; accountId?: string },
   delivery: { channel?: string; to?: string; accountId?: string },
@@ -36,7 +51,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  return target.to === delivery.to;
+  // Normalize both target.to and delivery.to for Feishu/Lark to handle cases where
+  // messaging tool records targets with prefixes (user:ou_xxx) when provider is "message"
+  const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to);
+  const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
+  return normalizedTargetTo === normalizedDeliveryTo;
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
