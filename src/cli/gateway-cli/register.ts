@@ -140,11 +140,14 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
+      .option("--agent <id>", "Limit usage summary to a single agent id")
       .action(async (opts, command) => {
         await runGatewayCommand(async () => {
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
+          const agentId =
+            typeof opts.agent === "string" && opts.agent.trim() ? opts.agent.trim() : undefined;
+          const result = await callGatewayCli("usage.cost", rpcOpts, { days, agentId });
           if (rpcOpts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;

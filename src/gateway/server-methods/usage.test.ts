@@ -147,15 +147,111 @@ describe("gateway usage helpers", () => {
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "main",
     });
     const b = await __test.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "main",
     });
 
     expect(a.totals.totalTokens).toBe(1);
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
+  });
+
+  it("mergeCostUsageSummaries combines totals and daily buckets", () => {
+    const merged = __test.mergeCostUsageSummaries([
+      {
+        updatedAt: 1,
+        days: 1,
+        daily: [
+          {
+            date: "2026-02-01",
+            input: 10,
+            output: 20,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 30,
+            totalCost: 1,
+            inputCost: 0.4,
+            outputCost: 0.6,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          },
+        ],
+        totals: {
+          input: 10,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 30,
+          totalCost: 1,
+          inputCost: 0.4,
+          outputCost: 0.6,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+      },
+      {
+        updatedAt: 2,
+        days: 2,
+        daily: [
+          {
+            date: "2026-02-01",
+            input: 1,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3,
+            totalCost: 0.1,
+            inputCost: 0.04,
+            outputCost: 0.06,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          },
+          {
+            date: "2026-02-02",
+            input: 4,
+            output: 5,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 9,
+            totalCost: 0.3,
+            inputCost: 0.12,
+            outputCost: 0.18,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          },
+        ],
+        totals: {
+          input: 5,
+          output: 7,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          totalCost: 0.4,
+          inputCost: 0.16,
+          outputCost: 0.24,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+      },
+    ]);
+
+    expect(merged.totals.totalTokens).toBe(42);
+    expect(merged.totals.totalCost).toBeCloseTo(1.4);
+    expect(merged.daily).toHaveLength(2);
+    expect(merged.daily[0]?.date).toBe("2026-02-01");
+    expect(merged.daily[0]?.totalTokens).toBe(33);
+    expect(merged.daily[1]?.date).toBe("2026-02-02");
+    expect(merged.daily[1]?.totalTokens).toBe(9);
+    expect(merged.days).toBe(2);
   });
 });
