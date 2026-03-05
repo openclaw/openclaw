@@ -363,4 +363,42 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });
+
+  it('marks literal plugins.slots.memory="memory" as legacy for auto-migration', async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        plugins: { slots: { memory: "memory" } },
+      });
+
+      const snap = await readConfigFileSnapshot();
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.slots.memory")).toBe(true);
+      expect(snap.issues.some((issue) => issue.path === "plugins.slots.memory")).toBe(true);
+    });
+  });
+
+  it('does not mark resolved-only plugins.slots.memory="memory" values as auto-migratable legacy', async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        plugins: { slots: { memory: "${OPENCLAW_MEMORY_SLOT}" } },
+      });
+
+      const prev = process.env.OPENCLAW_MEMORY_SLOT;
+      process.env.OPENCLAW_MEMORY_SLOT = "memory";
+      try {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.valid).toBe(false);
+        expect(snap.legacyIssues.some((issue) => issue.path === "plugins.slots.memory")).toBe(
+          false,
+        );
+        expect(snap.issues.some((issue) => issue.path === "plugins.slots.memory")).toBe(true);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_MEMORY_SLOT;
+        } else {
+          process.env.OPENCLAW_MEMORY_SLOT = prev;
+        }
+      }
+    });
+  });
 });

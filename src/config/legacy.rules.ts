@@ -46,6 +46,10 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   );
 }
 
+function isLegacyMemorySlotValue(value: unknown): boolean {
+  return value === "memory";
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -153,6 +157,13 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["memorySearch"],
     message:
       "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+  },
+  {
+    path: ["plugins", "slots", "memory"],
+    message:
+      'plugins.slots.memory="memory" is legacy; use "memory-core" instead (auto-migrated on load).',
+    match: (value) => isLegacyMemorySlotValue(value),
+    requireSourceLiteral: true,
   },
   {
     path: ["tools", "bash"],

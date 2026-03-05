@@ -591,7 +591,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
       if (!slots) {
         return;
       }
-      const memorySlot = typeof slots.memory === "string" ? slots.memory.trim().toLowerCase() : "";
+      const memorySlot = typeof slots.memory === "string" ? slots.memory : "";
       if (memorySlot !== "memory") {
         return;
       }

@@ -374,4 +374,26 @@ describe("legacy migrate memory plugin slot", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toHaveLength(0);
   });
+
+  it("does not migrate non-exact legacy memory slot variants", () => {
+    const upper = migrateLegacyConfig({
+      plugins: {
+        slots: {
+          memory: "Memory",
+        },
+      },
+    });
+    const padded = migrateLegacyConfig({
+      plugins: {
+        slots: {
+          memory: " memory ",
+        },
+      },
+    });
+
+    expect(upper.config).toBeNull();
+    expect(upper.changes).toHaveLength(0);
+    expect(padded.config).toBeNull();
+    expect(padded.changes).toHaveLength(0);
+  });
 });
