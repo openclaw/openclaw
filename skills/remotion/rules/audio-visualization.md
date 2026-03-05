@@ -151,8 +151,7 @@ const frequencies = visualizeAudio({
 });
 
 const lowFrequencies = frequencies.slice(0, 32);
-const bassIntensity =
-  lowFrequencies.reduce((sum, v) => sum + v, 0) / lowFrequencies.length;
+const bassIntensity = lowFrequencies.reduce((sum, v) => sum + v, 0) / lowFrequencies.length;
 
 const scale = 1 + bassIntensity * 0.5;
 const opacity = Math.min(0.6, bassIntensity * 0.8);
@@ -178,9 +177,7 @@ const waveform = getWaveformPortion({
 });
 
 // Returns array of { index, amplitude } objects (amplitude: 0-1)
-waveform.map((bar) => (
-  <div key={bar.index} style={{ height: bar.amplitude * 100 }} />
-));
+waveform.map((bar) => <div key={bar.index} style={{ height: bar.amplitude * 100 }} />);
 ```
 
 ## Postprocessing
