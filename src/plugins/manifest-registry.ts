@@ -245,6 +245,9 @@ export function loadPluginManifestRegistry(params: {
       }
       // For cross-origin duplicates, fall through without warning so both
       // records are emitted and the loader can mark the loser as "disabled".
+      // Update seenIds so subsequent same-origin duplicates compare against
+      // the latest candidate rather than the original cross-origin entry.
+      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

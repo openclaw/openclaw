@@ -181,6 +181,25 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
+  it("warns on same-origin duplicate even after a cross-origin entry was seen first", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const dirC = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+    writeManifest(dirC, manifest);
+
+    // bundled → global → global: the second global is a same-origin duplicate
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirA, origin: "bundled" }),
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirB, origin: "global" }),
+      createPluginCandidate({ idHint: "test-plugin", rootDir: dirC, origin: "global" }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
