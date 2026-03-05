@@ -1,5 +1,6 @@
 import { html } from "lit";
 
 export function renderIframeDashboard(src: string, title: string) {
-  return html`<iframe src=${src} class="iframe-dashboard" title=${title}></iframe>`;
+  const embeddedSrc = src + (src.includes("?") ? "&" : "?") + "embedded=1";
+  return html`<iframe src=${embeddedSrc} class="iframe-dashboard" title=${title}></iframe>`;
 }

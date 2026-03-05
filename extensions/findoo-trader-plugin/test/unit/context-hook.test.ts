@@ -95,11 +95,58 @@ describe("buildFinancialContext", () => {
     expect(result).toContain("Exchanges:");
   });
 
-  it("keeps context within ~300 char budget", () => {
-    const deps = makeMockDeps();
+  it("keeps context within ~400 char budget", () => {
+    const deps = makeMockDeps({
+      lifecycleEngine: {
+        getStats: vi.fn().mockReturnValue({
+          running: true,
+          cycleCount: 3,
+          pendingApprovals: 0,
+        }),
+      },
+    });
     const result = buildFinancialContext(deps);
 
-    // Reasonable upper bound for the context string
-    expect(result.length).toBeLessThan(400);
+    // Budget accommodates lifecycle engine line
+    expect(result.length).toBeLessThan(500);
+  });
+
+  it("includes lifecycle engine stats when available", () => {
+    const deps = makeMockDeps({
+      lifecycleEngine: {
+        getStats: vi.fn().mockReturnValue({
+          running: true,
+          cycleCount: 5,
+          pendingApprovals: 2,
+        }),
+      },
+    });
+    const result = buildFinancialContext(deps);
+
+    expect(result).toContain("Lifecycle engine: running, cycles=5, pending_approvals=2");
+    expect(result).toContain("ACTION: 2 strategies awaiting L3 approval");
+  });
+
+  it("shows stopped engine without ACTION when no pending approvals", () => {
+    const deps = makeMockDeps({
+      lifecycleEngine: {
+        getStats: vi.fn().mockReturnValue({
+          running: false,
+          cycleCount: 10,
+          pendingApprovals: 0,
+        }),
+      },
+    });
+    const result = buildFinancialContext(deps);
+
+    expect(result).toContain("Lifecycle engine: stopped, cycles=10, pending_approvals=0");
+    expect(result).not.toContain("ACTION:");
+  });
+
+  it("omits lifecycle engine line when not provided", () => {
+    const deps = makeMockDeps(); // no lifecycleEngine
+    const result = buildFinancialContext(deps);
+
+    expect(result).not.toContain("Lifecycle engine");
   });
 });

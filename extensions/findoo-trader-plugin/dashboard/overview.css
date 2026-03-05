@@ -91,3 +91,112 @@
   color: var(--text-dim);
   margin-top: 2px;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Getting Started — onboarding panel for empty state
+   ════════════════════════════════════════════════════════════════ */
+
+.getting-started {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 24px;
+}
+.getting-started__header {
+  text-align: center;
+  max-width: 420px;
+}
+.getting-started__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-hi);
+  margin: 0 0 8px;
+}
+.getting-started__desc {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: 0;
+}
+.getting-started__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 420px;
+}
+.getting-started__card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.getting-started__card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.08);
+}
+.getting-started__num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(34, 197, 94, 0.15));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.getting-started__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.getting-started__card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.getting-started__card-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.getting-started__arrow {
+  font-size: 18px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+.getting-started__card:hover .getting-started__arrow {
+  color: var(--accent);
+}
+.getting-started__skip {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: var(--r-sm);
+  transition: color 0.12s;
+}
+.getting-started__skip:hover {
+  color: var(--text);
+}
