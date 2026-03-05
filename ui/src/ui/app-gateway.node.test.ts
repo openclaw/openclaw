@@ -243,6 +243,26 @@ describe("resolveControlUiClientVersion", () => {
     ).toBe("2026.3.3");
   });
 
+  it("returns serverVersion for same-origin relative targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "/ws",
+        serverVersion: "2026.3.3",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.3");
+  });
+
+  it("returns serverVersion for same-origin http targets", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "https://control.example.com/ws",
+        serverVersion: "2026.3.3",
+        pageUrl: "https://control.example.com/openclaw/",
+      }),
+    ).toBe("2026.3.3");
+  });
+
   it("omits serverVersion for cross-origin targets", () => {
     expect(
       resolveControlUiClientVersion({

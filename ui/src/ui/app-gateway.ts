@@ -102,8 +102,8 @@ export function resolveControlUiClientVersion(params: {
   try {
     const page = new URL(pageUrl);
     const gateway = new URL(params.gatewayUrl, page);
-    const expectedWsProtocol = page.protocol === "https:" ? "wss:" : "ws:";
-    if (gateway.protocol !== expectedWsProtocol || gateway.host !== page.host) {
+    const allowedProtocols = new Set(["ws:", "wss:", "http:", "https:"]);
+    if (!allowedProtocols.has(gateway.protocol) || gateway.host !== page.host) {
       return undefined;
     }
     return serverVersion;
