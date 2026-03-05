@@ -296,5 +296,5 @@ npx skills add https://github.com/googleworkspace/cli/tree/main/skills/gws-gmail
 - All output is structured JSON; pipe to `jq` for filtering.
 - Use `--dry-run` before any write or delete operation.
 - Use `--page-all` to auto-paginate large result sets (outputs NDJSON).
-- Confirm with the user before sending mail, creating calendar events, or deleting files.
+- The `gws` binary is also available from source: `git clone https://github.com/googleworkspace/cli && cd cli && cargo install --path .`
 - The `gws` binary is built in Rust and also available via `cargo install --path .` from source.
