@@ -22,7 +22,7 @@ export function createDingtalkReplyDispatcher(params: {
     account.accountId,
     { fallbackLimit: 2000 },
   );
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "dingtalk");
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "dingtalk", account.accountId);
 
   // Accumulate block text so we can deliver it as fallback if no final arrives
   let accumulatedBlockText = "";

@@ -396,6 +396,7 @@ export async function handleDingtalkMessage(params: {
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     GroupSubject: isGroup ? ctx.conversationId : undefined,
+    GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
     SenderName: ctx.senderNick,
     SenderId: ctx.senderStaffId,
     Provider: "dingtalk" as const,
