@@ -148,6 +148,7 @@ async function runNonStreamingChatSend(params: {
   idempotencyKey: string;
   message?: string;
   sessionKey?: string;
+  deliver?: boolean;
   client?: unknown;
   expectBroadcast?: boolean;
 }) {
@@ -156,6 +157,7 @@ async function runNonStreamingChatSend(params: {
       sessionKey: params.sessionKey ?? "main",
       message: params.message ?? "hello",
       idempotencyKey: params.idempotencyKey,
+      deliver: params.deliver,
     },
     respond: params.respond as unknown as Parameters<
       (typeof chatHandlers)["chat.send"]
@@ -369,6 +371,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-origin-routing",
       sessionKey: "agent:main:telegram:direct:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -403,6 +406,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-feishu-origin-routing",
       sessionKey: "agent:main:feishu:direct:ou_feishu_direct_123",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -436,6 +440,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-per-account-channel-peer-routing",
       sessionKey: "agent:main:telegram:account-a:direct:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -469,6 +474,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-legacy-channel-peer-routing",
       sessionKey: "agent:main:telegram:6812765697",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -504,6 +510,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-legacy-thread-channel-peer-routing",
       sessionKey: "agent:main:telegram:6812765697:thread:42",
+      deliver: true,
       expectBroadcast: false,
     });
 
@@ -573,6 +580,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       // Keep a second custom scope token so legacy-shape detection is exercised.
       // "agent:main:work" only yields one rest token and does not hit that path.
       sessionKey: "agent:main:work:ticket-123",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send keeps replies on the internal surface when deliver is not enabled", async () => {
+    createTranscriptFixture("openclaw-chat-send-no-deliver-internal-surface-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "discord",
+        to: "user:1234567890",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "user:1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-no-deliver-internal-surface",
+      sessionKey: "agent:main:discord:direct:1234567890",
+      deliver: false,
       expectBroadcast: false,
     });
 

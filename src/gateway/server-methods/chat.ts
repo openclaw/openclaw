@@ -856,6 +856,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const shouldDeliverExternally = p.deliver === true;
       const routeChannelCandidate = normalizeMessageChannel(
         entry?.deliveryContext?.channel ?? entry?.lastChannel,
       );
@@ -890,6 +891,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         (isChannelScopedSession || hasLegacyChannelPeerShape),
       );
       const hasDeliverableRoute =
+        shouldDeliverExternally &&
         canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
