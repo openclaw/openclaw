@@ -102,6 +102,26 @@ describe("verifyGoogleChatRequest", () => {
     });
   });
 
+  it("rejects trusted Chat issuer when email_verified is false", async () => {
+    verifyIdTokenMock.mockResolvedValue({
+      getPayload: () => ({
+        email: "chat@system.gserviceaccount.com",
+        email_verified: false,
+      }),
+    });
+
+    const result = await verifyGoogleChatRequest({
+      bearer: "token",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "invalid issuer: chat@system.gserviceaccount.com",
+    });
+  });
+
   it("fails closed when token or audience is missing", async () => {
     await expect(
       verifyGoogleChatRequest({
