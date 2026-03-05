@@ -248,6 +248,40 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).not.toContain("strict-skill");
   });
 
+  it("loads valid index entries even when one entry is malformed", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+
+    await fs.mkdir(extraRoot, { recursive: true });
+    await writeSkill({
+      dir: path.join(extraRoot, "valid-skill"),
+      name: "valid-skill",
+      description: "Still loads with a malformed sibling entry",
+    });
+    await fs.writeFile(
+      path.join(extraRoot, "skills-index.json"),
+      '{"version":1,"generated":"2026-03-05T00:00:00.000Z","skills":[{"name":"broken"},{"name":"valid-skill","path":"valid-skill"}]}',
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("valid-skill");
+  });
+
   it("skips out-of-root index entries", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const managedDir = path.join(workspaceDir, ".managed");
@@ -263,6 +297,42 @@ describe("loadWorkspaceSkillEntries", () => {
     await fs.writeFile(
       path.join(extraRoot, "skills-index.json"),
       '{"version":1,"generated":"2026-03-05T00:00:00.000Z","skills":[{"name":"outside-skill","path":"../outside-skill"}]}',
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+  });
+
+  it("skips symlinked index entries that resolve outside the root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+    const outsideSkillDir = path.join(workspaceDir, "outside-skill");
+
+    await fs.mkdir(extraRoot, { recursive: true });
+    await writeSkill({
+      dir: outsideSkillDir,
+      name: "outside-skill",
+      description: "Realpath escapes the indexed root",
+    });
+    await fs.symlink(outsideSkillDir, path.join(extraRoot, "linked-skill"));
+    await fs.writeFile(
+      path.join(extraRoot, "skills-index.json"),
+      '{"version":1,"generated":"2026-03-05T00:00:00.000Z","skills":[{"name":"linked-skill","path":"linked-skill"}]}',
       "utf-8",
     );
 
