@@ -67,33 +67,46 @@ To enable the PolarDB-powered memory system, follow these steps:
 
 # Examples
 ### Scenario 1: Memory Add (Ingestion)
-- **User**: "I’m starting to prepare for the AWS Solutions Architect exam next month, and I'm feeling a bit overwhelmed."
-- **Agent Action**: Call `save_fact(fact="User is planning to take the AWS Certified Solutions Architect exam next month.")`
-- **Logic**: Converts casual conversation into a structured fact with a specific goal and timeline.
+**User Input**: "I am planning to migrate our database to PolarDB next month."
+**Agent Action**: Extract the key fact and store it for the specific user.
+- **Tool**: save_fact
+- **Arguments**: 
+    - user_id: "dev_user_01"
+    - fact: "The user is planning a database migration to PolarDB next month."
 
 ### Scenario 2: Retrieval (Context Recall)
-- **User**: "Can you help me create a study roadmap?"
-- **Agent Action**: Call `search_memories(query="User's professional goals and upcoming certification plans")`
-- **Logic**: Proactively searches PolarDB to retrieve the "AWS Exam" context before generating a personalized response.
+**User Input**: "What was my plan for the database?"
+**Agent Action**: Retrieve historical context before answering the question.
+- **Tool**: search_memories
+- **Arguments**: 
+    - user_id: "dev_user_01"
+    - query: "database migration plans"
 
 ### Scenario 3: Update & Conflict Resolution
-- **User**: "I’ve decided to drop the AWS exam. I think Alibaba Cloud's PolarDB has more potential for my career, so I’m going for the ACP certification instead."
-- **Agent Action**: Call `save_fact(fact="User cancelled AWS exam plans and is now focusing on Alibaba Cloud ACP certification.")`
-- **Logic**: PolarDB Mem0 automatically resolves the conflict. In future interactions, the Agent will prioritize the new ACP goal over the outdated AWS info.
+**User Input**: "Actually, we decided to migrate in two months, not next month."
+**Agent Action**: Update the memory to resolve the conflict between the new input and old data.
+- **Tool**: save_fact
+- **Arguments**: 
+    - user_id: "dev_user_01"
+    - fact: "The database migration is now scheduled for two months from now (correction of previous next-month plan)."
 
 ### Scenario 4: Consolidation (Information Synthesis)
-- **User (Monday)**: "I'm self-studying vector databases today."
-- **User (Wednesday)**: "I'm currently reading about PolarDB's vector index implementation."
-- **Agent Action**: Call `save_fact(fact="User is deeply researching vector database technologies, with a specific focus on PolarDB vector indexing.")`
-- **Logic**: Instead of storing two fragmented notes, the system merges related information into a comprehensive user profile.
+**User Input**: "We also need to ensure high-availability is enabled."
+**Agent Action**: Combine new requirements with the existing project context.
+- **Tool**: save_fact
+- **Arguments**: 
+    - user_id: "dev_user_01"
+    - fact: "Migration requirements for PolarDB: must include high-availability features."
 
 ### Scenario 5: Decay & Temporal Relevance
-- **User**: "Should I continue with that project I mentioned before?"
-- **Agent Action**: Call `search_memories(query="Status of user's past ongoing projects")`
-- **Logic**: PolarDB calculates relevance based on timestamps. If a project was mentioned years ago and never touched again, its weight decays. The Agent can then respond intelligently: "Are you referring to the old Project X from 2023, or the Project Y we discussed last week?"
+**User Input**: "Forget about that old migration plan, we have an entirely new strategy."
+**Agent Action**: Clear stale or irrelevant information to maintain the accuracy of future recalls.
+- **Tool**: delete_all_memories
+- **Arguments**: 
+    - user_id: "dev_user_01"
 
 # Security & Privacy
-- **Data Isolation**: Memories are strictly isolated by  `user_id` and. No cross-user data leakage is possible.
+- **Data Isolation**: Memories are strictly isolated by  `user_id`. No cross-user data leakage is possible.
 - **Encryption**: The script dynamically connects to the address in MEM0_HOST.
 - **Compliance**: Powered by Alibaba Cloud PolarDB, adhering to global data protection standards.
 
