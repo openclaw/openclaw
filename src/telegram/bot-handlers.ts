@@ -241,6 +241,13 @@ export const registerTelegramHandlers = ({
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
   };
 
+  const clearAllDocumentBuffers = () => {
+    for (const [key, entry] of documentBatchBuffer) {
+      clearTimeout(entry.timer);
+      documentBatchBuffer.delete(key);
+    }
+  };
+
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
     if (!callback) return;
@@ -681,7 +688,13 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Document batch handling — buffer one-by-one document uploads
+      // Document batch handling — buffer rapid one-by-one document uploads into a
+      // single agent turn.  Telegram's media_group_id covers the "select multiple
+      // files at once" case.  This buffer handles the remaining scenarios where
+      // documents arrive as individual messages in quick succession:
+      //   - individual drag-and-drop / paste
+      //   - some older Telegram clients that don't batch uploads
+      //   - forwarding files one-by-one from another chat
       const senderId = msg.from?.id ? String(msg.from.id) : "";
       const docBatchKey = `${chatId}:${senderId}`;
 
@@ -769,4 +782,6 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   });
+
+  return { clearAllDocumentBuffers };
 };
