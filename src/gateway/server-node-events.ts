@@ -1,16 +1,27 @@
 import { randomUUID } from "node:crypto";
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
+  updateSessionStore,
+} from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  resolveAgentIdFromSessionKey,
+  scopedHeartbeatWakeOptions,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
@@ -133,6 +144,45 @@ function compactNotificationEventText(raw: string) {
   }
   const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
   return `${normalized.slice(0, safe)}…`;
+}
+
+function resolveNotificationHeartbeatTarget(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sourceSessionKey: string;
+}): { agentId: string; sessionKey: string } {
+  const fallbackAgentId = resolveAgentIdFromSessionKey(params.sourceSessionKey);
+  const agentId = normalizeAgentId(fallbackAgentId || resolveDefaultAgentId(params.cfg));
+
+  if (params.cfg.session?.scope === "global") {
+    return { agentId, sessionKey: "global" };
+  }
+
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  const configuredSession =
+    resolveAgentConfig(params.cfg, agentId)?.heartbeat?.session?.trim() ??
+    params.cfg.agents?.defaults?.heartbeat?.session?.trim() ??
+    "";
+
+  if (!configuredSession) {
+    return { agentId, sessionKey: mainSessionKey };
+  }
+
+  const normalizedConfigured = configuredSession.toLowerCase();
+  if (normalizedConfigured === "main" || normalizedConfigured === "global") {
+    return { agentId, sessionKey: mainSessionKey };
+  }
+
+  const candidate = toAgentStoreSessionKey({
+    agentId,
+    requestKey: configuredSession,
+    mainKey: params.cfg.session?.mainKey,
+  });
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: candidate,
+  });
+  return { agentId, sessionKey };
 }
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
@@ -470,7 +520,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const { canonicalKey: sourceSessionKey, cfg } = loadSessionEntry(sessionKeyRaw);
+      const heartbeatTarget = resolveNotificationHeartbeatTarget({
+        cfg,
+        sourceSessionKey,
+      });
       const packageName = normalizeNonEmptyString(obj.packageName);
       const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
       const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
@@ -488,11 +542,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const queued = enqueueSystemEvent(summary, {
-        sessionKey,
+        sessionKey: heartbeatTarget.sessionKey,
         contextKey: `notification:${key}`,
       });
       if (queued) {
-        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+        requestHeartbeatNow({
+          reason: "notifications-event",
+          agentId: heartbeatTarget.agentId,
+        });
       }
       return;
     }

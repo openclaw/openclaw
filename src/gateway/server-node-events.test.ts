@@ -11,7 +11,7 @@ const buildSessionLookup = (
     updatedAt?: number;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
@@ -37,10 +37,14 @@ vi.mock("../commands/agent.js", () => ({
   agentCommandFromIngress: ingressAgentCommandMock,
 }));
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  loadConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   STATE_DIR: "/tmp/openclaw-state",
 }));
 vi.mock("../config/sessions.js", () => ({
+  canonicalizeMainSessionAlias: vi.fn(({ sessionKey }: { sessionKey: string }) =>
+    sessionKey.toLowerCase(),
+  ),
+  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   updateSessionStore: vi.fn(),
 }));
 vi.mock("./session-utils.js", () => ({
@@ -199,7 +203,7 @@ describe("node exec events", () => {
 
   it("suppresses exec.started when notifyOnExit is false", async () => {
     loadConfigMock.mockReturnValueOnce({
-      session: { mainKey: "agent:main:main" },
+      session: { mainKey: "main" },
       tools: { exec: { notifyOnExit: false } },
     } as ReturnType<typeof loadConfig>);
     const ctx = buildCtx();
@@ -218,7 +222,7 @@ describe("node exec events", () => {
 
   it("suppresses exec.finished when notifyOnExit is false", async () => {
     loadConfigMock.mockReturnValueOnce({
-      session: { mainKey: "agent:main:main" },
+      session: { mainKey: "main" },
       tools: { exec: { notifyOnExit: false } },
     } as ReturnType<typeof loadConfig>);
     const ctx = buildCtx();
@@ -238,7 +242,7 @@ describe("node exec events", () => {
 
   it("suppresses exec.denied when notifyOnExit is false", async () => {
     loadConfigMock.mockReturnValueOnce({
-      session: { mainKey: "agent:main:main" },
+      session: { mainKey: "main" },
       tools: { exec: { notifyOnExit: false } },
     } as ReturnType<typeof loadConfig>);
     const ctx = buildCtx();
@@ -384,11 +388,11 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
-      { sessionKey: "node-node-n1", contextKey: "notification:notif-1" },
+      { sessionKey: "agent:main:main", contextKey: "notification:notif-1" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "node-node-n1",
+      agentId: "main",
     });
   });
 
@@ -405,15 +409,15 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
-      { sessionKey: "node-node-n2", contextKey: "notification:notif-2" },
+      { sessionKey: "agent:main:main", contextKey: "notification:notif-2" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "node-node-n2",
+      agentId: "main",
     });
   });
 
-  it("wakes heartbeat on payload sessionKey when provided", async () => {
+  it("wakes only the resolved agent even when payload sessionKey is provided", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n4", {
       event: "notifications.changed",
@@ -426,11 +430,31 @@ describe("notifications changed events", () => {
 
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "agent:main:main",
+      agentId: "main",
     });
   });
 
-  it("canonicalizes notifications session key before enqueue and wake", async () => {
+  it("resolves wake agentId from canonicalized notification session key", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-n4b"),
+      canonicalKey: "agent:ops:node-node-n4b",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n4b", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-4b",
+      }),
+    });
+
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      agentId: "ops",
+    });
+  });
+
+  it("routes notification events to the heartbeat session while scoping wake by agent", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("node-node-n5"),
       canonicalKey: "agent:main:node-node-n5",
@@ -447,11 +471,45 @@ describe("notifications changed events", () => {
     expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
-      { sessionKey: "agent:main:node-node-n5", contextKey: "notification:notif-5" },
+      { sessionKey: "agent:main:main", contextKey: "notification:notif-5" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
-      sessionKey: "agent:main:node-node-n5",
+      agentId: "main",
+    });
+  });
+
+  it("routes notifications to configured heartbeat.session when provided", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-n5b"),
+      cfg: {
+        session: { mainKey: "main" },
+        agents: {
+          defaults: {
+            heartbeat: {
+              session: "agent:main:direct:choury",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      canonicalKey: "agent:main:node-node-n5b",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n5b", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-5b",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n5b key=notif-5b)",
+      { sessionKey: "agent:main:direct:choury", contextKey: "notification:notif-5b" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      agentId: "main",
     });
   });
 
