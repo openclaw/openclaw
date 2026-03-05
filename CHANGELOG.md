@@ -26,14 +26,19 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/compaction safeguard pre-check: skip embedded compaction before entering the Pi SDK when a session has no real conversation messages, avoiding unnecessary LLM API calls on idle sessions. (#36451) thanks @Sid-Qin.
 - iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Sessions/daily reset transcript archival: archive prior transcript files during stale-session scheduled/daily resets by capturing the previous session entry before rollover, preventing orphaned transcript files on disk. (#35493) Thanks @byungsker.
 - Feishu/group slash command detection: normalize group mention wrappers before command-authorization probing so mention-prefixed commands (for example `@Bot/model` and `@Bot /reset`) are recognized as gateway commands instead of being forwarded to the agent. (#35994) Thanks @liuxiaopai-ai.
 - Agents/context pruning: guard assistant thinking/text char estimation against malformed blocks (missing `thinking`/`text` strings or null entries) so pruning no longer crashes with malformed provider content. (openclaw#35146) thanks @Sid-Qin.
+- Agents/transcript policy: set `preserveSignatures` to Anthropic-only handling in `resolveTranscriptPolicy` so Anthropic thinking signatures are preserved while non-Anthropic providers remain unchanged. (#32813) thanks @Sid-Qin.
 - Agents/schema cleaning: detect Venice + Grok model IDs as xAI-proxied targets so unsupported JSON Schema keywords are stripped before requests, preventing Venice/Grok `Invalid arguments` failures. (openclaw#35355) thanks @Sid-Qin.
 - Skills/native command deduplication: centralize skill command dedupe by canonical `skillName` in `listSkillCommandsForAgents` so duplicate suffixed variants (for example `_2`) are no longer surfaced across interfaces outside Discord. (#27521) thanks @shivama205.
 - Agents/xAI tool-call argument decoding: decode HTML-entity encoded xAI/Grok tool-call argument values (`&amp;`, `&quot;`, `&lt;`, `&gt;`, numeric entities) before tool execution so commands with shell operators and quotes no longer fail with parse errors. (#35276) Thanks @Sid-Qin.
 - Agents/thinking-tag promotion hardening: guard `promoteThinkingTagsToBlocks` against malformed assistant content entries (`null`/`undefined`) before `block.type` reads so malformed provider payloads no longer crash session processing while preserving pass-through behavior. (#35143) thanks @Sid-Qin.
 - Gateway/Control UI version reporting: align runtime and browser client version metadata to avoid `dev` placeholders, wait for bootstrap version before first UI websocket connect, and only forward bootstrap `serverVersion` to same-origin gateway targets to prevent cross-target version leakage. (from #35230, #30928, #33928) Thanks @Sid-Qin, @joelnishanth, and @MoerAI.
+- Control UI/markdown parser crash fallback: catch `marked.parse()` failures and fall back to escaped plain-text `<pre>` rendering so malformed recursive markdown no longer crashes Control UI session rendering on load. (#36445) Thanks @BinHPdev.
+- Control UI/markdown fallback regression coverage: add explicit regression assertions for parser-error fallback behavior so malformed markdown no longer risks reintroducing hard-crash rendering paths in future markdown/parser upgrades. (#36445) Thanks @BinHPdev.
 - Web UI/config form: treat `additionalProperties: true` object schemas as editable map entries instead of unsupported fields so Accounts-style maps stay editable in form mode. (#35380, supersedes #32072) Thanks @stakeswky and @liuxiaopai-ai.
 - Feishu/streaming card delivery synthesis: unify snapshot and delta streaming merge semantics, apply overlap-aware final merge, suppress duplicate final text delivery (including text+media final packets), prefer topic-thread `message.reply` routing when a reply target exists, and tune card print cadence to avoid duplicate incremental rendering. (from #33245, #32896, #33840) Thanks @rexl2018, @kcinzgg, and @aerelune.
 - Feishu/group mention detection: carry startup-probed bot display names through monitor dispatch so `requireMention` checks compare against current bot identity instead of stale config names, fixing missed `@bot` handling in groups while preserving multi-bot false-positive guards. (#36317, #34271) Thanks @liuxiaopai-ai.
@@ -132,6 +137,8 @@ Docs: https://docs.openclaw.ai
 - Feishu/groupPolicy legacy alias compatibility: treat legacy `groupPolicy: "allowall"` as `open` in both schema parsing and runtime policy checks so intended open-group configs no longer silently drop group messages when `groupAllowFrom` is empty. (from #36358) Thanks @Sid-Qin.
 
 - Mattermost/plugin SDK import policy: replace remaining monolithic `openclaw/plugin-sdk` imports in Mattermost mention-gating paths/tests with scoped subpaths (`openclaw/plugin-sdk/compat` and `openclaw/plugin-sdk/mattermost`) so `pnpm check` passes `lint:plugins:no-monolithic-plugin-sdk-entry-imports` on baseline. (#36480) Thanks @Takhoffman.
+
+- Agents/failover cooldown classification: stop treating generic `cooling down` text as provider `rate_limit` so healthy models no longer show false global cooldown/rate-limit warnings while explicit `model_cooldown` markers still trigger failover. (#32972) thanks @stakeswky.
 
 ## 2026.3.2
 
@@ -348,6 +355,7 @@ Docs: https://docs.openclaw.ai
 - Cron/store migration: normalize legacy cron jobs with string `schedule` and top-level `command`/`timeout` fields into canonical schedule/payload/session-target shape on load, preventing schedule-error loops on old persisted stores. (#31926) Thanks @bmendonca3.
 - Tests/Windows backup rotation: skip chmod-only backup permission assertions on Windows while retaining compose/rotation/prune coverage across platforms to avoid false CI failures from Windows non-POSIX mode semantics. (#32286) Thanks @jalehman.
 - Tests/Subagent announce: set `OPENCLAW_TEST_FAST=1` before importing `subagent-announce` format suites so module-level fast-mode constants are captured deterministically on Windows CI, preventing timeout flakes in nested completion announce coverage. (#31370) Thanks @zwffff.
+- Control UI/markdown recursion fallback: catch markdown parser failures and safely render escaped plain-text fallback instead of crashing the Control UI on pathological markdown history payloads. (#36445, fixes #36213) Thanks @BinHPdev.
 
 ## 2026.3.1
 
@@ -483,6 +491,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/provider config precedence: prefer exact `models.providers.<name>` matches before normalized provider aliases in embedded model resolution, preventing alias/canonical key collisions from applying the wrong provider `api`, `baseUrl`, or headers. (#35934) thanks @RealKai42.
 - Logging/Subsystem console timestamps: route subsystem console timestamp rendering through `formatConsoleTimestamp(...)` so `pretty` and timestamp-prefix output use local timezone formatting consistently instead of inline UTC `toISOString()` paths. (#25970) Thanks @openperf.
 - Feishu/Multi-account + reply reliability: add `channels.feishu.defaultAccount` outbound routing support with schema validation, prevent inbound preview text from leaking into prompt system events, keep quoted-message extraction text-first (post/interactive/file placeholders instead of raw JSON), route Feishu video sends as `msg_type: "file"`, and avoid websocket event blocking by using non-blocking event handling in monitor dispatch. Landed from contributor PRs #31209, #29610, #30432, #30331, and #29501. Thanks @stakeswky, @hclsys, @bmendonca3, @patrick-yingxi-pan, and @zwffff.
 - Feishu/Target routing + replies + dedupe: normalize provider-prefixed targets (`feishu:`/`lark:`), prefer configured `channels.feishu.defaultAccount` for tool execution, honor Feishu outbound `renderMode` in adapter text/caption sends, fall back to normal send when reply targets are withdrawn/deleted, and add synchronous in-memory dedupe guard for concurrent duplicate inbound events. Landed from contributor PRs #30428, #30438, #29958, #30444, and #29463. Thanks @bmendonca3 and @Yaxuan42.
