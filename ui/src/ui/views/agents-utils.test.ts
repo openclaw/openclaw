@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveAgentConfigEntryIndex,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +97,62 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("resolveAgentConfigEntryIndex", () => {
+  it("bootstraps agents.list when missing", () => {
+    const result = resolveAgentConfigEntryIndex({}, "main");
+
+    expect(result).toEqual({
+      index: 0,
+      bootstrapPatches: [
+        {
+          path: ["agents", "list"],
+          value: [{ id: "main" }],
+        },
+      ],
+    });
+  });
+
+  it("returns existing agent index without bootstrap patches", () => {
+    const result = resolveAgentConfigEntryIndex(
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "writer" }],
+        },
+      },
+      "writer",
+    );
+
+    expect(result).toEqual({
+      index: 1,
+      bootstrapPatches: [],
+    });
+  });
+
+  it("appends a missing agent to the existing list", () => {
+    const result = resolveAgentConfigEntryIndex(
+      {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      },
+      "ops",
+    );
+
+    expect(result).toEqual({
+      index: 1,
+      bootstrapPatches: [
+        {
+          path: ["agents", "list", 1],
+          value: { id: "ops" },
+        },
+      ],
+    });
+  });
+
+  it("returns null for invalid list shape", () => {
+    expect(resolveAgentConfigEntryIndex({ agents: { list: {} } }, "main")).toBeNull();
   });
 });

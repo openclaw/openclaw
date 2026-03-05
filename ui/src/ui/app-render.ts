@@ -66,7 +66,11 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
+import {
+  resolveAgentConfigEntryIndex,
+  resolveConfiguredCronModelSuggestions,
+  sortLocaleStrings,
+} from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -663,23 +667,14 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  if (!configValue) {
+                  const resolved = resolveAgentConfigEntryIndex(configValue, agentId);
+                  if (!resolved) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
+                  for (const patch of resolved.bootstrapPatches) {
+                    updateConfigFormValue(state, patch.path, patch.value);
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
+                  const index = resolved.index;
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
                     updateConfigFormValue(state, [...basePath, "profile"], profile);
@@ -691,23 +686,14 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  if (!configValue) {
+                  const resolved = resolveAgentConfigEntryIndex(configValue, agentId);
+                  if (!resolved) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
+                  for (const patch of resolved.bootstrapPatches) {
+                    updateConfigFormValue(state, patch.path, patch.value);
                   }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
+                  const index = resolved.index;
                   const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
                     updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);

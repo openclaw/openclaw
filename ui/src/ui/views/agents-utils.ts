@@ -134,6 +134,56 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
   };
 }
 
+export type AgentConfigEntryResolution = {
+  index: number;
+  bootstrapPatches: Array<{
+    path: Array<string | number>;
+    value: unknown;
+  }>;
+};
+
+export function resolveAgentConfigEntryIndex(
+  config: Record<string, unknown> | null,
+  agentId: string,
+): AgentConfigEntryResolution | null {
+  const normalizedAgentId = agentId.trim();
+  if (!normalizedAgentId) {
+    return null;
+  }
+  const cfg = config as ConfigSnapshot | null;
+  const list = cfg?.agents?.list;
+  if (list == null) {
+    return {
+      index: 0,
+      bootstrapPatches: [
+        {
+          path: ["agents", "list"],
+          value: [{ id: normalizedAgentId }],
+        },
+      ],
+    };
+  }
+  if (!Array.isArray(list)) {
+    return null;
+  }
+  const existingIndex = list.findIndex(
+    (entry) =>
+      entry && typeof entry === "object" && "id" in entry && entry.id === normalizedAgentId,
+  );
+  if (existingIndex >= 0) {
+    return { index: existingIndex, bootstrapPatches: [] };
+  }
+  return {
+    index: list.length,
+    bootstrapPatches: [
+      {
+        path: ["agents", "list", list.length],
+        value: { id: normalizedAgentId },
+      },
+    ],
+  };
+}
+
 export type AgentContext = {
   workspace: string;
   model: string;
