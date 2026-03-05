@@ -107,15 +107,21 @@ export function resolveRuntimeServiceVersion(
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+  const openclawVersion = firstNonEmpty(env["OPENCLAW_VERSION"]);
+  const serviceVersion = firstNonEmpty(env["OPENCLAW_SERVICE_VERSION"]);
+  const npmPackageVersion = firstNonEmpty(env["npm_package_version"]);
 
-  return (
-    firstNonEmpty(
-      env["OPENCLAW_VERSION"],
-      runtimeVersion,
-      env["OPENCLAW_SERVICE_VERSION"],
-      env["npm_package_version"],
-    ) ?? fallback
-  );
+  if (openclawVersion) {
+    return openclawVersion;
+  }
+
+  // npm global installs can update package.json while an older bundled constant
+  // survives in dist metadata. When they disagree, trust live service/package markers.
+  if (runtimeVersion && npmPackageVersion && runtimeVersion !== npmPackageVersion) {
+    return serviceVersion ?? npmPackageVersion;
+  }
+
+  return runtimeVersion ?? serviceVersion ?? npmPackageVersion ?? fallback;
 }
 
 // Single source of truth for the current OpenClaw version.
