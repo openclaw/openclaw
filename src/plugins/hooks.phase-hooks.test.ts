@@ -72,4 +72,43 @@ describe("phase hooks merger", () => {
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
   });
+
+  it("before_prompt_build passes both appendSystemPrompt and prependContext independently", async () => {
+    // Both fields pass through — plugins decide what goes where
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin",
+      () => ({
+        appendSystemPrompt: "memory context here",
+        prependContext: "memory context here",
+      }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("memory context here");
+    expect(result?.prependContext).toBe("memory context here");
+  });
+
+  it("before_prompt_build uses both when appendSystemPrompt differs from prependContext", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin",
+      () => ({
+        appendSystemPrompt: "instructions for the model",
+        prependContext: "context for user prompt",
+      }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("instructions for the model");
+    expect(result?.prependContext).toBe("context for user prompt");
+  });
 });

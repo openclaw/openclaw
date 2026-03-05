@@ -364,11 +364,16 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /** The current system prompt text, if available. Plugins can read this to make informed decisions. */
+  systemPrompt?: string;
 };
 
 export type PluginHookBeforePromptBuildResult = {
+  /** Replace the entire system prompt. Use appendSystemPrompt for additive injection. */
   systemPrompt?: string;
   prependContext?: string;
+  /** Text to append to the system prompt (preserves built-in instructions). */
+  appendSystemPrompt?: string;
 };
 
 // before_agent_start hook (legacy compatibility: combines both phases)
@@ -391,6 +396,15 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+};
+
+export type PluginHookLlmInputResult = {
+  /**
+   * Text to append to the system prompt before the LLM call.
+   * Useful for injecting memory or context into the system prompt
+   * without replacing it entirely.
+   */
+  appendSystemPrompt?: string;
 };
 
 // llm_output hook
@@ -694,7 +708,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,

@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
@@ -144,6 +145,20 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       acc?.prependContext && next.prependContext
         ? `${acc.prependContext}\n\n${next.prependContext}`
         : (next.prependContext ?? acc?.prependContext),
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
+  });
+
+  const mergeLlmInputResult = (
+    acc: PluginHookLlmInputResult | undefined,
+    next: PluginHookLlmInputResult,
+  ): PluginHookLlmInputResult => ({
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
   });
 
   const mergeSubagentSpawningResult = (
@@ -323,11 +338,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe the input payload sent to the LLM and optionally
+   * inject context by returning { appendSystemPrompt: string }.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
+      "llm_input",
+      event,
+      ctx,
+      mergeLlmInputResult,
+    );
   }
 
   /**
