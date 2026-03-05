@@ -20,6 +20,29 @@ describe("applyDiscoveredContextWindows", () => {
 
     expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
   });
+
+  it("stores provider-scoped values when providers share a model id", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        {
+          provider: "github-copilot",
+          id: "gemini-3.1-pro-preview",
+          contextWindow: 128_000,
+        },
+        {
+          provider: "google-gemini-cli",
+          id: "gemini-3.1-pro-preview",
+          contextWindow: 1_048_576,
+        },
+      ],
+    });
+
+    expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(128_000);
+  });
 });
 
 describe("applyConfiguredContextWindows", () => {
@@ -58,6 +81,26 @@ describe("applyConfiguredContextWindows", () => {
 
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
+  });
+
+  it("stores provider-scoped configured values for shared model ids", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          "github-copilot": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 128_000 }],
+          },
+          "google-gemini-cli": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 });
 

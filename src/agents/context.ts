@@ -8,7 +8,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -40,6 +40,12 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
+    const providerScopedKey = toProviderScopedModelKey(model.provider, model.id);
+    if (providerScopedKey && providerScopedKey !== model.id) {
+      // Keep provider-specific values so status/context calculations can use the
+      // correct limit even when multiple providers share the same model id.
+      params.cache.set(providerScopedKey, contextWindow);
+    }
     const existing = params.cache.get(model.id);
     // When multiple providers expose the same model id with different limits,
     // prefer the smaller window so token budgeting is fail-safe (no overestimation).
@@ -57,7 +63,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerName, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -69,6 +75,10 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
+      const providerScopedKey = toProviderScopedModelKey(providerName, modelId);
+      if (providerScopedKey && providerScopedKey !== modelId) {
+        params.cache.set(providerScopedKey, contextWindow);
+      }
     }
   }
 }
@@ -236,6 +246,21 @@ function resolveProviderModelRef(params: {
   return { provider, model };
 }
 
+function toProviderScopedModelKey(provider?: string, modelId?: string): string | undefined {
+  const normalizedModel = modelId?.trim();
+  if (!normalizedModel) {
+    return undefined;
+  }
+  if (normalizedModel.includes("/")) {
+    return normalizedModel;
+  }
+  const normalizedProvider = provider?.trim().toLowerCase();
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  return `${normalizedProvider}/${normalizedModel}`;
+}
+
 function isAnthropic1MModel(provider: string, model: string): boolean {
   if (provider !== "anthropic") {
     return false;
@@ -266,6 +291,12 @@ export function resolveContextTokensForModel(params: {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+    const providerScopedTokens = lookupContextTokens(
+      toProviderScopedModelKey(ref.provider, ref.model),
+    );
+    if (providerScopedTokens !== undefined) {
+      return providerScopedTokens;
     }
   }
 
