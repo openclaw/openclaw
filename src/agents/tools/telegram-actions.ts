@@ -1,7 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { createTelegramActionGate } from "../../telegram/accounts.js";
+import {
+  createTelegramActionGate,
+  resolveTelegramPollActionGateState,
+} from "../../telegram/accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -252,10 +255,11 @@ export async function handleTelegramAction(
   }
 
   if (action === "poll") {
-    if (!isActionEnabled("sendMessage")) {
+    const pollActionState = resolveTelegramPollActionGateState(isActionEnabled);
+    if (!pollActionState.sendMessageEnabled) {
       throw new Error("Telegram sendMessage is disabled.");
     }
-    if (!isActionEnabled("poll")) {
+    if (!pollActionState.pollEnabled) {
       throw new Error("Telegram polls are disabled.");
     }
     const to = readStringParam(params, "to", { required: true });

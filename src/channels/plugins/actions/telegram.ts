@@ -11,6 +11,7 @@ import { resolveTelegramPollVisibility } from "../../../poll-params.js";
 import {
   createTelegramActionGate,
   listEnabledTelegramAccounts,
+  resolveTelegramPollActionGateState,
 } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
@@ -79,7 +80,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const isEnabled = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (isEnabled("sendMessage") && isEnabled("poll")) {
+    if (resolveTelegramPollActionGateState(isEnabled).enabled) {
       actions.add("poll");
     }
     if (isEnabled("reactions")) {

@@ -43,7 +43,10 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
     if (def.kind === "stringArray" && Array.isArray(value) && value.length > 0) {
       return true;
     }
-    if ((def.kind === "number" || def.kind === "boolean") && value !== undefined) {
+    if (def.kind === "number" && typeof value === "number" && Number.isFinite(value)) {
+      return true;
+    }
+    if (def.kind === "boolean" && value === true) {
       return true;
     }
   }

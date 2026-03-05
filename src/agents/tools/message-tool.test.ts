@@ -45,7 +45,8 @@ function createChannelPlugin(params: {
   label: string;
   docsPath: string;
   blurb: string;
-  actions: string[];
+  actions?: string[];
+  listActions?: (params: { cfg: unknown }) => string[];
   supportsButtons?: boolean;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
@@ -65,7 +66,11 @@ function createChannelPlugin(params: {
     },
     ...(params.messaging ? { messaging: params.messaging } : {}),
     actions: {
-      listActions: () => params.actions as never,
+      listActions:
+        params.listActions ??
+        (() => {
+          return (params.actions ?? []) as never;
+        }),
       ...(params.supportsButtons ? { supportsButtons: () => true } : {}),
     },
   };
@@ -245,6 +250,47 @@ describe("message tool schema scoping", () => {
     const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("poll");
+  });
+
+  it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
+    const telegramPluginWithConfig = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      listActions: ({ cfg }) => {
+        const telegramCfg = (cfg as { channels?: { telegram?: { actions?: { poll?: boolean } } } })
+          .channels?.telegram;
+        return telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"];
+      },
+      supportsButtons: true,
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPluginWithConfig },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          telegram: {
+            actions: {
+              poll: false,
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
+
+    expect(actionEnum).not.toContain("poll");
+    expect(properties.pollDurationSeconds).toBeUndefined();
+    expect(properties.pollAnonymous).toBeUndefined();
+    expect(properties.pollPublic).toBeUndefined();
   });
 });
 
