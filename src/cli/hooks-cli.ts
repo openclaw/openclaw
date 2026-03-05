@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/io.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,

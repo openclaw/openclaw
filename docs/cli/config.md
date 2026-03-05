@@ -11,6 +11,19 @@ Config helpers: get/set/unset/validate values by path and print the active
 config file. Run without a subcommand to open
 the configure wizard (same as `openclaw configure`).
 
+## Write safety model
+
+Config writes use a transactional pipeline:
+
+1. `prepare` (isolated validation in a staging file)
+2. `commit` (write to active config path)
+3. `verify` (re-read and validate committed snapshot)
+4. `rollback` (restore pre-write snapshot on verify failure)
+
+If a write fails, OpenClaw reports transaction details (stage, rollback status,
+and issues when available). Failed writes do not intentionally leave a broken
+committed config on disk.
+
 ## Examples
 
 ```bash
@@ -55,7 +68,11 @@ openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 
 - `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location).
 
-Restart the gateway after edits.
+## Apply changes
+
+After edits, restart the gateway to apply restart-scoped fields (`gateway.*`,
+`plugins`, etc.). Restart now includes config preflight and backup recovery
+attempts before proceeding.
 
 ## Validate
 

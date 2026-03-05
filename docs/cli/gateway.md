@@ -163,6 +163,9 @@ Notes:
 
 - `gateway install` supports `--port`, `--runtime`, `--token`, `--force`, `--json`.
 - Lifecycle commands accept `--json` for scripting.
+- `gateway restart` runs config preflight before restart:
+  - if config is invalid, OpenClaw attempts restore from valid backups (`openclaw.json.bak`, `.bak.1...`)
+  - if recovery fails, restart is blocked with actionable hints (`openclaw config validate`, `openclaw doctor`)
 
 ## Discover gateways (Bonjour)
 

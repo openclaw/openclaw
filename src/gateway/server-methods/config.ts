@@ -2,13 +2,14 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   CONFIG_PATH,
+  commitConfigWriteTransactionOrThrow,
+  ConfigWriteTransactionError,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -243,6 +244,59 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   });
 }
 
+async function commitConfigTransactionOrRespond(params: {
+  method: "config.set" | "config.patch" | "config.apply";
+  config: OpenClawConfig;
+  writeOptions: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["writeOptions"];
+  expectedBaseHash: string | null;
+  respond: RespondFn;
+}): Promise<{ transactionId: string } | null> {
+  try {
+    const transaction = await commitConfigWriteTransactionOrThrow({
+      config: params.config,
+      writeOptions: params.writeOptions,
+      expectedBaseHash: params.expectedBaseHash,
+    });
+    return { transactionId: transaction.transactionId };
+  } catch (error) {
+    if (!(error instanceof ConfigWriteTransactionError)) {
+      throw error;
+    }
+    const rollbackStateText = error.rolledBack
+      ? error.beforeHash
+        ? `changes were rolled back to the previous version (config hash ${error.beforeHash})`
+        : "changes were rolled back to the previous version"
+      : error.stage === "prepare" || error.stage === "commit"
+        ? "config file was left unchanged"
+        : error.stage === "rollback"
+          ? "rollback did not complete"
+          : "config state could not be confirmed";
+    const isBaseHashMismatch = error.reason.startsWith("config base hash mismatch:");
+    const message = isBaseHashMismatch
+      ? "config changed since last load; re-run config.get and retry"
+      : `${params.method} transaction failed: ${error.reason}; ${rollbackStateText}; retry the config update`;
+
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        isBaseHashMismatch ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        message,
+        {
+          details: {
+            transactionId: error.transactionId,
+            stage: error.stage,
+            rolledBack: error.rolledBack,
+            beforeHash: error.beforeHash,
+            issues: error.issues,
+          },
+        },
+      ),
+    );
+    return null;
+  }
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -270,13 +324,26 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    await writeConfigFile(parsed.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.set",
+      config: parsed.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
+        },
       },
       undefined,
     );
@@ -360,7 +427,16 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
-    await writeConfigFile(validated.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.patch",
+      config: validated.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -399,6 +475,10 @@ export const configHandlers: GatewayRequestHandlers = {
           path: sentinelPath,
           payload,
         },
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
+        },
       },
       undefined,
     );
@@ -420,7 +500,16 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
-    await writeConfigFile(parsed.config, writeOptions);
+    const transaction = await commitConfigTransactionOrRespond({
+      method: "config.apply",
+      config: parsed.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      respond,
+    });
+    if (!transaction) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -458,6 +547,10 @@ export const configHandlers: GatewayRequestHandlers = {
         sentinel: {
           path: sentinelPath,
           payload,
+        },
+        transaction: {
+          id: transaction.transactionId,
+          verified: true,
         },
       },
       undefined,

@@ -779,6 +779,7 @@ Notes:
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
+- `gateway restart` blocks on invalid config and attempts backup recovery before restart.
 
 ### `logs`
 

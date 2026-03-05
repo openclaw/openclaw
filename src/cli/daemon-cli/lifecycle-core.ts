@@ -24,7 +24,7 @@ type RestartPostCheckContext = {
   json: boolean;
   stdout: Writable;
   warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
+  fail: (message: string, hints?: string[]) => never;
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -46,13 +46,14 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     }
     emitDaemonActionJson({ action: params.action, ...payload });
   };
-  const fail = (message: string, hints?: string[]) => {
+  const fail = (message: string, hints?: string[]): never => {
     if (params.json) {
       emit({ ok: false, error: message, hints });
     } else {
       defaultRuntime.error(message);
     }
     defaultRuntime.exit(1);
+    throw new Error("unreachable");
   };
   return { stdout, emit, fail };
 }
@@ -249,6 +250,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
+  preRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -275,6 +277,9 @@ export async function runServiceRestart(params: {
   }
 
   const warnings: string[] = [];
+  if (params.preRestartCheck) {
+    await params.preRestartCheck({ json, stdout, warnings, fail });
+  }
   if (params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
     try {
