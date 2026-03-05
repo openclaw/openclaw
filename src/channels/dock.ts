@@ -288,14 +288,16 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       media: true,
       blockStreaming: true,
     },
-    outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
+    outbound: { textChunkLimit: 5000 },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
         stringifyAllowFrom(
           resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom ?? [],
         ),
       formatAllowFrom: ({ allowFrom }) =>
-        formatAllowFromWithReplacements(allowFrom, [/^line:/i, /^user:/i]),
+        trimAllowFromEntries(allowFrom).map((entry) =>
+          entry.replace(/^line:/i, "").replace(/^user:/i, ""),
+        ),
     },
     groups: {
       resolveRequireMention: ({ cfg, accountId, groupId }) => {
