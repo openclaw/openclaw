@@ -9,6 +9,8 @@ import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+
 export type DownloadImageResult = {
   buffer: Buffer;
   contentType?: string;
@@ -78,6 +80,11 @@ async function readFeishuResponseBuffer(params: {
   throw new Error(`${params.errorPrefix}: unexpected response format. Keys: [${types}]`);
 }
 
+function createFeishuMediaClient(account: ReturnType<typeof resolveFeishuAccount>) {
+  // Media uploads/downloads routinely take longer than the default API budget.
+  return createFeishuClient({ ...account, httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS });
+}
+
 /**
  * Download an image from Feishu using image_key.
  * Used for downloading images sent in messages.
@@ -97,10 +104,7 @@ export async function downloadImageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const client = createFeishuMediaClient(account);
 
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
@@ -135,10 +139,7 @@ export async function downloadMessageResourceFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const client = createFeishuMediaClient(account);
 
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
@@ -182,10 +183,7 @@ export async function uploadImageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const client = createFeishuMediaClient(account);
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -252,10 +250,7 @@ export async function uploadFileFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const client = createFeishuMediaClient(account);
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library

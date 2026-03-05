@@ -200,6 +200,12 @@ describe("sendMediaFeishu msg_type routing", () => {
         data: expect.objectContaining({ msg_type: "image" }),
       }),
     );
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main",
+        httpTimeoutMs: 120_000,
+      }),
+    );
   });
 
   it("uses msg_type=media when replying with mp4", async () => {
@@ -320,6 +326,12 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(imageGetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { image_key: imageKey },
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main",
+        httpTimeoutMs: 120_000,
       }),
     );
     expect(result.buffer).toEqual(Buffer.from("image-data"));
