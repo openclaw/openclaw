@@ -7,6 +7,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { readSystemPromptFile } from "../../agents/system-prompt-file.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -267,7 +268,9 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  const systemPromptFileContent = readSystemPromptFile(agentCfg?.systemPromptFile) ?? "";
   const extraSystemPromptParts = [
+    systemPromptFileContent,
     inboundMetaPrompt,
     groupChatContext,
     groupIntro,
