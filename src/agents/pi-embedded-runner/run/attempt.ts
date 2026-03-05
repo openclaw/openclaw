@@ -1633,18 +1633,23 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
-          }
-
-          // Restore original streamFn after prompt (wrapper is one-shot
-          // but restore explicitly for safety in case of retries).
-          if (params.documents && params.documents.length > 0) {
-            activeSession.agent.streamFn = prevStreamFn;
+          try {
+            // Only pass images option if there are actually images to pass
+            // This avoids potential issues with models that don't expect the images parameter
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          } finally {
+            // Restore original streamFn unconditionally (success AND error paths).
+            // Without this, a thrown error leaves the one-shot wrapper installed,
+            // causing nested wrappers to accumulate on subsequent retries/turns.
+            if (params.documents && params.documents.length > 0) {
+              activeSession.agent.streamFn = prevStreamFn;
+            }
           }
         } catch (err) {
           promptError = err;
