@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
@@ -190,4 +191,92 @@ Never do Y.
       expect(result).toBeNull();
     },
   );
+
+  it("substitutes YYYY-MM-DD with the actual date in extracted sections", async () => {
+    const content = `## Session Startup
+
+Read memory/YYYY-MM-DD.md and memory/yesterday.md.
+
+## Red Lines
+
+Never modify memory/YYYY-MM-DD.md destructively.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+    // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
+    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
+    const result = await readPostCompactionContext(tmpDir, cfg, nowMs);
+    expect(result).not.toBeNull();
+    expect(result).toContain("memory/2026-03-03.md");
+    expect(result).not.toContain("memory/YYYY-MM-DD.md");
+    expect(result).toContain("Current time:");
+    expect(result).toContain("America/New_York");
+  });
+
+  it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
+    const content = `## Session Startup
+
+Read WORKFLOW.md on startup.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
+    const result = await readPostCompactionContext(tmpDir, undefined, nowMs);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Current time:");
+  });
+
+  it("falls back to legacy section names (Every Session / Safety)", async () => {
+    const content = `# Rules
+
+## Every Session
+
+Read SOUL.md and USER.md.
+
+## Safety
+
+Don't exfiltrate private data.
+
+## Other
+
+Ignore this.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Every Session");
+    expect(result).toContain("Read SOUL.md");
+    expect(result).toContain("Safety");
+    expect(result).toContain("Don't exfiltrate");
+    expect(result).not.toContain("Other");
+  });
+
+  it("prefers new section names over legacy when both exist", async () => {
+    const content = `# Rules
+
+## Session Startup
+
+New startup instructions.
+
+## Every Session
+
+Old startup instructions.
+
+## Red Lines
+
+New red lines.
+
+## Safety
+
+Old safety rules.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("New startup instructions");
+    expect(result).toContain("New red lines");
+    expect(result).not.toContain("Old startup instructions");
+    expect(result).not.toContain("Old safety rules");
+  });
 });

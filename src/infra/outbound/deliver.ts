@@ -53,7 +53,13 @@ const TELEGRAM_TEXT_LIMIT = 4096;
 type SendMatrixMessage = (
   to: string,
   text: string,
-  opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
+  opts?: {
+    cfg?: OpenClawConfig;
+    mediaUrl?: string;
+    replyToId?: string;
+    threadId?: string;
+    timeoutMs?: number;
+  },
 ) => Promise<{ messageId: string; roomId: string }>;
 
 export type OutboundSendDeps = {
@@ -91,6 +97,7 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
+  supportsMedia: boolean;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: {
@@ -143,7 +150,7 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
@@ -163,6 +170,7 @@ function createPluginHandler(
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
+    supportsMedia: Boolean(sendMedia),
     sendPayload: outbound.sendPayload
       ? async (payload, overrides) =>
           outbound.sendPayload!({
@@ -177,12 +185,19 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
+    sendMedia: async (caption, mediaUrl, overrides) => {
+      if (sendMedia) {
+        return sendMedia({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+        });
+      }
+      return sendText({
         ...resolveCtx(overrides),
         text: caption,
-        mediaUrl,
-      }),
+      });
+    },
   };
 }
 
@@ -600,6 +615,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, text, {
+        cfg,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
         textMode: "plain",
@@ -636,6 +652,7 @@ async function deliverOutboundPayloadsCore(
     return {
       channel: "signal" as const,
       ...(await sendSignal(to, formatted.text, {
+        cfg,
         mediaUrl,
         maxBytes: signalMaxBytes,
         accountId: accountId ?? undefined,
@@ -713,6 +730,32 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
+        const messageId = results.at(-1)?.messageId;
+        emitMessageSent({
+          success: results.length > beforeCount,
+          content: payloadSummary.text,
+          messageId,
+        });
+        continue;
+      }
+
+      if (!handler.supportsMedia) {
+        log.warn(
+          "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+          {
+            channel,
+            to,
+            mediaCount: payloadSummary.mediaUrls.length,
+          },
+        );
+        const fallbackText = payloadSummary.text.trim();
+        if (!fallbackText) {
+          throw new Error(
+            "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+          );
+        }
+        const beforeCount = results.length;
+        await sendTextChunks(fallbackText, sendOverrides);
         const messageId = results.at(-1)?.messageId;
         emitMessageSent({
           success: results.length > beforeCount,
