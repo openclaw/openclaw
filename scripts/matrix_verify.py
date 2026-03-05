@@ -12,7 +12,9 @@ to share or convert between crypto store formats.
 Usage:
     python3 matrix_verify.py
 
-Dependencies: requests, cryptography  (usually already installed)
+Dependencies: requests, cryptography
+    pip install requests cryptography
+    (consider using a venv: python3 -m venv .venv && source .venv/bin/activate)
 
 Flow:
  1. Loads credentials from the OpenClaw config
@@ -47,15 +49,30 @@ from cryptography.hazmat.primitives import hashes
 # ---------------------------------------------------------------------------
 
 OPENCLAW_CONFIG = Path.home() / ".openclaw" / "openclaw.json"
-DEVICE_STORAGE = (
-    Path.home()
-    / ".openclaw"
-    / "matrix"
-    / "accounts"
-    / "default"
-    / "matrix-client.matrix.org__tpott-openclaw1_matrix.org"
-    / "c1dee56ebca4d50f"
-)
+MATRIX_ACCOUNTS_DIR = Path.home() / ".openclaw" / "matrix" / "accounts" / "default"
+
+
+def find_device_storage() -> Path:
+    """Auto-discover the device storage directory under ~/.openclaw/matrix/accounts/default/."""
+    if not MATRIX_ACCOUNTS_DIR.is_dir():
+        print(f"ERROR: Matrix accounts directory not found: {MATRIX_ACCOUNTS_DIR}")
+        sys.exit(1)
+
+    accounts = [d for d in MATRIX_ACCOUNTS_DIR.iterdir() if d.is_dir()]
+    if len(accounts) == 0:
+        print(f"ERROR: No account directories found in {MATRIX_ACCOUNTS_DIR}")
+        sys.exit(1)
+    if len(accounts) > 1:
+        print(f"Multiple accounts found, using first: {accounts[0].name}")
+    account_dir = accounts[0]
+
+    stores = [d for d in account_dir.iterdir() if d.is_dir()]
+    if len(stores) == 0:
+        print(f"ERROR: No device store found in {account_dir}")
+        sys.exit(1)
+    if len(stores) > 1:
+        print(f"Multiple device stores found, using first: {stores[0].name}")
+    return stores[0]
 
 # ---------------------------------------------------------------------------
 # SAS emoji table -- 64 entries from the Matrix spec
@@ -181,7 +198,8 @@ def load_config():
 
 
 def load_device_id():
-    with open(DEVICE_STORAGE / "crypto" / "bot-sdk.json") as f:
+    device_storage = find_device_storage()
+    with open(device_storage / "crypto" / "bot-sdk.json") as f:
         return json.load(f)["deviceId"]
 
 
