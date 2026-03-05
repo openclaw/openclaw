@@ -6,6 +6,7 @@
   "dependencies": {
     "axios": "^1.7.9",
     "dingtalk-stream": "^2.1.4",
+    "form-data": "2.5.4",
     "zod": "^4.3.6"
   },
   "openclaw": {

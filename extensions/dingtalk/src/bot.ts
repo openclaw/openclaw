@@ -128,11 +128,6 @@ export async function handleDingtalkMessage(params: {
     const dmPolicy = dingtalkCfg?.dmPolicy ?? "pairing";
     const configAllowFrom = dingtalkCfg?.allowFrom ?? [];
 
-    if (dmPolicy === "disabled") {
-      log(`dingtalk[${account.accountId}]: DMs are disabled`);
-      return;
-    }
-
     if (dmPolicy === "allowlist") {
       const allowed = configAllowFrom.some(
         (entry) => String(entry).trim() === ctx.senderStaffId || String(entry).trim() === "*",

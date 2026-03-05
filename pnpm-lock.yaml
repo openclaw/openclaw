@@ -321,6 +321,9 @@ importers:
       dingtalk-stream:
         specifier: ^2.1.4
         version: 2.1.4
+      form-data:
+        specifier: 2.5.4
+        version: 2.5.4
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -6726,7 +6729,7 @@ snapshots:
       '@aws-crypto/sha256-js': 5.2.0
       '@aws-crypto/supports-web-crypto': 5.2.0
       '@aws-crypto/util': 5.2.0
-      '@aws-sdk/types': 3.973.5
+      '@aws-sdk/types': 3.973.4
       '@aws-sdk/util-locate-window': 3.965.4
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
@@ -6734,7 +6737,7 @@ snapshots:
   '@aws-crypto/sha256-js@5.2.0':
     dependencies:
       '@aws-crypto/util': 5.2.0
-      '@aws-sdk/types': 3.973.5
+      '@aws-sdk/types': 3.973.4
       tslib: 2.8.1
 
   '@aws-crypto/supports-web-crypto@5.2.0':
@@ -6743,7 +6746,7 @@ snapshots:
 
   '@aws-crypto/util@5.2.0':
     dependencies:
-      '@aws-sdk/types': 3.973.5
+      '@aws-sdk/types': 3.973.4
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
 

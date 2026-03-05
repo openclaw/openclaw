@@ -36,7 +36,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         title: "Message",
         text,
       });
-      return { channel: "dingtalk", ...result };
+      return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
     }
 
     const result = await sendTextMessage({
@@ -44,7 +44,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
       ...target,
       text,
     });
-    return { channel: "dingtalk", ...result };
+    return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
   },
 
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
@@ -75,9 +75,9 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         ...target,
         text: `[File] ${mediaUrl}`,
       });
-      return { channel: "dingtalk", ...result };
+      return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
     }
 
-    return { channel: "dingtalk" };
+    return { channel: "dingtalk", messageId: "" };
   },
 };
