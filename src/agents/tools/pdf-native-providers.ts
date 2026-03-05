@@ -137,10 +137,9 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
+  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com")
+    .replace(/\/+$/, "")
+    .replace(/\/v1beta$/, ""); // Bug fix for #34312: Strip existing /v1beta to avoid duplication
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
