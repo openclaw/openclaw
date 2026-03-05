@@ -21,6 +21,7 @@ async function makeTempStateDir(prefix: string) {
 }
 
 afterEach(async () => {
+  __test.reset();
   process.env = { ...savedEnv };
 });
 
