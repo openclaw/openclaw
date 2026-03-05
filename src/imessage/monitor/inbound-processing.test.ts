@@ -59,6 +59,77 @@ describe("describeIMessageEchoDropLog", () => {
   });
 });
 
+describe("resolveIMessageInboundDecision sender fallback", () => {
+  const cfg = {} as OpenClawConfig;
+
+  it("uses reply_to_sender when sender is missing", () => {
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 77,
+        sender: "",
+        reply_to_sender: "+15555550001",
+        text: "hello",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "hello",
+      bodyText: "hello",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.sender).toBe("+15555550001");
+  });
+
+  it("uses single participant as group sender fallback when sender is missing", () => {
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 78,
+        sender: "",
+        participants: ["+15555550002"],
+        text: "group msg",
+        chat_id: "chat-1",
+        is_from_me: false,
+        is_group: true,
+      },
+      opts: undefined,
+      messageText: "group msg",
+      bodyText: "group msg",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.sender).toBe("+15555550002");
+  });
+});
+
 describe("resolveIMessageInboundDecision command auth", () => {
   const cfg = {} as OpenClawConfig;
   const resolveDmCommandDecision = (params: { messageId: number; storeAllowFrom: string[] }) =>

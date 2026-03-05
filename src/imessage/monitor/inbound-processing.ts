@@ -85,6 +85,21 @@ export type IMessageInboundDecision =
   | { kind: "pairing"; senderId: string }
   | IMessageInboundDispatchDecision;
 
+function resolveFallbackSender(message: IMessagePayload): string {
+  const replyToSender = (message.reply_to_sender ?? "").trim();
+  if (replyToSender) {
+    return replyToSender;
+  }
+  if (!message.is_group) {
+    return "";
+  }
+  const participants = (message.participants ?? []).map((v) => v.trim()).filter(Boolean);
+  if (participants.length === 1) {
+    return participants[0] ?? "";
+  }
+  return "";
+}
+
 export function resolveIMessageInboundDecision(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -103,7 +118,7 @@ export function resolveIMessageInboundDecision(params: {
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
-  const sender = senderRaw.trim();
+  const sender = senderRaw.trim() || resolveFallbackSender(params.message);
   if (!sender) {
     return { kind: "drop", reason: "missing sender" };
   }
