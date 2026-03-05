@@ -175,44 +175,30 @@ describe("handleFeishuMessage command authorization", () => {
               mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           reply: {
-            resolveEnvelopeFormatOptions: vi.fn(
-              () => ({}),
-            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext:
               mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
             withReplyDispatcher:
               mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+            createReplyDispatcherWithTyping: mockCreateReplyDispatcherWithTyping,
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            isControlCommandMessage: mockIsControlCommandMessage,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
           media: {
             saveMediaBuffer:
               mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+            detectMime: vi.fn(async () => "application/octet-stream"),
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,
             upsertPairingRequest: mockUpsertPairingRequest,
             buildPairingReply: mockBuildPairingReply,
           },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-          createReplyDispatcherWithTyping: mockCreateReplyDispatcherWithTyping,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          isControlCommandMessage: mockIsControlCommandMessage,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
-        },
-        media: {
-          detectMime: vi.fn(async () => "application/octet-stream"),
         },
       }),
     );

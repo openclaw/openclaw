@@ -1054,7 +1054,9 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
       );
-      if (chatHistories) {
+      // Broadcast groups deliver the same event to every account; skip recording here
+      // to avoid duplicate history entries inflating the context.
+      if (chatHistories && !broadcastAgents) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupHistoryKey,
@@ -1497,35 +1499,77 @@ export async function handleFeishuMessage(params: {
         ctx.mentionedBot,
       );
 
-      const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime: runtime as RuntimeEnv,
-        chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
-        replyInThread,
-        rootId: ctx.rootId,
-        threadReply,
-        mentionTargets: ctx.mentionTargets,
-        accountId: account.accountId,
-        messageCreateTimeMs,
-      });
+      if (dispatchMode === "plugin") {
+        // When forwardControlCommands is explicitly false, skip control commands entirely.
+        const skipControlCommands = feishuCfg?.pluginMode?.forwardControlCommands === false;
+        if (
+          skipControlCommands &&
+          core.channel.commands.isControlCommandMessage(ctx.content, cfg)
+        ) {
+          log(`feishu[${account.accountId}]: plugin dispatch mode, skipping control command`);
+          return;
+        }
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
-            dispatcher,
-            replyOptions,
-          }),
-      });
+        // Plugin mode: run inference + hooks but suppress all Feishu replies.
+        // Use a no-op dispatcher so withReplyDispatcher can properly track and
+        // settle the pending-reply slot (avoids a permanently non-zero pending count).
+        // Pass replyResolver: async () => undefined to suppress reply generation.
+        log(
+          `feishu[${account.accountId}]: plugin dispatch mode, hooks-only for session=${route.sessionKey}`,
+        );
+        const noopDispatcher = {
+          sendToolResult: () => false,
+          sendBlockReply: () => false,
+          sendFinalReply: () => false,
+          waitForIdle: async () => {},
+          getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+          markComplete: () => {},
+        };
+        await core.channel.reply.withReplyDispatcher({
+          dispatcher: noopDispatcher,
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher: noopDispatcher,
+              replyResolver: async () => undefined,
+            }),
+        });
+      } else {
+        const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+          cfg,
+          agentId: route.agentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: ctx.chatId,
+          replyToMessageId: replyTargetMessageId,
+          skipReplyToInMessages: !isGroup,
+          replyInThread,
+          rootId: ctx.rootId,
+          threadReply,
+          mentionTargets: ctx.mentionTargets,
+          accountId: account.accountId,
+          messageCreateTimeMs,
+        });
+
+        log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+        const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+          dispatcher,
+          onSettled: () => {
+            markDispatchIdle();
+          },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions,
+            }),
+        });
+
+        log(
+          `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
+        );
+      }
 
       if (isGroup && historyKey && chatHistories) {
         clearHistoryEntriesIfEnabled({
@@ -1534,10 +1578,6 @@ export async function handleFeishuMessage(params: {
           limit: historyLimit,
         });
       }
-
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
