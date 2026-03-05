@@ -413,6 +413,173 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.send broadcasts final reply message to webchat", async () => {
+    const tempDirs: string[] = [];
+    let webchatWs: WebSocket | undefined;
+
+    try {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(dir);
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      trackConnectChallengeNonce(webchatWs);
+      await new Promise<void>((resolve) => webchatWs!.once("open", resolve));
+      await connectOk(webchatWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+          version: "dev",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
+
+      const spy = getReplyFromConfig as unknown as import("vitest").Mock;
+      spy.mockResolvedValueOnce({ text: "hello from test" });
+
+      const eventPromise = onceMessage<{
+        type?: string;
+        event?: string;
+        payload?: {
+          runId?: string;
+          state?: string;
+          message?: { content?: Array<{ text?: string }> };
+        };
+      }>(
+        webchatWs,
+        (o) => {
+          const ev = o as {
+            type?: string;
+            event?: string;
+            payload?: { runId?: string; state?: string };
+          };
+          return (
+            ev.type === "event" &&
+            ev.event === "chat" &&
+            ev.payload?.state === "final" &&
+            ev.payload?.runId === "idem-webchat-final"
+          );
+        },
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hi",
+        idempotencyKey: "idem-webchat-final",
+      });
+      expect(res.ok).toBe(true);
+
+      const evt = await eventPromise;
+      const firstText = evt.payload?.message?.content?.[0]?.text;
+      expect(firstText).toContain("hello from test");
+    } finally {
+      testState.sessionStorePath = undefined;
+      if (webchatWs) {
+        webchatWs.close();
+      }
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("chat.send uses fallback message when agent returns no reply", async () => {
+    const tempDirs: string[] = [];
+    let webchatWs: WebSocket | undefined;
+
+    try {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(dir);
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      trackConnectChallengeNonce(webchatWs);
+      await new Promise<void>((resolve) => webchatWs!.once("open", resolve));
+      await connectOk(webchatWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+          version: "dev",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
+
+      const spy = getReplyFromConfig as unknown as import("vitest").Mock;
+      spy.mockImplementationOnce(
+        async (
+          _ctx: unknown,
+          opts?: { runId?: string; onAgentRunStart?: (runId: string) => void },
+        ) => {
+          // Simulate an agent run that starts but produces no final reply payloads.
+          opts?.onAgentRunStart?.(opts.runId ?? "idem-webchat-fallback");
+          return undefined;
+        },
+      );
+
+      const eventPromise = onceMessage<{
+        type?: string;
+        event?: string;
+        payload?: {
+          runId?: string;
+          state?: string;
+          message?: { content?: Array<{ text?: string }> };
+        };
+      }>(
+        webchatWs,
+        (o) => {
+          const ev = o as {
+            type?: string;
+            event?: string;
+            payload?: { runId?: string; state?: string };
+          };
+          return (
+            ev.type === "event" &&
+            ev.event === "chat" &&
+            ev.payload?.state === "final" &&
+            ev.payload?.runId === "idem-webchat-fallback"
+          );
+        },
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hi",
+        idempotencyKey: "idem-webchat-fallback",
+      });
+      expect(res.ok).toBe(true);
+
+      const evt = await eventPromise;
+      const firstText = evt.payload?.message?.content?.[0]?.text ?? "";
+      expect(firstText).toContain("The assistant did not return a reply");
+    } finally {
+      testState.sessionStorePath = undefined;
+      if (webchatWs) {
+        webchatWs.close();
+      }
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);

@@ -987,50 +987,56 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then(() => {
-          if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
-              .filter(Boolean)
-              .join("\n\n")
-              .trim();
-            let message: Record<string, unknown> | undefined;
-            if (combinedReply) {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
-              });
-              if (appended.ok) {
-                message = appended.message;
-              } else {
-                context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
-              }
-            }
-            broadcastChatFinal({
-              context,
-              runId: clientRunId,
-              sessionKey: rawSessionKey,
-              message,
+          const buildAssistantMessage = (
+            text: string,
+            stopReason: "stop" | "injected",
+          ): Record<string, unknown> | undefined => {
+            const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+            const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+            const appended = appendAssistantTranscriptMessage({
+              message: text,
+              sessionId,
+              storePath: latestStorePath,
+              sessionFile: latestEntry?.sessionFile,
+              agentId,
+              createIfMissing: true,
             });
+            if (appended.ok) {
+              return appended.message;
+            }
+            context.logGateway.warn(
+              `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+            );
+            const now = Date.now();
+            return {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: now,
+              stopReason,
+              usage: { input: 0, output: 0, totalTokens: 0 },
+            };
+          };
+
+          const combinedReply = finalReplyParts
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
+          let message: Record<string, unknown> | undefined;
+          if (combinedReply) {
+            message = buildAssistantMessage(combinedReply, "stop");
+          } else if (agentRunStarted) {
+            // Run completed but produced no reply (e.g. timeout with no content); show fallback so the bubble is not empty.
+            const fallbackText =
+              "The assistant did not return a reply. You may see an error in Slack or logs.";
+            message = buildAssistantMessage(fallbackText, "injected");
           }
+          broadcastChatFinal({
+            context,
+            runId: clientRunId,
+            sessionKey: rawSessionKey,
+            message,
+          });
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
