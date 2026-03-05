@@ -44,7 +44,7 @@ export type ResolvedAcpxPluginConfig = {
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
-const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
+const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 5;
 const DEFAULT_STRICT_WINDOWS_CMD_WRAPPER = true;
 
 type ParseResult =

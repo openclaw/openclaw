@@ -24,7 +24,7 @@ beforeAll(async () => {
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
       strictWindowsCmdWrapper: true,
-      queueOwnerTtlSeconds: 0.1,
+      queueOwnerTtlSeconds: 5,
     },
     { logger: NOOP_LOGGER },
   );
@@ -165,7 +165,7 @@ describe("AcpxRuntime", () => {
     const promptArgs = (prompt?.args as string[]) ?? [];
     const ttlFlagIndex = promptArgs.indexOf("--ttl");
     expect(ttlFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(promptArgs[ttlFlagIndex + 1]).toBe("0.1");
+    expect(promptArgs[ttlFlagIndex + 1]).toBe("5");
   });
 
   it("emits done once when ACP stream repeats stop reason responses", async () => {
