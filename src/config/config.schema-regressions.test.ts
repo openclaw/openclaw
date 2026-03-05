@@ -191,6 +191,22 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts legacy browser.profiles.*.driver value "clawd"', () => {
+    const res = validateConfigObject({
+      browser: {
+        profiles: {
+          default: {
+            cdpPort: 9222,
+            driver: "clawd",
+            color: "#FF4500",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
