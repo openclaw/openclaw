@@ -192,6 +192,7 @@ let latestOnAttachmentsChange: ((attachments: ChatAttachment[]) => void) | undef
 // overwriting another's files.
 let pendingAttachments: ChatAttachment[] = [];
 let flushScheduled = false;
+let lastSessionKey: string | undefined;
 
 function flushPendingAttachments() {
   flushScheduled = false;
@@ -232,7 +233,7 @@ function addFilesAsAttachments(files: File[]) {
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+  if (!items || !props.onAttachmentsChange || !props.connected) {
     return;
   }
 
@@ -312,17 +313,17 @@ function handleDrop(e: DragEvent, props: ChatProps) {
 }
 
 function handleDragOver(e: DragEvent, props: ChatProps) {
-  // Only show the drop overlay when the drag payload contains files
-  // and the chat is connected (compose is enabled).
+  const hasFiles = e.dataTransfer?.types?.includes("Files") ?? false;
+  if (!hasFiles) {
+    return;
+  }
+  // ALWAYS prevent browser file-navigation for file drags,
+  // even when disconnected. Only show the overlay when connected.
+  e.preventDefault();
+  e.stopPropagation();
   if (!props.connected) {
     return;
   }
-  const hasFiles = e.dataTransfer?.types?.includes("Files") ?? false;
-  if (!hasFiles) {
-    return; // Let non-file drags (text, URLs) pass through to native behavior
-  }
-  e.preventDefault();
-  e.stopPropagation();
   const target = e.currentTarget as HTMLElement;
   target.classList.add("chat--drag-over");
 }
@@ -383,6 +384,13 @@ export function renderChat(props: ChatProps) {
   // Update mutable refs so async attachment callbacks always read latest state
   latestAttachments = props.attachments ?? [];
   latestOnAttachmentsChange = props.onAttachmentsChange;
+
+  // Reset accumulator state when session changes to prevent cross-session injection
+  if (props.sessionKey !== lastSessionKey) {
+    pendingAttachments = [];
+    flushScheduled = false;
+    lastSessionKey = props.sessionKey;
+  }
 
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
