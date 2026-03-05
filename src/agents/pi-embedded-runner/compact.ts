@@ -4,7 +4,6 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
-  estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
@@ -13,6 +12,7 @@ import { resolveChannelCapabilities } from "../../config/channel-capabilities.js
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { estimateTokensWithTokenizer } from "../../infra/tokenizer.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -182,7 +182,7 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
     if (!tokenEstimationFailed) {
       try {
-        estTokens += estimateTokens(msg);
+        estTokens += estimateTokensWithTokenizer(msg);
       } catch {
         tokenEstimationFailed = true;
       }
@@ -672,7 +672,7 @@ export async function compactEmbeddedPiSessionDirect(
         try {
           tokensAfter = 0;
           for (const message of session.messages) {
-            tokensAfter += estimateTokens(message);
+            tokensAfter += estimateTokensWithTokenizer(message);
           }
           // Sanity check: tokensAfter should be less than tokensBefore
           if (tokensAfter > result.tokensBefore) {
