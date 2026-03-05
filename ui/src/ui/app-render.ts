@@ -641,8 +641,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onLoadFiles: async (agentId) => {
                   await loadAgentFiles(state, agentId);
-                  if (state.agentFileActive && resolvedAgentId) {
-                    await loadAgentFileContent(state, resolvedAgentId, state.agentFileActive, {
+                  if (state.agentFileActive && agentId) {
+                    await loadAgentFileContent(state, agentId, state.agentFileActive, {
                       force: true,
                     });
                   }
