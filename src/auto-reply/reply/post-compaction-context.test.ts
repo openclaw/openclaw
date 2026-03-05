@@ -335,6 +335,25 @@ Read WORKFLOW.md on startup.
       expect(result).toContain("Execute your Session Startup sequence now");
     });
 
+    it("falls back to legacy sections when defaults are explicitly configured", async () => {
+      // Older AGENTS.md templates use "Every Session" / "Safety" instead of
+      // "Session Startup" / "Red Lines". Explicitly setting the defaults should
+      // still trigger the legacy fallback — same behavior as leaving the field unset.
+      const content = `## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+          },
+        },
+      } as OpenClawConfig;
+      const result = await readPostCompactionContext(tmpDir, cfg);
+      expect(result).not.toBeNull();
+      expect(result).toContain("Do startup things");
+      expect(result).toContain("Be safe");
+    });
+
     it("custom section names are matched case-insensitively", async () => {
       const content = `## WORKFLOW INIT\n\nInit things.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);

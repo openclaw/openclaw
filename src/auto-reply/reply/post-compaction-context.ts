@@ -71,8 +71,16 @@ export async function readPostCompactionContext(
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
-    // with older AGENTS.md templates.
-    if (sections.length === 0 && !Array.isArray(configuredSections)) {
+    // with older AGENTS.md templates. The fallback also applies when the user
+    // explicitly configures the default pair, so that pinning the documented
+    // defaults never silently changes behavior vs. leaving the field unset.
+    const isExplicitDefaults =
+      Array.isArray(configuredSections) &&
+      configuredSections.length === DEFAULT_POST_COMPACTION_SECTIONS.length &&
+      configuredSections.every(
+        (s, i) => s.toLowerCase() === DEFAULT_POST_COMPACTION_SECTIONS[i].toLowerCase(),
+      );
+    if (sections.length === 0 && (!Array.isArray(configuredSections) || isExplicitDefaults)) {
       sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
     }
 
