@@ -13,7 +13,39 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(false);
   });
 
-  it("returns true when final event has no message payload", () => {
+  it("returns false for undefined payload", () => {
+    expect(shouldReloadHistoryForFinalEvent(undefined)).toBe(false);
+  });
+
+  it("returns false for final assistant message without media", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true for final event with media flag set", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns true for final event with no message (cross-run reload)", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
         runId: "run-1",
@@ -23,24 +55,22 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(true);
   });
 
-  it("returns false when final event includes assistant payload", () => {
+  it("returns true for final event with no message even without media", () => {
     expect(
-      shouldReloadHistoryForFinalEvent({
-        runId: "run-1",
-        sessionKey: "main",
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
-      }),
-    ).toBe(false);
+      shouldReloadHistoryForFinalEvent(
+        { runId: "run-1", sessionKey: "main", state: "final" },
+        false,
+      ),
+    ).toBe(true);
   });
 
-  it("returns true when final event message role is non-assistant", () => {
+  it("returns true for final event with non-assistant role", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
         runId: "run-1",
         sessionKey: "main",
         state: "final",
-        message: { role: "user", content: [{ type: "text", text: "echo" }] },
+        message: { role: "system", content: [{ type: "text", text: "info" }] },
       }),
     ).toBe(true);
   });

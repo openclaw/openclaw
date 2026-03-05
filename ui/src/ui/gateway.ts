@@ -241,7 +241,10 @@ export class GatewayBrowserClient {
       role,
       scopes,
       device,
-      caps: [],
+      // tool-events: required for inline image rendering. Server-side gating
+      // (toolEventRecipients per-run map) ensures clients only receive events
+      // for runs they are subscribed to. See server-chat.ts broadcastToConnIds.
+      caps: ["tool-events"],
       auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

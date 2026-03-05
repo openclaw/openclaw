@@ -4,6 +4,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { MEDIA_IMAGE_LINE_RE } from "../media/parse.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -515,12 +516,39 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
+    // Build tool payload: strip result/partialResult unless verbose=full,
+    // but preserve result when it contains MEDIA: image paths or inline
+    // image blocks so the TUI can render inline images even when verbose
+    // is "off".
     const toolPayload =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
-            delete data.result;
+            // Preserve result when MEDIA: text lines OR bare image blocks
+            // are present.  Local images emit [MEDIA text, image block]
+            // pairs; web-fetched images emit bare [image block] only.
+            // Both paths need the result preserved to reach the TUI.
+            const hasMedia =
+              data.result &&
+              typeof data.result === "object" &&
+              Array.isArray((data.result as { content?: unknown[] }).content) &&
+              (data.result as { content: unknown[] }).content.some((b) => {
+                if (!b || typeof b !== "object") {
+                  return false;
+                }
+                const block = b as { type?: string; text?: string; data?: string };
+                return (
+                  (block.type === "text" &&
+                    typeof block.text === "string" &&
+                    MEDIA_IMAGE_LINE_RE.test(block.text)) ||
+                  (block.type === "image" &&
+                    typeof block.data === "string" &&
+                    block.data.length > 0)
+                );
+              });
+            if (!hasMedia) {
+              delete data.result;
+            }
             delete data.partialResult;
             return sessionKey
               ? { ...eventForClients, sessionKey, data }

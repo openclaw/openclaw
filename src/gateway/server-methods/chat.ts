@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -11,6 +12,8 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { MAX_IMAGE_BYTES } from "../../media/constants.js";
+import { normalizeMediaSource } from "../../media/parse.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -278,6 +281,16 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
     entry.bytes = bytes;
     changed = true;
   }
+  // Recurse into nested content[] arrays (e.g. tool_result blocks) so that
+  // extractImages (browser-side, which also recurses) doesn't find unsanitized
+  // base64 image blocks at nested depth — preventing duplicates on reload.
+  if (Array.isArray(entry.content)) {
+    const updated = entry.content.map((nested: unknown) => sanitizeChatHistoryContentBlock(nested));
+    if (updated.some((item) => item.changed)) {
+      entry.content = updated.map((item) => item.block);
+      changed = true;
+    }
+  }
   return { block: changed ? entry : block, changed };
 }
 
@@ -403,6 +416,26 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   };
 }
 
+function messageHasImageData(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (b.type === "image" && typeof b.data === "string") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function replaceOversizedChatHistoryMessages(params: {
   messages: unknown[];
   maxSingleMessageBytes: number;
@@ -411,9 +444,14 @@ function replaceOversizedChatHistoryMessages(params: {
   if (messages.length === 0) {
     return { messages, replacedCount: 0 };
   }
+  // Allow much higher cap for messages carrying inline base64 images.
+  // A single 800×800 JPEG is ~100-200KB raw, ~130-270KB as base64.
+  // Three images can easily exceed 512KB, so we allow up to 2MB.
+  const imageMessageCap = Math.max(maxSingleMessageBytes * 16, 2 * 1024 * 1024);
   let replacedCount = 0;
   const next = messages.map((message) => {
-    if (jsonUtf8Bytes(message) <= maxSingleMessageBytes) {
+    const cap = messageHasImageData(message) ? imageMessageCap : maxSingleMessageBytes;
+    if (jsonUtf8Bytes(message) <= cap) {
       return message;
     }
     replacedCount += 1;
@@ -442,6 +480,433 @@ function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: 
     return { messages: [placeholder], placeholderCount: 1 };
   }
   return { messages: [], placeholderCount: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// MEDIA: image injection for chat.history
+// ---------------------------------------------------------------------------
+// The image tool emits MEDIA:<container-path> text blocks in tool results.
+// The TUI renders these by reading the file directly (readFileSync on the
+// container path).  The web chat has no filesystem access AND hides tool
+// result messages when the "show thinking" toggle is off.  To ensure images
+// are always visible, we resolve the paths server-side and inject the base64
+// data into the NEXT assistant message (which always renders regardless of
+// the thinking toggle).
+// ---------------------------------------------------------------------------
+
+const MEDIA_IMAGE_PATH_RE = /^MEDIA:\s*`?(.+\.(?:png|jpe?g|gif|webp))`?\s*$/i;
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
+
+function extractMediaImagePaths(text: string): string[] {
+  const paths: string[] = [];
+  for (const line of text.split("\n")) {
+    const match = line.match(MEDIA_IMAGE_PATH_RE);
+    if (match?.[1]) {
+      // Normalize file:// URIs to bare paths (mirrors TUI's getMediaPaths).
+      const raw = normalizeMediaSource(match[1].trim());
+      if (raw && path.isAbsolute(raw) && !raw.includes("\0")) {
+        paths.push(raw);
+      }
+    }
+  }
+  return paths;
+}
+
+/** Maximum number of images that can accumulate across tool results before injection. */
+const MAX_PENDING_IMAGES = 20;
+
+async function readImageAsBase64(
+  filePath: string,
+): Promise<{ data: string; media_type: string } | null> {
+  try {
+    // Reject paths containing ".." components to prevent directory traversal.
+    // Check BEFORE normalization — normalize() resolves ".." in absolute paths,
+    // so a post-normalize check would always pass (e.g. /workspace/../etc/shadow → /etc/shadow).
+    if (filePath.includes("..")) {
+      return null;
+    }
+    const normalized = path.normalize(filePath);
+    const ext = path.extname(normalized).toLowerCase();
+    const mime = MIME_BY_EXT[ext];
+    if (!mime) {
+      return null;
+    }
+    // Use lstat (no symlink follow) to reject symlinks before reading.
+    const stat = await lstat(normalized);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return null;
+    }
+    if (stat.size > MAX_IMAGE_BYTES || stat.size === 0) {
+      return null;
+    }
+    const buf = await readFile(normalized);
+    // Re-check size after read to close the TOCTOU window: the file could
+    // have been replaced between lstat and readFile.
+    if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) {
+      return null;
+    }
+    return { data: buf.toString("base64"), media_type: mime };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collect MEDIA: image paths from tool_result content blocks.
+ */
+async function collectMediaImagesFromBlock(
+  block: Record<string, unknown>,
+  seen: Set<string>,
+): Promise<
+  Array<{
+    type: string;
+    data: string;
+    media_type: string;
+  }>
+> {
+  const bType = typeof block.type === "string" ? block.type : "";
+  if (bType !== "tool_result" && bType !== "toolresult") {
+    return [];
+  }
+
+  const texts: string[] = [];
+  if (typeof block.content === "string") {
+    texts.push(block.content);
+  } else if (Array.isArray(block.content)) {
+    for (const nested of block.content as unknown[]) {
+      if (
+        nested &&
+        typeof nested === "object" &&
+        (nested as Record<string, unknown>).type === "text" &&
+        typeof (nested as Record<string, unknown>).text === "string"
+      ) {
+        texts.push((nested as Record<string, unknown>).text as string);
+      }
+    }
+  }
+
+  const images: Array<{ type: string; data: string; media_type: string }> = [];
+  for (const text of texts) {
+    for (const filePath of extractMediaImagePaths(text)) {
+      if (seen.has(filePath)) {
+        continue;
+      }
+      const img = await readImageAsBase64(filePath);
+      if (img) {
+        images.push({ type: "image", ...img });
+        seen.add(filePath);
+      }
+    }
+  }
+  return images;
+}
+
+/**
+ * Collect MEDIA: image paths from plain text blocks (e.g. inside messages with
+ * role "toolResult" where content is [{type: "text", text: "MEDIA:..."}]).
+ */
+async function collectMediaImagesFromTextBlock(
+  block: Record<string, unknown>,
+  seen: Set<string>,
+): Promise<
+  Array<{
+    type: string;
+    data: string;
+    media_type: string;
+  }>
+> {
+  if (typeof block.type !== "string" || block.type !== "text" || typeof block.text !== "string") {
+    return [];
+  }
+  const images: Array<{ type: string; data: string; media_type: string }> = [];
+  for (const filePath of extractMediaImagePaths(block.text)) {
+    if (seen.has(filePath)) {
+      continue;
+    }
+    const img = await readImageAsBase64(filePath);
+    if (img) {
+      images.push({ type: "image", ...img });
+      seen.add(filePath);
+    }
+  }
+  return images;
+}
+
+/** Regex to extract absolute image paths from a shell command string. */
+const IMAGE_PATH_IN_COMMAND_RE = /(?:^|\s)(\/[^\s'"`;|&>]+\.(?:png|jpe?g|gif|webp))\b/gi;
+
+/** Known image-viewer command patterns (view-image skill, common CLIs). */
+const IMAGE_VIEWER_CMD_RE =
+  /\b(?:view[-_]?image|imgcat|icat|viu|timg|catimg|chafa|kitty\s+icat)\b/i;
+
+const TOOL_USE_TYPES = new Set(["toolcall", "tool_call", "tooluse", "tool_use"]);
+
+/**
+ * Extract image file paths from exec tool_use blocks whose command looks
+ * like an image-viewer invocation (e.g. `sh /app/view-image.sh /path.jpg`).
+ * Only paths that actually exist on disk are returned.
+ */
+async function collectImagePathsFromToolUse(
+  block: Record<string, unknown>,
+  seen: Set<string>,
+): Promise<Array<{ type: string; data: string; media_type: string }>> {
+  const kind = (typeof block.type === "string" ? block.type : "").toLowerCase();
+  if (!TOOL_USE_TYPES.has(kind) && !(typeof block.name === "string" && block.arguments != null)) {
+    return [];
+  }
+
+  const name = (typeof block.name === "string" ? block.name : "").toLowerCase();
+  if (name !== "exec") {
+    return [];
+  }
+
+  // Extract the command string from arguments/input.
+  const args = block.arguments ?? block.input ?? block.args;
+  let command = "";
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      command = typeof parsed?.command === "string" ? parsed.command : "";
+    } catch {
+      command = args;
+    }
+  } else if (args && typeof args === "object") {
+    const a = args as Record<string, unknown>;
+    if (typeof a.command === "string") {
+      command = a.command;
+    }
+  }
+  if (!command) {
+    return [];
+  }
+
+  // Only proceed for commands that look like image viewers.
+  if (!IMAGE_VIEWER_CMD_RE.test(command)) {
+    return [];
+  }
+
+  // Collect all regex matches synchronously before any await — IMAGE_PATH_IN_COMMAND_RE
+  // is a module-level /g regex whose lastIndex would be corrupted by concurrent calls
+  // if an await suspended mid-loop.
+  const matchedPaths: string[] = [];
+  IMAGE_PATH_IN_COMMAND_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = IMAGE_PATH_IN_COMMAND_RE.exec(command)) !== null) {
+    if (match[1]) {
+      matchedPaths.push(match[1]);
+    }
+  }
+
+  const images: Array<{ type: string; data: string; media_type: string }> = [];
+  for (const p of matchedPaths) {
+    if (!p || !path.isAbsolute(p) || p.includes("\0") || seen.has(p)) {
+      continue;
+    }
+    const img = await readImageAsBase64(p);
+    if (img) {
+      images.push({ type: "image", ...img });
+      seen.add(p);
+    }
+  }
+  return images;
+}
+
+/**
+ * Scan messages for images referenced by tool results or tool calls, read them
+ * from the container filesystem, and inject base64 image blocks into the next
+ * assistant text message so the web chat always displays them (even when the
+ * "show thinking" toggle hides tool result messages).
+ *
+ * Two collection strategies run in parallel:
+ *  1. MEDIA: text lines in tool_result content  (from the dedicated image tool)
+ *  2. Image paths in exec tool_use commands     (from the view-image skill)
+ */
+async function injectMediaImagesIntoHistory(messages: unknown[]): Promise<unknown[]> {
+  if (messages.length === 0) {
+    return messages;
+  }
+
+  // Shallow-clone each message object so we can mutate content arrays safely.
+  const result: unknown[] = messages.map((m) =>
+    m && typeof m === "object" ? { ...(m as Record<string, unknown>) } : m,
+  );
+
+  // Total byte budget for injected image data.  The history cap is 6MB; keep
+  // injected images well under half of that so the rest of the conversation
+  // (text, tool cards, etc.) still fits.
+  const MAX_TOTAL_INJECTED_BYTES = 2 * 1024 * 1024; // 2MB
+  let totalInjectedBytes = 0;
+
+  let pendingImages: Array<{ type: string; data: string; media_type: string }> = [];
+  const seenPaths = new Set<string>();
+
+  for (let i = 0; i < result.length; i++) {
+    const msg = result[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const entry = msg as Record<string, unknown>;
+    const content = entry.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    // Detect toolResult-role messages to enable text block MEDIA: scanning.
+    const msgRole = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+    const isToolResultMsg =
+      msgRole === "toolresult" || msgRole === "tool_result" || msgRole === "tool";
+
+    // Skip collecting new images once the total budget is exhausted.
+    if (totalInjectedBytes >= MAX_TOTAL_INJECTED_BYTES) {
+      continue;
+    }
+
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const b = block as Record<string, unknown>;
+
+      // Strategy 1a: Collect images from MEDIA: lines in tool_result content blocks.
+      if (pendingImages.length < MAX_PENDING_IMAGES) {
+        const mediaImages = await collectMediaImagesFromBlock(b, seenPaths);
+        for (const img of mediaImages) {
+          if (pendingImages.length >= MAX_PENDING_IMAGES) {
+            break;
+          }
+          pendingImages.push(img);
+        }
+      }
+
+      // Strategy 1b: Collect images from plain text blocks in toolResult messages.
+      // Handles the format: {role:"toolResult", content:[{type:"text", text:"MEDIA:..."}]}
+      if (pendingImages.length < MAX_PENDING_IMAGES && isToolResultMsg) {
+        const textImages = await collectMediaImagesFromTextBlock(b, seenPaths);
+        for (const img of textImages) {
+          if (pendingImages.length >= MAX_PENDING_IMAGES) {
+            break;
+          }
+          pendingImages.push(img);
+        }
+      }
+
+      // Strategy 2: Collect images from exec commands with image-viewer patterns.
+      if (pendingImages.length < MAX_PENDING_IMAGES) {
+        const execImages = await collectImagePathsFromToolUse(b, seenPaths);
+        for (const img of execImages) {
+          if (pendingImages.length >= MAX_PENDING_IMAGES) {
+            break;
+          }
+          pendingImages.push(img);
+        }
+      }
+    }
+
+    // Inject accumulated images into the next text-only assistant message.
+    if (pendingImages.length > 0 && typeof entry.role === "string" && entry.role === "assistant") {
+      const hasText = content.some(
+        (b: unknown) =>
+          b &&
+          typeof b === "object" &&
+          (b as Record<string, unknown>).type === "text" &&
+          typeof (b as Record<string, unknown>).text === "string" &&
+          ((b as Record<string, unknown>).text as string).trim().length > 0,
+      );
+      const hasToolUse = content.some((b: unknown) => {
+        if (!b || typeof b !== "object") {
+          return false;
+        }
+        const k = (
+          typeof (b as Record<string, unknown>).type === "string"
+            ? ((b as Record<string, unknown>).type as string)
+            : ""
+        ).toLowerCase();
+        return TOOL_USE_TYPES.has(k);
+      });
+      if (hasText && !hasToolUse) {
+        // Deduplicate by full base64 content before budget trimming — catches
+        // the same image loaded via different strategies (e.g. MEDIA: path vs
+        // exec tool_use) where the resolved path string differs but the
+        // underlying file content is identical.  Uses full string as key
+        // (Set stores a reference, not a copy) to avoid prefix collisions
+        // across images with identical headers/dimensions.
+        const seen64 = new Set<string>();
+        const deduped: typeof pendingImages = [];
+        for (const img of pendingImages) {
+          if (!seen64.has(img.data)) {
+            seen64.add(img.data);
+            deduped.push(img);
+          }
+        }
+        // Trim pending images to fit within the remaining byte budget.
+        const affordable: typeof pendingImages = [];
+        for (const img of deduped) {
+          const imgBytes = img.data.length; // base64 string length ≈ byte count
+          if (totalInjectedBytes + imgBytes > MAX_TOTAL_INJECTED_BYTES) {
+            continue;
+          }
+          affordable.push(img);
+          totalInjectedBytes += imgBytes;
+        }
+        if (affordable.length > 0) {
+          entry.content = [...content, ...affordable];
+        }
+        pendingImages = [];
+        // Reset seenPaths so subsequent conversation rounds can re-process
+        // the same image paths (dedup only applies within a single round).
+        seenPaths.clear();
+      } else if (hasToolUse) {
+        // The assistant turn has pending tool calls — images carry forward to
+        // the next qualifying assistant message.  Preserve seenPaths so that
+        // multi-step agent commands (e.g. find → view-image) that produce the
+        // same MEDIA: path across consecutive tool_result blocks don't inject
+        // the same image twice.
+      }
+    }
+  }
+
+  // Flush any remaining pending images into the last assistant message in the
+  // history.  Without this, images produced near the end of a conversation
+  // (e.g. the final tool result with no subsequent text-only assistant turn)
+  // would be silently lost.
+  if (pendingImages.length > 0) {
+    for (let i = result.length - 1; i >= 0; i--) {
+      const msg = result[i];
+      if (!msg || typeof msg !== "object") {
+        continue;
+      }
+      const entry = msg as Record<string, unknown>;
+      if (
+        typeof entry.role !== "string" ||
+        entry.role !== "assistant" ||
+        !Array.isArray(entry.content)
+      ) {
+        continue;
+      }
+      const affordable: typeof pendingImages = [];
+      for (const img of pendingImages) {
+        const imgBytes = img.data.length;
+        if (totalInjectedBytes + imgBytes > MAX_TOTAL_INJECTED_BYTES) {
+          continue;
+        }
+        affordable.push(img);
+        totalInjectedBytes += imgBytes;
+      }
+      if (affordable.length > 0) {
+        entry.content = [...(entry.content as unknown[]), ...affordable];
+      }
+      break;
+    }
+  }
+
+  return result;
 }
 
 function resolveTranscriptPath(params: {
@@ -733,10 +1198,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
+    // Resolve MEDIA:<path> references in tool results to inline base64 images
+    // so the web chat can display them (the browser has no container filesystem access).
+    const withImages = await injectMediaImagesIntoHistory(normalized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
+      messages: withImages,
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
@@ -1244,4 +1712,11 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, messageId: appended.messageId });
   },
+};
+
+/** @internal — exposed for unit tests only. */
+export const __test = {
+  extractMediaImagePaths,
+  readImageAsBase64,
+  injectMediaImagesIntoHistory,
 };

@@ -92,6 +92,29 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (!content) {
     return record;
   }
+  // Preserve base64 image data when the result contains renderable images —
+  // either local files (MEDIA: text paths) or web-fetched images (bare image
+  // blocks without a MEDIA path).  Without this, sanitization strips the
+  // base64 data and the TUI / web UI cannot render images inline.
+  let mediaPathCount = 0;
+  let imageBlockCount = 0;
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "text" && typeof entry.text === "string") {
+      const matches = entry.text.match(/^MEDIA:/gm);
+      if (matches) {
+        mediaPathCount += matches.length;
+      }
+    } else if (entry.type === "image" && typeof entry.data === "string") {
+      imageBlockCount++;
+    }
+  }
+  // Local images have both a MEDIA path and an image block; web images only
+  // have an image block.  Preserve enough blocks to cover both sources.
+  let imagePreserveQuota = Math.max(mediaPathCount, imageBlockCount);
   const sanitized = content.map((item) => {
     if (!item || typeof item !== "object") {
       return item;
@@ -102,6 +125,10 @@ export function sanitizeToolResult(result: unknown): unknown {
       return { ...entry, text: truncateToolText(entry.text) };
     }
     if (type === "image") {
+      if (imagePreserveQuota > 0) {
+        imagePreserveQuota--;
+        return entry;
+      }
       const data = typeof entry.data === "string" ? entry.data : undefined;
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };

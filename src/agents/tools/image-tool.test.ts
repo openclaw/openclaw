@@ -160,14 +160,14 @@ async function expectImageToolExecOk(
   },
   image: string,
 ) {
-  await expect(
-    tool.execute("t1", {
-      prompt: "Describe the image.",
-      image,
-    }),
-  ).resolves.toMatchObject({
-    content: [{ type: "text", text: "ok" }],
-  });
+  const result = (await tool.execute("t1", {
+    prompt: "Describe the image.",
+    image,
+  })) as { content: { type: string; text?: string }[] };
+  // The last content block should always be the VLM text description.
+  // Local file images additionally prepend MEDIA:<path> + image blocks.
+  const textBlocks = result.content.filter((b) => b.type === "text" && b.text === "ok");
+  expect(textBlocks).toHaveLength(1);
 }
 
 function requireImageTool<T>(tool: T | null | undefined): T {

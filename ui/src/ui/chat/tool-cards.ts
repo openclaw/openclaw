@@ -152,5 +152,31 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.content === "string") {
     return item.content;
   }
+  // Handle array content (tool results with multiple content blocks)
+  if (Array.isArray(item.content)) {
+    const texts: string[] = [];
+    for (const block of item.content as unknown[]) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as Record<string, unknown>).type === "text" &&
+        typeof (block as Record<string, unknown>).text === "string"
+      ) {
+        const text = (block as Record<string, unknown>).text as string;
+        // Filter out MEDIA: protocol lines (container paths not meaningful in browser)
+        const filtered = text
+          .split("\n")
+          .filter((line) => !line.startsWith("MEDIA:"))
+          .join("\n")
+          .trim();
+        if (filtered) {
+          texts.push(filtered);
+        }
+      }
+    }
+    if (texts.length > 0) {
+      return texts.join("\n");
+    }
+  }
   return undefined;
 }

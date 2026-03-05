@@ -4,6 +4,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  resultHasMedia,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
@@ -282,5 +283,99 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+});
+
+describe("resultHasMedia", () => {
+  it("returns true when a text entry contains a MEDIA: line", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "MEDIA:/tmp/image.png" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when MEDIA: is among multiple lines", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "some text\nMEDIA:/tmp/photo.jpg\nmore text" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for inline base64 image entries", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "image", data: "abc" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for non-text non-image entries", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "audio", data: "abc" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for text without MEDIA: prefix", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "no media here" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for null/undefined/non-object input", () => {
+    expect(resultHasMedia(null)).toBe(false);
+    expect(resultHasMedia(undefined)).toBe(false);
+    expect(resultHasMedia("string")).toBe(false);
+  });
+
+  it("returns false when content is not an array", () => {
+    expect(resultHasMedia({ content: "not-array" })).toBe(false);
+  });
+
+  it("returns false for non-image MEDIA: paths (e.g. audio)", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "MEDIA:/tmp/speech.mp3" }],
+      }),
+    ).toBe(false);
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "MEDIA:/tmp/audio.wav" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for all supported image extensions", () => {
+    for (const ext of ["png", "jpg", "jpeg", "gif", "webp"]) {
+      expect(
+        resultHasMedia({
+          content: [{ type: "text", text: `MEDIA:/tmp/file.${ext}` }],
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("returns false for audio MEDIA: even when unrelated image extension appears in text", () => {
+    // Regression: extension check must be scoped to the MEDIA: path, not
+    // the entire text blob. A text block with audio MEDIA: and unrelated
+    // ".png" text elsewhere should NOT trigger the bypass.
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "MEDIA:/tmp/audio.wav\nSee report.png for details" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for MEDIA: with space after colon", () => {
+    expect(
+      resultHasMedia({
+        content: [{ type: "text", text: "MEDIA: /tmp/photo.png" }],
+      }),
+    ).toBe(true);
   });
 });

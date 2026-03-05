@@ -106,6 +106,7 @@ function createHost() {
     serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
+    chatRunHasMedia: false,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
