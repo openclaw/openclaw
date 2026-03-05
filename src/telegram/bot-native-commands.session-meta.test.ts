@@ -360,6 +360,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(buildStatusTopicCommandContext());
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       -1001234567890,
       "You are not authorized to use this command.",
@@ -380,6 +382,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(buildStatusTopicCommandContext());
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.resolveConfiguredAcpBindingRecord).not.toHaveBeenCalled();
+    expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       -1001234567890,
       "You are not authorized to use this command.",

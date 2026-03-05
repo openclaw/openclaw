@@ -89,4 +89,27 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
   });
+
+  it("defers ACP session initialization for unauthorized control commands", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      accountId: "work",
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
+        message_thread_id: 42,
+        text: "/new",
+      },
+      cfg: {
+        channels: {
+          telegram: {},
+        },
+        commands: {
+          useAccessGroups: true,
+        },
+      },
+    });
+
+    expect(ctx).toBeNull();
+    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+  });
 });

@@ -295,6 +295,9 @@ export async function initSessionState(params: {
       ctx: sessionCtxForState,
     }),
   );
+  const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
+    shouldUseAcpInPlaceReset &&
+    DEFAULT_RESET_TRIGGERS.some((defaultTrigger) => defaultTrigger.toLowerCase() === triggerLower);
 
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
@@ -310,7 +313,7 @@ export async function initSessionState(params: {
     }
     const triggerLower = trigger.toLowerCase();
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
-      if (shouldUseAcpInPlaceReset) {
+      if (shouldBypassAcpResetForTrigger(triggerLower)) {
         // ACP-bound conversations handle /new and /reset in command handling
         // so the bound ACP runtime can be reset in place without rotating the
         // normal OpenClaw session/transcript.
@@ -326,7 +329,7 @@ export async function initSessionState(params: {
       trimmedBodyLower.startsWith(triggerPrefixLower) ||
       strippedForResetLower.startsWith(triggerPrefixLower)
     ) {
-      if (shouldUseAcpInPlaceReset) {
+      if (shouldBypassAcpResetForTrigger(triggerLower)) {
         break;
       }
       isNewSession = true;

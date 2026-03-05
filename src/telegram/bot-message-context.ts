@@ -373,7 +373,10 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
-  if (configuredBinding) {
+  const ensureConfiguredBindingReady = async (): Promise<boolean> => {
+    if (!configuredBinding) {
+      return true;
+    }
     const ensured = await ensureConfiguredAcpBindingSession({
       cfg: freshCfg,
       spec: configuredBinding.spec,
@@ -382,22 +385,23 @@ export const buildTelegramMessageContext = async ({
       logVerbose(
         `telegram: using configured ACP binding for ${configuredBinding.spec.conversationId} -> ${configuredBindingSessionKey}`,
       );
-    } else {
-      logVerbose(
-        `telegram: configured ACP binding unavailable for ${configuredBinding.spec.conversationId}: ${ensured.error}`,
-      );
-      route = routeBeforeConfiguredBinding;
-      if (requiresExplicitAccountBinding(route)) {
-        logInboundDrop({
-          log: logVerbose,
-          channel: "telegram",
-          reason: "non-default account requires explicit binding",
-          target: route.accountId,
-        });
-        return null;
-      }
+      return true;
     }
-  }
+    logVerbose(
+      `telegram: configured ACP binding unavailable for ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+    );
+    route = routeBeforeConfiguredBinding;
+    if (requiresExplicitAccountBinding(route)) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "non-default account requires explicit binding",
+        target: route.accountId,
+      });
+      return false;
+    }
+    return true;
+  };
 
   const baseSessionKey = route.sessionKey;
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
@@ -601,6 +605,10 @@ export const buildTelegramMessageContext = async ({
       });
       return null;
     }
+  }
+
+  if (!(await ensureConfiguredBindingReady())) {
+    return null;
   }
 
   // ACK reactions

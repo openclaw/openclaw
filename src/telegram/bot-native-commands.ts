@@ -557,17 +557,22 @@ export const registerTelegramNativeCommands = ({
             commandAuthorized: initialCommandAuthorized,
           } = auth;
           let commandAuthorized = initialCommandAuthorized;
+          const threadSpec = resolveTelegramThreadSpec({
+            isGroup,
+            isForum,
+            messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+          });
+          if (isSessionResetCommand && !commandAuthorized) {
+            await sendCommandUnauthorizedReply({ chatId, threadSpec });
+            return;
+          }
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
             isForum,
             resolvedThreadId,
           });
-          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
-          if (isSessionResetCommand && !commandAuthorized) {
-            await sendCommandUnauthorizedReply({ chatId, threadSpec });
-            return;
-          }
+          const { route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
