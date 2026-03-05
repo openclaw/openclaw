@@ -1,0 +1,42 @@
+{
+  "name": "@irisclaw/iris-engine",
+  "version": "1.0.0",
+  "description": "Iris parallel agent engine — drop-in replacement for pi-agent-core's sequential agent loop",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent-loop": {
+      "types": "./dist/agent-loop.d.ts",
+      "import": "./dist/agent-loop.js"
+    },
+    "./iris-agent": {
+      "types": "./dist/iris-agent.d.ts",
+      "import": "./dist/iris-agent.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "0.54.1",
+    "@mariozechner/pi-ai": "0.54.1"
+  },
+  "devDependencies": {
+    "tsdown": "^0.20.3",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

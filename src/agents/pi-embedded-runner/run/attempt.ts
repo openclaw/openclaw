@@ -128,6 +128,7 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import {
+  applyParallelOptionsToSession,
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
@@ -868,6 +869,7 @@ export async function runEmbeddedAttempt(
         settingsManager,
         resourceLoader,
       }));
+      applyParallelOptionsToSession(session.agent, params.config?.agents?.defaults?.parallel);
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");

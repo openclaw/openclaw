@@ -28,6 +28,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleStatsCommand } from "./commands-stats.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
@@ -65,5 +66,6 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleStopCommand,
     handleCompactCommand,
     handleAbortTrigger,
+    handleStatsCommand,
   ];
 }

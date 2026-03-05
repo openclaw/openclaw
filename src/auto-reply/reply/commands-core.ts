@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { saveSessionMemory } from "../../agents/iris-session-memory.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -184,6 +186,38 @@ export async function emitResetCommandHooks(params: {
       }
     })();
   }
+
+  // Iris Stage 4: save compact session memory before history is cleared
+  void (async () => {
+    try {
+      const prevEntry = params.previousSessionEntry;
+      const sessionFile = prevEntry?.sessionFile;
+      if (!sessionFile) {
+        return;
+      }
+      const agentId = params.sessionKey?.split(":")[0] ?? "main";
+      const agentDir = path.join(os.homedir(), ".openclaw", "agents", agentId, "agent");
+      const raw = await fs.readFile(sessionFile, "utf-8");
+      const messages: unknown[] = [];
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === "message" && entry.message) {
+            messages.push(entry.message);
+          }
+        } catch {
+          // skip malformed
+        }
+      }
+      await saveSessionMemory(agentDir, messages);
+      logVerbose(`[iris-memory] saved session memory for agent=${agentId}`);
+    } catch (err: unknown) {
+      logVerbose(`[iris-memory] save failed: ${String(err)}`);
+    }
+  })();
 }
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
