@@ -35,6 +35,9 @@ export type ResolvedMemorySearchConfig = {
   store: {
     driver: "sqlite";
     path: string;
+    fts: {
+      tokenizer: "unicode61" | "trigram";
+    };
     vector: {
       enabled: boolean;
       extensionPath?: string;
@@ -207,9 +210,13 @@ function mergeConfig(
     extensionPath:
       overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
   };
+  const fts = {
+    tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
+  };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
     path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    fts,
     vector,
   };
   const chunking = {
