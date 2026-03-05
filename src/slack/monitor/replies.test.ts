@@ -53,4 +53,18 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
   });
+
+  it("passes mediaLocalRoots to sendMessageSlack", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const mediaLocalRoots = ["/tmp/workspace-sre"];
+    await deliverReplies(
+      baseParams({
+        mediaLocalRoots,
+        replies: [{ text: "report", mediaUrls: ["/tmp/workspace-sre/report.csv"] }],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ mediaLocalRoots });
+  });
 });

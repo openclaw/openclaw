@@ -13,6 +13,7 @@ export async function deliverReplies(params: {
   target: string;
   token: string;
   accountId?: string;
+  mediaLocalRoots?: readonly string[];
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
@@ -39,6 +40,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        mediaLocalRoots: params.mediaLocalRoots,
         ...(params.identity ? { identity: params.identity } : {}),
       });
     } else {
@@ -51,6 +53,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          mediaLocalRoots: params.mediaLocalRoots,
           ...(params.identity ? { identity: params.identity } : {}),
         });
       }
