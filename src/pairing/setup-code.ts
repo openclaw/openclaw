@@ -227,6 +227,14 @@ async function resolveGatewayTokenSecretRef(
   if (mode === "password" || mode === "none" || mode === "trusted-proxy") {
     return cfg;
   }
+  if (mode !== "token") {
+    const hasPasswordEnvCandidate = Boolean(
+      env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
+    );
+    if (hasPasswordEnvCandidate) {
+      return cfg;
+    }
+  }
   const resolved = await resolveSecretRefValues([ref], {
     config: cfg,
     env,

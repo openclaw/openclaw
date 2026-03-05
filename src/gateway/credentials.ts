@@ -247,6 +247,9 @@ export function resolveGatewayCredentialsFromConfig(params: {
     value: remote?.password,
     defaults,
   }).ref;
+  const localTokenCanWin =
+    authMode === "token" ||
+    (authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy");
   const localTokenFallback = remoteTokenFallback === "remote-only" ? undefined : localToken;
   const localPasswordFallback =
     remotePasswordFallback === "remote-only" ? undefined : localPassword;
@@ -256,7 +259,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   if (remotePasswordRef && !password && !envPassword && !localPasswordFallback && !token) {
     throwUnresolvedGatewaySecretInput("gateway.remote.password");
   }
-  if (localTokenRef && !token && !password && !envToken && !remoteToken) {
+  if (localTokenRef && !token && !password && !envToken && !remoteToken && localTokenCanWin) {
     throwUnresolvedGatewaySecretInput("gateway.auth.token");
   }
 

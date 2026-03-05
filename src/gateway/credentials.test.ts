@@ -305,6 +305,36 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.remote.token");
   });
 
+  it("ignores unresolved local token ref in remote mode when local auth mode is none", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+          },
+          auth: {
+            mode: "none",
+            token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+      remoteTokenFallback: "remote-only",
+      remotePasswordFallback: "remote-only",
+    });
+    expect(resolved).toEqual({
+      token: undefined,
+      password: undefined,
+    });
+  });
+
   it("does not throw for unresolved remote token ref when password is available", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: {
