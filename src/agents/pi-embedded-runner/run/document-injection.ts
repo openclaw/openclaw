@@ -55,7 +55,8 @@ export function createDocumentInjectionWrapper(
     // and the anthropic-beta header. Non-Claude Bedrock models (e.g. amazon.nova-*)
     // must use the non-Anthropic fallback path to avoid invalid payloads/headers.
     const provider = (model as { provider?: string }).provider ?? "";
-    const modelId = (model as { id?: string; model?: string }).id ?? (model as { model?: string }).model ?? "";
+    const modelId =
+      (model as { id?: string; model?: string }).id ?? (model as { model?: string }).model ?? "";
     const isAnthropicBedrockModel = (id: string) => {
       const normalized = id.toLowerCase();
       return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
