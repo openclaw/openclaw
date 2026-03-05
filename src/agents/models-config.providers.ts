@@ -390,6 +390,39 @@ function normalizeApiKeyConfig(value: string): string {
   return match?.[1] ?? trimmed;
 }
 
+function normalizeCloudflareGatewayAuthHeaderValue(value: string): string {
+  const match = /^Bearer:\s*(.+)$/i.exec(value.trim());
+  if (!match) {
+    return value;
+  }
+  const token = match[1]?.trim();
+  if (!token) {
+    return value;
+  }
+  // Backward compatibility for legacy docs/configs that used "Bearer: <token>".
+  return `Bearer ${token}`;
+}
+
+function normalizeProviderHeaders(providerKey: string, provider: ProviderConfig): ProviderConfig {
+  if (providerKey !== "cloudflare-ai-gateway" || !provider.headers) {
+    return provider;
+  }
+  let mutated = false;
+  const headers = { ...provider.headers };
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (headerName.toLowerCase() !== "cf-aig-authorization") {
+      continue;
+    }
+    const normalizedValue = normalizeCloudflareGatewayAuthHeaderValue(headerValue);
+    if (normalizedValue === headerValue) {
+      continue;
+    }
+    headers[headerName] = normalizedValue;
+    mutated = true;
+  }
+  return mutated ? { ...provider, headers } : provider;
+}
+
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
   const resolved = resolveEnvApiKey(provider);
   if (!resolved) {
@@ -559,6 +592,12 @@ export function normalizeProviders(params: {
         mutated = true;
       }
       normalizedProvider = antigravityNormalized;
+    }
+
+    const headersNormalized = normalizeProviderHeaders(normalizedKey, normalizedProvider);
+    if (headersNormalized !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = headersNormalized;
     }
 
     const existing = next[normalizedKey];

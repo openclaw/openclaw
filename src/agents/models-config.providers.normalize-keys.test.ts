@@ -73,4 +73,30 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("normalizes legacy Cloudflare Gateway bearer header syntax", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        "cloudflare-ai-gateway": {
+          baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+          api: "openai-completions",
+          apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+          headers: {
+            "cf-aig-authorization": "Bearer: test-token",
+            "X-Other": "keep",
+          },
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.["cloudflare-ai-gateway"]?.headers?.["cf-aig-authorization"]).toBe(
+        "Bearer test-token",
+      );
+      expect(normalized?.["cloudflare-ai-gateway"]?.headers?.["X-Other"]).toBe("keep");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 });
