@@ -358,10 +358,11 @@ export async function spawnSubagentDirect(
         normalizeAgentId(entry.id).toLowerCase(),
       ),
     );
+    const normalizedRequesterId = requesterAgentId.toLowerCase();
     const isAllowed = allowAny
       ? true
       : explicitAllowAgents === undefined
-        ? configuredSet.has(normalizedTargetId)
+        ? configuredSet.has(normalizedRequesterId) && configuredSet.has(normalizedTargetId)
         : allowSet.has(normalizedTargetId);
     if (!isAllowed) {
       const allowedText =

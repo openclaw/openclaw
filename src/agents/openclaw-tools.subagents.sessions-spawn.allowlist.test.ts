@@ -165,6 +165,30 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
+  it("sessions_spawn forbids configured cross-agent when requester is not configured and allowlist is unset", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [{ id: "main" }, { id: "beta" }],
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:ghost:main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call6c", {
+      task: "do thing",
+      agentId: "beta",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
     setSessionsSpawnConfigOverride({
       session: {
