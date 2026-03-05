@@ -618,7 +618,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     pluginId: "mattermost",
     source: "mattermost-interactions",
     accountId: account.accountId,
-    log: (msg) => runtime.log?.(msg),
+    log: (msg: string) => runtime.log?.(msg),
   });
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();

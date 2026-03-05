@@ -148,12 +148,6 @@ export async function fetchMattermostChannelByName(
   );
 }
 
-export async function fetchMattermostUserTeams(
-  client: MattermostClient,
-): Promise<Array<{ id: string; name?: string }>> {
-  return await client.request<Array<{ id: string; name?: string }>>("/users/me/teams");
-}
-
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },
