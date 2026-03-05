@@ -101,14 +101,21 @@ export function emitSubagentSmt2(data: ParsedAll): string {
 
   // 4. explicitAllow override
   w(`; --------------------------------------------------------------------------`);
-  w(`; 4. explicitAllow Override`);
+  w(`; 4. explicitAllow Override + Allowlist Activation`);
   w(`; --------------------------------------------------------------------------`);
   w(`; resolveSubagentToolPolicy builds explicitAllow = union(allow, alsoAllow)`);
   w(`; and removes matching tools from the base deny list before passing it to`);
   w(`; makeToolPolicyMatcher. This means explicitAllow CAN override default`);
   w(`; deny entries.`);
+  w(`;`);
+  w(`; When the runtime subagent allow list (tools.subagents.tools.allow) is`);
+  w(`; configured, makeToolPolicyMatcher also enforces an allow-only mode where`);
+  w(`; every tool must match the allowlist after the deny check. We model that`);
+  w(`; via allowlist_active + allowlist_allows.`);
   w(``);
-  w(`(declare-fun explicit_allow (Tool) Bool) ; union of allow + alsoAllow from config`);
+  w(`(declare-fun explicit_allow (Tool) Bool) ; union of allow + alsoAllow`);
+  w(`(declare-fun allowlist_active () Bool) ; allow array has entries`);
+  w(`(declare-fun allowlist_allows (Tool) Bool) ; matches allow entries`);
   w(``);
 
   // 5. Effective deny (after explicitAllow pruning)
@@ -123,9 +130,13 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`  (and (subagent_base_deny t)`);
   w(`       (not (explicit_allow t))))`);
   w(``);
-  w(`; A tool passes the subagent gate iff it's NOT effectively denied`);
+  w(`; A tool passes the subagent gate iff it's NOT effectively denied AND,`);
+  w(`; when an allowlist is active, it matches allowlist_allows. This mirrors`);
+  w(`; makeToolPolicyMatcher (deny-first, then allowlist if configured).`);
   w(`(define-fun passes_subagent_gate ((t Tool)) Bool`);
-  w(`  (not (subagent_effective_deny t)))`);
+  w(`  (and (not (subagent_effective_deny t))`);
+  w(`       (or (not allowlist_active)`);
+  w(`           (allowlist_allows t))))`);
   w(``);
 
   // 6. Full policy
@@ -173,6 +184,27 @@ export function emitSubagentSmt2(data: ParsedAll): string {
   w(`(assert (explicit_allow memory_search_))`);
   w(`(assert (not (passes_subagent_gate memory_search_)))`);
   w(`(check-sat) ; Expected: unsat (memory_search denied but overridden by explicit_allow)`);
+  w(`(pop 1)`);
+  w(``);
+  w(`; Smoke test 5: allowlist_active blocks a tool not in allowlist`);
+  w(`(push 1)`);
+  w(`(assert allowlist_active)`);
+  w(`(assert (= depth 1))`);
+  w(`(assert (= max_spawn_depth 2))`);
+  w(`(assert (not (subagent_effective_deny browser_)))`);
+  w(`(assert (not (allowlist_allows browser_)))`);
+  w(`(assert (passes_subagent_gate browser_))`);
+  w(`(check-sat) ; Expected: unsat (allowlist active, browser not allowed)`);
+  w(`(pop 1)`);
+  w(``);
+  w(`; Smoke test 6: allowlist allows a matching tool`);
+  w(`(push 1)`);
+  w(`(assert allowlist_active)`);
+  w(`(assert (= depth 1))`);
+  w(`(assert (= max_spawn_depth 2))`);
+  w(`(assert (allowlist_allows sessions_spawn_))`);
+  w(`(assert (passes_subagent_gate sessions_spawn_))`);
+  w(`(check-sat) ; Expected: sat (allowlist grants access when not denied)`); // wait to check unsat? we want to show allowed -> sat (should not contradictory). But we have `(assert (passes_subagent_gate sessions_spawn_))` and expect sat as consistent. maybe comment accordingly.
   w(`(pop 1)`);
   w(``);
   w(`(echo "subagent.smt2 loaded successfully")`);
