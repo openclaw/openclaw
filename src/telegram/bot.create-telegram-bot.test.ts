@@ -2055,7 +2055,7 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
-  it("processes remaining media group photos when one photo download fails", async () => {
+  it("retries media group photo downloads when one photo fetch fails", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
 
@@ -2139,12 +2139,88 @@ describe("createTelegramBot", () => {
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
       expect(payload.Body).toContain("partial album");
+      expect(payload.MediaPaths).toHaveLength(2);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+  it("retries a transient media group photo download failure once", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    let fetchCallIndex = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      fetchCallIndex++;
+      if (fetchCallIndex === 1) {
+        throw new Error("MediaFetchError: Failed to fetch media");
+      }
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 451,
+          caption: "retry album",
+          date: 1736380800,
+          media_group_id: "retry-album-1",
+          photo: [{ file_id: "p1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+
+      expect(fetchCallIndex).toBe(2);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+      expect(payload.Body).toContain("retry album");
       expect(payload.MediaPaths).toHaveLength(1);
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });
+
   it("drops the media group when a non-recoverable media error occurs", async () => {
     onSpy.mockReset();
     replySpy.mockReset();

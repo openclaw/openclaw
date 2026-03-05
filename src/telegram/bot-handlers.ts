@@ -354,10 +354,30 @@ export const registerTelegramHandlers = ({
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
           }
-          runtime.log?.(
-            warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
-          );
-          continue;
+
+          if (!isMediaSizeLimitError(mediaErr)) {
+            runtime.log?.(
+              warn(
+                `media group: retrying photo fetch after transient failure: ${String(mediaErr)}`,
+              ),
+            );
+            try {
+              media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+            } catch (retryErr) {
+              if (!isRecoverableMediaGroupError(retryErr)) {
+                throw retryErr;
+              }
+              runtime.log?.(
+                warn(`media group: skipping photo that failed after retry: ${String(retryErr)}`),
+              );
+              continue;
+            }
+          } else {
+            runtime.log?.(
+              warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
+            );
+            continue;
+          }
         }
         if (media) {
           allMedia.push({
