@@ -492,7 +492,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         contextKey: `notification:${key}`,
       });
       if (queued) {
-        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+        requestHeartbeatNow({ reason: "notifications-event" });
       }
       return;
     }
