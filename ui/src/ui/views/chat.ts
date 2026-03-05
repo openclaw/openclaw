@@ -295,15 +295,25 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const target = e.currentTarget as HTMLElement;
   target.classList.remove("chat--drag-over");
 
-  const fileList = e.dataTransfer?.files;
-  if (!fileList || fileList.length === 0) {
-    return; // Not a file drop — let native behavior handle it
+  // Check types first (same gate as handleDragOver) so we cancel the drop
+  // event for ALL file drags — including cross-origin ones where browsers
+  // restrict files[] to an empty list for security. Without this, handleDragOver
+  // would have called preventDefault() (promising to handle the drop), but this
+  // handler wouldn't cancel it, letting the browser navigate away.
+  const hasFiles = e.dataTransfer?.types?.includes("Files") ?? false;
+  if (!hasFiles) {
+    return; // Not a file drag — let native behavior handle it
   }
 
   // Always cancel file drops to prevent the browser from navigating away
   // (its default action for dropped files). We filter to images below.
   e.preventDefault();
   e.stopPropagation();
+
+  const fileList = e.dataTransfer?.files;
+  if (!fileList || fileList.length === 0) {
+    return; // Cross-origin drop or empty file list — cancelled but nothing to process
+  }
 
   if (!props.onAttachmentsChange || !props.connected) {
     return;
