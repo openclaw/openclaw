@@ -10,6 +10,7 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.preserveSignatures).toBe(true);
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -23,6 +24,7 @@ describe("resolveTranscriptPolicy", () => {
       allowBase64Only: true,
       includeCamelCase: true,
     });
+    expect(policy.preserveSignatures).toBe(false);
   });
 
   it("enables sanitizeToolCallIds for Mistral provider", () => {
