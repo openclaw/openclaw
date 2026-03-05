@@ -53,9 +53,14 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract "## Session Startup" and "## Red Lines" sections
+    // Extract "## Session Startup" and "## Red Lines" sections.
+    // Also accept legacy names "Every Session" and "Safety" for backward
+    // compatibility with older AGENTS.md templates.
     // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    let sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    if (sections.length === 0) {
+      sections = extractSections(content, ["Every Session", "Safety"]);
+    }
 
     if (sections.length === 0) {
       return null;

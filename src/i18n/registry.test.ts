@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "../../ui/src/i18n/lib/registry.ts";
-import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 
 function getNestedTranslation(map: TranslationMap | null, ...path: string[]): string | undefined {
   let value: string | TranslationMap | undefined = map ?? undefined;
@@ -20,12 +20,14 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
 
 describe("ui i18n locale registry", () => {
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es"]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
 
   it("resolves browser locale fallbacks", () => {
     expect(resolveNavigatorLocale("de-DE")).toBe("de");
+    expect(resolveNavigatorLocale("es-ES")).toBe("es");
+    expect(resolveNavigatorLocale("es-MX")).toBe("es");
     expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
     expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(resolveNavigatorLocale("en-US")).toBe("en");
@@ -33,9 +35,14 @@ describe("ui i18n locale registry", () => {
 
   it("loads lazy locale translations from the registry", async () => {
     const de = await loadLazyLocaleTranslation("de");
+    const es = await loadLazyLocaleTranslation("es");
+    const ptBR = await loadLazyLocaleTranslation("pt-BR");
     const zhCN = await loadLazyLocaleTranslation("zh-CN");
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
+    expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
+    expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
+    expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("健康状况");
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
   });
