@@ -114,17 +114,29 @@ export async function listArchivedWorkflowPlans(
   const historyDir = resolveWorkflowHistoryDir(agentId);
   try {
     const files = await fs.promises.readdir(historyDir);
-    const jsonFiles = files
-      .filter((f) => f.endsWith(".json"))
-      .toSorted()
-      .toReversed();
-    const total = jsonFiles.length;
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
+
+    // Get file stats to sort by modification time (newest first)
+    const filesWithMtime: Array<{ file: string; mtime: number }> = [];
+    for (const file of jsonFiles) {
+      try {
+        const stat = await fs.promises.stat(path.join(historyDir, file));
+        filesWithMtime.push({ file, mtime: stat.mtimeMs });
+      } catch {
+        // Skip files that can't be stat'd
+      }
+    }
+
+    // Sort by mtime descending (newest first)
+    filesWithMtime.sort((a, b) => b.mtime - a.mtime);
+
+    const total = filesWithMtime.length;
     const offset = opts?.offset ?? 0;
     const limit = opts?.limit ?? 50;
-    const slice = jsonFiles.slice(offset, offset + limit);
+    const slice = filesWithMtime.slice(offset, offset + limit);
 
     const plans: WorkflowPlan[] = [];
-    for (const file of slice) {
+    for (const { file } of slice) {
       const planId = file.replace(".json", "");
       const plan = await loadArchivedWorkflowPlan(agentId, planId);
       if (plan) {

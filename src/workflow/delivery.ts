@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkflowPlan } from "./types.js";
@@ -79,14 +80,18 @@ export async function deliverWorkflowReport(params: {
     // This avoids importing complex delivery dependencies
     const { callGatewayTool } = await import("../agents/tools/gateway.js");
 
+    // Generate idempotency key for deduplication
+    const idempotencyKey = `workflow-report:${plan.id}:${crypto.randomUUID()}`;
+
     await callGatewayTool(
       "send",
       {},
       {
-        channel: effectiveChannel,
         to: effectiveTo,
+        message: summary,
+        idempotencyKey,
+        channel: effectiveChannel,
         accountId: params.accountId,
-        text: summary,
       },
     );
 
