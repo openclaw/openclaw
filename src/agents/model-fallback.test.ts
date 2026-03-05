@@ -173,6 +173,17 @@ async function expectSkippedUnavailableProvider(params: {
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
+// OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
+const OPENAI_RATE_LIMIT_MESSAGE =
+  "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.";
+// Anthropic overloaded_error example shape: https://docs.anthropic.com/en/api/errors
+const ANTHROPIC_OVERLOADED_PAYLOAD =
+  '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}';
+// Internal OpenClaw compatibility marker, not a provider API contract.
+const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 are cooling down";
+// SDK/transport compatibility marker, not a provider API contract.
+const CONNECTION_ERROR_MESSAGE = "Connection error.";
+
 describe("runWithModelFallback", () => {
   it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
     const cfg = makeCfg();
@@ -709,6 +720,38 @@ describe("runWithModelFallback", () => {
       provider: "openai",
       model: "gpt-4.1-mini",
       firstError: new Error("no api key found for profile openai"),
+    });
+  });
+
+  it("falls back on documented OpenAI 429 rate limit responses", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error(OPENAI_RATE_LIMIT_MESSAGE), { status: 429 }),
+    });
+  });
+
+  it("falls back on documented overloaded_error payloads", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(ANTHROPIC_OVERLOADED_PAYLOAD),
+    });
+  });
+
+  it("falls back on internal model cooldown markers", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(MODEL_COOLDOWN_MESSAGE),
+    });
+  });
+
+  it("falls back on compatibility connection error messages", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(CONNECTION_ERROR_MESSAGE),
     });
   });
 
