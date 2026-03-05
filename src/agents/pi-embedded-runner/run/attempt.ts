@@ -45,7 +45,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveModelAuthMode, type ModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
@@ -590,6 +590,25 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+const GOOGLE_GEMINI_CLI_OAUTH_SLOW_PROMPT_WARN_MS = 40_000;
+
+export function shouldWarnGoogleGeminiCliOAuthPromptLatency(params: {
+  provider: string;
+  modelAuthMode: ModelAuthMode | undefined;
+  durationMs: number;
+}): boolean {
+  if (
+    !Number.isFinite(params.durationMs) ||
+    params.durationMs < GOOGLE_GEMINI_CLI_OAUTH_SLOW_PROMPT_WARN_MS
+  ) {
+    return false;
+  }
+  if (normalizeProviderId(params.provider) !== "google-gemini-cli") {
+    return false;
+  }
+  return params.modelAuthMode === "oauth";
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -749,6 +768,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       sessionAgentId,
     });
+    const modelAuthMode = resolveModelAuthMode(params.model.provider, params.config);
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -783,7 +803,7 @@ export async function runEmbeddedAttempt(
           modelProvider: params.model.provider,
           modelId: params.modelId,
           modelContextWindowTokens: params.model.contextWindow,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+          modelAuthMode,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
@@ -1632,9 +1652,23 @@ export async function runEmbeddedAttempt(
           promptError = err;
           promptErrorSource = "prompt";
         } finally {
+          const promptDurationMs = Date.now() - promptStartedAt;
           log.debug(
-            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${promptDurationMs}`,
           );
+          if (
+            shouldWarnGoogleGeminiCliOAuthPromptLatency({
+              provider: params.provider,
+              modelAuthMode,
+              durationMs: promptDurationMs,
+            })
+          ) {
+            log.warn(
+              `[gemini-oauth-latency] slow prompt step detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${params.provider}/${params.modelId} durationMs=${promptDurationMs} ` +
+                `possibleCause=upstream rate-limit backoff (HTTP 429).`,
+            );
+          }
         }
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs

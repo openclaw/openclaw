@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
+  shouldWarnGoogleGeminiCliOAuthPromptLatency,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -121,6 +122,48 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
       resolveAttemptFsWorkspaceOnly({
         config: cfg,
         sessionAgentId: "main",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldWarnGoogleGeminiCliOAuthPromptLatency", () => {
+  it("returns true for slow google-gemini-cli oauth prompt steps", () => {
+    expect(
+      shouldWarnGoogleGeminiCliOAuthPromptLatency({
+        provider: "google-gemini-cli",
+        modelAuthMode: "oauth",
+        durationMs: 60_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for non-oauth auth modes", () => {
+    expect(
+      shouldWarnGoogleGeminiCliOAuthPromptLatency({
+        provider: "google-gemini-cli",
+        modelAuthMode: "api-key",
+        durationMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false below the slow prompt threshold", () => {
+    expect(
+      shouldWarnGoogleGeminiCliOAuthPromptLatency({
+        provider: "google-gemini-cli",
+        modelAuthMode: "oauth",
+        durationMs: 39_999,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for other providers", () => {
+    expect(
+      shouldWarnGoogleGeminiCliOAuthPromptLatency({
+        provider: "google",
+        modelAuthMode: "oauth",
+        durationMs: 60_000,
       }),
     ).toBe(false);
   });
