@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedBrowserConfig } from "./config.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -57,7 +58,7 @@ function createMockChromeProcess() {
   return child;
 }
 
-function makeResolvedConfig() {
+function makeResolvedConfig(): ResolvedBrowserConfig {
   return {
     enabled: true,
     evaluateEnabled: false,
