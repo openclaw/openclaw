@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearCronScheduleCacheForTest,
   computeNextRunAtMs,
+  computePreviousRunAtMs,
   getCronScheduleCacheSizeForTest,
 } from "./schedule.js";
 
@@ -89,6 +90,17 @@ describe("cron schedule", () => {
     );
     expect(next).toBeDefined();
     expect(next!).toBeGreaterThan(nowMs);
+  });
+
+  it("never returns a previous run that is at-or-after now", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const previous = computePreviousRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    if (previous !== undefined) {
+      expect(previous).toBeLessThan(nowMs);
+    }
   });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {
