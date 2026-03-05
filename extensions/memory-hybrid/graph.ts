@@ -2,7 +2,7 @@
  * Knowledge Graph Module
  *
  * Stores entities (people, places, concepts) and their relationships
- * in a simple JSON file alongside the LanceDB database.
+ * in an append-only JSONL file alongside the LanceDB database.
  *
  * Example:
  *   Node: { id: "Vova", type: "Person", description: "The user" }
@@ -13,7 +13,7 @@
  * - recall(): enriches search results with graph connections
  */
 
-import { readFile, writeFile, access } from "node:fs/promises";
+import { readFile, writeFile, appendFile, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { ChatModel } from "./chat.js";
 
@@ -47,12 +47,18 @@ export class GraphDB {
   public nodes: Map<string, GraphNode> = new Map();
   public edges: GraphEdge[] = [];
   private filePath: string;
+  private legacyJsonPath: string;
   private loaded = false;
   private mutex = Promise.resolve();
 
+  /** Track new (unsaved) nodes and edges for append-only writes */
+  private dirtyNodes: Set<string> = new Set();
+  private savedEdgeCount = 0;
+
   constructor(basePath: string) {
-    // Save graph.json next to the lancedb folder
-    this.filePath = join(dirname(basePath), "graph.json");
+    // Save graph.jsonl next to the lancedb folder
+    this.filePath = join(dirname(basePath), "graph.jsonl");
+    this.legacyJsonPath = join(dirname(basePath), "graph.json");
   }
 
   /**
@@ -76,22 +82,55 @@ export class GraphDB {
     }
   }
 
-  /** Load graph from disk (lazy, only on first access) */
+  /** Load graph from disk (lazy, only on first access). Supports JSONL + legacy JSON migration. */
   async load(): Promise<void> {
     return this.withLock(async () => {
       if (this.loaded) return;
 
+      let migrated = false;
+
+      // Try JSONL first (new format)
       try {
         await access(this.filePath);
         const raw = await readFile(this.filePath, "utf-8");
+        for (const line of raw.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const record = JSON.parse(trimmed) as { _t: "n" | "e"; d: GraphNode | GraphEdge };
+            if (record._t === "n") {
+              const node = record.d as GraphNode;
+              if (!this.nodes.has(node.id)) this.nodes.set(node.id, node);
+            } else if (record._t === "e") {
+              const edge = record.d as GraphEdge;
+              const exists = this.edges.some(
+                (existing) =>
+                  existing.source === edge.source &&
+                  existing.target === edge.target &&
+                  existing.relation === edge.relation,
+              );
+              if (!exists) this.edges.push(edge);
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+        this.savedEdgeCount = this.edges.length;
+        this.loaded = true;
+        return;
+      } catch {
+        // JSONL doesn't exist — try legacy JSON migration
+      }
+
+      // Legacy JSON migration
+      try {
+        await access(this.legacyJsonPath);
+        const raw = await readFile(this.legacyJsonPath, "utf-8");
         const data = JSON.parse(raw) as GraphData;
 
-        // Merge with existing in-memory nodes/edges if any (rare but possible)
         for (const n of data.nodes) {
           if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
         }
-
-        // Add edges that aren't already present
         for (const e of data.edges || []) {
           const exists = this.edges.some(
             (existing) =>
@@ -101,48 +140,84 @@ export class GraphDB {
           );
           if (!exists) this.edges.push(e);
         }
+
+        // Mark everything as dirty so first save() writes full JSONL
+        for (const n of this.nodes.keys()) this.dirtyNodes.add(n);
+        this.savedEdgeCount = 0;
+        migrated = true;
+
+        console.warn(
+          `[memory-hybrid][graph] Migrated legacy graph.json → graph.jsonl (${this.nodes.size} nodes, ${this.edges.length} edges)`,
+        );
       } catch {
-        // File doesn't exist yet or is invalid — start fresh
-        // Keep existing in-memory state
+        // No legacy file either — start fresh
       }
 
       this.loaded = true;
+
+      // Auto-save migrated data to new format
+      if (migrated) {
+        await this.doSave();
+      }
     });
   }
 
-  /** Persist graph to disk (async, atomic) */
+  /** Persist only NEW (dirty) entries to disk via append */
   async save(): Promise<void> {
     return this.withLock(async () => {
-      // Always re-read from disk before saving to prevent overwriting other processes' changes
-      // (Optimistic locking strategy would be better but simple re-read is safer for now)
-      try {
-        await access(this.filePath);
-        const raw = await readFile(this.filePath, "utf-8");
-        const onDisk = JSON.parse(raw) as GraphData;
+      await this.doSave();
+    });
+  }
 
-        // Merge disk -> memory
-        for (const n of onDisk.nodes) {
-          if (!this.nodes.has(n.id)) this.nodes.set(n.id, n);
-        }
-        const existingEdgesStr = new Set(
-          this.edges.map((e) => `${e.source}|${e.target}|${e.relation}`),
-        );
-        for (const e of onDisk.edges || []) {
-          const key = `${e.source}|${e.target}|${e.relation}`;
-          if (!existingEdgesStr.has(key)) {
-            this.edges.push(e);
-            existingEdgesStr.add(key);
-          }
-        }
-      } catch {
-        // File doesn't exist, safe to write our full state
+  /** Inner save (must be called inside withLock) */
+  private async doSave(): Promise<void> {
+    // Snapshot dirty state so items added during write aren't lost
+    const nodesToFlush = new Set(this.dirtyNodes);
+    const edgeFlushStart = this.savedEdgeCount;
+    const edgeFlushEnd = this.edges.length;
+
+    const lines: string[] = [];
+
+    // Append new nodes
+    for (const nodeId of nodesToFlush) {
+      const node = this.nodes.get(nodeId);
+      if (node) {
+        lines.push(JSON.stringify({ _t: "n", d: node }));
       }
+    }
 
-      const data: GraphData = {
-        nodes: Array.from(this.nodes.values()),
-        edges: this.edges,
-      };
-      await writeFile(this.filePath, JSON.stringify(data, null, 2), "utf-8");
+    // Append new edges (only those beyond savedEdgeCount)
+    for (let i = edgeFlushStart; i < edgeFlushEnd; i++) {
+      lines.push(JSON.stringify({ _t: "e", d: this.edges[i] }));
+    }
+
+    if (lines.length > 0) {
+      await appendFile(this.filePath, lines.join("\n") + "\n", "utf-8");
+    }
+
+    // Only clear flushed items (new ones may have been added during write)
+    for (const id of nodesToFlush) {
+      this.dirtyNodes.delete(id);
+    }
+    this.savedEdgeCount = edgeFlushEnd;
+  }
+
+  /**
+   * Full rewrite (compaction) — use periodically to clean up the JSONL file.
+   * Removes duplicate lines and produces a minimal file.
+   */
+  async compact(): Promise<void> {
+    return this.withLock(async () => {
+      const lines: string[] = [];
+      for (const node of this.nodes.values()) {
+        lines.push(JSON.stringify({ _t: "n", d: node }));
+      }
+      for (const edge of this.edges) {
+        lines.push(JSON.stringify({ _t: "e", d: edge }));
+      }
+      await writeFile(this.filePath, lines.join("\n") + "\n", "utf-8");
+      this.dirtyNodes.clear();
+      this.savedEdgeCount = this.edges.length;
     });
   }
 
@@ -150,6 +225,7 @@ export class GraphDB {
   addNode(node: GraphNode): void {
     if (!this.nodes.has(node.id)) {
       this.nodes.set(node.id, node);
+      this.dirtyNodes.add(node.id);
     }
   }
 
@@ -337,8 +413,12 @@ Text: "${text.replace(/"/g, '\\"')}"`;
       }));
 
     return { nodes, edges };
-  } catch {
+  } catch (error) {
     // LLM extraction is best-effort — never fail the main operation
+    console.warn(
+      `[memory-hybrid][graph] extractGraphFromText failed for: "${text.substring(0, 40)}..."`,
+      error instanceof Error ? error.message : String(error),
+    );
     return { nodes: [], edges: [] };
   }
 }

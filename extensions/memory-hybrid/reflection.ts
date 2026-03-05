@@ -159,7 +159,11 @@ Return ONLY valid JSON:
       memoriesAnalyzed: memories.length,
       generatedAt: Date.now(),
     };
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[memory-hybrid][reflection] generateReflection JSON parse failed`,
+      error instanceof Error ? error.message : String(error),
+    );
     return {
       summary: "Reflection failed (LLM error). Try again later.",
       patterns: [],

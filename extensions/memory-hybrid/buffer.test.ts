@@ -66,21 +66,21 @@ describe("WorkingMemoryBuffer", () => {
   });
 
   test("should evict oldest non-promoted when full", () => {
-    // Fill buffer (max 5)
-    buffer.add("fact 1", 0.3, "other"); // non-promoted
-    buffer.add("fact 2", 0.3, "other"); // non-promoted  
-    buffer.add("fact 3", 0.3, "other"); // non-promoted
+    // Fill buffer (max 5) — use distinct strings to avoid fuzzy matching
+    buffer.add("the weather is cloudy today", 0.3, "other"); // non-promoted
+    buffer.add("python is a programming language", 0.3, "other"); // non-promoted
+    buffer.add("kyiv is the capital of ukraine", 0.3, "other"); // non-promoted
     buffer.add("important thing", 0.9, "entity"); // promoted
     buffer.add("another important", 0.8, "decision"); // promoted
     expect(buffer.size).toBe(5);
 
-    // Add 6th — should evict "fact 1" (oldest non-promoted)
-    buffer.add("fact 6", 0.3, "other");
+    // Add 6th — should evict oldest non-promoted ("the weather is cloudy today")
+    buffer.add("random unrelated new entry here", 0.3, "other");
     expect(buffer.size).toBe(5);
 
-    // "fact 1" should be gone
+    // Oldest non-promoted should be gone
     const texts = buffer.entries.map((e) => e.text);
-    expect(texts).not.toContain("fact 1");
+    expect(texts).not.toContain("the weather is cloudy today");
     expect(texts).toContain("important thing"); // promoted stays
   });
 
