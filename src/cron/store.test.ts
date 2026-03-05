@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import nodeFs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
@@ -73,6 +74,43 @@ describe("cron store", () => {
 
     await saveCronStore(store.storePath, first);
     await saveCronStore(store.storePath, second);
+
+    const currentRaw = await fs.readFile(store.storePath, "utf-8");
+    const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
+    expect(JSON.parse(currentRaw)).toEqual(second);
+    expect(JSON.parse(backupRaw)).toEqual(first);
+  });
+
+  it("backs up pre-save bytes when store changes after tmp write", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second = makeStore("job-2", false);
+    const external = makeStore("job-external", true);
+
+    await saveCronStore(store.storePath, first);
+
+    const originalWriteFile = nodeFs.promises.writeFile.bind(nodeFs.promises);
+    let injected = false;
+    const writeSpy = vi
+      .spyOn(nodeFs.promises, "writeFile")
+      .mockImplementation(async (file, data, options) => {
+        await originalWriteFile(file, data, options);
+        if (
+          !injected &&
+          typeof file === "string" &&
+          file.startsWith(`${store.storePath}.`) &&
+          file.endsWith(".tmp")
+        ) {
+          injected = true;
+          await fs.writeFile(store.storePath, JSON.stringify(external, null, 2), "utf-8");
+        }
+      });
+
+    try {
+      await saveCronStore(store.storePath, second);
+    } finally {
+      writeSpy.mockRestore();
+    }
 
     const currentRaw = await fs.readFile(store.storePath, "utf-8");
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
