@@ -53,6 +53,18 @@ function makeToolResultWithDetails(id: string, text: string, detailText: string)
   });
 }
 
+function makeMalformedToolResult(id: string): AgentMessage {
+  return castAgentMessage({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read",
+    // Intentionally malformed: text block omits the "text" field.
+    content: [{ type: "text" }],
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 function getToolResultText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -267,5 +279,24 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
+  });
+
+  it("does not crash when toolResult text blocks are malformed", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      makeMalformedToolResult("call_bad"),
+      makeToolResult("call_new", "y".repeat(1_000)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.toBe(contextForNextCall);
   });
 });
