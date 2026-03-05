@@ -1,7 +1,7 @@
 import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type {
@@ -217,6 +217,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       : {}),
   });
+  const loadPluginWithJiti = (modulePath: string): OpenClawPluginModule =>
+    jiti(pathToFileURL(modulePath).href) as OpenClawPluginModule;
 
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
@@ -293,7 +295,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = jiti(candidate.source) as OpenClawPluginModule;
+      mod = loadPluginWithJiti(candidate.source);
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";
