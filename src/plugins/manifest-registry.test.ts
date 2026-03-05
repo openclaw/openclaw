@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning for cross-origin plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -142,6 +142,29 @@ describe("loadPluginManifestRegistry", () => {
         idHint: "test-plugin",
         rootDir: dirA,
         origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("emits duplicate warning for same-origin plugins with same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirA,
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",

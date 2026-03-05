@@ -214,9 +214,12 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
-      if (samePlugin) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
+      // Cross-origin duplicates (e.g. bundled + global) are expected when a
+      // user installs a global extension that shadows a bundled plugin.
+      // Silently prefer the higher-precedence origin in that case.
+      // Only warn when two different directories share the same plugin id
+      // within the same origin — that indicates a real configuration conflict.
+      if (samePlugin || candidate.origin !== existing.candidate.origin) {
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
