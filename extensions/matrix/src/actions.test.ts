@@ -13,7 +13,7 @@ vi.mock("./tool-actions.js", () => ({
 function createSendCtx(params: Record<string, unknown>) {
   return {
     channel: "matrix",
-    action: "send",
+    action: "send" as const,
     params,
     cfg: {} as CoreConfig,
   };
@@ -25,7 +25,7 @@ describe("matrixMessageActions send voice flag forwarding", () => {
   });
 
   it("forwards asVoice to sendMessage audioAsVoice", async () => {
-    await matrixMessageActions.handleAction?.(
+    await matrixMessageActions.handleAction!(
       createSendCtx({
         to: "room:!room:example.org",
         message: "voice caption",
@@ -44,7 +44,7 @@ describe("matrixMessageActions send voice flag forwarding", () => {
   });
 
   it("forwards audioAsVoice to sendMessage", async () => {
-    await matrixMessageActions.handleAction?.(
+    await matrixMessageActions.handleAction!(
       createSendCtx({
         to: "room:!room:example.org",
         message: "voice caption",
