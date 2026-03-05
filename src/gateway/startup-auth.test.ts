@@ -132,6 +132,62 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.auth.password).toBe("resolved-password");
   });
 
+  it("resolves gateway.auth.token SecretRef before startup auth checks", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GW_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      env: {
+        GW_TOKEN: "resolved-token",
+      } as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("resolved-token");
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("uses OPENCLAW_GATEWAY_TOKEN without resolving configured token SecretRef", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "token-from-env",
+      } as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("token-from-env");
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef", async () => {
     const result = await ensureGatewayStartupAuth({
       cfg: {
