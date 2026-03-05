@@ -52,6 +52,17 @@ function resolveMainSessionHeartbeatTarget(job: CronJob): {
   accountId?: string;
 } {
   const delivery = job.delivery;
+  // If delivery mode is "none", respect the explicit opt-out.
+  // Fall back to default behavior (deliver to last active channel).
+  if (delivery?.mode === "none") {
+    return { target: "last" };
+  }
+  // If delivery mode is "webhook", delivery.to is an HTTP URL — not a
+  // channel target.  Don't pass it to heartbeat routing, which would
+  // cause Discord/Telegram to resolve no-target and drop the reply.
+  if (delivery?.mode === "webhook") {
+    return { target: "last" };
+  }
   // If delivery has an explicit channel (not undefined and not "last" default),
   // use that as the heartbeat target.
   if (delivery?.channel && delivery.channel !== "last") {
