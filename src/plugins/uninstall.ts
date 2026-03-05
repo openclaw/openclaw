@@ -30,10 +30,6 @@ export function resolveUninstallDirectoryTarget(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
 }): string | null {
-  if (!params.hasInstall) {
-    return null;
-  }
-
   if (params.installRecord?.source === "path") {
     return null;
   }
