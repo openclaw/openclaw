@@ -385,7 +385,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.debug("Memory file written successfully");
     }
 
-    log.info(`Session context saved to ${writeRelativePath}`);
+    log.info(`Session context saved to ${writePath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {
