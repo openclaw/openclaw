@@ -50,6 +50,8 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Allowed local media directories for file uploads. */
+  mediaLocalRoots?: readonly string[];
 };
 
 /**
@@ -209,6 +211,7 @@ export async function handleSlackAction(
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });
