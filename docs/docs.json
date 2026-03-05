@@ -1112,6 +1112,7 @@
                   "providers/ollama",
                   "providers/openai",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/openrouter",
                   "providers/qianfan",
                   "providers/qwen",

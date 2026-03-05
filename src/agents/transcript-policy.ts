@@ -38,7 +38,11 @@ const OPENAI_MODEL_APIS = new Set([
   "openai-codex-responses",
 ]);
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
-const OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS = new Set(["openrouter", "opencode"]);
+const OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS = new Set([
+  "openrouter",
+  "opencode",
+  "opencode-go",
+]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
@@ -91,7 +95,10 @@ export function resolveTranscriptPolicy(params: {
     !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
   const isOpenRouterGemini =
-    (provider === "openrouter" || provider === "opencode" || provider === "kilocode") &&
+    (provider === "openrouter" ||
+      provider === "opencode" ||
+      provider === "opencode-go" ||
+      provider === "kilocode") &&
     modelId.toLowerCase().includes("gemini");
   const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";

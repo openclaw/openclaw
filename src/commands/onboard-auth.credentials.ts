@@ -435,6 +435,18 @@ export async function setOpencodeZenApiKey(
   });
 }
 
+export async function setOpencodeGoApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "opencode-go:default",
+    credential: buildApiKeyCredential("opencode-go", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setTogetherApiKey(
   key: SecretInput,
   agentDir?: string,

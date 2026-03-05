@@ -8,6 +8,11 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
+import {
+  getOpencodeGoStaticFallbackModels,
+  OPENCODE_GO_API_BASE_URL,
+  resolveOpencodeGoAlias,
+} from "../opencode-go-models.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
@@ -97,6 +102,25 @@ export function resolveModel(
         contextWindow: DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
         maxTokens: 8192,
+      } as Model<Api>);
+      return { model: fallbackModel, authStorage, modelRegistry };
+    }
+    // OpenCode Go is a pass-through proxy — resolve models from the static catalog.
+    if (normalizedProvider === "opencode-go") {
+      const resolvedId = resolveOpencodeGoAlias(modelId);
+      const catalog = getOpencodeGoStaticFallbackModels();
+      const catalogMatch = catalog.find((m) => m.id === resolvedId);
+      const fallbackModel: Model<Api> = normalizeModelCompat({
+        id: resolvedId,
+        name: catalogMatch?.name ?? resolvedId,
+        api: catalogMatch?.api ?? "openai-completions",
+        provider,
+        baseUrl: OPENCODE_GO_API_BASE_URL,
+        reasoning: catalogMatch?.reasoning ?? false,
+        input: catalogMatch?.input ?? ["text"],
+        cost: catalogMatch?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: catalogMatch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+        maxTokens: catalogMatch?.maxTokens ?? 8192,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }

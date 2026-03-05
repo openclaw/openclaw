@@ -155,6 +155,9 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   if (providers["opencode-zen"]) {
     overrides.push("opencode-zen");
   }
+  if (providers["opencode-go"]) {
+    overrides.push("opencode-go");
+  }
   if (overrides.length === 0) {
     return;
   }

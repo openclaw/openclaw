@@ -41,6 +41,7 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "minimax-portal"
   | "opencode-zen"
+  | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -67,6 +68,7 @@ export type AuthChoiceGroupId =
   | "zai"
   | "xiaomi"
   | "opencode-zen"
+  | "opencode-go"
   | "minimax"
   | "synthetic"
   | "venice"
@@ -131,6 +133,7 @@ export type OnboardOptions = {
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
+  opencodeGoApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
