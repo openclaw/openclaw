@@ -291,7 +291,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        stringifyAllowFrom(resolveLineAccount({ cfg, accountId }).config.allowFrom ?? []),
+        stringifyAllowFrom(
+          resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom ?? [],
+        ),
       formatAllowFrom: ({ allowFrom }) =>
         trimAllowFromEntries(allowFrom)
           .map((entry) =>
