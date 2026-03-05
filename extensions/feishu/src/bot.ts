@@ -1338,6 +1338,12 @@ export async function handleFeishuMessage(params: {
     const messageCreateTimeMs = event.message.create_time
       ? parseInt(event.message.create_time, 10)
       : undefined;
+    // Strip synthetic reaction suffix (`:reaction:<emoji>:<uuid>`) from message
+    // IDs before using them in API calls. Reaction events generate synthetic IDs
+    // for dedup but the base ID is what Feishu's API expects.
+    const baseMessageId = ctx.messageId.includes(":reaction:")
+      ? ctx.messageId.slice(0, ctx.messageId.indexOf(":reaction:"))
+      : ctx.messageId;
     // Determine reply target based on group session mode:
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.
@@ -1354,7 +1360,7 @@ export async function handleFeishuMessage(params: {
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+      isTopicSession || configReplyInThread ? (ctx.rootId ?? baseMessageId) : baseMessageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
