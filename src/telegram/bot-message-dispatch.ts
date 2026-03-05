@@ -183,11 +183,8 @@ export const dispatchTelegramMessage = async ({
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
-  // Keep draft preview messages unthreaded. Drafts are transient and can be
-  // deleted/cleared during finalization; threading them can make Telegram show
-  // a "Deleted message" quote block when reply tags are used.
-  // Final delivery still applies reply threading via deliverReplies.
-  const draftReplyToMessageId = undefined;
+  const draftReplyToMessageId =
+    replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];

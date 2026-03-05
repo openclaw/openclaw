@@ -19,7 +19,6 @@ OPENCLAW_USER="${OPENCLAW_PODMAN_USER:-openclaw}"
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
 QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"
-OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -210,11 +209,7 @@ if ! run_as_openclaw test -f "$OPENCLAW_JSON"; then
 fi
 
 echo "Building image from $REPO_PATH..."
-PODMAN_BUILD_ARGS=()
-if [[ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]]; then
-  PODMAN_BUILD_ARGS+=(--build-arg "OPENCLAW_DOCKER_APT_PACKAGES=$OPENCLAW_DOCKER_APT_PACKAGES")
-fi
-podman build "${PODMAN_BUILD_ARGS[@]}" -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
+podman build -t openclaw:local -f "$REPO_PATH/Dockerfile" "$REPO_PATH"
 
 echo "Loading image into $OPENCLAW_USER's Podman store..."
 TMP_IMAGE="$(mktemp -p /tmp openclaw-image.XXXXXX.tar)"
