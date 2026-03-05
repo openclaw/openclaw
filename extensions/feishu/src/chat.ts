@@ -85,25 +85,23 @@ function parseMessageContent(msgType: string | undefined, bodyContent: string | 
       return typeof parsed.text === "string" ? parsed.text : bodyContent;
     }
     if (msgType === "post") {
-      // Rich-text post: extract text from content arrays
+      // Rich-text post: pick a single locale (zh_cn preferred, then first available).
+      const locale = (parsed.zh_cn ?? parsed.en_us ?? Object.values(parsed)[0]) as
+        | { title?: string; content?: Array<Array<{ tag: string; text?: string }>> }
+        | undefined;
+      if (!locale) return bodyContent;
       const lines: string[] = [];
-      const locales = Object.values(parsed) as Array<{
-        title?: string;
-        content?: Array<Array<{ tag: string; text?: string }>>;
-      }>;
-      for (const locale of locales) {
-        if (locale?.title) lines.push(locale.title);
-        if (Array.isArray(locale?.content)) {
-          for (const paragraph of locale.content) {
-            if (!Array.isArray(paragraph)) continue;
-            const texts = paragraph
-              .filter(
-                (el): el is { tag: string; text: string } =>
-                  el.tag === "text" && typeof el.text === "string",
-              )
-              .map((el) => el.text);
-            if (texts.length > 0) lines.push(texts.join(""));
-          }
+      if (locale.title) lines.push(locale.title);
+      if (Array.isArray(locale.content)) {
+        for (const paragraph of locale.content) {
+          if (!Array.isArray(paragraph)) continue;
+          const texts = paragraph
+            .filter(
+              (el): el is { tag: string; text: string } =>
+                el.tag === "text" && typeof el.text === "string",
+            )
+            .map((el) => el.text);
+          if (texts.length > 0) lines.push(texts.join(""));
         }
       }
       return lines.join("\n") || bodyContent;
