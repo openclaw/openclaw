@@ -289,6 +289,57 @@ describe("sendMessageMatrix cfg threading", () => {
   });
 });
 
+describe("sendMessageMatrix rate-limit retry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtimeLoadConfigMock.mockReset();
+    runtimeLoadConfigMock.mockReturnValue({});
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("retries once after M_LIMIT_EXCEEDED and succeeds", async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce({ body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 1 } })
+      .mockResolvedValue("evt-retry");
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    const result = await sendMessageMatrix("!room:example", "hello", { client });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("evt-retry");
+  });
+
+  it("propagates error when retry also fails", async () => {
+    const rateLimitErr = { body: { errcode: "M_LIMIT_EXCEEDED", retry_after_ms: 1 } };
+    const sendMessage = vi.fn().mockRejectedValue(rateLimitErr);
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await expect(sendMessageMatrix("!room:example", "hello", { client })).rejects.toBe(
+      rateLimitErr,
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on non-rate-limit errors", async () => {
+    const otherErr = new Error("M_FORBIDDEN");
+    const sendMessage = vi.fn().mockRejectedValue(otherErr);
+    const client = {
+      sendMessage,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await expect(sendMessageMatrix("!room:example", "hello", { client })).rejects.toBe(otherErr);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("resolveMediaMaxBytes cfg threading", () => {
   beforeEach(() => {
     runtimeLoadConfigMock.mockReset();

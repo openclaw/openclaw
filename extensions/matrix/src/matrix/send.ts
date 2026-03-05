@@ -75,9 +75,22 @@ export async function sendMessageMatrix(
         ? buildThreadRelation(threadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
       const sendContent = async (content: MatrixOutboundContent) => {
-        // @vector-im/matrix-bot-sdk uses sendMessage differently
-        const eventId = await client.sendMessage(roomId, content);
-        return eventId;
+        // @vector-im/matrix-bot-sdk uses sendMessage differently.
+        // On M_LIMIT_EXCEEDED, honor retry_after_ms and retry once (issue #36027).
+        try {
+          return await client.sendMessage(roomId, content);
+        } catch (err) {
+          const body = (err as { body?: { errcode?: string; retry_after_ms?: unknown } }).body;
+          if (body?.errcode !== "M_LIMIT_EXCEEDED") {
+            throw err;
+          }
+          const retryAfterMs =
+            typeof body.retry_after_ms === "number" && body.retry_after_ms > 0
+              ? Math.min(body.retry_after_ms, 30_000)
+              : 2_000;
+          await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
+          return await client.sendMessage(roomId, content);
+        }
       };
 
       let lastMessageId = "";
