@@ -686,6 +686,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        restartRecovery: z
+          .object({
+            resumeInflightAgentRuns: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         tls: z
           .object({
             enabled: z.boolean().optional(),

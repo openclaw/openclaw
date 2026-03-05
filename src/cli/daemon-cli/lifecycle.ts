@@ -1,5 +1,9 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  formatDoctorNonInteractiveHint,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -75,6 +79,21 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+
+  // Best-effort: write a restart sentinel so the next gateway process can detect
+  // this restart as being triggered via the explicit restart command.
+  try {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "ok",
+      ts: Date.now(),
+      message: null,
+      doctorHint: formatDoctorNonInteractiveHint(),
+      stats: { mode: "cli.gateway.restart", reason: "daemon restart" },
+    });
+  } catch {
+    // ignore: sentinel is best-effort
+  }
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
