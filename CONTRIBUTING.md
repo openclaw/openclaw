@@ -76,6 +76,17 @@ Welcome to the lobster tank! 🦞
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
+## PR Description Checklist
+
+Use the repository PR template and complete every section before requesting review:
+
+- Summary / Change Type / Scope / Linked Issue
+- Security Impact (permissions, secrets, network surface, data exposure)
+- Repro + Verification + Evidence + Human Verification
+- Compatibility/Migration + Failure Recovery + Risks/Mitigations
+
+Template source: `.github/pull_request_template.md`
+
 ## Control UI Decorators
 
 The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
