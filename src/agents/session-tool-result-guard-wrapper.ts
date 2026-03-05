@@ -69,8 +69,8 @@ export function guardSessionManager(
       let result = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       if (opts?.userMessageExtras && (result as { role?: unknown }).role === "user") {
         result = {
-          ...(result as unknown as Record<string, unknown>),
           ...opts.userMessageExtras,
+          ...(result as unknown as Record<string, unknown>),
         } as unknown as import("@mariozechner/pi-agent-core").AgentMessage;
       }
       return result;
