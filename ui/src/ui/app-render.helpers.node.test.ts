@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
-import {
-  isCronSessionKey,
-  parseSessionKey,
-  resolveSessionDisplayName,
-} from "./app-render.helpers.ts";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "./types.ts";
+
+vi.stubGlobal("localStorage", {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+});
+vi.stubGlobal("navigator", { language: "en-US" });
+
+const { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } =
+  await import("./app-render.helpers.ts");
 
 type SessionRow = SessionsListResult["sessions"][number];
 

@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
+
+vi.stubGlobal("localStorage", {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+});
+vi.stubGlobal("navigator", { language: "en-US" });
+
+const { connectGateway, resolveControlUiClientVersion } = await import("./app-gateway.ts");
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
