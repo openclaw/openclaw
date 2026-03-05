@@ -362,33 +362,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
         });
         log.debug("Memory file written to redirect path");
       } catch (redirectErr) {
-        // Operational failures (ENOSPC, EACCES) and intentional security rejections
-        // (outside-workspace) fail closed — no fallback to default memory dir.
-        // Only structural path errors (invalid-path, symlink issues) fall back,
-        // since those indicate misconfiguration rather than policy intent.
-        if (!(redirectErr instanceof SafeOpenError)) {
-          throw redirectErr;
-        }
-        if (redirectErr.code === "outside-workspace") {
-          // The plugin intentionally pointed to an external path (e.g. quarantine
-          // directory). Falling back would silently defeat the policy intent.
-          log.warn(
-            `sessionSaveRedirectPath rejected as outside-workspace — failing closed. ` +
-              `Session memory not saved. Use an in-workspace path or set blockSessionSave=true.`,
-          );
-          return;
-        }
+        // ALL SafeOpenError codes fail closed — no fallback to default memory dir.
+        // This includes outside-workspace, symlink, path-mismatch, invalid-path,
+        // and not-file. Any of these could result from adversarial filesystem state
+        // (e.g. symlink at quarantine path) or policy intent (outside-workspace
+        // redirect). Falling back would silently defeat the upstream plugin's
+        // quarantine/isolation intent. Non-SafeOpenError failures (ENOSPC, EACCES)
+        // also fail closed to avoid bypassing policy on operational errors.
+        const code = redirectErr instanceof SafeOpenError ? redirectErr.code : "io-error";
         log.warn(
-          `sessionSaveRedirectPath rejected (${redirectErr.code}), falling back to default memory dir.`,
+          `sessionSaveRedirectPath rejected (${code}) — failing closed. ` +
+            `Session memory not saved. Fix the redirect path or set blockSessionSave=true.`,
         );
-        writePath = path.join("memory", filename);
-        await writeFileWithinRoot({
-          rootDir: workspaceDir,
-          relativePath: writePath,
-          data: entry,
-          encoding: "utf-8",
-        });
-        log.debug("Memory file written to fallback path");
+        if (!(redirectErr instanceof SafeOpenError)) {
+          // Log the underlying error for debugging operational failures
+          log.debug(`Redirect write error detail: ${String(redirectErr)}`);
+        }
+        return;
       }
     } else {
       await writeFileWithinRoot({

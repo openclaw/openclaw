@@ -546,14 +546,8 @@ describe("session-memory hook", () => {
     await handler(event);
 
     const memoryDir = path.join(tempDir, "memory");
-    const exists = await fs.stat(memoryDir).then(
-      () => true,
-      () => false,
-    );
-    if (exists) {
-      const files = await fs.readdir(memoryDir);
-      expect(files).toHaveLength(0);
-    }
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 
   it("sessionSaveRedirectPath writes to alternate location", async () => {
