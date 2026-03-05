@@ -429,6 +429,13 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
+  // Exit code 4 means the unit file does not exist. systemctl writes "not-found"
+  // to stdout in this case. execFileUtf8 folds empty stderr into e.message (the
+  // command string), so readSystemctlDetail would return the command line rather
+  // than "not-found" — check stdout and code directly before falling back.
+  if (res.code === 4 || res.stdout.trim() === "not-found") {
+    return false;
+  }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
