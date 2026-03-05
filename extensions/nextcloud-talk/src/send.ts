@@ -1,4 +1,4 @@
-import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/nextcloud-talk";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";

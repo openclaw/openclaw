@@ -356,6 +356,81 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("returns a no-op send response when write policy denies delivery", async () => {
+    mocks.decideWrite.mockReturnValueOnce({
+      kind: "deny",
+      reason: "no relay",
+    });
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-send-deny",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        noOp: true,
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("returns a no-op send response when write policy suppresses delivery", async () => {
+    mocks.decideWrite.mockReturnValueOnce({
+      kind: "suppress",
+      reason: "protected destination",
+    });
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-send-suppress",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        noOp: true,
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("redirects send delivery to relay target destination", async () => {
+    mocks.decideWrite.mockReturnValueOnce({
+      kind: "redirect",
+      target: { channel: "slack", to: "channel:C-RELAY", accountId: "default" },
+    });
+    mockDeliverySuccess("m-redirect");
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-send-redirect",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C-RELAY",
+        accountId: "default",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-redirect" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("does not mirror when delivery returns no results", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
 

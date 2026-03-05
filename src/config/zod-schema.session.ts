@@ -117,6 +117,11 @@ export const SessionRelayRoutingSchema = z
       }
       const sourceAccountId = normalizeAccountId(rule.match?.accountId);
       const targetAccountId = normalizeAccountId(target.accountId);
+      // NOTE: This comparison uses raw strings — if one side is a configured
+      // alias and the other is the canonical ID for the same destination, the
+      // self-reference is not detected at validation time. The runtime policy
+      // engine resolves both sides canonically so this is not a security gap,
+      // but operators using aliases should expand them manually in config.
       if (
         sourceChannel === targetChannel &&
         sourceChatId === targetTo &&

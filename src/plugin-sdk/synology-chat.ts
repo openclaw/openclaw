@@ -15,3 +15,6 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 export { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
+
+// Write-policy enforcement exports for extensions using guardWrite.
+export { getProtectedDestinationMap, guardWrite } from "../infra/outbound/write-policy.js";

@@ -5,7 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
-import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/synology-chat";
 import { getSynologyRuntime } from "./runtime.js";
 
 const MIN_SEND_INTERVAL_MS = 500;

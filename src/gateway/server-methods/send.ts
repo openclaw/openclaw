@@ -244,11 +244,32 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
         });
+        // Check write policy before delivery — suppress/deny should return a
+        // clean noOp response, not fall through to deliverOutboundPayloads which
+        // would return [] and trigger a misleading UNAVAILABLE error.
+        let deliveryChannel = outboundChannel;
+        let deliveryTo = resolved.to;
+        let deliveryAccountId = accountId;
+        const writeDecision = decideWrite(
+          "deliver",
+          { channel: deliveryChannel, to: deliveryTo, accountId: deliveryAccountId },
+          getProtectedDestinationMap(cfg),
+        );
+        if (writeDecision.kind === "redirect") {
+          deliveryChannel = writeDecision.target.channel;
+          deliveryTo = writeDecision.target.to;
+          deliveryAccountId = writeDecision.target.accountId;
+        } else if (writeDecision.kind === "suppress" || writeDecision.kind === "deny") {
+          const payload: Record<string, unknown> = { runId: idem, channel, noOp: true };
+          context.dedupe.set(dedupeKey, { ts: Date.now(), ok: true, payload });
+          return { ok: true, payload, meta: { channel } };
+        }
+
         const results = await deliverOutboundPayloads({
           cfg,
-          channel: outboundChannel,
-          to: resolved.to,
-          accountId,
+          channel: deliveryChannel,
+          to: deliveryTo,
+          accountId: deliveryAccountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
           session: outboundSession,
           gifPlayback: request.gifPlayback,

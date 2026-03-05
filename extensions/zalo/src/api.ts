@@ -1,4 +1,4 @@
-import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk";
+import { getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/zalo";
 import { getZaloRuntime } from "./runtime.js";
 
 /**
