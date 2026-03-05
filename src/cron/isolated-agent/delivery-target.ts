@@ -61,12 +61,16 @@ export async function resolveDeliveryTarget(
   const threadSessionKey = jobPayload.sessionKey?.trim();
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
   const main = threadEntry ?? store[mainSessionKey];
+  const sessionRouteKey = threadSessionKey || mainSessionKey;
+  const sessionMainKey = cfg.session?.mainKey;
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
     requestedChannel,
     explicitTo,
     allowMismatchedLastTo,
+    sessionKey: sessionRouteKey,
+    mainKey: sessionMainKey,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -95,6 +99,8 @@ export async function resolveDeliveryTarget(
         fallbackChannel,
         allowMismatchedLastTo,
         mode: preliminary.mode,
+        sessionKey: sessionRouteKey,
+        mainKey: sessionMainKey,
       })
     : preliminary;
 

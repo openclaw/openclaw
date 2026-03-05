@@ -41,6 +41,7 @@ import {
 } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import type { DeliveryIntent } from "../../infra/outbound/targets.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -634,6 +635,12 @@ export async function runCronIsolatedAgentTurn(params: {
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
+  const deliveryIntent: DeliveryIntent =
+    !deliveryRequested || deliveryPlan.mode === "none"
+      ? "internal_only"
+      : deliveryBestEffort
+        ? "external_preferred"
+        : "external_required";
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
   const runLevelError = runResult.meta?.error;
   const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
@@ -682,7 +689,6 @@ export async function runCronIsolatedAgentTurn(params: {
     );
 
   const deliveryResult = await dispatchCronDelivery({
-    cfg: params.cfg,
     cfgWithAgentDefaults,
     deps: params.deps,
     job: params.job,
@@ -694,6 +700,7 @@ export async function runCronIsolatedAgentTurn(params: {
     timeoutMs,
     resolvedDelivery,
     deliveryRequested,
+    deliveryIntent,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
     deliveryBestEffort,

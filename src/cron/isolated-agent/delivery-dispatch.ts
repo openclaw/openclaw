@@ -4,7 +4,6 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
@@ -12,6 +11,7 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import type { DeliveryIntent } from "../../infra/outbound/targets.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -71,21 +71,28 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return false;
 }
 
+type CronAnnounceSessionRouteResolution =
+  | { ok: true; sessionKey: string }
+  | { ok: false; error: Error };
+
 async function resolveCronAnnounceSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  fallbackSessionKey: string;
   delivery: {
     channel: NonNullable<DeliveryTargetResolution["channel"]>;
     to?: string;
     accountId?: string;
     threadId?: string | number;
   };
-}): Promise<string> {
+}): Promise<CronAnnounceSessionRouteResolution> {
   const to = params.delivery.to?.trim();
   if (!to) {
-    return params.fallbackSessionKey;
+    return {
+      ok: false,
+      error: new Error("announce delivery target is missing recipient"),
+    };
   }
+  const routeLabel = `${params.delivery.channel}:${to}`;
   try {
     const route = await resolveOutboundSessionRoute({
       cfg: params.cfg,
@@ -96,32 +103,40 @@ async function resolveCronAnnounceSessionKey(params: {
       threadId: params.delivery.threadId,
     });
     const resolved = route?.sessionKey?.trim();
-    if (route && resolved) {
-      // Ensure the session entry exists so downstream announce / queue delivery
-      // can look up channel metadata (lastChannel, to, sessionId).  Named agents
-      // may not have a session entry for this target yet, causing announce
-      // delivery to silently fail (#32432).
-      await ensureOutboundSessionEntry({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        channel: params.delivery.channel,
-        accountId: params.delivery.accountId,
-        route,
-      }).catch(() => {
-        // Best-effort: don't block delivery on session entry creation.
-      });
-      return resolved;
+    if (resolved) {
+      if (route) {
+        // Ensure the session entry exists so downstream announce / queue delivery
+        // can look up channel metadata (lastChannel, to, sessionId). Named agents
+        // may not have a session entry for this target yet, causing announce
+        // delivery to silently fail (#32432).
+        await ensureOutboundSessionEntry({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          channel: params.delivery.channel,
+          accountId: params.delivery.accountId,
+          route,
+        }).catch(() => {
+          // Best-effort: don't block delivery on session entry creation.
+        });
+      }
+      return { ok: true, sessionKey: resolved };
     }
-  } catch {
-    // Fall back to main session routing if announce session resolution fails.
+    return {
+      ok: false,
+      error: new Error(`no session key resolved for ${routeLabel}`),
+    };
+  } catch (err) {
+    const detail = err instanceof Error && err.message ? err.message : String(err);
+    return {
+      ok: false,
+      error: new Error(`failed resolving ${routeLabel}: ${detail}`),
+    };
   }
-  return params.fallbackSessionKey;
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
-  cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   deps: CliDeps;
   job: CronJob;
@@ -133,6 +148,7 @@ type DispatchCronDeliveryParams = {
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
+  deliveryIntent: DeliveryIntent;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery: boolean;
   deliveryBestEffort: boolean;
@@ -163,6 +179,7 @@ export type DispatchCronDeliveryState = {
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
+  const requiresExternalDelivery = params.deliveryIntent === "external_required";
   let summary = params.summary;
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
@@ -233,7 +250,7 @@ export async function dispatchCronDelivery(
       delivered = deliveryResults.length > 0;
       return null;
     } catch (err) {
-      if (!params.deliveryBestEffort) {
+      if (requiresExternalDelivery) {
         return params.withRunSession({
           status: "error",
           summary,
@@ -253,14 +270,9 @@ export async function dispatchCronDelivery(
     if (!synthesizedText) {
       return null;
     }
-    const announceMainSessionKey = resolveAgentMainSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const announceSessionKey = await resolveCronAnnounceSessionKey({
+    const announceSessionRoute = await resolveCronAnnounceSessionKey({
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
-      fallbackSessionKey: announceMainSessionKey,
       delivery: {
         channel: delivery.channel,
         to: delivery.to,
@@ -268,6 +280,15 @@ export async function dispatchCronDelivery(
         threadId: delivery.threadId,
       },
     });
+    if (!announceSessionRoute.ok) {
+      const message = `cron announce session route resolution failed: ${announceSessionRoute.error.message}`;
+      if (requiresExternalDelivery) {
+        return failDeliveryTarget(message);
+      }
+      logWarn(`[cron:${params.job.id}] ${message}`);
+      return null;
+    }
+    const announceSessionKey = announceSessionRoute.sessionKey;
     const taskLabel =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()
@@ -374,7 +395,7 @@ export async function dispatchCronDelivery(
         // Delivery failure is tracked separately via delivered/deliveryAttempted.
         const message = "cron announce delivery failed";
         logWarn(`[cron:${params.job.id}] ${message}`);
-        if (!params.deliveryBestEffort) {
+        if (requiresExternalDelivery) {
           return params.withRunSession({
             status: "ok",
             summary,
@@ -390,7 +411,7 @@ export async function dispatchCronDelivery(
       // Same as above: announce delivery errors should not mark a successful
       // agent execution as failed.
       logWarn(`[cron:${params.job.id}] ${String(err)}`);
-      if (!params.deliveryBestEffort) {
+      if (requiresExternalDelivery) {
         return params.withRunSession({
           status: "ok",
           summary,
@@ -406,12 +427,12 @@ export async function dispatchCronDelivery(
   };
 
   if (
-    params.deliveryRequested &&
+    params.deliveryIntent !== "internal_only" &&
     !params.skipHeartbeatDelivery &&
     !params.skipMessagingToolDelivery
   ) {
     if (!params.resolvedDelivery.ok) {
-      if (!params.deliveryBestEffort) {
+      if (requiresExternalDelivery) {
         return {
           result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,

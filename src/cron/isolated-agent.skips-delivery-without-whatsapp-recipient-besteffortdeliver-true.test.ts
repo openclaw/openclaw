@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import * as outboundSession from "../infra/outbound/outbound-session.js";
 import {
   createCliDeps,
   expectDirectTelegramDelivery,
@@ -457,6 +458,99 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.delivered).toBe(true);
       expect(res.deliveryAttempted).toBe(true);
       expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("fails closed when announce session route resolution throws and best-effort is disabled", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+      const routeSpy = vi
+        .spyOn(outboundSession, "resolveOutboundSessionRoute")
+        .mockRejectedValueOnce(new Error("route explode"));
+
+      try {
+        const res = await runTelegramAnnounceTurn({
+          home,
+          storePath,
+          deps,
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+            bestEffort: false,
+          },
+        });
+
+        expect(res.status).toBe("error");
+        expect(res.error).toContain("announce session route");
+        expect(res.error).toContain("route explode");
+        expect(res.deliveryAttempted).toBe(false);
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      } finally {
+        routeSpy.mockRestore();
+      }
+    });
+  });
+
+  it("skips announce when session route resolution fails and best-effort is enabled", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+      const routeSpy = vi
+        .spyOn(outboundSession, "resolveOutboundSessionRoute")
+        .mockRejectedValueOnce(new Error("route explode"));
+
+      try {
+        const res = await runTelegramAnnounceTurn({
+          home,
+          storePath,
+          deps,
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+            bestEffort: true,
+          },
+        });
+
+        expect(res.status).toBe("ok");
+        expect(res.delivered).toBe(false);
+        expect(res.deliveryAttempted).toBe(false);
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      } finally {
+        routeSpy.mockRestore();
+      }
+    });
+  });
+
+  it("does not attempt outbound delivery when delivery mode is none", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "telegram", lastTo: "123" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          channels: { telegram: { botToken: "t-1" } },
+        }),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "none" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.deliveryAttempted).toBe(false);
+      expect(res.delivered).toBe(false);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 
