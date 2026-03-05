@@ -94,6 +94,146 @@ describe("media store redirects", () => {
     expect(stat.mode & 0o777).toBe(expectedMode);
   });
 
+  it("strips all sensitive headers on cross-origin redirect", async () => {
+    const requestCalls: Array<{ url: URL; headers?: Record<string, string> }> = [];
+    mockRequest.mockImplementation((url, opts, cb) => {
+      const parsed = typeof url === "string" ? new URL(url) : (url as URL);
+      requestCalls.push({
+        url: parsed,
+        headers: opts?.headers as Record<string, string> | undefined,
+      });
+
+      const { req, res } = createMockHttpExchange();
+      if (requestCalls.length === 1) {
+        res.statusCode = 302;
+        res.headers = { location: "https://other.example.com/final" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.end();
+        });
+      } else {
+        res.statusCode = 200;
+        res.headers = { "content-type": "text/plain" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.write("ok");
+          res.end();
+        });
+      }
+      return req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+      "Proxy-Authorization": "Basic cHJveHk=",
+      Cookie: "session=abc",
+      Cookie2: "legacy=1",
+      "X-Custom": "keep",
+    });
+
+    expect(requestCalls).toHaveLength(2);
+
+    const first = requestCalls[0]!.headers!;
+    expect(first["Authorization"]).toBe("Bearer secret");
+    expect(first["Proxy-Authorization"]).toBe("Basic cHJveHk=");
+    expect(first["Cookie"]).toBe("session=abc");
+    expect(first["Cookie2"]).toBe("legacy=1");
+    expect(first["X-Custom"]).toBe("keep");
+
+    const second = requestCalls[1]!.headers!;
+    expect(second["Authorization"]).toBeUndefined();
+    expect(second["Proxy-Authorization"]).toBeUndefined();
+    expect(second["Cookie"]).toBeUndefined();
+    expect(second["Cookie2"]).toBeUndefined();
+    expect(second["X-Custom"]).toBe("keep");
+  });
+
+  it("keeps all headers when redirect stays on same origin", async () => {
+    const requestCalls: Array<{ url: URL; headers?: Record<string, string> }> = [];
+    mockRequest.mockImplementation((url, opts, cb) => {
+      const parsed = typeof url === "string" ? new URL(url) : (url as URL);
+      requestCalls.push({
+        url: parsed,
+        headers: opts?.headers as Record<string, string> | undefined,
+      });
+
+      const { req, res } = createMockHttpExchange();
+      if (requestCalls.length === 1) {
+        res.statusCode = 302;
+        res.headers = { location: "https://example.com/final" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.end();
+        });
+      } else {
+        res.statusCode = 200;
+        res.headers = { "content-type": "text/plain" };
+        setImmediate(() => {
+          cb(res as unknown);
+          res.write("ok");
+          res.end();
+        });
+      }
+      return req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer token",
+      Cookie: "session=keep",
+    });
+
+    expect(requestCalls).toHaveLength(2);
+    expect(requestCalls[0]!.headers?.["Authorization"]).toBe("Bearer token");
+    expect(requestCalls[0]!.headers?.["Cookie"]).toBe("session=keep");
+    expect(requestCalls[1]!.headers?.["Authorization"]).toBe("Bearer token");
+    expect(requestCalls[1]!.headers?.["Cookie"]).toBe("session=keep");
+  });
+
+  it("keeps headers stripped through a multi-hop chain", async () => {
+    const requestCalls: Array<{ url: URL; headers?: Record<string, string> }> = [];
+    mockRequest.mockImplementation((url, opts, cb) => {
+      const parsed = typeof url === "string" ? new URL(url) : (url as URL);
+      requestCalls.push({
+        url: parsed,
+        headers: opts?.headers as Record<string, string> | undefined,
+      });
+
+      const { req, res } = createMockHttpExchange();
+      const hop = requestCalls.length;
+      if (hop === 1) {
+        // Hop 1: same-origin redirect (headers preserved)
+        res.statusCode = 302;
+        res.headers = { location: "https://example.com/mid" };
+      } else if (hop === 2) {
+        // Hop 2: cross-origin redirect (headers stripped)
+        res.statusCode = 302;
+        res.headers = { location: "https://cdn.other.com/final" };
+      } else {
+        // Hop 3: final response
+        res.statusCode = 200;
+        res.headers = { "content-type": "text/plain" };
+      }
+      setImmediate(() => {
+        cb(res as unknown);
+        if (hop >= 3) res.write("done");
+        res.end();
+      });
+      return req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+    });
+
+    expect(requestCalls).toHaveLength(3);
+    // Hop 1: same origin → headers preserved
+    expect(requestCalls[0]!.headers?.["Authorization"]).toBe("Bearer secret");
+    // Hop 2: still same origin from hop 1 → headers still present
+    expect(requestCalls[1]!.headers?.["Authorization"]).toBe("Bearer secret");
+    // Hop 3: was cross-origin from hop 2 → stripped
+    expect(requestCalls[2]!.headers?.["Authorization"]).toBeUndefined();
+  });
+
   it("fails when redirect response omits location header", async () => {
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
       const { req, res } = createMockHttpExchange();

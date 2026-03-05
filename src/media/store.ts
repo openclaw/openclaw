@@ -130,6 +130,27 @@ function looksLikeUrl(src: string) {
   return /^https?:\/\//i.test(src);
 }
 
+// Mirror fetch-guard: strip credential headers on cross-origin redirect to prevent leak.
+const CROSS_ORIGIN_SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "cookie2",
+]);
+
+function stripSensitiveHeadersForRedirect(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!headers || Object.keys(headers).length === 0) return headers;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (!CROSS_ORIGIN_SENSITIVE_HEADERS.has(k.toLowerCase())) {
+      out[k] = v;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
  * Download media to disk while capturing the first few KB for mime sniffing.
  */
@@ -163,7 +184,12 @@ async function downloadToFile(
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            const redirectParsed = new URL(redirectUrl);
+            const isCrossOrigin = redirectParsed.origin !== parsedUrl.origin;
+            const redirectHeaders = isCrossOrigin
+              ? stripSensitiveHeadersForRedirect(headers)
+              : headers;
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
