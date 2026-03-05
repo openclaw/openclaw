@@ -18,6 +18,82 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+type ContentBlockStreamUpdate = {
+  evtType: "text_delta" | "text_start" | "thinking_delta" | "thinking_start";
+  delta: string;
+  content: string;
+  blockKind: "text" | "thinking";
+};
+
+function normalizeBlockKind(type: string): "text" | "thinking" | undefined {
+  const normalized = type.toLowerCase();
+  if (normalized === "text" || normalized === "text_delta") {
+    return "text";
+  }
+  if (normalized === "thinking" || normalized === "thinking_delta") {
+    return "thinking";
+  }
+  return undefined;
+}
+
+function resolveContentBlockUpdate(
+  assistantRecord: Record<string, unknown> | undefined,
+): ContentBlockStreamUpdate | null {
+  const eventType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (eventType === "content_block_delta") {
+    const deltaRecord = assistantRecord?.delta;
+    if (typeof deltaRecord !== "object" || deltaRecord === null) {
+      return null;
+    }
+    const record = deltaRecord as Record<string, unknown>;
+    const blockKind = normalizeBlockKind(typeof record.type === "string" ? record.type : "");
+    if (!blockKind) {
+      return null;
+    }
+    const delta =
+      typeof record.text === "string"
+        ? record.text
+        : blockKind === "thinking" && typeof record.thinking === "string"
+          ? record.thinking
+          : "";
+    if (!delta) {
+      return null;
+    }
+    return {
+      evtType: blockKind === "text" ? "text_delta" : "thinking_delta",
+      delta,
+      content: "",
+      blockKind,
+    };
+  }
+
+  if (eventType !== "content_block_start") {
+    return null;
+  }
+
+  const blockRecord = assistantRecord?.content_block;
+  if (typeof blockRecord !== "object" || blockRecord === null) {
+    return null;
+  }
+  const record = blockRecord as Record<string, unknown>;
+  const blockKind = normalizeBlockKind(typeof record.type === "string" ? record.type : "");
+  if (!blockKind) {
+    return null;
+  }
+  const content =
+    typeof record.text === "string"
+      ? record.text
+      : blockKind === "thinking" && typeof record.thinking === "string"
+        ? record.thinking
+        : "";
+  return {
+    evtType: blockKind === "text" ? "text_start" : "thinking_start",
+    delta: "",
+    content,
+    blockKind,
+  };
+}
+
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
@@ -91,7 +167,10 @@ export function handleMessageUpdate(
     assistantEvent && typeof assistantEvent === "object"
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const contentBlockUpdate = resolveContentBlockUpdate(assistantRecord);
+  const evtType =
+    contentBlockUpdate?.evtType ??
+    (typeof assistantRecord?.type === "string" ? assistantRecord.type : "");
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
@@ -100,19 +179,29 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+    const inferredContent =
+      !thinkingContent && contentBlockUpdate?.blockKind === "thinking"
+        ? contentBlockUpdate.content
+        : "";
+    const inferredDelta =
+      !thinkingDelta && contentBlockUpdate?.blockKind === "thinking"
+        ? contentBlockUpdate.delta
+        : "";
     appendRawStream({
       ts: Date.now(),
       event: "assistant_thinking_stream",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
       evtType,
-      delta: thinkingDelta,
-      content: thinkingContent,
+      delta: thinkingDelta || inferredDelta,
+      content: thinkingContent || inferredContent,
     });
     if (ctx.state.streamReasoning) {
       // Prefer full partial-message thinking when available; fall back to event payloads.
       const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+      ctx.emitReasoningStream(
+        partialThinking || thinkingContent || thinkingDelta || inferredContent || inferredDelta,
+      );
     }
     if (evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
@@ -127,8 +216,18 @@ export function handleMessageUpdate(
     return;
   }
 
-  const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-  const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+  const delta =
+    contentBlockUpdate?.blockKind === "text"
+      ? contentBlockUpdate.delta
+      : typeof assistantRecord?.delta === "string"
+        ? assistantRecord.delta
+        : "";
+  const content =
+    contentBlockUpdate?.blockKind === "text"
+      ? contentBlockUpdate.content
+      : typeof assistantRecord?.content === "string"
+        ? assistantRecord.content
+        : "";
 
   appendRawStream({
     ts: Date.now(),

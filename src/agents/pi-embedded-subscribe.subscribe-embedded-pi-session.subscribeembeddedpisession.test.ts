@@ -12,15 +12,19 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(
+    options?: Partial<
+      Omit<Parameters<typeof subscribeEmbeddedPiSession>[0], "session" | "onAgentEvent">
+    >,
+  ) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
       session,
       runId: options?.runId ?? "run",
+      ...options,
       onAgentEvent,
-      sessionKey: options?.sessionKey,
     });
 
     return { emit, onAgentEvent };
@@ -59,6 +63,42 @@ describe("subscribeEmbeddedPiSession", () => {
       assistantMessageEvent: {
         type: "text_delta",
         delta,
+      },
+    });
+  }
+
+  function emitContentBlockTextDelta(
+    emit: (evt: unknown) => void,
+    delta: string,
+    message: Record<string, unknown> = { role: "assistant" },
+  ) {
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "content_block_delta",
+        delta: {
+          type: "text",
+          text: delta,
+        },
+      },
+    });
+  }
+
+  function emitContentBlockThinkingDelta(
+    emit: (evt: unknown) => void,
+    delta: string,
+    message: Record<string, unknown> = { role: "assistant" },
+  ) {
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "content_block_delta",
+        delta: {
+          type: "thinking",
+          thinking: delta,
+        },
       },
     });
   }
@@ -227,6 +267,39 @@ describe("subscribeEmbeddedPiSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams assistant text from content_block_delta events", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitContentBlockTextDelta(emit, "Hello");
+    emitContentBlockTextDelta(emit, " world");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "Hello", delta: "Hello" });
+    expect(payloads[1]).toMatchObject({ text: "Hello world", delta: " world" });
+  });
+
+  it("streams both content_block thinking and text blocks during streaming", () => {
+    const onReasoningStream = vi.fn();
+    const { emit, onAgentEvent } = createAgentEventHarness({
+      onReasoningStream,
+      reasoningMode: "stream",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitContentBlockThinkingDelta(emit, "Checking...");
+    emitContentBlockTextDelta(emit, "Final answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toEqual([{ text: "Final answer", delta: "Final answer" }]);
+
+    const reasoningTexts = onReasoningStream.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(reasoningTexts.at(-1)).toBe("Reasoning:\n_Checking..._");
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
