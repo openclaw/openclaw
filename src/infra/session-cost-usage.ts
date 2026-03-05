@@ -5,6 +5,7 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
@@ -214,6 +215,15 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+function isUsageTranscriptFileName(fileName: string): boolean {
+  if (fileName.endsWith(".jsonl")) {
+    return true;
+  }
+  return (
+    parseSessionArchiveTimestamp(fileName, "reset") !== null && fileName.includes(".jsonl.reset.")
+  );
+}
+
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
   const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
@@ -318,7 +328,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isUsageTranscriptFileName(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +403,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isUsageTranscriptFileName(entry.name)) {
       continue;
     }
 
@@ -409,8 +419,15 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename (remove .jsonl or .jsonl.reset.<timestamp>)
+    const resetMarker = ".jsonl.reset.";
+    const resetIdx = entry.name.indexOf(resetMarker);
+    const sessionId =
+      resetIdx >= 0
+        ? entry.name.slice(0, resetIdx)
+        : entry.name.endsWith(".jsonl")
+          ? entry.name.slice(0, -6)
+          : entry.name;
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;

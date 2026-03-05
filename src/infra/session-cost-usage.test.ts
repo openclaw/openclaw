@@ -442,4 +442,39 @@ example
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
+
+  it("includes reset-archived transcript shards in usage summary and discovery", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-reset-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowIso = new Date("2026-03-01T10:00:00.000Z").toISOString();
+    const mainFile = path.join(sessionsDir, "sess-archived.jsonl");
+    const archivedFile = path.join(
+      sessionsDir,
+      "sess-archived.jsonl.reset.2026-03-01T09-00-00.000Z",
+    );
+
+    const mkAssistant = (tokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: nowIso,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens / 1000 } },
+        },
+      });
+
+    await fs.writeFile(mainFile, `${mkAssistant(10)}\n`, "utf-8");
+    await fs.writeFile(archivedFile, `${mkAssistant(30)}\n`, "utf-8");
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(40);
+
+      const discovered = await discoverAllSessions();
+      const archivedSession = discovered.find((s) => s.sessionId === "sess-archived");
+      expect(archivedSession).toBeTruthy();
+    });
+  });
 });
