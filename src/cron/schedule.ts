@@ -131,6 +131,9 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   if (!Number.isFinite(previousMs)) {
     return undefined;
   }
+  if (previousMs >= nowMs) {
+    return undefined;
+  }
   return previousMs;
 }
 

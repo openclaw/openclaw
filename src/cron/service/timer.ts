@@ -737,6 +737,15 @@ function isRunnableJob(params: {
   if (typeof next === "number" && Number.isFinite(next) && nowMs >= next) {
     return true;
   }
+  if (
+    typeof next === "number" &&
+    Number.isFinite(next) &&
+    next > nowMs &&
+    job.state.lastStatus === "error"
+  ) {
+    // Respect persisted retry backoff windows for recurring jobs on restart.
+    return false;
+  }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }

@@ -263,4 +263,45 @@ describe("CronService restart catch-up", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("does not replay missed cron slots while error backoff is pending after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-backoff-pending",
+        name: "backoff pending",
+        enabled: true,
+        createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+        updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
+        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "do not run during backoff" },
+        state: {
+          // Next retry is intentionally delayed by backoff despite a newer cron slot.
+          nextRunAtMs: Date.parse("2025-12-13T04:10:00.000Z"),
+          lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+          lastStatus: "error",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+    });
+
+    await cron.start();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
 });
