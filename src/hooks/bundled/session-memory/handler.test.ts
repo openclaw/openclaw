@@ -628,15 +628,11 @@ describe("session-memory hook", () => {
       () => false,
     );
     expect(exists).toBe(false);
-    // Should NOT fall back to normal memory dir — outside-workspace fails closed
-    const memoryDirExists = await fs.stat(path.join(tempDir, "memory")).then(
-      () => true,
-      () => false,
-    );
-    if (memoryDirExists) {
-      const files = await fs.readdir(path.join(tempDir, "memory"));
-      expect(files.length).toBe(0);
-    }
+    // Should NOT fall back to normal memory dir — outside-workspace fails closed.
+    // Assert unconditionally: either the dir doesn't exist, or it's empty.
+    const memoryDir = path.join(tempDir, "memory");
+    const memoryFiles = await fs.readdir(memoryDir).catch(() => [] as string[]);
+    expect(memoryFiles.filter((f) => f.endsWith(".md"))).toHaveLength(0);
   });
 
   it("sessionSaveContent overrides saved content", async () => {
