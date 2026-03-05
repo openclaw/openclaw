@@ -356,6 +356,19 @@ export async function handleAcpSpawnAction(
     parts.push(`ℹ️ ${dispatchNote}`);
   }
 
+  const shouldPinBindingNotice =
+    binding?.conversation.channel === "telegram" &&
+    binding.conversation.conversationId.includes(":topic:");
+  if (shouldPinBindingNotice) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: parts.join(" "),
+        channelData: { telegram: { pin: true } },
+      },
+    };
+  }
+
   return stopWithText(parts.join(" "));
 }
 
