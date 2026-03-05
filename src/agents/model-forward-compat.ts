@@ -17,6 +17,8 @@ const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 
+const GEMINI_3_1_COMPATIBLE_PROVIDERS = new Set(["google", "google-gemini-cli"]);
+
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
 // google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
 // don't get "Unknown model" errors when Google releases a new minor version.
@@ -176,7 +178,8 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!GEMINI_3_1_COMPATIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -191,13 +194,28 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
     return undefined;
   }
 
-  return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
-    trimmedModelId: trimmed,
-    templateIds: [...templateIds],
-    modelRegistry,
-    patch: { reasoning: true },
-  });
+  const templateProviders =
+    normalizedProvider === "google"
+      ? ["google", "google-gemini-cli"]
+      : ["google-gemini-cli", "google"];
+
+  for (const templateProvider of templateProviders) {
+    for (const templateId of templateIds) {
+      const template = modelRegistry.find(templateProvider, templateId) as Model<Api> | null;
+      if (!template) {
+        continue;
+      }
+      return normalizeModelCompat({
+        ...template,
+        provider: normalizedProvider,
+        id: trimmed,
+        name: trimmed,
+        reasoning: true,
+      } as Model<Api>);
+    }
+  }
+
+  return undefined;
 }
 
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.

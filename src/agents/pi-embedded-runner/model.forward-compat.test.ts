@@ -11,6 +11,7 @@ import {
   GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
+  mockDiscoveredModel,
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAICodexTemplateModel,
@@ -77,6 +78,26 @@ describe("pi embedded model e2e smoke", () => {
       ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
       id: "gemini-3.1-flash-preview",
       name: "gemini-3.1-flash-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-pro-preview", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-3-pro-preview",
+      templateModel: {
+        ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+        provider: "google",
+      },
+    });
+
+    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
       reasoning: true,
     });
   });
