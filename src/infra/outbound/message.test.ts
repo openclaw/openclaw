@@ -16,6 +16,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveSessionAgentId: ({ sessionKey }: { sessionKey: string }) =>
+    sessionKey.split(":")[1] ?? "main",
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -67,6 +69,23 @@ describe("sendMessage", () => {
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
+      }),
+    );
+  });
+
+  it("populates session.key from sessionKey param so internal message:sent hooks fire for direct agent responses (#35557)", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ key: "agent:main:main" }),
       }),
     );
   });

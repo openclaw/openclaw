@@ -31,6 +31,8 @@ export type OutboundSendContext = {
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
+  /** Session key of the invoking agent turn; used as fallback for internal message:sent hooks when no mirror is set. */
+  sessionKey?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -128,6 +130,7 @@ export async function executeSendAction(params: {
     to: params.to,
     content: params.message,
     agentId: params.ctx.agentId,
+    sessionKey: params.ctx.mirror?.sessionKey ?? params.ctx.sessionKey,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,
