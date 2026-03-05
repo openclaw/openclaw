@@ -123,11 +123,15 @@ export function buildReplyPayloads(params: {
       })
     : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
+  // When the pipeline aborted (for example due to delivery timeout), suppress payloads that
+  // already started delivery attempts to avoid duplicate final fallbacks.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      ? mediaFilteredPayloads.filter((payload) =>
+          params.blockReplyPipeline?.isAborted()
+            ? !params.blockReplyPipeline.hasAttemptedPayload(payload)
+            : !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
         ? mediaFilteredPayloads.filter(

@@ -117,7 +117,10 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
-  /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
+  /**
+   * When true, suppress all ⚠️ tool-error warnings from being shown to the user,
+   * including mutating tool warnings. Default: false.
+   */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;

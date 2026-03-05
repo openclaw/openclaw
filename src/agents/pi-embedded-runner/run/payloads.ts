@@ -73,16 +73,20 @@ function resolveToolErrorWarningPolicy(params: {
   if (normalizedToolName === "sessions_send") {
     return { showWarning: false, includeDetails };
   }
-  const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
-    return { showWarning: true, includeDetails };
-  }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
+  const isMutatingToolError =
+    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+  const isRecoverable = isRecoverableToolError(params.lastToolError.error);
+  if (isMutatingToolError) {
+    // Mutating tool failures remain visible by default unless the error is likely
+    // recoverable and the assistant already provided a user-facing reply.
+    const suppressRecoverableWithReply = isRecoverable && params.hasUserFacingReply;
+    return { showWarning: !suppressRecoverableWithReply, includeDetails };
+  }
   return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    showWarning: !params.hasUserFacingReply && !isRecoverable,
     includeDetails,
   };
 }
@@ -284,8 +288,10 @@ export function buildEmbeddedRunPayloads(params: {
       verboseLevel: params.verboseLevel,
     });
 
-    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+    // Warning policy:
+    // - messages.suppressToolErrors disables all user-facing tool warnings.
+    // - Mutating failures are shown by default except recoverable+already-replied cases.
+    // - Non-mutating failures are only shown when non-recoverable and no user reply exists.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
