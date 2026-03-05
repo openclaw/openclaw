@@ -92,17 +92,18 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
   // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
+  // Use truthy checks so empty strings are treated as absent.
+  if (normalized.file_path && !normalized.path) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
   }
   // old_string → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
+  if (normalized.old_string && !normalized.oldText) {
     normalized.oldText = normalized.old_string;
     delete normalized.old_string;
   }
   // new_string → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
+  if (normalized.new_string && !normalized.newText) {
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
