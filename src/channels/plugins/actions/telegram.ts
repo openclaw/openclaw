@@ -6,6 +6,7 @@ import {
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { TelegramActionConfig } from "../../../config/types.telegram.js";
+import { readBooleanParam } from "../../../plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
 import { resolveTelegramPollVisibility } from "../../../poll-params.js";
 import {
@@ -29,8 +30,8 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
-  const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
-  const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+  const asVoice = readBooleanParam(params, "asVoice");
+  const silent = readBooleanParam(params, "silent");
   const quoteText = readStringParam(params, "quoteText");
   return {
     to,
@@ -137,7 +138,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action === "react") {
       const messageId = resolveReactionMessageId({ args: params, toolContext });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+      const remove = readBooleanParam(params, "remove");
       return await handleTelegramAction(
         {
           action: "react",
@@ -164,12 +165,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       });
       const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
       const messageThreadId = readNumberParam(params, "threadId", { integer: true });
-      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
-      const pollAnonymous =
-        typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined;
-      const pollPublic = typeof params.pollPublic === "boolean" ? params.pollPublic : undefined;
+      const allowMultiselect = readBooleanParam(params, "pollMulti");
+      const pollAnonymous = readBooleanParam(params, "pollAnonymous");
+      const pollPublic = readBooleanParam(params, "pollPublic");
       const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
-      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const silent = readBooleanParam(params, "silent");
       return await handleTelegramAction(
         {
           action: "poll",

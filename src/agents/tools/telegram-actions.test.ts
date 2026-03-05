@@ -335,6 +335,33 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("parses string booleans for poll flags", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        allowMultiselect: "true",
+        isAnonymous: "false",
+        silent: "true",
+      },
+      telegramConfig(),
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      expect.objectContaining({
+        question: "Ready?",
+        options: ["Yes", "No"],
+        maxSelections: 2,
+      }),
+      expect.objectContaining({
+        isAnonymous: false,
+        silent: true,
+      }),
+    );
+  });
+
   it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
     await handleTelegramAction(
       {

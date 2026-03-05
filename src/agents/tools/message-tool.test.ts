@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -45,8 +45,8 @@ function createChannelPlugin(params: {
   label: string;
   docsPath: string;
   blurb: string;
-  actions?: string[];
-  listActions?: (params: { cfg: unknown }) => string[];
+  actions?: ChannelMessageActionName[];
+  listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
   supportsButtons?: boolean;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {

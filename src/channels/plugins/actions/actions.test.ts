@@ -330,6 +330,25 @@ describe("handleDiscordMessageAction", () => {
       },
     },
     {
+      name: "parses string booleans for discord poll adapter params",
+      input: {
+        action: "poll" as const,
+        params: {
+          to: "channel:123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: "true",
+        },
+      },
+      expected: {
+        action: "poll",
+        to: "channel:123",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        allowMultiselect: true,
+      },
+    },
+    {
       name: "forwards accountId for thread replies",
       input: {
         action: "thread-reply" as const,
@@ -684,6 +703,32 @@ describe("telegramMessageActions", () => {
           durationSeconds: 60,
           replyToMessageId: 55,
           messageThreadId: 77,
+          isAnonymous: false,
+          silent: true,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "poll parses string booleans before telegram action handoff",
+        action: "poll" as const,
+        params: {
+          to: "123",
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: "true",
+          pollPublic: "true",
+          silent: "true",
+        },
+        expectedPayload: {
+          action: "poll",
+          to: "123",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          allowMultiselect: true,
+          durationHours: undefined,
+          durationSeconds: undefined,
+          replyToMessageId: undefined,
+          messageThreadId: undefined,
           isAnonymous: false,
           silent: true,
           accountId: undefined,

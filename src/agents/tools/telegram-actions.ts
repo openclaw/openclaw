@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import {
   createTelegramActionGate,
@@ -244,8 +245,8 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
-      asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
-      silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      asVoice: readBooleanParam(params, "asVoice"),
+      silent: readBooleanParam(params, "silent"),
     });
     return jsonResult({
       ok: true,
@@ -265,8 +266,7 @@ export async function handleTelegramAction(
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });
     const answers = readStringArrayParam(params, "answers", { required: true });
-    const allowMultiselect =
-      typeof params.allowMultiselect === "boolean" ? params.allowMultiselect : false;
+    const allowMultiselect = readBooleanParam(params, "allowMultiselect") ?? false;
     const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
     const durationHours = readNumberParam(params, "durationHours", { integer: true });
     const replyToMessageId = readNumberParam(params, "replyToMessageId", {
@@ -275,8 +275,8 @@ export async function handleTelegramAction(
     const messageThreadId = readNumberParam(params, "messageThreadId", {
       integer: true,
     });
-    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
-    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+    const isAnonymous = readBooleanParam(params, "isAnonymous");
+    const silent = readBooleanParam(params, "silent");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
