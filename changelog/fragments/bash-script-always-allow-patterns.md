@@ -1,0 +1,1 @@
+- exec approvals: `allow-always` now persists and matches shell script paths for wrapper invocations like `bash scripts/foo.sh`, so repeated runs stop prompting while still avoiding broad wrapper-wide allow rules.

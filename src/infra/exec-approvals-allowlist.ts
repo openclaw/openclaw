@@ -25,6 +25,7 @@ import {
   unwrapKnownShellMultiplexerInvocation,
   unwrapKnownDispatchWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
+import { expandHomePrefix } from "./home-dir.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -221,7 +222,19 @@ function evaluateSegments(
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
+    const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
+    const shellScriptCandidatePath = resolveShellWrapperScriptCandidatePath({
+      segment,
+      cwd: params.cwd,
+    });
+    const shellScriptMatch = shellScriptCandidatePath
+      ? matchAllowlist(params.allowlist, {
+          rawExecutable: shellScriptCandidatePath,
+          resolvedPath: shellScriptCandidatePath,
+          executableName: path.basename(shellScriptCandidatePath),
+        })
+      : null;
+    const match = executableMatch ?? shellScriptMatch;
     if (match) {
       matches.push(match);
     }
@@ -327,6 +340,69 @@ function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
 }
 
+const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set([
+  "-c",
+  "--command",
+  "-o",
+  "-O",
+  "+O",
+  "--rcfile",
+  "--init-file",
+  "--startup-file",
+]);
+
+function resolveShellWrapperScriptCandidatePath(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+}): string | undefined {
+  if (!isShellWrapperSegment(params.segment)) {
+    return undefined;
+  }
+
+  const argv = params.segment.argv;
+  if (!Array.isArray(argv) || argv.length < 2) {
+    return undefined;
+  }
+
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token === "-c" || token === "--command") {
+      return undefined;
+    }
+    if (SHELL_WRAPPER_OPTIONS_WITH_VALUE.has(token)) {
+      idx += 2;
+      continue;
+    }
+    if (token.startsWith("-") || token.startsWith("+")) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+
+  const scriptToken = argv[idx]?.trim();
+  if (!scriptToken) {
+    return undefined;
+  }
+
+  if (path.isAbsolute(scriptToken)) {
+    return scriptToken;
+  }
+
+  const expanded = scriptToken.startsWith("~") ? expandHomePrefix(scriptToken) : scriptToken;
+  const base = params.cwd && params.cwd.trim().length > 0 ? params.cwd : process.cwd();
+  return path.resolve(base, expanded);
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -382,6 +458,13 @@ function collectAllowAlwaysPatterns(params: {
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    const scriptPath = resolveShellWrapperScriptCandidatePath({
+      segment: params.segment,
+      cwd: params.cwd,
+    });
+    if (scriptPath) {
+      params.out.add(scriptPath);
+    }
     return;
   }
   const nested = analyzeShellCommand({

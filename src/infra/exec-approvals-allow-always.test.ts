@@ -127,6 +127,57 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(new Set(patterns)).toEqual(new Set([whoami, ls]));
   });
 
+  it("persists shell script paths for wrapper invocations without inline commands", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "save_crystal.sh");
+    fs.writeFileSync(script, "echo ok\n");
+
+    const safeBins = resolveSafeBins(undefined);
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const first = evaluateShellAllowlist({
+      command: "bash scripts/save_crystal.sh",
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([script]);
+
+    const second = evaluateShellAllowlist({
+      command: "bash scripts/save_crystal.sh",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+
+    const other = path.join(scriptsDir, "other.sh");
+    fs.writeFileSync(other, "echo other\n");
+    const third = evaluateShellAllowlist({
+      command: "bash scripts/other.sh",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(third.allowlistSatisfied).toBe(false);
+  });
+
   it("does not persist broad shell binaries when no inner command can be derived", () => {
     const patterns = resolveAllowAlwaysPatterns({
       segments: [
