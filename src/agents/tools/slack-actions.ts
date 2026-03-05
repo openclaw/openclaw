@@ -52,6 +52,10 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+export type SlackActionMessageContext = {
+  mediaLocalRoots?: readonly string[];
+};
+
 /**
  * Resolve threadTs for a Slack message based on context and replyToMode.
  * - "all": always inject threadTs
@@ -104,6 +108,7 @@ export async function handleSlackAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   context?: SlackActionContext,
+  messageContext?: SlackActionMessageContext,
 ): Promise<AgentToolResult<unknown>> {
   const resolveChannelId = () =>
     resolveSlackChannelId(
@@ -209,6 +214,7 @@ export async function handleSlackAction(
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots: messageContext?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });

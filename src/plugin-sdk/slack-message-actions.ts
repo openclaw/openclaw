@@ -7,6 +7,7 @@ type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
+  messageContext?: { mediaLocalRoots?: readonly string[] },
 ) => Promise<AgentToolResult<unknown>>;
 
 function readSlackBlocksParam(actionParams: Record<string, unknown>) {
@@ -55,9 +56,11 @@ export async function handleSlackMessageAction(params: {
         blocks,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
+        mediaLocalRoots: ctx.mediaLocalRoots,
       },
       cfg,
       ctx.toolContext,
+      { mediaLocalRoots: ctx.mediaLocalRoots },
     );
   }
 
