@@ -62,6 +62,19 @@ describe("plugin-sdk root alias", () => {
     hooks.__unsafeResetMonolithicForTest?.();
   });
 
+  it("keeps `in` capability probes non-throwing when monolithic load fails", () => {
+    const hooks = rootSdk as RootAliasTestHooks;
+    hooks.__unsafeResetMonolithicForTest?.();
+    hooks.__unsafeSetJitiOverrideForTest?.(() => {
+      throw new Error("forced-monolithic-load-failure");
+    });
+
+    expect(() => "registerPluginHttpRoute" in rootSdk).not.toThrow();
+    expect("registerPluginHttpRoute" in rootSdk).toBe(false);
+
+    hooks.__unsafeResetMonolithicForTest?.();
+  });
+
   it("keeps descriptor/hasOwnProperty probes non-throwing when lazy load fails", () => {
     const hooks = rootSdk as RootAliasTestHooks;
     hooks.__unsafeResetMonolithicForTest?.();

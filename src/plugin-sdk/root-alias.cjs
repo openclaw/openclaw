@@ -101,6 +101,14 @@ function loadMonolithicSdk() {
   return monolithicSdk;
 }
 
+function tryLoadMonolithicSdk() {
+  try {
+    return loadMonolithicSdk();
+  } catch {
+    return null;
+  }
+}
+
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
@@ -136,7 +144,11 @@ const rootProxy = new Proxy(fastExports, {
     if (Reflect.has(target, prop)) {
       return true;
     }
-    return prop in loadMonolithicSdk();
+    const monolithic = tryLoadMonolithicSdk();
+    if (!monolithic) {
+      return false;
+    }
+    return prop in monolithic;
   },
   ownKeys(target) {
     const keys = new Set([...Reflect.ownKeys(target), "default", "__esModule"]);
