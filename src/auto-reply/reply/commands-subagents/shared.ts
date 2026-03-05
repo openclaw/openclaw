@@ -21,20 +21,21 @@ import {
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
-import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   isDiscordSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
-} from "../discord-context.js";
+} from "../channel-context.js";
+import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
   formatRunStatus,
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
+import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
 export {
@@ -43,6 +44,7 @@ export {
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
+  resolveTelegramConversationId,
 };
 
 export const COMMAND = "/subagents";

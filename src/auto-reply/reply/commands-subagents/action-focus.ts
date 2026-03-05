@@ -12,7 +12,6 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { parseTelegramTarget } from "../../../telegram/targets.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
@@ -22,6 +21,7 @@ import {
   resolveCommandSurfaceChannel,
   resolveDiscordChannelIdForFocus,
   resolveFocusTargetSession,
+  resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
 
@@ -32,35 +32,6 @@ type FocusBindingContext = {
   placement: "current" | "child";
   labelNoun: "thread" | "conversation";
 };
-
-function resolveTelegramConversationId(
-  params: SubagentsCommandContext["params"],
-): string | undefined {
-  const rawThreadId =
-    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-  const threadId = rawThreadId || undefined;
-  const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo : "",
-    typeof params.command.to === "string" ? params.command.to : "",
-    typeof params.ctx.To === "string" ? params.ctx.To : "",
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const chatId = toCandidates
-    .map((candidate) => parseTelegramTarget(candidate).chatId.trim())
-    .find((candidate) => candidate.length > 0);
-  if (!chatId) {
-    return undefined;
-  }
-  if (threadId) {
-    return `${chatId}:topic:${threadId}`;
-  }
-  // Non-topic groups should not become globally focused conversations.
-  if (chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
-}
 
 function resolveFocusBindingContext(
   params: SubagentsCommandContext["params"],

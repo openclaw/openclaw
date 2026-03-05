@@ -15,7 +15,6 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
 import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
@@ -24,10 +23,11 @@ import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
-import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./discord-context.js";
+import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
@@ -58,34 +58,6 @@ function parseSessionDurationMs(raw: string): number {
 
 function formatSessionExpiry(expiresAt: number) {
   return new Date(expiresAt).toISOString();
-}
-
-function resolveTelegramConversationIdForSessionCommand(
-  params: Parameters<CommandHandler>[0],
-): string | undefined {
-  const rawThreadId =
-    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-  const threadId = rawThreadId || undefined;
-  const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo : "",
-    typeof params.command.to === "string" ? params.command.to : "",
-    typeof params.ctx.To === "string" ? params.ctx.To : "",
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const chatId = toCandidates
-    .map((candidate) => parseTelegramTarget(candidate).chatId.trim())
-    .find((candidate) => candidate.length > 0);
-  if (!chatId) {
-    return undefined;
-  }
-  if (threadId) {
-    return `${chatId}:topic:${threadId}`;
-  }
-  if (chatId.startsWith("-")) {
-    return undefined;
-  }
-  return chatId;
 }
 
 function resolveTelegramBindingDurationMs(
@@ -318,9 +290,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const sessionBindingService = getSessionBindingService();
   const threadId =
     params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-  const telegramConversationId = onTelegram
-    ? resolveTelegramConversationIdForSessionCommand(params)
-    : undefined;
+  const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
 
   const discordManager = onDiscord ? getThreadBindingManager(accountId) : null;
   if (onDiscord && !discordManager) {
