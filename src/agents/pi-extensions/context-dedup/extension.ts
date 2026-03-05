@@ -152,7 +152,7 @@ function collectReadToolCallMeta(messages: any[]): Map<string, ReadCallMeta> {
       }
 
       const parsed = parseReadToolArgs(call.arguments);
-      if (parsed) {
+      if (parsed && !byToolCallId.has(id)) {
         byToolCallId.set(id, parsed);
       }
     }
@@ -715,6 +715,9 @@ function resolveRootSourceMessageIndex(messages: any[], startIndex: number): num
 
     const text = extractText(messages[current]?.content);
     if (typeof text !== "string" || text.length === 0) {
+      return current;
+    }
+    if (!isSyntheticPointerOrLineageNote(text)) {
       return current;
     }
 
