@@ -464,15 +464,16 @@ describe("rewriteAllAssistantContent", () => {
 // ---------------------------------------------------------------------------
 
 describe("getRunScopedMessages", () => {
-  it("slices by preRunMessageCount when valid", () => {
+  it("uses tail scan to find run-scoped messages (compaction-safe)", () => {
     const messages = [
       makeMsg("assistant", "old"),
       makeMsg("user", "new q"),
       makeMsg("assistant", "new answer"),
     ];
+    // Tail scan finds 1 assistant message from end, returns from that point
     const result = getRunScopedMessages(messages, 1, 1);
-    expect(result).toHaveLength(2);
-    expect((result[1] as { content: unknown }).content).toBe("new answer");
+    expect(result).toHaveLength(1);
+    expect((result[0] as { content: unknown }).content).toBe("new answer");
   });
 
   it("falls back to tail when compaction invalidates preRunMessageCount", () => {

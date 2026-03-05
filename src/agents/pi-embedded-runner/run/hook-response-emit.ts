@@ -179,11 +179,12 @@ export function getRunScopedMessages(
   preRunMessageCount: number | undefined,
   assistantTextCount: number,
 ): AgentMessage[] {
-  if (preRunMessageCount !== undefined && preRunMessageCount <= messages.length) {
-    return messages.slice(preRunMessageCount);
-  }
-  // Fallback: find the last N assistant messages and return everything from
-  // the first one onward. This handles compaction safely.
+  // Always prefer tail-based scan over index-based slicing. Compaction can
+  // replace/merge earlier transcript entries while keeping messages.length
+  // >= preRunMessageCount, which makes the index stale and causes the slice
+  // to include compacted pre-run messages or miss actual run messages.
+  // The tail scan is compaction-safe because it works backward from the end
+  // and only needs the count of assistant messages produced in this run.
   if (assistantTextCount <= 0) {
     // No assistant texts — return empty slice to avoid touching history.
     return [];
