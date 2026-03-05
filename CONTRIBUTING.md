@@ -76,6 +76,24 @@ Welcome to the lobster tank! 🦞
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 
+## PR Description Checklist
+
+When opening a PR, use the [PR template](.github/pull_request_template.md) and ensure all required sections are completed:
+
+- [ ] **Summary** — Problem, why it matters, what changed
+- [ ] **Change Type** — Bug fix / Feature / Refactor / Docs / Security / Chore
+- [ ] **Scope** — Gateway / Skills / Auth / Memory / Integrations / API / UI / CI
+- [ ] **Linked Issue** — Closes # or Related #
+- [ ] **User-visible Changes** — What users will see (or `None`)
+- [ ] **Security Impact** — All questions answered
+- [ ] **Repro + Verification** — Steps to reproduce, expected vs actual
+- [ ] **Evidence** — Test log, screenshot, or perf numbers
+- [ ] **Human Verification** — What you personally verified
+- [ ] **Compatibility** — Backward compatible, migration needed?
+- [ ] **Failure Recovery** — How to revert if this breaks
+
+Filling out the template helps reviewers understand your change faster.
+
 ## Control UI Decorators
 
 The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
