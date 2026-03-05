@@ -56,6 +56,13 @@ const RESERVED_KEYS = new Set([
   "allowFrom",
   "commandAllowlist",
   "commandBlockMessage",
+  "dm",
+  "groupChat",
+  "dynamicAgents",
+  "adminUsers",
+  "commands",
+  "kf",
+  "workspaceTemplate",
 ]);
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -121,6 +128,30 @@ function normalizeAccountKey(key) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "_");
+}
+
+/**
+ * Extract top-level wecom keys that act as shared defaults for all instances
+ * (e.g. dm, groupChat, dynamicAgents, adminUsers, etc.).
+ * Only picks non-reserved, non-account object keys and scalar values.
+ */
+function extractTopLevelDefaults(wecom) {
+  const defaults = {};
+  const sharedKeys = [
+    "dm",
+    "groupChat",
+    "dynamicAgents",
+    "adminUsers",
+    "commands",
+    "kf",
+    "workspaceTemplate",
+  ];
+  for (const k of sharedKeys) {
+    if (wecom[k] !== undefined) {
+      defaults[k] = wecom[k];
+    }
+  }
+  return defaults;
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -202,7 +233,10 @@ export function resolveAccount(cfg, accountId) {
           typeof entry.name === "string"
         ) {
           if (normalizeAccountKey(entry.name) === normalizedId) {
-            return buildAccount(normalizedId, entry);
+            // Merge top-level wecom defaults (dm, groupChat, etc.) under the
+            // instance entry so shared config is inherited automatically.
+            const merged = { ...extractTopLevelDefaults(wecom), ...entry };
+            return buildAccount(normalizedId, merged);
           }
         }
       }
@@ -211,7 +245,8 @@ export function resolveAccount(cfg, accountId) {
     if (normalizeAccountKey(key) === normalizedId) {
       const val = wecom[key];
       if (val && typeof val === "object" && !Array.isArray(val)) {
-        return buildAccount(normalizedId, val);
+        const merged = { ...extractTopLevelDefaults(wecom), ...val };
+        return buildAccount(normalizedId, merged);
       }
     }
   }
