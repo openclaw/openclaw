@@ -395,10 +395,10 @@ describe("before_response_emit hook", () => {
 
     const result = await runner.runBeforeResponseEmit(baseEvent, agentCtx);
     // h1 runs first, h2 runs second (registration order).
-    // Merge: block and blockReason from h2 override; content stays from h1
-    // since h2 doesn't provide content.
-    // Actually with the merge function: acc?.content ?? next.content (first-writer-wins),
-    // h1 runs first so acc.content ("modified") survives since h2 doesn't provide content.
+    // First-writer-wins merge: h1 runs first and sets content ("modified"),
+    // h2 doesn't provide content so h1's value survives. block uses one-way
+    // latch (h2 sets it), blockReason uses first-writer-wins (h1 doesn't set
+    // one, so h2's "policy" is the first defined value).
     expect(result?.block).toBe(true);
     expect(result?.blockReason).toBe("policy");
     expect(result?.content).toBe("modified");
