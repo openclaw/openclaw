@@ -338,7 +338,8 @@ export async function runDiscordGatewayLifecycle(params: {
     if (
       !sawDisallowedIntents &&
       !params.isDisallowedIntentsError(err) &&
-      !(sawReconnectExhausted && isReconnectExhaustedError(err))
+      !sawReconnectExhausted &&
+      !isReconnectExhaustedError(err)
     ) {
       throw err;
     }
