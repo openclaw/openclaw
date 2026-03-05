@@ -718,4 +718,49 @@ describe("doctor config flow", () => {
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
+
+  it("does not emit false groupPolicy warning for multi-account telegram config (#35560)", async () => {
+    const warnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              enabled: true,
+              botToken: "fake:token",
+              groupPolicy: "allowlist",
+              groupAllowFrom: [123456],
+              dmPolicy: "pairing",
+              allowFrom: [123456],
+            },
+          },
+        },
+      },
+    });
+
+    const groupPolicyWarning = warnings.find((w) => w.includes("channels.telegram.groupPolicy"));
+    expect(groupPolicyWarning).toBeUndefined();
+  });
+
+  it("still warns about empty groupAllowFrom inside accounts (#35560)", async () => {
+    const warnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              enabled: true,
+              botToken: "fake:token",
+              groupPolicy: "allowlist",
+              dmPolicy: "pairing",
+              // groupAllowFrom and allowFrom intentionally omitted
+            },
+          },
+        },
+      },
+    });
+
+    const accountWarning = warnings.find((w) =>
+      w.includes("channels.telegram.accounts.default.groupPolicy"),
+    );
+    expect(accountWarning).toBeDefined();
+  });
 });

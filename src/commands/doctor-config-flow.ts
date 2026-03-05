@@ -1124,12 +1124,18 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
 
     const allowFromMode = resolveAllowFromMode(channelName);
 
-    // Check the top-level channel config
-    ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
-
     // Check per-account configs (e.g. channels.discord.accounts.mybot)
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
-    if (accounts && typeof accounts === "object") {
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level repair when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom, causing spurious repairs (#35560).
+    if (!hasAccounts) {
+      ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
+    }
+
+    if (hasAccounts) {
       for (const [accountName, accountConfig] of Object.entries(accounts)) {
         if (accountConfig && typeof accountConfig === "object") {
           ensureWildcard(
@@ -1276,26 +1282,33 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    await recoverAllowFromForAccount({
-      channelName,
-      account: channelConfig,
-      prefix: `channels.${channelName}`,
-    });
 
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
-    if (!accounts || typeof accounts !== "object") {
-      continue;
-    }
-    for (const [accountId, accountConfig] of Object.entries(accounts)) {
-      if (!accountConfig || typeof accountConfig !== "object") {
-        continue;
-      }
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level repair when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom, causing spurious repairs (#35560).
+    if (!hasAccounts) {
       await recoverAllowFromForAccount({
         channelName,
-        account: accountConfig,
-        accountId,
-        prefix: `channels.${channelName}.accounts.${accountId}`,
+        account: channelConfig,
+        prefix: `channels.${channelName}`,
       });
+    }
+
+    if (hasAccounts) {
+      for (const [accountId, accountConfig] of Object.entries(accounts)) {
+        if (!accountConfig || typeof accountConfig !== "object") {
+          continue;
+        }
+        await recoverAllowFromForAccount({
+          channelName,
+          account: accountConfig,
+          accountId,
+          prefix: `channels.${channelName}.accounts.${accountId}`,
+        });
+      }
     }
   }
 
@@ -1414,10 +1427,19 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
-
     const accounts = channelConfig.accounts;
-    if (accounts && typeof accounts === "object") {
+    const hasAccounts =
+      accounts && typeof accounts === "object" && Object.keys(accounts).length > 0;
+
+    // Skip top-level policy check when accounts exist — top-level values are
+    // Zod-injected defaults and lack allowFrom/groupAllowFrom, producing false
+    // warnings. Per-account checks below handle each account with the top-level
+    // config as parent fallback (#35560).
+    if (!hasAccounts) {
+      checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
+    }
+
+    if (hasAccounts) {
       for (const [accountId, account] of Object.entries(
         accounts as Record<string, Record<string, unknown>>,
       )) {
