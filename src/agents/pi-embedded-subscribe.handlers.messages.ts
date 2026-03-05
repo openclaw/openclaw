@@ -431,19 +431,18 @@ export function handleMessageEnd(
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
-  // When block streaming is active and this turn emitted assistant text,
+  // When block streaming is active and this turn emitted visible assistant text,
   // mark that a cross-turn separator should be prepended to the next chunk.
   // This prevents text from separate tool-call cycles from being concatenated
   // together in the streaming UI (issue #35308).
   //
-  // We check both deltaBuffer (for streaming text) and emittedAssistantUpdate
-  // (for late-streaming/fallback text emitted at message_end) to handle:
-  // - Fully streamed turns: deltaBuffer has content
-  // - Partially streamed turns: deltaBuffer has partial content
-  // - Non-streamed turns: emittedAssistantUpdate set via fallback path
-  const thisTurnEmittedContent =
-    !!ctx.blockChunking && (ctx.state.deltaBuffer.length > 0 || ctx.state.emittedAssistantUpdate);
-  const shouldInsertCrossTurnSeparator = thisTurnEmittedContent;
+  // We only check emittedAssistantUpdate because:
+  // - deltaBuffer may contain hidden/trimmed content (e.g., <thinking> tags, whitespace)
+  // - emittedAssistantUpdate is only set when visible text actually reaches the client
+  // - This ensures separator is armed only when real content was emitted, not when
+  //   deltaBuffer has tag-only or whitespace-only chunks that get stripped/trimmed
+  const thisTurnEmittedVisibleContent = !!ctx.blockChunking && ctx.state.emittedAssistantUpdate;
+  const shouldInsertCrossTurnSeparator = thisTurnEmittedVisibleContent;
 
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";

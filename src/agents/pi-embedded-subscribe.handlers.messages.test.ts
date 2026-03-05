@@ -79,80 +79,84 @@ describe("pendingCrossTurnSeparator flag preservation", () => {
     expect(flag).toBe(true);
   });
 
-  describe("separator arming based on emitted content", () => {
-    it("arms separator for streamed turns", () => {
-      // Simulate a streamed turn with deltaBuffer content
-      const deltaBufferLength = 100;
-      const emittedAssistantUpdate = true;
+  describe("separator arming based on emitted visible content", () => {
+    it("arms separator for turns with visible streamed content", () => {
+      // Simulate a streamed turn with visible content
+      const emittedAssistantUpdate = true; // Visible text was emitted
       const blockChunking = true;
 
-      const shouldArm = blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      const shouldArm = blockChunking && emittedAssistantUpdate;
       expect(shouldArm).toBe(true);
     });
 
     it("arms separator for non-streamed turns with fallback text", () => {
       // Simulate a non-streamed turn that emits text via fallback path
-      const deltaBufferLength = 0; // No streaming content
-      const emittedAssistantUpdate = true; // But fallback emitted text
+      const emittedAssistantUpdate = true; // Fallback emitted text
       const blockChunking = true;
 
-      const shouldArm = blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      const shouldArm = blockChunking && emittedAssistantUpdate;
       expect(shouldArm).toBe(true);
     });
 
-    it("does not arm separator for empty turns", () => {
-      // Simulate an empty turn (no text emitted at all)
-      const deltaBufferLength = 0;
-      const emittedAssistantUpdate = false;
+    it("does not arm separator for turns with only hidden tags", () => {
+      // Simulate a turn that streams only <thinking> tags
+      // deltaBuffer has content but it's all hidden, so emittedAssistantUpdate stays false
+      const emittedAssistantUpdate = false; // No visible text emitted
       const blockChunking = true;
 
-      const shouldArm = blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      const shouldArm = blockChunking && emittedAssistantUpdate;
       expect(shouldArm).toBe(false);
     });
 
-    it("handles streamed turn followed by non-streamed empty turn", () => {
-      // First turn: streamed with content
-      let deltaBufferLength = 100;
+    it("does not arm separator for turns with only whitespace", () => {
+      // Simulate a turn that streams only whitespace
+      // deltaBuffer has content but it's all whitespace, so .trim() makes it empty
+      const emittedAssistantUpdate = false; // No visible text after .trim()
+      const blockChunking = true;
+
+      const shouldArm = blockChunking && emittedAssistantUpdate;
+      expect(shouldArm).toBe(false);
+    });
+
+    it("handles streamed turn followed by turn with only hidden tags", () => {
+      // First turn: streamed with visible content
       let emittedAssistantUpdate = true;
       let blockChunking = true;
       let separatorFlag = false;
 
       // First message_end: arms separator
-      separatorFlag ||= blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      separatorFlag ||= blockChunking && emittedAssistantUpdate;
       expect(separatorFlag).toBe(true);
 
       // Separator consumed by next turn's first chunk
       separatorFlag = false;
 
-      // Second turn: non-streamed, no content (e.g., empty tool result)
-      deltaBufferLength = 0;
-      emittedAssistantUpdate = false;
+      // Second turn: only <thinking> tags (hidden)
+      emittedAssistantUpdate = false; // No visible text
 
-      // Second message_end: should NOT arm separator (no content emitted)
-      separatorFlag ||= blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      // Second message_end: should NOT arm separator (no visible content)
+      separatorFlag ||= blockChunking && emittedAssistantUpdate;
       expect(separatorFlag).toBe(false);
     });
 
     it("handles streamed turn followed by non-streamed turn with text", () => {
-      // First turn: streamed with content
-      let deltaBufferLength = 100;
+      // First turn: streamed with visible content
       let emittedAssistantUpdate = true;
       let blockChunking = true;
       let separatorFlag = false;
 
       // First message_end: arms separator
-      separatorFlag ||= blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      separatorFlag ||= blockChunking && emittedAssistantUpdate;
       expect(separatorFlag).toBe(true);
 
       // Separator consumed by next turn's first chunk
       separatorFlag = false;
 
       // Second turn: non-streamed, but has fallback text
-      deltaBufferLength = 0; // No streaming
       emittedAssistantUpdate = true; // Fallback path emitted text
 
-      // Second message_end: SHOULD arm separator (content was emitted)
-      separatorFlag ||= blockChunking && (deltaBufferLength > 0 || emittedAssistantUpdate);
+      // Second message_end: SHOULD arm separator (visible content was emitted)
+      separatorFlag ||= blockChunking && emittedAssistantUpdate;
       expect(separatorFlag).toBe(true);
     });
   });
