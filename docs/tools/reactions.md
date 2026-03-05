@@ -61,4 +61,26 @@ tool with the `react` action. Reaction behavior varies by channel.
 ## Related
 
 - [Agent Send](/tools/agent-send) — the `message` tool that includes `react`
-- [Channels](/channels) — channel-specific configuration
+
+## Reaction trigger (`reactionTrigger`)
+
+When `reactionTrigger` is enabled, receiving a reaction immediately wakes the agent session (via `requestHeartbeatNow`) instead of waiting for the next message or scheduled heartbeat. This lets the agent respond to reactions in real time.
+
+Currently supported for **Slack** only. Other channels (Telegram, Discord, Signal) can be added in follow-up PRs.
+
+**Values:**
+
+| Value       | Behavior                                                             |
+| ----------- | -------------------------------------------------------------------- |
+| `off`       | (Default) No immediate wake on reactions.                            |
+| `own`       | Wake only when a reaction is added to one of the bot's own messages. |
+| `all`       | Wake on any reaction the bot can see.                                |
+| `allowlist` | (Slack only) Wake for reactions from allowlisted users.              |
+
+**Important distinctions:**
+
+- `reactionNotifications` controls which reactions generate system events (the data the agent sees).
+- `reactionTrigger` controls whether those reactions also wake the agent immediately.
+- Both settings are independent — you can have notifications without triggering, or vice versa.
+
+**Slack Free plan limitation:** Reaction events (`reaction_added` / `reaction_removed`) are not delivered on Slack Free workspaces, so `reactionTrigger` has no effect there.
