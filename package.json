@@ -5,10 +5,9 @@
     "type": "module",
     "main": "server/extension-relay.js",
     "dependencies": {
-        "tsx": "^4.21.0",
         "ws": "^8.19.0"
     },
     "scripts": {
-        "start": "tsx server/extension-relay.ts"
+        "start": "node server/extension-relay.js"
     }
 }

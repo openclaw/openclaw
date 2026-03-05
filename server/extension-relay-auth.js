@@ -1,23 +1,13 @@
-import { createHmac } from "node:crypto";
 import { resolveRelayAcceptedTokensForPort } from "./utils.js";
 
-const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
-const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
+const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 
-import fs from "node:fs";
-import path from "node:path";
-
-export function resolveRelayAuthTokenForPort(port: number): string {
+export function resolveRelayAuthTokenForPort(port) {
   return resolveRelayAcceptedTokensForPort(port)[0];
 }
 
-export async function probeAuthenticatedOpenClawRelay(params: {
-  baseUrl: string;
-  relayAuthHeader: string;
-  relayAuthToken: string;
-  timeoutMs?: number;
-}): Promise<boolean> {
+export async function probeAuthenticatedOpenClawRelay(params) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), params.timeoutMs ?? DEFAULT_RELAY_PROBE_TIMEOUT_MS);
   try {
@@ -29,7 +19,7 @@ export async function probeAuthenticatedOpenClawRelay(params: {
     if (!res.ok) {
       return false;
     }
-    const body = (await res.json()) as { Browser?: unknown };
+    const body = await res.json();
     const browserName = typeof body?.Browser === "string" ? body.Browser.trim() : "";
     return browserName === OPENCLAW_RELAY_BROWSER;
   } catch {
