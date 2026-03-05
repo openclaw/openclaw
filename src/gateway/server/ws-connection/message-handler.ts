@@ -753,14 +753,33 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        // When the gateway is loopback-bound, all incoming connections must originate
+        // from the local host (no external network access is possible). Operator
+        // connections authenticated with the shared gateway credential (token/password)
+        // skip device pairing in this configuration — the bind restriction already
+        // provides the locality guarantee, and the gateway token is the primary auth
+        // factor. This restores the pre-#8d1481cb4 behaviour for Docker deployments
+        // where the loopback detection heuristic may not fire correctly due to internal
+        // proxy layers. (#35763)
+        const usesSharedSecretAuth = authMethod === "token" || authMethod === "password";
+        const skipPairingForLoopbackBoundSharedAuth =
+          (configSnapshot.gateway?.bind ?? "loopback") === "loopback" &&
+          role === "operator" &&
+          sharedAuthOk &&
+          usesSharedSecretAuth &&
+          !hasBrowserOriginHeader &&
+          !isControlUi &&
+          !isWebchat;
         const skipPairing =
+          skipPairingForLoopbackBoundSharedAuth ||
           shouldSkipBackendSelfPairing({
             connectParams,
             isLocalClient,
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
-          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
+          }) ||
+          shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {

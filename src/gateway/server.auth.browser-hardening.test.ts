@@ -176,4 +176,84 @@ describe("gateway auth browser hardening", () => {
       }
     });
   });
+
+  // #35763: loopback-bound gateway pairing bypass for Docker deployments.
+  // When gateway.bind = "loopback", all connections must originate locally.
+  // Internal proxy layers in Docker can make isLocalClient=false, so we test
+  // the bypass using x-forwarded-for to simulate that condition.
+  test("skips device pairing for non-browser operator on loopback-bound gateway when isLocalClient is false (Docker scenario)", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    // default bind is "loopback"; set explicitly to document the expectation
+    testState.gatewayBind = "loopback";
+    await withGatewayServer(async ({ port }) => {
+      // x-forwarded-for (without a trusted proxy) makes isLocalClient=false
+      const ws = await openWs(port, { "x-forwarded-for": "10.0.0.2" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          deviceIdentityPath: path.join(
+            os.tmpdir(),
+            `openclaw-loopback-bypass-${randomUUID()}.json`,
+          ),
+        });
+        // skipPairingForLoopbackBoundSharedAuth=true → pairing check bypassed
+        expect(res.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("still requires device pairing for browser clients on loopback-bound gateway when isLocalClient is false", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    testState.gatewayBind = "loopback";
+    await withGatewayServer(async ({ port }) => {
+      // browser Origin + x-forwarded-for → hasBrowserOriginHeader=true AND isLocalClient=false
+      const ws = await openWs(port, {
+        "x-forwarded-for": "10.0.0.2",
+        origin: originForPort(port),
+      });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          deviceIdentityPath: path.join(
+            os.tmpdir(),
+            `openclaw-loopback-browser-${randomUUID()}.json`,
+          ),
+        });
+        // skipPairingForLoopbackBoundSharedAuth=false (hasBrowserOriginHeader blocks it)
+        // shouldAllowSilentLocalPairing=false (isLocalClient=false)
+        // → pairing required
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("still requires device pairing on non-loopback-bound gateway when isLocalClient is false", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    testState.gatewayBind = "lan";
+    await withGatewayServer(async ({ port }) => {
+      // x-forwarded-for makes isLocalClient=false; non-loopback bind disables bypass
+      const ws = await openWs(port, { "x-forwarded-for": "10.0.0.2" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          deviceIdentityPath: path.join(os.tmpdir(), `openclaw-lan-bypass-${randomUUID()}.json`),
+        });
+        // skipPairingForLoopbackBoundSharedAuth=false (bind != loopback)
+        // shouldAllowSilentLocalPairing=false (isLocalClient=false)
+        // → pairing required
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+      } finally {
+        ws.close();
+      }
+    });
+  });
 });
