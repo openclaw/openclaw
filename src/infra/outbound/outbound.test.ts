@@ -328,6 +328,7 @@ describe("delivery-queue", () => {
       expect(result.recovered).toBe(2);
       expect(result.failed).toBe(0);
       expect(result.skippedMaxRetries).toBe(0);
+      expect(result.skippedExpired).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
       // Queue should be empty after recovery.
@@ -348,11 +349,39 @@ describe("delivery-queue", () => {
 
       expect(deliver).not.toHaveBeenCalled();
       expect(result.skippedMaxRetries).toBe(1);
+      expect(result.skippedExpired).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
       // Entry should be in failed/ directory.
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    });
+
+    it("moves expired entries to failed/ without retrying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale" }] },
+        tmpDir,
+      );
+      setEntryState(id, {
+        retryCount: 0,
+        enqueuedAt: Date.now() - 25 * 60 * 60 * 1000,
+      });
+
+      const deliver = vi.fn();
+      const log = createLog();
+      const { result } = await runRecovery({ deliver, log });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        skippedExpired: 1,
+        deferredBackoff: 0,
+      });
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("expired"));
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
@@ -363,6 +392,7 @@ describe("delivery-queue", () => {
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
+      expect(result.skippedExpired).toBe(0);
 
       // Entry should still be in queue with incremented retryCount.
       const entries = await loadPendingDeliveries(tmpDir);
@@ -384,6 +414,7 @@ describe("delivery-queue", () => {
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
+      expect(result.skippedExpired).toBe(0);
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
@@ -449,6 +480,7 @@ describe("delivery-queue", () => {
       expect(result.recovered).toBe(0);
       expect(result.failed).toBe(0);
       expect(result.skippedMaxRetries).toBe(0);
+      expect(result.skippedExpired).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
       // All entries should still be in the queue.
@@ -457,6 +489,19 @@ describe("delivery-queue", () => {
 
       // Should have logged a warning about deferred entries.
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+    });
+
+    it("warns when queue size exceeds threshold", async () => {
+      for (let i = 0; i < 101; i += 1) {
+        await enqueueDelivery(
+          { channel: "whatsapp", to: `+1${i}`, payloads: [{ text: String(i) }] },
+          tmpDir,
+        );
+      }
+      const deliver = vi.fn().mockResolvedValue([]);
+      const log = createLog();
+      await runRecovery({ deliver, log, maxRecoveryMs: 0 });
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("queue depth is high"));
     });
 
     it("defers entries until backoff becomes eligible", async () => {
@@ -477,6 +522,7 @@ describe("delivery-queue", () => {
         recovered: 0,
         failed: 0,
         skippedMaxRetries: 0,
+        skippedExpired: 0,
         deferredBackoff: 1,
       });
 
@@ -507,6 +553,7 @@ describe("delivery-queue", () => {
         recovered: 1,
         failed: 0,
         skippedMaxRetries: 0,
+        skippedExpired: 0,
         deferredBackoff: 1,
       });
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -536,6 +583,7 @@ describe("delivery-queue", () => {
         recovered: 0,
         failed: 0,
         skippedMaxRetries: 0,
+        skippedExpired: 0,
         deferredBackoff: 1,
       });
       expect(firstDeliver).not.toHaveBeenCalled();
@@ -547,6 +595,7 @@ describe("delivery-queue", () => {
         recovered: 1,
         failed: 0,
         skippedMaxRetries: 0,
+        skippedExpired: 0,
         deferredBackoff: 0,
       });
       expect(secondDeliver).toHaveBeenCalledTimes(1);
@@ -565,6 +614,7 @@ describe("delivery-queue", () => {
         recovered: 0,
         failed: 0,
         skippedMaxRetries: 0,
+        skippedExpired: 0,
         deferredBackoff: 0,
       });
       expect(deliver).not.toHaveBeenCalled();

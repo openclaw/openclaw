@@ -9,6 +9,8 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+const MAX_ENTRY_AGE_MS = 24 * 60 * 60 * 1000;
+const QUEUE_WARN_THRESHOLD = 100;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -55,6 +57,7 @@ export type RecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
+  skippedExpired: number;
   deferredBackoff: number;
 };
 
@@ -285,19 +288,31 @@ export async function recoverPendingDeliveries(opts: {
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      skippedExpired: 0,
+      deferredBackoff: 0,
+    };
   }
 
   // Process oldest first.
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
+  if (pending.length > QUEUE_WARN_THRESHOLD) {
+    opts.log.warn(
+      `Delivery queue depth is high (${pending.length} entries, threshold ${QUEUE_WARN_THRESHOLD})`,
+    );
+  }
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
 
   let recovered = 0;
   let failed = 0;
   let skippedMaxRetries = 0;
+  let skippedExpired = 0;
   let deferredBackoff = 0;
 
   for (const entry of pending) {
@@ -306,6 +321,18 @@ export async function recoverPendingDeliveries(opts: {
       const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
+    }
+    if (isEntryExpired(entry, now)) {
+      opts.log.warn(
+        `Delivery ${entry.id} expired after ${MAX_ENTRY_AGE_MS}ms in queue — moving to failed/`,
+      );
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+      } catch (err) {
+        opts.log.error(`Failed to move expired entry ${entry.id} to failed/: ${String(err)}`);
+      }
+      skippedExpired += 1;
+      continue;
     }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
@@ -370,9 +397,9 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${skippedExpired} skipped (expired), ${deferredBackoff} deferred (backoff)`,
   );
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+  return { recovered, failed, skippedMaxRetries, skippedExpired, deferredBackoff };
 }
 
 export { MAX_RETRIES };
@@ -391,4 +418,15 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+function isEntryExpired(entry: QueuedDelivery, now: number): boolean {
+  const hasEnqueuedTimestamp =
+    typeof entry.enqueuedAt === "number" &&
+    Number.isFinite(entry.enqueuedAt) &&
+    entry.enqueuedAt > 0;
+  if (!hasEnqueuedTimestamp) {
+    return false;
+  }
+  return now - entry.enqueuedAt >= MAX_ENTRY_AGE_MS;
 }
