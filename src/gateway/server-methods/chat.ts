@@ -17,7 +17,11 @@ import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isWebchatClient,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -28,7 +32,11 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -880,14 +888,18 @@ export const chatHandlers: GatewayRequestHandlers = {
         !isChannelScopedSession &&
         typeof sessionScopeParts[1] === "string" &&
         sessionChannelHint === routeChannelCandidate;
-      // Only inherit prior external route metadata for channel-scoped sessions.
-      // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
-      // leak stale routes across surfaces.
+      const clientMode = client?.connect?.client?.mode;
+      const isFromWebchatClient =
+        isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
+      // Channel-agnostic session scopes (main, direct:<peer>, etc.) can leak
+      // stale routes across surfaces. Allow main sessions only from non-Webchat
+      // clients so CLI replies can keep the last WA/Telegram route.
       const canInheritDeliverableRoute = Boolean(
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-        !isChannelAgnosticSessionScope &&
-        (isChannelScopedSession || hasLegacyChannelPeerShape),
+        ((!isChannelAgnosticSessionScope &&
+          (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+          (sessionChannelHint === "main" && client?.connect !== undefined && !isFromWebchatClient)),
       );
       const hasDeliverableRoute =
         canInheritDeliverableRoute &&

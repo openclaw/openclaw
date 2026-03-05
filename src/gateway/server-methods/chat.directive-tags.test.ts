@@ -4,7 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -538,6 +538,47 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-main-no-cross-route",
       sessionKey: "main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send does not inherit external delivery context for UI clients on main sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-ui-routes-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "whatsapp:+8613800138000",
+        accountId: "default",
+      },
+      lastChannel: "whatsapp",
+      lastTo: "whatsapp:+8613800138000",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-ui-routes",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
       expectBroadcast: false,
     });
 
