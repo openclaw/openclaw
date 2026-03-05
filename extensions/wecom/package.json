@@ -1,7 +1,7 @@
 {
     "name": "@openclaw/wecom",
     "version": "1.5.0",
-    "description": "OpenClaw WeCom (Enterprise WeChat) channel plugin — 3 modes, 4-layer delivery fallback, dynamic agent routing (community maintained by @sunnoy)",
+    "description": "OpenClaw WeCom (Enterprise WeChat) channel plugin — 3 modes, 4-layer delivery fallback, dynamic agent routing (community contributed)",
     "type": "module",
     "main": "index.js",
     "files": [
@@ -72,6 +72,6 @@
     "bugs": {
         "url": "https://github.com/openclaw/openclaw/issues"
     },
-    "author": "Russell <sunnoy@openclaw.ai>",
+    "author": "Russell",
     "license": "MIT"
 }

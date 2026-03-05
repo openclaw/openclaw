@@ -2,7 +2,7 @@
 
 [English](#english) | [中文](#中文)
 
-> The official Enterprise WeChat (WeCom) channel plugin for [OpenClaw](https://github.com/openclaw/openclaw). 7,200+ lines of battle-tested code powering real businesses. Community maintained by [@sunnoy](https://github.com/sunnoy).
+> The official Enterprise WeChat (WeCom) channel plugin for [OpenClaw](https://github.com/openclaw/openclaw). 7,200+ lines of battle-tested code powering real businesses.
 
 ---
 
