@@ -74,9 +74,20 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Task instruction for the LLM." }),
-      input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
+      // NOTE: Use Type.Unsafe with explicit type instead of Type.Unknown();
+      // Type.Unknown() emits schema without a "type" field, which llama.cpp
+      // rejects during JSON schema-to-grammar conversion (400 Bad Request).
+      input: Type.Optional(
+        Type.Unsafe<unknown>({
+          type: "object",
+          description: "Optional input payload for the task.",
+        }),
+      ),
       schema: Type.Optional(
-        Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
+        Type.Unsafe<unknown>({
+          type: "object",
+          description: "Optional JSON Schema to validate the returned JSON.",
+        }),
       ),
       provider: Type.Optional(
         Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
