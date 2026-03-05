@@ -176,7 +176,8 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
-  if (normalizeProviderId(provider) !== "google-gemini-cli") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google-gemini-cli" && normalizedProvider !== "google") {
     return undefined;
   }
   const trimmed = modelId.trim();
@@ -191,13 +192,26 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
     return undefined;
   }
 
-  return cloneFirstTemplateModel({
-    normalizedProvider: "google-gemini-cli",
-    trimmedModelId: trimmed,
-    templateIds: [...templateIds],
-    modelRegistry,
-    patch: { reasoning: true },
-  });
+  // Support both provider aliases. User configs commonly use "google/..." model
+  // refs while registry templates may be keyed under "google-gemini-cli".
+  const providerCandidates: readonly string[] =
+    normalizedProvider === "google"
+      ? (["google", "google-gemini-cli"] as const)
+      : (["google-gemini-cli", "google"] as const);
+
+  for (const candidateProvider of providerCandidates) {
+    const resolved = cloneFirstTemplateModel({
+      normalizedProvider: candidateProvider,
+      trimmedModelId: trimmed,
+      templateIds: [...templateIds],
+      modelRegistry,
+      patch: { reasoning: true, provider: normalizedProvider },
+    });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
 }
 
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
