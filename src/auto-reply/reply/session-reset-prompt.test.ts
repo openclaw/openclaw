@@ -8,6 +8,7 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("Execute your Session Startup sequence now");
     expect(prompt).toContain("read the required files before responding to the user");
     expect(prompt).toContain("including AGENTS.md and any markdown docs it references");
+    expect(prompt).toContain("scan relevant .md files in the current workspace before greeting");
   });
 
   it("appends current time line so agents know the date", () => {
