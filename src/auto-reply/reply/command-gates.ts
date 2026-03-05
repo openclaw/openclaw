@@ -14,7 +14,12 @@ export function rejectUnauthorizedCommand(
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
   );
-  return { shouldContinue: false };
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚠️ You are not authorized to use ${commandLabel}.`,
+    },
+  };
 }
 
 export function buildDisabledCommandReply(params: {

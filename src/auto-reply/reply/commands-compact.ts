@@ -55,7 +55,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     logVerbose(
       `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ You are not authorized to use /compact." },
+    };
   }
   if (!params.sessionEntry?.sessionId) {
     return {
