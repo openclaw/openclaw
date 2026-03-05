@@ -400,21 +400,72 @@ Notes:
 }
 ```
 
-  </Accordion>
+When you use native commands (`channels.slack.commands.native: true`), replace the `slash_commands` block with a command-per-entry list so Slack can dispatch each command directly:
 
-  <Accordion title="Optional user-token scopes (read operations)">
-    If you configure `channels.slack.userToken`, typical read scopes are:
+```json
+{
+  "slash_commands": [
+    { "command": "/help", "description": "Show command help", "should_escape": false },
+    { "command": "/commands", "description": "List available commands", "should_escape": false },
+    {
+      "command": "/agentstatus",
+      "description": "Show status (Slack-safe alias for /status)",
+      "should_escape": false
+    },
+    { "command": "/whoami", "description": "Show sender identity", "should_escape": false },
+    { "command": "/context", "description": "Show context summary", "should_escape": false },
+    { "command": "/allowlist", "description": "Manage allowlist entries", "should_escape": false },
+    { "command": "/approve", "description": "Resolve approval prompts", "should_escape": false },
+    { "command": "/model", "description": "Select or inspect model", "should_escape": false },
+    { "command": "/new", "description": "Start a new session", "should_escape": false },
+    { "command": "/reset", "description": "Reset current session", "should_escape": false },
+    { "command": "/usage", "description": "Configure usage footer output", "should_escape": false },
+    { "command": "/verbose", "description": "Toggle verbose mode", "should_escape": false },
+    { "command": "/reasoning", "description": "Toggle reasoning output", "should_escape": false },
+    { "command": "/think", "description": "Set thinking level", "should_escape": false },
+    { "command": "/queue", "description": "Set queue behavior", "should_escape": false },
+    { "command": "/session", "description": "Manage session idle/max-age", "should_escape": false },
+    {
+      "command": "/subagents",
+      "description": "Inspect and control subagents",
+      "should_escape": false
+    },
+    {
+      "command": "/acp",
+      "description": "Inspect and control ACP sessions",
+      "should_escape": false
+    },
+    { "command": "/config", "description": "Persisted config changes", "should_escape": false },
+    { "command": "/debug", "description": "Runtime-only config overrides", "should_escape": false },
+    { "command": "/exec", "description": "Set exec mode and security", "should_escape": false },
+    { "command": "/elevated", "description": "Set elevated mode", "should_escape": false },
+    { "command": "/restart", "description": "Restart gateway", "should_escape": false },
+    { "command": "/stop", "description": "Stop current run", "should_escape": false }
+  ]
+}
+```
 
-    - `channels:history`, `groups:history`, `im:history`, `mpim:history`
-    - `channels:read`, `groups:read`, `im:read`, `mpim:read`
-    - `users:read`
-    - `reactions:read`
-    - `pins:read`
-    - `emoji:read`
-    - `search:read` (if you depend on Slack search reads)
+Notes:
 
-  </Accordion>
-</AccordionGroup>
+- Keep `/openclaw` only if you also use single-command mode (`channels.slack.slashCommand.enabled: true`).
+- Slack reserves `/status`, so register `/agentstatus` and map it to OpenClaw status command handling.
+- Add any extra command entries you use from [Slash commands](/tools/slash-commands).
+
+    </Accordion>
+
+    <Accordion title="Optional user-token scopes (read operations)">
+      If you configure `channels.slack.userToken`, typical read scopes are:
+
+      - `channels:history`, `groups:history`, `im:history`, `mpim:history`
+      - `channels:read`, `groups:read`, `im:read`, `mpim:read`
+      - `users:read`
+      - `reactions:read`
+      - `pins:read`
+      - `emoji:read`
+      - `search:read` (if you depend on Slack search reads)
+
+    </Accordion>
+  </AccordionGroup>
 
 ## Troubleshooting
 
