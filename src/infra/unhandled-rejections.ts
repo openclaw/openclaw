@@ -60,6 +60,32 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "temporary failure in name resolution",
 ];
 
+/**
+ * Detects the undici TLS session null-dereference crash that occurs when undici's
+ * reconnect path calls tls.connect() with a stale WeakRef-cached session whose
+ * internal _handle has already been destroyed.
+ *
+ * Stack: TLSSocket.setSession (node:_tls_wrap) ← Object.connect ← undici connect.js
+ *
+ * This is a transient condition — the session cache entry becomes invalid after
+ * a socket close under concurrent load; the next request will succeed without
+ * a cached session. Exiting the process is unnecessary and causes crash-loops
+ * when the network is still unstable at restart.
+ */
+export function isTlsSocketNullDeref(err: unknown): boolean {
+  if (!(err instanceof TypeError)) {
+    return false;
+  }
+  const msg = err.message ?? "";
+  // Node 18+: "Cannot read properties of null (reading 'setSession')"
+  // Node <18:  "Cannot read property 'setSession' of null"
+  if (!msg.includes("setSession")) {
+    return false;
+  }
+  const stack = err.stack ?? "";
+  return stack.includes("TLSSocket.setSession") || stack.includes("_tls_wrap");
+}
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -155,6 +181,11 @@ export function isTransientNetworkError(err: unknown): boolean {
     }
 
     if (candidate instanceof TypeError && candidate.message === "fetch failed") {
+      return true;
+    }
+
+    // undici TLS session null dereference during socket reconnect — transient
+    if (isTlsSocketNullDeref(candidate)) {
       return true;
     }
 
