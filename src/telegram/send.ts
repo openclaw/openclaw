@@ -26,7 +26,7 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -711,20 +711,26 @@ export async function sendMessageTelegram(
 
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
+    // Chunk follow-up text to stay within Telegram's 4096-char message limit.
     if (needsSeparateText && followUpText) {
-      const textParams =
-        hasThreadParams || replyMarkup
-          ? {
-              ...threadParams,
-              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-            }
-          : undefined;
-      const textRes = await sendTelegramText(followUpText, textParams);
-      // Return the text message ID as the "main" message (it's the actual content).
-      const textMessageId = resolveTelegramMessageIdOrThrow(textRes, "text follow-up send");
-      recordSentMessage(chatId, textMessageId);
+      const followUpChunks = markdownToTelegramChunks(followUpText, 4000, { tableMode });
+      let lastTextMessageId = "";
+      for (let i = 0; i < followUpChunks.length; i++) {
+        const isLast = i === followUpChunks.length - 1;
+        const textParams =
+          hasThreadParams || (isLast && replyMarkup)
+            ? {
+                ...threadParams,
+                ...(isLast && replyMarkup ? { reply_markup: replyMarkup } : {}),
+              }
+            : undefined;
+        const textRes = await sendTelegramText(followUpChunks[i].text, textParams);
+        const textMessageId = resolveTelegramMessageIdOrThrow(textRes, "text follow-up send");
+        recordSentMessage(chatId, textMessageId);
+        lastTextMessageId = String(textMessageId);
+      }
       return {
-        messageId: String(textMessageId),
+        messageId: lastTextMessageId,
         chatId: resolvedChatId,
       };
     }
@@ -735,6 +741,57 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
+
+  // When textMode is "html", the caller already pre-rendered and pre-chunked the
+  // text as HTML. Skip markdownToTelegramChunks which would corrupt HTML tags by
+  // escaping angle brackets and could split tags across chunk boundaries.
+  if (textMode === "html") {
+    const htmlParams =
+      hasThreadParams || replyMarkup
+        ? {
+            ...threadParams,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    const res = await sendTelegramText(text, htmlParams, opts.plainText);
+    const messageId = resolveTelegramMessageIdOrThrow(res, "html text send");
+    recordSentMessage(chatId, messageId);
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+    return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  }
+
+  const textChunks = markdownToTelegramChunks(text, 4000, { tableMode });
+  if (textChunks.length > 1) {
+    let lastMessageId = "";
+    let lastChatId = String(chatId);
+    for (let i = 0; i < textChunks.length; i++) {
+      const isLast = i === textChunks.length - 1;
+      const chunkParams =
+        hasThreadParams || (isLast && replyMarkup)
+          ? {
+              ...threadParams,
+              ...(isLast && replyMarkup ? { reply_markup: replyMarkup } : {}),
+            }
+          : undefined;
+      // Send raw markdown text — sendTelegramText handles HTML rendering
+      const res = await sendTelegramText(textChunks[i].text, chunkParams);
+      const mid = resolveTelegramMessageIdOrThrow(res, "text chunk send");
+      recordSentMessage(chatId, mid);
+      lastMessageId = String(mid);
+      lastChatId = String(res?.chat?.id ?? chatId);
+    }
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+    return { messageId: lastMessageId, chatId: lastChatId };
+  }
+
   const textParams =
     hasThreadParams || replyMarkup
       ? {
