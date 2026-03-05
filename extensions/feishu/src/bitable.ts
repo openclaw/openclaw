@@ -193,6 +193,47 @@ async function getRecord(client: Lark.Client, appToken: string, tableId: string,
   };
 }
 
+type RecordFieldsArgs = {
+  fields?: Record<string, unknown>;
+  fields_json?: string;
+};
+
+function resolveRecordFields(args: RecordFieldsArgs, actionName: string): Record<string, unknown> {
+  const hasFields = args.fields !== undefined;
+  const hasFieldsJson = args.fields_json !== undefined;
+
+  if (hasFields && hasFieldsJson) {
+    throw new Error(`Provide either fields or fields_json for ${actionName}, not both`);
+  }
+
+  let resolved: unknown;
+  if (hasFieldsJson) {
+    const raw = args.fields_json?.trim();
+    if (!raw) {
+      throw new Error(`fields_json cannot be empty for ${actionName}`);
+    }
+    try {
+      resolved = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `Invalid fields_json for ${actionName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  } else {
+    resolved = args.fields;
+  }
+
+  if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) {
+    throw new Error(`Record fields must be a JSON object for ${actionName}`);
+  }
+
+  const fields = resolved as Record<string, unknown>;
+  if (Object.keys(fields).length === 0) {
+    throw new Error(`Record fields cannot be empty for ${actionName}`);
+  }
+  return fields;
+}
+
 async function createRecord(
   client: Lark.Client,
   appToken: string,
@@ -471,10 +512,18 @@ const CreateRecordSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
-    description:
-      "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
-  }),
+  fields: Type.Optional(
+    Type.Record(Type.String(), Type.Any(), {
+      description:
+        "Field values keyed by field name. Preferred when the client supports dynamic object params.",
+    }),
+  ),
+  fields_json: Type.Optional(
+    Type.String({
+      description:
+        'JSON-encoded field object fallback when your client cannot pass dynamic fields. Example: {"Name":"Alice","Score":95}',
+    }),
+  ),
 });
 
 const CreateAppSchema = Type.Object({
@@ -513,9 +562,17 @@ const UpdateRecordSchema = Type.Object({
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
-    description: "Field values to update (same format as create_record)",
-  }),
+  fields: Type.Optional(
+    Type.Record(Type.String(), Type.Any(), {
+      description: "Field values to update (same format as create_record)",
+    }),
+  ),
+  fields_json: Type.Optional(
+    Type.String({
+      description:
+        'JSON-encoded field object fallback when your client cannot pass dynamic fields. Example: {"Status":"Done"}',
+    }),
+  ),
 });
 
 // ============ Tool Registration ============
@@ -633,7 +690,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   registerBitableTool<{
     app_token: string;
     table_id: string;
-    fields: Record<string, unknown>;
+    fields?: Record<string, unknown>;
+    fields_json?: string;
     accountId?: string;
   }>({
     name: "feishu_bitable_create_record",
@@ -645,7 +703,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         getClient(params, defaultAccountId),
         params.app_token,
         params.table_id,
-        params.fields,
+        resolveRecordFields(params, "feishu_bitable_create_record"),
       );
     },
   });
@@ -654,7 +712,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     app_token: string;
     table_id: string;
     record_id: string;
-    fields: Record<string, unknown>;
+    fields?: Record<string, unknown>;
+    fields_json?: string;
     accountId?: string;
   }>({
     name: "feishu_bitable_update_record",
@@ -667,7 +726,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         params.app_token,
         params.table_id,
         params.record_id,
-        params.fields,
+        resolveRecordFields(params, "feishu_bitable_update_record"),
       );
     },
   });
