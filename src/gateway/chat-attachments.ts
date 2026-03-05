@@ -145,7 +145,7 @@ export async function parseMessageWithAttachments(
         type: "document",
         data: b64,
         mimeType: "application/pdf",
-        fileName: att.fileName || label,
+        fileName: att.fileName || `document-${idx + 1}.pdf`,
       });
       continue;
     }
