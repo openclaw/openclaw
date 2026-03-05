@@ -153,6 +153,37 @@ describe("thread-level session keys", () => {
     }
   });
 
+  it("keeps one session from top-level channel turn into thread replies when replyToMode=all", async () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    ctx.resolveUserName = async () => ({ name: "Dave" });
+    const account = createSlackTestAccount({ replyToMode: "all" });
+
+    const starterTs = "1770408600.000000";
+    const topLevel = await prepareSlackMessage({
+      ctx,
+      account,
+      message: buildChannelMessage({ ts: starterTs }),
+      opts: { source: "message" },
+    });
+    const reply = await prepareSlackMessage({
+      ctx,
+      account,
+      message: buildChannelMessage({
+        ts: "1770408601.000000",
+        thread_ts: starterTs,
+        parent_user_id: "U1",
+      }),
+      opts: { source: "message" },
+    });
+
+    expect(topLevel).toBeTruthy();
+    expect(reply).toBeTruthy();
+    const topLevelKey = topLevel!.ctxPayload.SessionKey as string;
+    const replyKey = reply!.ctxPayload.SessionKey as string;
+    expect(topLevelKey).toBe(replyKey);
+    expect(replyKey).toContain(`:thread:`);
+  });
+
   it("always adds thread suffix for DMs even when replyToMode=off", async () => {
     const ctx = buildCtx({ replyToMode: "off" });
     ctx.resolveUserName = async () => ({ name: "Carol" });

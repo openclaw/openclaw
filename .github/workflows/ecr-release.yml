@@ -25,7 +25,7 @@ on:
           - dev
           - prd
           - both
-        default: dev
+        default: both
 
 concurrency:
   group: ecr-release-${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +38,7 @@ permissions:
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-3' }}
   ECR_REPOSITORY: openclaw-sre
+  BUILD_CACHE_SCOPE: openclaw-sre-ecr-release
 
 jobs:
   build-and-release:
@@ -46,36 +47,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.INFRA_DEPLOYER_APP_ID }}
-          private-key: ${{ secrets.INFRA_DEPLOYER_SECRET_KEY }}
-          owner: morpho-org
-
-      - name: Checkout morpho-infra
-        uses: actions/checkout@v4
-        with:
-          repository: morpho-org/morpho-infra
-          ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          path: .infra-checkouts/morpho-infra
-
-      - name: Checkout morpho-infra-helm
-        uses: actions/checkout@v4
-        with:
-          repository: morpho-org/morpho-infra-helm
-          ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          path: .infra-checkouts/morpho-infra-helm
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -87,6 +58,9 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Resolve image URI
         id: image
         run: |
@@ -95,19 +69,22 @@ jobs:
           echo "uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
       - name: Build and push runtime image
-        run: |
-          set -euo pipefail
-          docker build \
-            --platform linux/amd64 \
-            -t "${{ steps.image.outputs.uri }}" \
-            .
-          docker push "${{ steps.image.outputs.uri }}"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.image.outputs.uri }}
+          cache-from: type=gha,scope=${{ env.BUILD_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.BUILD_CACHE_SCOPE }}
 
       - name: Resolve infra update environments
         id: infra
         run: |
           set -euo pipefail
-          envs="dev"
+          envs="dev,prd"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             case "${{ inputs.environment }}" in
               dev) envs="dev" ;;

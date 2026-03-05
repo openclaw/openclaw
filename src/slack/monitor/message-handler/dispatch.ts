@@ -28,6 +28,7 @@ import { appendSlackStream, startSlackStream, stopSlackStream } from "../../stre
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
+import { enforceSlackDirectEitherOrAnswer } from "./final-answer-guard.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
@@ -365,7 +366,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
-    deliver: async (payload) => {
+    deliver: async (incomingPayload) => {
+      const payload = enforceSlackDirectEitherOrAnswer({
+        questionText:
+          message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
+        payload: incomingPayload,
+      });
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
