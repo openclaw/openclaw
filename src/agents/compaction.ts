@@ -31,6 +31,7 @@ const MERGE_SUMMARIES_INSTRUCTIONS = [
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
+const TOOL_CALL_CONTENT_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
@@ -70,9 +71,69 @@ export function buildCompactionSummarizationInstructions(
 }
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
-  const safe = stripToolResultDetails(messages);
+  const safe = sanitizeMessagesForCompaction(messages);
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+}
+
+function sanitizeAssistantContentBlock(block: unknown): unknown {
+  if (!block || typeof block !== "object") {
+    return block;
+  }
+  const type = (block as { type?: unknown }).type;
+  if (typeof type !== "string" || !TOOL_CALL_CONTENT_BLOCK_TYPES.has(type)) {
+    return block;
+  }
+
+  const blockRecord = block as Record<string, unknown>;
+  const hasArguments = Object.hasOwn(blockRecord, "arguments");
+  const hasInput = Object.hasOwn(blockRecord, "input");
+  const hasPartialJson = Object.hasOwn(blockRecord, "partialJson");
+  if (!hasArguments && !hasInput && !hasPartialJson) {
+    return block;
+  }
+
+  const { arguments: _arguments, input: _input, partialJson: _partialJson, ...rest } = blockRecord;
+  const next: Record<string, unknown> = { ...rest };
+  if (hasArguments) {
+    next.arguments = {};
+  }
+  if (hasInput) {
+    next.input = {};
+  }
+  return next;
+}
+
+function sanitizeCompactionMessage(message: AgentMessage): AgentMessage {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return message;
+  }
+  let changed = false;
+  const nextContent = message.content.map((block) => {
+    const nextBlock = sanitizeAssistantContentBlock(block);
+    if (nextBlock !== block) {
+      changed = true;
+    }
+    return nextBlock;
+  });
+  if (!changed) {
+    return message;
+  }
+  return { ...message, content: nextContent } as AgentMessage;
+}
+
+export function sanitizeMessagesForCompaction(messages: AgentMessage[]): AgentMessage[] {
+  // SECURITY: toolResult.details and tool-call argument payloads can contain
+  // untrusted or sensitive data; never include them in LLM-facing compaction.
+  const withoutToolResultDetails = stripToolResultDetails(messages);
+  let changed = withoutToolResultDetails !== messages;
+  const sanitized = withoutToolResultDetails.map((message) => {
+    const nextMessage = sanitizeCompactionMessage(message);
+    if (nextMessage !== message) {
+      changed = true;
+    }
+    return nextMessage;
+  });
+  return changed ? sanitized : messages;
 }
 
 function estimateCompactionMessageTokens(message: AgentMessage): number {
@@ -223,8 +284,8 @@ async function summarizeChunks(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  // SECURITY: never feed toolResult.details into summarization prompts.
-  const safeMessages = stripToolResultDetails(params.messages);
+  // SECURITY: never feed toolResult.details or raw tool-call args into compaction prompts.
+  const safeMessages = sanitizeMessagesForCompaction(params.messages);
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
   const effectiveInstructions = buildCompactionSummarizationInstructions(

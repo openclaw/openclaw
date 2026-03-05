@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
+  sanitizeMessagesForCompaction,
   splitMessagesByTokenShare,
 } from "./compaction.js";
 
@@ -275,5 +276,67 @@ describe("pruneHistoryForContextShare", () => {
     // droppedMessages = 1 (assistant) + 2 (orphaned tool_results) = 3
     // droppedMessagesList only has the assistant message
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
+  });
+});
+
+describe("sanitizeMessagesForCompaction", () => {
+  it("redacts raw tool-call arguments before compaction summarization", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_write",
+            name: "write",
+            arguments: { filePath: "/tmp/feishu_voice_sender.py", content: "print('hi')" },
+          },
+          {
+            type: "toolUse",
+            id: "call_message",
+            name: "message",
+            input: { filePath: "/tmp/feishu_voice_sender.py", target: "user-1" },
+            partialJson: '{"filePath":"/tmp/feishu_voice_sender.py"}',
+          },
+        ],
+        timestamp: 1,
+      } as AgentMessage,
+    ];
+
+    const sanitized = sanitizeMessagesForCompaction(messages);
+    const assistant = sanitized[0] as { content?: unknown[] };
+    const blocks = assistant.content as Array<Record<string, unknown>>;
+
+    expect(blocks[0]?.arguments).toEqual({});
+    expect(blocks[1]?.input).toEqual({});
+    expect(blocks[1]).not.toHaveProperty("partialJson");
+  });
+
+  it("does not mutate original messages when sanitizing tool-call arguments", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "message",
+            arguments: { filePath: "/tmp/secret.txt" },
+          },
+        ],
+        timestamp: 1,
+      } as AgentMessage,
+    ];
+
+    const original = (messages[0] as { content: Array<Record<string, unknown>> }).content[0];
+    const sanitized = sanitizeMessagesForCompaction(messages);
+    const sanitizedBlock = ((sanitized[0] as { content: unknown[] }).content[0] ?? {}) as Record<
+      string,
+      unknown
+    >;
+
+    expect(original.arguments).toEqual({ filePath: "/tmp/secret.txt" });
+    expect(sanitizedBlock.arguments).toEqual({});
+    expect(sanitizedBlock).not.toBe(original);
   });
 });
