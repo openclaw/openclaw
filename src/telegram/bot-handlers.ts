@@ -16,7 +16,12 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
-import { DOCUMENT_BATCH_FLUSH_MS, MEDIA_GROUP_TIMEOUT_MS, type DocumentBatchEntry, type MediaGroupEntry } from "./bot-updates.js";
+import {
+  DOCUMENT_BATCH_FLUSH_MS,
+  MEDIA_GROUP_TIMEOUT_MS,
+  type DocumentBatchEntry,
+  type MediaGroupEntry,
+} from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
@@ -680,7 +685,7 @@ export const registerTelegramHandlers = ({
       const senderId = msg.from?.id ? String(msg.from.id) : "";
       const docBatchKey = `${chatId}:${senderId}`;
 
-      if (!mediaGroupId && msg.document && documentBatchWindowMs > 0) {
+      if (msg.document && documentBatchWindowMs > 0) {
         const existing = documentBatchBuffer.get(docBatchKey);
         if (existing) {
           clearTimeout(existing.timer);

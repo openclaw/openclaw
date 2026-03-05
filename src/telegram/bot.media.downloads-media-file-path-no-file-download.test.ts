@@ -975,4 +975,81 @@ describe("telegram document batch buffer", () => {
     },
     DOC_BATCH_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "text message flushes pending document batch immediately",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+      onSpy.mockReset();
+      replySpy.mockReset();
+
+      const runtimeError = vi.fn();
+      const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => "text/plain" },
+        arrayBuffer: async () => new Uint8Array([0x48, 0x65]).buffer,
+      } as Response);
+
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
+        },
+      });
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      // Send a document first
+      await handler({
+        message: {
+          chat: { id: 400, type: "private" },
+          message_id: 1,
+          from: { id: 777 },
+          date: 1736380800,
+          document: { file_id: "docX", file_name: "notes.txt" },
+        },
+        me: { username: "moltbot_bot" },
+        getFile: async () => ({ file_path: "documents/notes.txt" }),
+      });
+
+      // Document should be buffered, not yet processed
+      expect(replySpy).not.toHaveBeenCalled();
+
+      // Now send a plain text message from the same sender — should flush the batch
+      await handler({
+        message: {
+          chat: { id: 400, type: "private" },
+          message_id: 2,
+          from: { id: 777 },
+          date: 1736380802,
+          text: "Please review these notes",
+        },
+        me: { username: "moltbot_bot" },
+      });
+
+      // The document batch should have been flushed by the text message
+      // (first call = flushed doc batch, second call = the text message itself)
+      expect(replySpy).toHaveBeenCalledTimes(2);
+
+      const docPayload = replySpy.mock.calls[0][0];
+      expect(docPayload.MediaPaths).toHaveLength(1);
+
+      const textPayload = replySpy.mock.calls[1][0];
+      expect(textPayload.Body).toContain("Please review these notes");
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
+  );
 });
