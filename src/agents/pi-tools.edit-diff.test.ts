@@ -7,7 +7,12 @@ import { createHostWorkspaceEditTool } from "./pi-tools.read.js";
 function extractFirstText(result: any): string {
   const blocks = Array.isArray(result?.content) ? result.content : [];
   for (const b of blocks) {
-    if (b && typeof b === "object" && (b as any).type === "text" && typeof (b as any).text === "string") {
+    if (
+      b &&
+      typeof b === "object" &&
+      (b as any).type === "text" &&
+      typeof (b as any).text === "string"
+    ) {
       return (b as any).text;
     }
   }
@@ -22,7 +27,12 @@ describe("edit tool diff", () => {
       await fs.writeFile(file, "old\n", "utf8");
 
       const tool = createHostWorkspaceEditTool(root);
-      const res = await tool.execute("t1", { path: file, oldText: "old\n", newText: "new\n" }, undefined, undefined);
+      const res = await tool.execute(
+        "t1",
+        { path: file, oldText: "old\n", newText: "new\n" },
+        undefined,
+        undefined,
+      );
 
       const text = extractFirstText(res);
       expect(text).toContain("--- a/");

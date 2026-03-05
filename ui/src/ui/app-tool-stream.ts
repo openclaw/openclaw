@@ -174,11 +174,20 @@ function formatEditDiff(args: unknown): string | null {
     return null;
   }
   const a = args as Record<string, unknown>;
-  const path = typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : null;
+  const path =
+    typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : null;
   const oldText =
-    typeof a.oldText === "string" ? a.oldText : typeof a.old_string === "string" ? a.old_string : null;
+    typeof a.oldText === "string"
+      ? a.oldText
+      : typeof a.old_string === "string"
+        ? a.old_string
+        : null;
   const newText =
-    typeof a.newText === "string" ? a.newText : typeof a.new_string === "string" ? a.new_string : null;
+    typeof a.newText === "string"
+      ? a.newText
+      : typeof a.new_string === "string"
+        ? a.new_string
+        : null;
   if (oldText === null || newText === null) {
     return null;
   }
@@ -188,10 +197,7 @@ function formatEditDiff(args: unknown): string | null {
   const newLines = normalize(newText).split("\n");
 
   const headerPath = (path ?? "<unknown>").replaceAll("\\", "/");
-  const body = [
-    ...oldLines.map((l) => `-${l}`),
-    ...newLines.map((l) => `+${l}`),
-  ].join("\n");
+  const body = [...oldLines.map((l) => `-${l}`), ...newLines.map((l) => `+${l}`)].join("\n");
 
   return `--- a/${headerPath}\n+++ b/${headerPath}\n@@\n${body}`;
 }
@@ -456,7 +462,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     data.arguments ??
     data.params;
   const args =
-    argsCandidate && typeof argsCandidate === "object" ? (argsCandidate as Record<string, unknown>) : undefined;
+    argsCandidate && typeof argsCandidate === "object"
+      ? (argsCandidate as Record<string, unknown>)
+      : undefined;
 
   const output =
     phase === "update"
@@ -494,7 +502,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   // Some tools (notably `edit`) often return empty output even on success.
   // To keep the UI informative, synthesize a diff-like preview from args.
-  if (phase === "result" && (!entry.output || entry.output.trim() === "") && entry.name === "edit") {
+  if (
+    phase === "result" &&
+    (!entry.output || entry.output.trim() === "") &&
+    entry.name === "edit"
+  ) {
     const diff = formatEditDiff(entry.args);
     if (diff) {
       entry.output = diff;

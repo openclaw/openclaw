@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { GATEWAY_CLIENT_CAPS } from "./protocol/client-info.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 
 function createFakeClient(params?: {
   caps?: string[];
