@@ -102,16 +102,14 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const isLocal = !isAbsoluteHttp(url);
   const msg = String(err);
   const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
+  const looksLikeTimeout = msgLower.includes("timed out") || msgLower.includes("timeout");
+  const looksLikeAbort =
+    msgLower.includes("aborterror") || msgLower.includes("aborted") || msgLower.includes("abort");
   if (looksLikeTimeout) {
-    // Timeouts are often transient (slow page load, heavy JS) — avoid
-    // telling operators to restart the gateway or models to give up.
     return new Error(`Browser control service request timed out after ${timeoutMs}ms.`);
+  }
+  if (looksLikeAbort) {
+    return new Error("Browser control service request was cancelled.");
   }
   // Persistent connection failures: include an actionable hint.
   const hint = isLocal
