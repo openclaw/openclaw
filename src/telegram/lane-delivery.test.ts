@@ -215,8 +215,9 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.log).toHaveBeenCalledWith(expect.stringContaining("preview final too long"));
   });
 
-  it("sends a final message after DM draft streaming even when text is unchanged", async () => {
-    const answerStream = createTestDraftStream({ previewMode: "draft" });
+  it("materializes DM draft streaming final even when text is unchanged", async () => {
+    const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 321 });
+    answerStream.materialize.mockResolvedValue(321);
     answerStream.update.mockImplementation(() => {});
     const harness = createHarness({
       answerStream: answerStream as DraftLaneState["stream"],
@@ -231,18 +232,17 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
-    expect(result).toBe("sent");
+    expect(result).toBe("preview-finalized");
     expect(harness.flushDraftLane).toHaveBeenCalled();
-    expect(harness.stopDraftLane).toHaveBeenCalled();
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Hello final" }),
-    );
-    expect(harness.markDelivered).not.toHaveBeenCalled();
+    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
-  it("sends a final message after DM draft streaming when revision changes", async () => {
+  it("materializes DM draft streaming final when revision changes", async () => {
     let previewRevision = 3;
-    const answerStream = createTestDraftStream({ previewMode: "draft" });
+    const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 654 });
+    answerStream.materialize.mockResolvedValue(654);
     answerStream.previewRevision.mockImplementation(() => previewRevision);
     answerStream.update.mockImplementation(() => {});
     answerStream.flush.mockImplementation(async () => {
@@ -261,11 +261,36 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
+    expect(result).toBe("preview-finalized");
+    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to normal send when draft materialize returns no message id", async () => {
+    const answerStream = createTestDraftStream({ previewMode: "draft" });
+    answerStream.materialize.mockResolvedValue(undefined);
+    const harness = createHarness({
+      answerStream: answerStream as DraftLaneState["stream"],
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Hello final",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
     expect(result).toBe("sent");
+    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Final answer" }),
+      expect.objectContaining({ text: "Hello final" }),
     );
-    expect(harness.markDelivered).not.toHaveBeenCalled();
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("draft preview materialize produced no message id"),
+    );
   });
 
   it("does not use DM draft final shortcut for media payloads", async () => {
