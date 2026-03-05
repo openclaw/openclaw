@@ -823,3 +823,24 @@ export function normalizeWebhookReaction(
     fromMe,
   };
 }
+
+/**
+ * Lightweight check: does the payload contain reaction/tapback markers
+ * (associatedMessageGuid / associatedMessageType) even if full normalization fails?
+ * Used to distinguish unprocessable reactions from truly invalid payloads.
+ */
+export function hasReactionMarkers(payload: Record<string, unknown>): boolean {
+  const message = extractMessagePayload(payload);
+  if (!message) {
+    return false;
+  }
+  const hasGuid = !!(
+    readString(message, "associatedMessageGuid") ??
+    readString(message, "associated_message_guid") ??
+    readString(message, "associatedMessageId")
+  );
+  const hasType =
+    readNumberLike(message, "associatedMessageType") !== undefined ||
+    readNumberLike(message, "associated_message_type") !== undefined;
+  return hasGuid || hasType;
+}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  hasReactionMarkers,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 
 describe("normalizeWebhookMessage", () => {
   it("falls back to DM chatGuid handle when sender handle is missing", () => {
@@ -74,5 +78,51 @@ describe("normalizeWebhookReaction", () => {
     expect(result?.senderId).toBe("+15551234567");
     expect(result?.messageId).toBe("p:0/msg-1");
     expect(result?.action).toBe("added");
+  });
+});
+
+describe("hasReactionMarkers", () => {
+  it("detects associatedMessageGuid in payload", () => {
+    expect(
+      hasReactionMarkers({
+        type: "new-message",
+        data: {
+          guid: "msg-2",
+          text: 'Liked "hello"',
+          associatedMessageGuid: "p:0/msg-1",
+          associatedMessageType: 2001,
+          isGroup: true,
+          handle: null,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("detects snake_case associated_message_guid", () => {
+    expect(
+      hasReactionMarkers({
+        data: {
+          associated_message_guid: "p:0/msg-1",
+          associated_message_type: 2000,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for regular text message", () => {
+    expect(
+      hasReactionMarkers({
+        type: "new-message",
+        data: {
+          guid: "msg-1",
+          text: "hello",
+          handle: { address: "+15551234567" },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for empty payload", () => {
+    expect(hasReactionMarkers({})).toBe(false);
   });
 });

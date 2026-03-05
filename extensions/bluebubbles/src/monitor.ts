@@ -9,7 +9,11 @@ import {
   resolveWebhookTargets,
 } from "openclaw/plugin-sdk/bluebubbles";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  hasReactionMarkers,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
@@ -225,6 +229,20 @@ export async function handleBlueBubblesWebhookRequest(
     }
     const message = reaction ? null : normalizeWebhookMessage(payload);
     if (!message && !reaction) {
+      // Tolerate unprocessable reactions (e.g. missing sender handle in group chats)
+      // instead of returning 400, which causes BlueBubbles webhook retries and log spam.
+      if (hasReactionMarkers(payload)) {
+        res.statusCode = 200;
+        res.end("ok");
+        if (firstTarget) {
+          logVerbose(
+            firstTarget.core,
+            firstTarget.runtime,
+            `webhook ignored unprocessable reaction (missing sender context)`,
+          );
+        }
+        return true;
+      }
       res.statusCode = 400;
       res.end("invalid payload");
       console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
