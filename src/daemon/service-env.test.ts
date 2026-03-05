@@ -179,10 +179,31 @@ describe("buildMinimalServicePath", () => {
       platform: "darwin",
     });
     const parts = splitPath(result, "darwin");
+    expect(parts).toContain("/opt/homebrew/opt/node@24/bin");
+    expect(parts).toContain("/opt/homebrew/opt/node@22/bin");
+    expect(parts).toContain("/opt/homebrew/opt/node/bin");
     expect(parts).toContain("/opt/homebrew/bin");
+    expect(parts).toContain("/usr/local/opt/node@24/bin");
+    expect(parts).toContain("/usr/local/opt/node@22/bin");
+    expect(parts).toContain("/usr/local/opt/node/bin");
     expect(parts).toContain("/usr/local/bin");
     expect(parts).toContain("/usr/bin");
     expect(parts).toContain("/bin");
+  });
+
+  it("includes HOMEBREW_PREFIX node bins on macOS", () => {
+    const result = buildMinimalServicePath({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/alice",
+        HOMEBREW_PREFIX: "/custom/homebrew",
+      },
+    });
+    const parts = splitPath(result, "darwin");
+    expect(parts).toContain("/custom/homebrew/opt/node@24/bin");
+    expect(parts).toContain("/custom/homebrew/opt/node@22/bin");
+    expect(parts).toContain("/custom/homebrew/opt/node/bin");
+    expect(parts).toContain("/custom/homebrew/bin");
   });
 
   it("returns PATH as-is on Windows", () => {
