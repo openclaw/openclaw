@@ -1,3 +1,18 @@
+import { formatErrorMessage } from "../infra/errors.js";
+import { logDebug } from "../logger.js";
+
+function parseContentLengthHeader(res: Response): number | null {
+  const raw = res.headers.get("content-length")?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -9,6 +24,11 @@ export async function readResponseWithLimit(
     opts?.onOverflow ??
     ((params: { size: number; maxBytes: number }) =>
       new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+
+  const declaredSize = parseContentLengthHeader(res);
+  if (declaredSize !== null && declaredSize > maxBytes) {
+    throw onOverflow({ size: declaredSize, maxBytes, res });
+  }
 
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
@@ -33,7 +53,11 @@ export async function readResponseWithLimit(
         if (total > maxBytes) {
           try {
             await reader.cancel();
-          } catch {}
+          } catch (err) {
+            logDebug(
+              `media: readResponseWithLimit failed to cancel stream after overflow: ${formatErrorMessage(err)}`,
+            );
+          }
           throw onOverflow({ size: total, maxBytes, res });
         }
         chunks.push(value);
@@ -42,7 +66,11 @@ export async function readResponseWithLimit(
   } finally {
     try {
       reader.releaseLock();
-    } catch {}
+    } catch (err) {
+      logDebug(
+        `media: readResponseWithLimit failed to release reader lock: ${formatErrorMessage(err)}`,
+      );
+    }
   }
 
   return Buffer.concat(
