@@ -44,11 +44,26 @@ runs:
         done
         exit 1
 
-    - name: Setup Node.js
+    - name: Setup Node.js (attempt 1)
+      id: setup_node_first
+      continue-on-error: true
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: ${{ inputs.node-version }}
         check-latest: false
+
+    - name: Setup Node.js (retry on transient failure)
+      if: steps.setup_node_first.outcome == 'failure'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        check-latest: false
+
+    - name: Verify Node.js availability
+      shell: bash
+      run: |
+        set -euo pipefail
+        node -v
 
     - name: Setup pnpm + cache store
       uses: ./.github/actions/setup-pnpm-store-cache
