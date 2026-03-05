@@ -51,6 +51,7 @@ import {
 } from "./audit-fs.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import { keychainAvailable } from "./vault/keychain.js";
 import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
@@ -1036,6 +1037,62 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   return findings;
 }
 
+async function collectVaultFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const vaultCfg = cfg.vault;
+
+  if (vaultCfg?.enabled === false) {
+    findings.push({
+      checkId: "credentials.vault_disabled",
+      severity: "warn",
+      title: "Credential vault explicitly disabled",
+      detail:
+        "vault.enabled is set to false. Credentials are stored in plaintext on disk, " +
+        "making them vulnerable to theft via malware or unauthorized device access.",
+      remediation:
+        "Set vault.enabled to true (or remove the setting to use the default) so credentials are encrypted at rest.",
+    });
+    return findings;
+  }
+
+  const isKeychainAvailable = await keychainAvailable().catch(() => false);
+
+  if (
+    isKeychainAvailable &&
+    vaultCfg?.backend !== "keychain" &&
+    vaultCfg?.backend !== "auto" &&
+    vaultCfg?.backend !== undefined
+  ) {
+    findings.push({
+      checkId: "credentials.vault_available_but_unencrypted",
+      severity: "warn",
+      title: "OS keychain available but vault not using it",
+      detail:
+        "The OS keychain is available but the vault backend is not set to keychain or auto. " +
+        "Credentials may be stored with weaker passphrase-derived encryption instead of hardware-backed keychain storage.",
+      remediation:
+        'Set vault.backend to "auto" (default) or "keychain" to use the OS keychain for key storage.',
+    });
+  }
+
+  const passphraseEnv = env.OPENCLAW_VAULT_PASSPHRASE?.trim();
+  if (passphraseEnv) {
+    findings.push({
+      checkId: "credentials.vault_passphrase_env",
+      severity: "info",
+      title: "Vault using environment variable passphrase",
+      detail:
+        "OPENCLAW_VAULT_PASSPHRASE is set. This is less secure than OS keychain storage " +
+        "but acceptable for headless/CI environments.",
+    });
+  }
+
+  return findings;
+}
+
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -1138,6 +1195,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
   findings.push(...collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...(await collectVaultFindings(cfg, env)));
 
   if (context.includeFilesystem) {
     findings.push(

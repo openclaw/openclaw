@@ -7,6 +7,12 @@ import { info, success } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { Vault } from "../security/vault/types.js";
+import {
+  isVaultEncrypted,
+  vaultDecryptFileContent,
+  vaultEncryptForWrite,
+} from "../security/vault/vault.js";
 import type { WebChannel } from "../utils.js";
 import { jidToE164, resolveUserPath } from "../utils.js";
 
@@ -203,4 +209,41 @@ export async function pickWebChannel(
     );
   }
   return choice;
+}
+
+/**
+ * Vault-aware read of WhatsApp creds.json. Decrypts if encrypted.
+ */
+export async function readWebCredsDecrypted(
+  authDir: string,
+  vault?: Vault | null,
+): Promise<string | null> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const raw = readCredsJsonRaw(credsPath);
+  if (!raw) {
+    return null;
+  }
+  if (vault && isVaultEncrypted(raw)) {
+    return vaultDecryptFileContent(raw, vault);
+  }
+  return raw;
+}
+
+/**
+ * Vault-aware write of WhatsApp creds.json. Encrypts if vault is provided.
+ */
+export async function writeWebCredsEncrypted(
+  authDir: string,
+  content: string,
+  vault?: Vault | null,
+): Promise<void> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const toWrite = await vaultEncryptForWrite(content, vault ?? null);
+  fsSync.mkdirSync(path.dirname(credsPath), { recursive: true });
+  fsSync.writeFileSync(credsPath, toWrite, "utf-8");
+  try {
+    fsSync.chmodSync(credsPath, 0o600);
+  } catch {
+    // best-effort
+  }
 }

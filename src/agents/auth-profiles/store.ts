@@ -1,8 +1,15 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import type { Vault } from "../../security/vault/types.js";
+import {
+  isVaultEncrypted,
+  vaultDecryptFileContent,
+  vaultEncryptForWrite,
+} from "../../security/vault/vault.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
@@ -506,4 +513,61 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+}
+
+/**
+ * Vault-aware save: encrypt the auth profile store before writing.
+ * Falls back to plaintext save if vault is null.
+ */
+export async function saveAuthProfileStoreEncrypted(
+  store: AuthProfileStore,
+  agentDir?: string,
+  vault?: Vault | null,
+): Promise<void> {
+  const authPath = resolveAuthStorePath(agentDir);
+  const payload = {
+    version: AUTH_STORE_VERSION,
+    profiles: store.profiles,
+    order: store.order ?? undefined,
+    lastGood: store.lastGood ?? undefined,
+    usageStats: store.usageStats ?? undefined,
+  } satisfies AuthProfileStore;
+
+  if (!vault) {
+    saveJsonFile(authPath, payload);
+    return;
+  }
+
+  const json = JSON.stringify(payload, null, 2);
+  const encrypted = await vaultEncryptForWrite(json, vault);
+  const dir = path.dirname(authPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(authPath, `${encrypted}\n`, "utf8");
+  fs.chmodSync(authPath, 0o600);
+}
+
+/**
+ * Vault-aware load: decrypt the auth profile store if it's encrypted.
+ * Returns the store and whether it was encrypted on disk.
+ */
+export async function loadAuthProfileStoreDecrypted(
+  agentDir?: string,
+  vault?: Vault | null,
+): Promise<{ store: AuthProfileStore; wasEncrypted: boolean }> {
+  const authPath = resolveAuthStorePath(agentDir);
+  try {
+    const raw = fs.readFileSync(authPath, "utf8");
+    if (vault && isVaultEncrypted(raw)) {
+      const decrypted = await vaultDecryptFileContent(raw, vault);
+      const parsed = JSON.parse(decrypted) as unknown;
+      const asStore = coerceAuthStore(parsed);
+      if (asStore) {
+        return { store: asStore, wasEncrypted: true };
+      }
+    }
+  } catch {
+    // fall through to normal load
+  }
+
+  return { store: loadAuthProfileStore(), wasEncrypted: false };
 }
