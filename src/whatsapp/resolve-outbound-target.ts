@@ -6,7 +6,9 @@ export type WhatsAppOutboundTargetResolution =
   | { ok: false; error: Error };
 
 function whatsappAllowFromPolicyError(rawTarget: string): Error {
-  return new Error(`Target "${rawTarget}" is not listed in the configured WhatsApp allowFrom policy.`);
+  return new Error(
+    `Target "${rawTarget}" is not listed in the configured WhatsApp allowFrom policy.`,
+  );
 }
 
 export function resolveWhatsAppOutboundTarget(params: {
