@@ -626,7 +626,8 @@ export function createBrowserTool(opts?: {
           }
           // Merge top-level targetId into the request body so it reaches
           // the CDP endpoint even when the model passes it outside `request`.
-          const request = targetId ? { ...rawRequest, targetId } : rawRequest;
+          const actTargetId = readStringParam(params, "targetId");
+          const request = actTargetId ? { ...rawRequest, targetId: actTargetId } : rawRequest;
           return await executeActAction({
             request,
             baseUrl,
