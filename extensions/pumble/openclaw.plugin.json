@@ -1,0 +1,10 @@
+{
+  "id": "pumble",
+  "channels": ["pumble"],
+  "_configSchemaNote": "Plugin-level config is empty; all settings live under channels.pumble in the root config.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

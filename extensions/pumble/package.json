@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/pumble",
+  "version": "2026.2.27",
+  "description": "OpenClaw Pumble channel plugin",
+  "type": "module",
+  "dependencies": {
+    "localtunnel": "^2.0.0",
+    "pumble-sdk": "^1.0.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "pumble",
+      "label": "Pumble",
+      "selectionLabel": "Pumble (plugin)",
+      "docsPath": "/channels/pumble",
+      "docsLabel": "pumble",
+      "blurb": "Slack-style team messaging by CAKE.com; install the plugin to enable.",
+      "order": 66
+    },
+    "install": {
+      "npmSpec": "@openclaw/pumble",
+      "localPath": "extensions/pumble",
+      "defaultChoice": "npm"
+    }
+  }
+}
