@@ -65,8 +65,15 @@ function mergeRuntimeSnapshot(
     if (!currentChannel || !runtimeChannel) {
       continue;
     }
-    let nextChannel = mergeRuntimeFields(currentChannel, runtimeChannel) as ChannelHealthSummary;
     const accountRuntimeMap = runtimeAccounts[channelId];
+    const preferredRuntimeAccount =
+      accountRuntimeMap && currentChannel.accountId
+        ? accountRuntimeMap[currentChannel.accountId]
+        : undefined;
+    let nextChannel = mergeRuntimeFields(
+      currentChannel,
+      preferredRuntimeAccount ?? runtimeChannel,
+    ) as ChannelHealthSummary;
     if (accountRuntimeMap && Object.keys(accountRuntimeMap).length > 0) {
       const currentAccounts = currentChannel.accounts ?? {};
       let nextAccounts = currentAccounts;
@@ -74,7 +81,10 @@ function mergeRuntimeSnapshot(
         if (!runtimeAccount) {
           continue;
         }
-        const currentAccount = currentAccounts[accountId] ?? { accountId };
+        const currentAccount = currentAccounts[accountId];
+        if (!currentAccount) {
+          continue;
+        }
         const mergedAccount = mergeRuntimeFields(currentAccount, runtimeAccount);
         if (mergedAccount === currentAccount) {
           continue;
@@ -106,11 +116,11 @@ function mergeRuntimeSnapshot(
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
-    const runtime = context.getRuntimeSnapshot();
     const wantsProbe = params?.probe === true;
     const now = Date.now();
     const cached = getHealthCache();
     if (!wantsProbe && cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
+      const runtime = context.getRuntimeSnapshot();
       respond(true, mergeRuntimeSnapshot(cached, runtime), undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
@@ -119,6 +129,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe });
+      const runtime = context.getRuntimeSnapshot();
       respond(true, mergeRuntimeSnapshot(snap, runtime), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

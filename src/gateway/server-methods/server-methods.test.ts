@@ -914,6 +914,135 @@ describe("gateway healthHandlers.status scope handling", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
   });
+
+  it("reads runtime snapshot after refresh in the probe path", async () => {
+    const refreshed = createHealthSummary(false, false);
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { refreshHealthSnapshot, getRuntimeSnapshot } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+    expect(getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshHealthSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      getRuntimeSnapshot.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not inject sparse runtime-only accounts into health summaries", async () => {
+    const refreshed = createHealthSummary(false, false);
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: true,
+          connected: true,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: true,
+            connected: true,
+          },
+          secondary: {
+            accountId: "secondary",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accounts.default.running).toBe(true);
+    expect(payload.channels.whatsapp.accounts.secondary).toBeUndefined();
+  });
+
+  it("prefers runtime state for the selected channel account in multi-account setups", async () => {
+    const refreshed = createHealthSummary(false, false);
+    refreshed.channels.whatsapp.accountId = "secondary";
+    refreshed.channels.whatsapp.accounts = {
+      default: {
+        accountId: "default",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+      secondary: {
+        accountId: "secondary",
+        configured: true,
+        linked: true,
+        running: false,
+        connected: false,
+      },
+    };
+    const runtime = {
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          running: false,
+          connected: false,
+        },
+      },
+      channelAccounts: {
+        whatsapp: {
+          default: {
+            accountId: "default",
+            running: false,
+            connected: false,
+          },
+          secondary: {
+            accountId: "secondary",
+            running: true,
+            connected: true,
+          },
+        },
+      },
+    };
+
+    const { respond } = await runHealth({
+      cached: null,
+      refreshed,
+      runtime,
+      probe: true,
+    });
+    const payload = respond.mock.calls[0]?.[1] as ReturnType<typeof createHealthSummary>;
+
+    expect(payload.channels.whatsapp.accountId).toBe("secondary");
+    expect(payload.channels.whatsapp.running).toBe(true);
+    expect(payload.channels.whatsapp.connected).toBe(true);
+  });
 });
 
 describe("logs.tail", () => {
