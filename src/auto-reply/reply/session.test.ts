@@ -1640,6 +1640,50 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBeUndefined();
   });
 
+  it("ignores stale delivery context when persistDeliveryContext is false", async () => {
+    const storePath = await createStorePath("ignore-stale-delivery-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-stale-route",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "12345",
+        lastAccountId: "default",
+        deliveryContext: {
+          channel: "telegram",
+          to: "12345",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "from tui",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+      persistDeliveryContext: false,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toBeUndefined();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const persistedEntry = persisted[sessionKey];
+    expect(persistedEntry.lastChannel).toBe("webchat");
+    expect(persistedEntry.lastTo).toBeUndefined();
+    expect(persistedEntry.deliveryContext).toEqual({ channel: "webchat" });
+  });
+
   it("prefers webchat route over persisted external route for main session turns", async () => {
     const storePath = await createStorePath("prefer-webchat-main-route-");
     const sessionKey = "agent:main:main";

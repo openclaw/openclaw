@@ -152,6 +152,7 @@ export async function getReplyFromConfig(
     ctx: finalized,
     cfg,
     commandAuthorized,
+    persistDeliveryContext: opts?.persistDeliveryContext ?? true,
   });
   let {
     sessionCtx,

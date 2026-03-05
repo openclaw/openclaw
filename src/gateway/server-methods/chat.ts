@@ -894,6 +894,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const isFromWebchatClient =
         isWebchatClient(client?.connect?.client) || clientMode === GATEWAY_CLIENT_MODES.UI;
       const configuredMainKey = (cfg.session?.mainKey ?? "main").trim().toLowerCase();
+      const shouldPersistDeliveryContext = !isFromWebchatClient || shouldDeliverExternally;
       const isConfiguredMainSessionScope =
         normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
       // Channel-agnostic session scopes (main, direct:<peer>, etc.) can leak
@@ -981,6 +982,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         replyOptions: {
           runId: clientRunId,
           abortSignal: abortController.signal,
+          persistDeliveryContext: shouldPersistDeliveryContext,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;

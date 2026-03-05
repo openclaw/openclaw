@@ -66,8 +66,10 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  persistDeliveryContext?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const shouldPersistDeliveryContext = params.persistDeliveryContext !== false;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
@@ -248,22 +250,25 @@ export async function initSessionState(params: {
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
+    persistedLastChannel: shouldPersistDeliveryContext ? baseEntry?.lastChannel : undefined,
     sessionKey,
   });
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
     originatingToRaw: ctx.OriginatingTo,
     toRaw: ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
+    persistedLastTo: shouldPersistDeliveryContext ? baseEntry?.lastTo : undefined,
+    persistedLastChannel: shouldPersistDeliveryContext ? baseEntry?.lastChannel : undefined,
     sessionKey,
   });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const lastAccountIdRaw =
+    ctx.AccountId || (shouldPersistDeliveryContext ? baseEntry?.lastAccountId : undefined);
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const lastThreadIdRaw =
+    ctx.MessageThreadId ||
+    (isThread && shouldPersistDeliveryContext ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -303,7 +308,7 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
-    deliveryContext: deliveryFields.deliveryContext,
+    deliveryContext: shouldPersistDeliveryContext ? deliveryFields.deliveryContext : undefined,
     // Track originating channel for subagent announce routing.
     lastChannel,
     lastTo,

@@ -821,7 +821,11 @@ describe("runHeartbeatOnce", () => {
             To: testCase.peerId,
             Provider: "heartbeat",
           }),
-          expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+          expect.objectContaining({
+            isHeartbeat: true,
+            suppressToolErrorWarnings: false,
+            persistDeliveryContext: false,
+          }),
           cfg,
         );
       }

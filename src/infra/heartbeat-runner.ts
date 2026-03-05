@@ -751,8 +751,14 @@ export async function runHeartbeatOnce(opts: {
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          persistDeliveryContext: false,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : {
+          isHeartbeat: true,
+          suppressToolErrorWarnings,
+          bootstrapContextMode,
+          persistDeliveryContext: false,
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
