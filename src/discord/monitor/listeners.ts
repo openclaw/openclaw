@@ -350,7 +350,7 @@ type DiscordReactionIngressAuthorizationParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
-  channelConfig?: { allowed?: boolean } | null;
+  channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
 };
 
 async function authorizeDiscordReactionIngress(
