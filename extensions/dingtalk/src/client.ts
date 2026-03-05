@@ -23,7 +23,7 @@ const TOKEN_REFRESH_BUFFER_S = 300;
  * GET https://oapi.dingtalk.com/gettoken?appkey={clientId}&appsecret={clientSecret}
  */
 export async function getAccessToken(account: ResolvedDingtalkAccount): Promise<string> {
-  const cacheKey = account.accountId;
+  const cacheKey = `${account.accountId}:${account.clientId ?? ""}`;
   const cached = tokenCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.accessToken;
@@ -60,7 +60,7 @@ export async function getAccessToken(account: ResolvedDingtalkAccount): Promise<
  * Some v1.0 APIs (e.g. messageFiles/download) may require this token type.
  */
 export async function getOAuth2AccessToken(account: ResolvedDingtalkAccount): Promise<string> {
-  const cacheKey = account.accountId;
+  const cacheKey = `${account.accountId}:${account.clientId ?? ""}`;
   const cached = oauth2TokenCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.accessToken;
@@ -145,8 +145,14 @@ export async function callDingtalkOapi<T = unknown>(params: {
  */
 export function clearTokenCache(accountId?: string): void {
   if (accountId) {
-    tokenCache.delete(accountId);
+    for (const key of tokenCache.keys()) {
+      if (key.startsWith(`${accountId}:`)) tokenCache.delete(key);
+    }
+    for (const key of oauth2TokenCache.keys()) {
+      if (key.startsWith(`${accountId}:`)) oauth2TokenCache.delete(key);
+    }
   } else {
     tokenCache.clear();
+    oauth2TokenCache.clear();
   }
 }
