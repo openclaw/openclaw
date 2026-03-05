@@ -890,7 +890,7 @@ describe("QmdMemoryManager", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const { manager } = await createManager({ mode: "status" });
-      await manager.sync({ reason: "manual" });
+      await manager.sync({ reason: "manual", force: true });
 
       const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[] | undefined;
@@ -1945,14 +1945,31 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("reuses exported session markdown files when inputs are unchanged", async () => {
+  it("reuses exported session markdown files for active and reset sessions", async () => {
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const resetSessionFile = path.join(
+      sessionsDir,
+      "session-1.jsonl.reset.2026-02-14T19-44-05.473Z",
+    );
     const exportFile = path.join(stateDir, "agents", agentId, "qmd", "sessions", "session-1.md");
+    const resetExportFile = path.join(
+      stateDir,
+      "agents",
+      agentId,
+      "qmd",
+      "sessions",
+      "session-1.jsonl.reset.2026-02-14T19-44-05.473Z.md",
+    );
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      resetSessionFile,
+      '{"type":"message","message":{"role":"assistant","content":"reset snapshot"}}\n',
       "utf-8",
     );
 
@@ -1965,6 +1982,7 @@ describe("QmdMemoryManager", () => {
           ...currentMemory?.qmd,
           sessions: {
             enabled: true,
+            includeResetArchives: true,
           },
         },
       },
@@ -1973,13 +1991,38 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     try {
-      await manager.sync({ reason: "manual" });
+      await manager.sync({ reason: "manual", force: true });
       const firstExport = await fs.readFile(exportFile, "utf-8");
+      const firstResetExport = await fs.readFile(resetExportFile, "utf-8");
       expect(firstExport).toContain("hello");
+      expect(firstResetExport).toContain("reset snapshot");
+      const firstSessionMtimeMs = (await fs.stat(exportFile)).mtimeMs;
+      const firstResetMtimeMs = (await fs.stat(resetExportFile)).mtimeMs;
 
       await manager.sync({ reason: "manual" });
       const secondExport = await fs.readFile(exportFile, "utf-8");
+      const secondResetExport = await fs.readFile(resetExportFile, "utf-8");
       expect(secondExport).toBe(firstExport);
+      expect(secondResetExport).toBe(firstResetExport);
+      const secondSessionMtimeMs = (await fs.stat(exportFile)).mtimeMs;
+      const secondResetMtimeMs = (await fs.stat(resetExportFile)).mtimeMs;
+      expect(secondSessionMtimeMs).toBe(firstSessionMtimeMs);
+      expect(secondResetMtimeMs).toBe(firstResetMtimeMs);
+
+      await fs.writeFile(
+        resetSessionFile,
+        '{"type":"message","message":{"role":"assistant","content":"follow-up update"}}\n',
+        "utf-8",
+      );
+      await manager.sync({ reason: "manual", force: true });
+      const thirdExport = await fs.readFile(exportFile, "utf-8");
+      const thirdResetExport = await fs.readFile(resetExportFile, "utf-8");
+      expect(thirdExport).toBe(secondExport);
+      expect(thirdResetExport).toContain("follow-up update");
+      const thirdSessionMtimeMs = (await fs.stat(exportFile)).mtimeMs;
+      const thirdResetMtimeMs = (await fs.stat(resetExportFile)).mtimeMs;
+      expect(thirdSessionMtimeMs).toBe(secondSessionMtimeMs);
+      expect(thirdResetMtimeMs).toBeGreaterThan(secondResetMtimeMs);
     } finally {
       await manager.close();
     }

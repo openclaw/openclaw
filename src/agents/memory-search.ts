@@ -52,6 +52,7 @@ export type ResolvedMemorySearchConfig = {
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
+      includeResetArchives: boolean;
     };
   };
   query: {
@@ -88,6 +89,7 @@ const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
+const DEFAULT_SESSION_INCLUDE_RESET_ARCHIVES = false;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
 const DEFAULT_HYBRID_ENABLED = true;
@@ -233,6 +235,10 @@ function mergeConfig(
         overrides?.sync?.sessions?.deltaMessages ??
         defaults?.sync?.sessions?.deltaMessages ??
         DEFAULT_SESSION_DELTA_MESSAGES,
+      includeResetArchives:
+        overrides?.sync?.sessions?.includeResetArchives ??
+        defaults?.sync?.sessions?.includeResetArchives ??
+        DEFAULT_SESSION_INCLUDE_RESET_ARCHIVES,
     },
   };
   const query = {
@@ -319,6 +325,7 @@ function mergeConfig(
       sessions: {
         deltaBytes,
         deltaMessages,
+        includeResetArchives: Boolean(sync.sessions.includeResetArchives),
       },
     },
     query: {

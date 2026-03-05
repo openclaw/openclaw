@@ -49,6 +49,7 @@ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
   exportDir?: string;
   retentionDays?: number;
+  includeResetArchives: boolean;
 };
 
 export type ResolvedQmdMcporterConfig = {
@@ -214,6 +215,7 @@ function resolveSessionConfig(
     enabled,
     exportDir,
     retentionDays,
+    includeResetArchives: cfg?.includeResetArchives === true,
   };
 }
 

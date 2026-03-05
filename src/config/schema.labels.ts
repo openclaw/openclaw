@@ -324,6 +324,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
+  "agents.defaults.memorySearch.sync.sessions.includeResetArchives":
+    "Include Reset Session Archives",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
@@ -355,6 +357,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.sessions.enabled": "QMD Session Indexing",
   "memory.qmd.sessions.exportDir": "QMD Session Export Directory",
   "memory.qmd.sessions.retentionDays": "QMD Session Retention (days)",
+  "memory.qmd.sessions.includeResetArchives": "QMD Include Reset Session Archives",
   "memory.qmd.update.interval": "QMD Update Interval",
   "memory.qmd.update.debounceMs": "QMD Update Debounce (ms)",
   "memory.qmd.update.onBoot": "QMD Update on Startup",

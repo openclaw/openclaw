@@ -387,6 +387,8 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
+      /** Include reset transcript archives (`*.jsonl.reset.<timestamp>`) in session indexing. */
+      includeResetArchives?: boolean;
     };
   };
   /** Query behavior. */

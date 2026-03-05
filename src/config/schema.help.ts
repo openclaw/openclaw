@@ -838,6 +838,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Overrides where sanitized session exports are written before QMD indexing. Use this when default state storage is constrained or when exports must land on a managed volume.",
   "memory.qmd.sessions.retentionDays":
     "Defines how long exported session files are kept before automatic pruning, in days (default: unlimited). Set a finite value for storage hygiene or compliance retention policies.",
+  "memory.qmd.sessions.includeResetArchives":
+    "Includes reset transcript archives (`*.jsonl.reset.<timestamp>`) in QMD session indexing (default: false). Enable only when reset snapshots should remain searchable.",
   "memory.qmd.update.interval":
     "Sets how often QMD refreshes indexes from source content (duration string, default: 5m). Shorter intervals improve freshness but increase background CPU and I/O.",
   "memory.qmd.update.debounceMs":
@@ -878,6 +880,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Requires at least this many newly appended bytes before session transcript changes trigger reindex (default: 100000). Increase to reduce frequent small reindexes, or lower for faster transcript freshness.",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":
     "Requires at least this many appended transcript messages before reindex is triggered (default: 50). Lower this for near-real-time transcript recall, or raise it to reduce indexing churn.",
+  "agents.defaults.memorySearch.sync.sessions.includeResetArchives":
+    "Includes reset transcript archives (`*.jsonl.reset.<timestamp>`) in builtin session-memory indexing (default: false). Enable only when reset snapshots should remain searchable.",
   ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent/seam color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",

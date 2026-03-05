@@ -38,6 +38,7 @@ import { ensureMemoryIndexSchema } from "./memory-schema.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
+  isArchivedSessionTranscriptPath,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
@@ -441,6 +442,16 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
+      if (
+        isArchivedSessionTranscriptPath(sessionFile, {
+          includeResetArchives: this.settings.sync.sessions.includeResetArchives,
+        })
+      ) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;
@@ -725,8 +736,19 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listSessionFilesForAgent(this.agentId);
+    const files = await listSessionFilesForAgent(this.agentId, {
+      includeResetArchives: this.settings.sync.sessions.includeResetArchives,
+    });
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
+    const knownPaths = params.needsFullReindex
+      ? new Set<string>()
+      : new Set(
+          (
+            this.db.prepare(`SELECT path FROM files WHERE source = ?`).all("sessions") as Array<{
+              path: string;
+            }>
+          ).map((row) => row.path),
+        );
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
@@ -745,7 +767,9 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+      const sessionPath = sessionPathForFile(absPath);
+      const isKnownPath = knownPaths.has(sessionPath);
+      if (!indexAll && !this.sessionsDirtyFiles.has(absPath) && isKnownPath) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
