@@ -181,8 +181,12 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
+    const normalizedWorkspaceDir = await fs
+      .realpath(workspaceDir)
+      .catch(() => path.resolve(workspaceDir));
     expect(lock.lockPath).toBe(await expectedLockPath(workspaceDir, "dir"));
-    expect(lock.lockPath.startsWith(path.join(workspaceDir, path.sep))).toBe(true);
+    const relative = path.relative(normalizedWorkspaceDir, lock.lockPath);
+    expect(relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
 
     await lock.release();
   });
