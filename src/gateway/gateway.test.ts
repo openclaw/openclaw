@@ -120,10 +120,15 @@ describe("gateway e2e", () => {
 
         // Assert tool events were streamed over WS
         const toolPayloads = agentEvents
-          .filter((p): p is { stream?: unknown; data?: any } => !!p && typeof p === "object")
+          .filter(
+            (p): p is { stream?: unknown; data?: Record<string, unknown> } =>
+              !!p && typeof p === "object",
+          )
           .filter((p) => p.stream === "tool");
         expect(toolPayloads.length).toBeGreaterThan(0);
-        const phases = toolPayloads.map((p) => String(p.data?.phase ?? ""));
+        const phases = toolPayloads.map((p) =>
+          String((p.data as Record<string, string> | undefined)?.phase ?? ""),
+        );
         expect(phases).toContain("start");
         expect(phases).toContain("result");
 

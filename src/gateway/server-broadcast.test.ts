@@ -30,16 +30,17 @@ function createFakeClient(params?: {
 describe("server-broadcast", () => {
   it("does not sequence agent tool events", () => {
     const { client, sent } = createFakeClient({ caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] });
-    const clients = new Set([client as any]);
-    const { broadcast } = createGatewayBroadcaster({ clients: clients as any });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- lightweight test stub
+    const clients = new Set([client]) as Set<any>;
+    const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("chat", { hello: true });
     broadcast("agent", { stream: "tool", data: { phase: "start" } });
     broadcast("chat", { ok: true });
 
-    const chat1 = sent[0] as any;
-    const tool = sent[1] as any;
-    const chat2 = sent[2] as any;
+    const chat1 = sent[0] as Record<string, unknown>;
+    const tool = sent[1] as Record<string, unknown>;
+    const chat2 = sent[2] as Record<string, unknown>;
 
     expect(chat1.seq).toBe(1);
     expect(tool.seq).toBeUndefined();
@@ -50,8 +51,9 @@ describe("server-broadcast", () => {
     const a = createFakeClient({ caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] });
     const b = createFakeClient({ caps: [] });
 
-    const clients = new Set([a.client as any, b.client as any]);
-    const { broadcast } = createGatewayBroadcaster({ clients: clients as any });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- lightweight test stub
+    const clients = new Set([a.client, b.client]) as Set<any>;
+    const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("agent", { stream: "tool", data: { phase: "result" } });
 
