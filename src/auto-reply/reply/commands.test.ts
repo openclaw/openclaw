@@ -1057,6 +1057,19 @@ describe("handleCommands ACP-bound /new and /reset", () => {
     });
   });
 
+  it("continues with trailing prompt text after successful ACP-bound /new", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const params = buildDiscordBoundParams("/new continue with deployment");
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(true);
+    expect(result.reply).toBeUndefined();
+    const mutableCtx = params.ctx as Record<string, unknown>;
+    expect(mutableCtx.BodyStripped).toBe("continue with deployment");
+    expect(mutableCtx.CommandBody).toBe("continue with deployment");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+  });
+
   it("handles /reset failures without falling back to normal session reset flow", async () => {
     resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
     const result = await handleCommands(buildDiscordBoundParams("/reset"));
@@ -1067,6 +1080,17 @@ describe("handleCommands ACP-bound /new and /reset", () => {
     expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
       reason: "reset",
     });
+  });
+
+  it("does not emit reset hooks when ACP reset fails", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("keeps existing /new behavior for non-ACP sessions", async () => {

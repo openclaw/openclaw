@@ -330,7 +330,8 @@ export async function handleInlineActions(params: {
 
   const runCommands = (commandInput: typeof command) =>
     handleCommands({
-      ctx,
+      // Pass sessionCtx so command handlers can mutate stripped body for same-turn continuation.
+      ctx: sessionCtx,
       cfg,
       command: commandInput,
       agentId,

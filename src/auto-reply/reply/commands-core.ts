@@ -175,6 +175,10 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
+    const resetTail =
+      resetMatch != null
+        ? params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart()
+        : "";
     const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
     const boundAcpKey =
       boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
@@ -191,17 +195,29 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           `acp reset-in-place failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`,
         );
       }
-      await emitResetCommandHooks({
-        action: commandAction,
-        ctx: params.ctx,
-        cfg: params.cfg,
-        command: params.command,
-        sessionKey: params.sessionKey,
-        sessionEntry: params.sessionEntry,
-        previousSessionEntry: params.previousSessionEntry,
-        workspaceDir: params.workspaceDir,
-      });
       if (resetResult.ok) {
+        await emitResetCommandHooks({
+          action: commandAction,
+          ctx: params.ctx,
+          cfg: params.cfg,
+          command: params.command,
+          sessionKey: params.sessionKey,
+          sessionEntry: params.sessionEntry,
+          previousSessionEntry: params.previousSessionEntry,
+          workspaceDir: params.workspaceDir,
+        });
+        if (resetTail) {
+          const mutableCtx = params.ctx as Record<string, unknown>;
+          mutableCtx.Body = resetTail;
+          mutableCtx.RawBody = resetTail;
+          mutableCtx.CommandBody = resetTail;
+          mutableCtx.BodyForCommands = resetTail;
+          mutableCtx.BodyForAgent = resetTail;
+          mutableCtx.BodyStripped = resetTail;
+          return {
+            shouldContinue: true,
+          };
+        }
         return {
           shouldContinue: false,
           reply: { text: "✅ ACP session reset in place." },
