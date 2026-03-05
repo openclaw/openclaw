@@ -52,8 +52,7 @@ export function createDocumentInjectionWrapper(
 
     // Check if this is an Anthropic-compatible provider
     const provider = (model as { provider?: string }).provider ?? "";
-    const isAnthropic =
-      provider === "anthropic" || provider.startsWith("anthropic") || provider.includes("bedrock");
+    const isAnthropic = provider === "anthropic" || provider === "amazon-bedrock";
 
     if (!isAnthropic) {
       // For non-Anthropic providers (OpenAI, Gemini, etc.), inject document
@@ -139,8 +138,10 @@ export function createDocumentInjectionWrapper(
           const messages = p.messages as Array<{ role: string; content: unknown }> | undefined;
           if (messages) {
             // Find the last user message and append document blocks
+            let userMessageFound = false;
             for (let i = messages.length - 1; i >= 0; i--) {
               if (messages[i].role === "user") {
+                userMessageFound = true;
                 const content = messages[i].content;
                 const docBlocks: AnthropicDocBlock[] = documents.map((doc) => ({
                   type: "document",
@@ -161,6 +162,12 @@ export function createDocumentInjectionWrapper(
                 }
                 break;
               }
+            }
+            if (!userMessageFound) {
+              // No user message found — documents were not injected
+              console.warn?.(
+                "[document-injection] No user-role message found in payload; PDF documents were not injected",
+              );
             }
           }
         }
