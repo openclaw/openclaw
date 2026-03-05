@@ -47,6 +47,48 @@ function buildSignal(abortSignal?: AbortSignal): AbortSignal {
     : AbortSignal.timeout(FETCH_TIMEOUT_MS);
 }
 
+/**
+ * Shared SSE stream reader. Buffers chunks, splits on newlines, strips the
+ * `data: ` prefix, skips `[DONE]` sentinel lines, and invokes `onData` for
+ * each remaining data payload.  Checks `abortSignal` before every read so
+ * callers can cancel mid-stream.
+ *
+ * @returns `false` if the read was aborted, `true` when the stream is exhausted.
+ */
+async function readSSEStream(
+  body: ReadableStream<Uint8Array>,
+  abortSignal: AbortSignal | undefined,
+  onData: (data: string) => void,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    if (abortSignal?.aborted) {
+      reader.cancel().catch(() => {});
+      return false;
+    }
+
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data: ")) continue;
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") continue;
+      onData(data);
+    }
+  }
+
+  return true;
+}
+
 // ── Anthropic Messages API ──────────────────────────────────────────────────
 
 /**
@@ -154,43 +196,22 @@ async function anthropicStreamRequest(
         throw new Error("No response body for streaming request");
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
       let accumulated = "";
-      let buffer = "";
-
-      for (;;) {
-        if (abortSignal?.aborted) {
-          reader.cancel().catch(() => {});
-          return null;
-        }
-
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          const data = trimmed.slice(6);
-
-          try {
-            const parsed = JSON.parse(data) as {
-              type?: string;
-              delta?: { type?: string; text?: string };
-            };
-            // Anthropic streaming: content_block_delta events contain text
-            if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-              accumulated += parsed.delta.text;
-            }
-          } catch {
-            // Skip malformed SSE chunks
+      // Anthropic streaming: content_block_delta events carry the text delta
+      const ok = await readSSEStream(response.body, abortSignal, (data) => {
+        try {
+          const parsed = JSON.parse(data) as {
+            type?: string;
+            delta?: { type?: string; text?: string };
+          };
+          if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+            accumulated += parsed.delta.text;
           }
+        } catch {
+          // Skip malformed SSE chunks
         }
-      }
+      });
+      if (!ok) return null;
 
       return accumulated || null;
     } catch (err) {
@@ -268,43 +289,22 @@ async function parseStreaming(
     throw new Error("No response body for streaming request");
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let accumulated = "";
-  let buffer = "";
-
-  for (;;) {
-    if (abortSignal?.aborted) {
-      reader.cancel().catch(() => {});
-      return null;
-    }
-
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") continue;
-
-      try {
-        const parsed = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string } }>;
-        };
-        const chunk = parsed.choices?.[0]?.delta?.content;
-        if (chunk) {
-          accumulated += chunk;
-        }
-      } catch {
-        // Skip malformed SSE chunks
+  // OpenAI-compatible streaming: delta text lives in choices[0].delta.content
+  const ok = await readSSEStream(response.body, abortSignal, (data) => {
+    try {
+      const parsed = JSON.parse(data) as {
+        choices?: Array<{ delta?: { content?: string } }>;
+      };
+      const chunk = parsed.choices?.[0]?.delta?.content;
+      if (chunk) {
+        accumulated += chunk;
       }
+    } catch {
+      // Skip malformed SSE chunks
     }
-  }
+  });
+  if (!ok) return null;
 
   return accumulated || null;
 }
