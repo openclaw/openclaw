@@ -319,6 +319,7 @@ async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  capability: MediaUnderstandingCapability;
   agentDir?: string;
 }) {
   const auth = await resolveApiKeyForProvider({
@@ -327,6 +328,7 @@ async function resolveProviderExecutionAuth(params: {
     profileId: params.entry.profile,
     preferredProfile: params.entry.preferredProfile,
     agentDir: params.agentDir,
+    allowOpenAiWhisperSkillFallback: params.capability === "audio",
   });
   return {
     apiKeys: collectProviderApiKeysForExecution({
@@ -341,6 +343,7 @@ async function resolveProviderExecutionContext(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
 }) {
@@ -348,6 +351,7 @@ async function resolveProviderExecutionContext(params: {
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
+    capability: params.capability,
     agentDir: params.agentDir,
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
@@ -479,6 +483,7 @@ export async function runProviderEntry(params: {
       providerId,
       cfg,
       entry,
+      capability,
       config: params.config,
       agentDir: params.agentDir,
     });
@@ -537,6 +542,7 @@ export async function runProviderEntry(params: {
     providerId,
     cfg,
     entry,
+    capability,
     config: params.config,
     agentDir: params.agentDir,
   });

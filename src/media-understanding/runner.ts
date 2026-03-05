@@ -363,7 +363,12 @@ async function resolveKeyEntry(params: {
       return null;
     }
     try {
-      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
+      await resolveApiKeyForProvider({
+        provider: providerId,
+        cfg,
+        agentDir,
+        allowOpenAiWhisperSkillFallback: capability === "audio",
+      });
       return { type: "provider" as const, provider: providerId, model };
     } catch {
       return null;
@@ -558,6 +563,7 @@ async function resolveActiveModelEntry(params: {
       provider: providerId,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      allowOpenAiWhisperSkillFallback: params.capability === "audio",
     });
   } catch {
     return null;

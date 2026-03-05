@@ -165,6 +165,51 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("resolves openai key from legacy whisper skill config when explicitly allowed", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openai",
+        cfg: {
+          skills: {
+            entries: {
+              "openai-whisper-api": {
+                apiKey: "sk-whisper-legacy",
+              },
+            },
+          },
+        } as never,
+        store: { version: 1, profiles: {} },
+        allowOpenAiWhisperSkillFallback: true,
+      });
+      expect(resolved.apiKey).toBe("sk-whisper-legacy");
+      expect(resolved.source).toBe("skills.entries.openai-whisper-api.apiKey");
+    });
+  });
+
+  it("does not use legacy whisper skill key for openai unless explicitly allowed", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
+      let error: unknown = null;
+      try {
+        await resolveApiKeyForProvider({
+          provider: "openai",
+          cfg: {
+            skills: {
+              entries: {
+                "openai-whisper-api": {
+                  apiKey: "sk-whisper-legacy",
+                },
+              },
+            },
+          } as never,
+          store: { version: 1, profiles: {} },
+        });
+      } catch (err) {
+        error = err;
+      }
+      expect(String(error)).toContain('No API key found for provider "openai".');
+    });
+  });
+
   it("throws when ZAI API key is missing", async () => {
     await withEnvAsync(
       {

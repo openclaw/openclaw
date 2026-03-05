@@ -66,6 +66,59 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("uses legacy whisper skill api key fallback for auto audio when openai key is absent", async () => {
+    const previousOpenAi = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    let seenModel: string | undefined;
+    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+    try {
+      await withAudioFixture("openclaw-auto-audio-whisper-skill", async ({ ctx, media, cache }) => {
+        const providerRegistry = createOpenAiAudioProvider(async (req) => {
+          seenModel = req.model;
+          return { text: "legacy-skill-ok", model: req.model ?? "unknown" };
+        });
+        const cfg = {
+          skills: {
+            entries: {
+              "openai-whisper-api": {
+                apiKey: "sk-whisper-legacy",
+              },
+            },
+          },
+          tools: {
+            media: {
+              audio: {
+                enabled: true,
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+        runResult = await runCapability({
+          capability: "audio",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry,
+        });
+      });
+    } finally {
+      if (previousOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAi;
+      }
+    }
+
+    if (!runResult) {
+      throw new Error("Expected legacy whisper skill fallback result");
+    }
+    expect(runResult.decision.outcome).toBe("success");
+    expect(runResult.outputs[0]?.provider).toBe("openai");
+    expect(runResult.outputs[0]?.text).toBe("legacy-skill-ok");
+    expect(seenModel).toBe("gpt-4o-mini-transcribe");
+  });
+
   it("skips auto audio when disabled", async () => {
     const result = await runAutoAudioCase({
       transcribeAudio: async () => ({

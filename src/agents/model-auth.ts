@@ -132,6 +132,11 @@ export type ResolvedProviderAuth = {
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
 };
 
+function resolveLegacyOpenAiWhisperSkillApiKey(cfg?: OpenClawConfig): string | undefined {
+  const entries = cfg?.skills?.entries as Record<string, { apiKey?: unknown }> | undefined;
+  return normalizeOptionalSecretInput(entries?.["openai-whisper-api"]?.apiKey);
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -139,6 +144,8 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  /** Allow media audio runtime to fall back to legacy whisper skill key wiring. */
+  allowOpenAiWhisperSkillFallback?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -207,8 +214,19 @@ export async function resolveApiKeyForProvider(params: {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
-  const normalized = normalizeProviderId(provider);
-  if (authOverride === undefined && normalized === "amazon-bedrock") {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (params.allowOpenAiWhisperSkillFallback === true && normalizedProvider === "openai") {
+    const legacyWhisperApiKey = resolveLegacyOpenAiWhisperSkillApiKey(cfg);
+    if (legacyWhisperApiKey) {
+      return {
+        apiKey: legacyWhisperApiKey,
+        source: "skills.entries.openai-whisper-api.apiKey",
+        mode: "api-key",
+      };
+    }
+  }
+
+  if (authOverride === undefined && normalizedProvider === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
 
