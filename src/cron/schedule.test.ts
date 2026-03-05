@@ -5,6 +5,7 @@ import {
   computeNextRunAtMs,
   computePreviousRunAtMs,
   getCronScheduleCacheSizeForTest,
+  hasCronScheduleCacheEntryForTest,
 } from "./schedule.js";
 
 describe("cron schedule", () => {
@@ -142,6 +143,34 @@ describe("cron schedule", () => {
     expect(second).toBeDefined();
     expect(third).toBeDefined();
     expect(getCronScheduleCacheSizeForTest()).toBe(2);
+  });
+
+  it("keeps recently used cron evaluators hot when cache reaches max size", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const hotExpr = "0 8 * * *";
+    const hotTz = "UTC";
+
+    computeNextRunAtMs({ kind: "cron", expr: hotExpr, tz: hotTz }, nowMs);
+
+    let i = 0;
+    while (getCronScheduleCacheSizeForTest() < 512 && i < 2_000) {
+      const minute = i % 60;
+      const hour = Math.floor(i / 60) % 24;
+      const expr = `0 ${minute} ${hour} * * *`;
+      computeNextRunAtMs({ kind: "cron", expr, tz: "UTC" }, nowMs + i * 1_000);
+      i += 1;
+    }
+
+    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+    expect(hasCronScheduleCacheEntryForTest(hotExpr, hotTz)).toBe(true);
+
+    // Touch the hot key so LRU promotion keeps it from becoming the eviction candidate.
+    computeNextRunAtMs({ kind: "cron", expr: hotExpr, tz: hotTz }, nowMs + 10_000);
+
+    computeNextRunAtMs({ kind: "cron", expr: "1 59 23 * * *", tz: "UTC" }, nowMs + 20_000);
+
+    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+    expect(hasCronScheduleCacheEntryForTest(hotExpr, hotTz)).toBe(true);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {
