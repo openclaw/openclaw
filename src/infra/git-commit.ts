@@ -11,10 +11,44 @@ const formatCommit = (value?: string | null) => {
   if (!trimmed) {
     return null;
   }
-  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+  const match = trimmed.match(/[0-9a-fA-F]{7,40}/);
+  if (!match) {
+    return null;
+  }
+  return match[0].slice(0, 7).toLowerCase();
 };
 
 let cachedCommit: string | null | undefined;
+
+const safeReadFilePrefix = (filePath: string, limit = 256) => {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(limit);
+    const bytesRead = fs.readSync(fd, buf, 0, limit, 0);
+    return buf.subarray(0, bytesRead).toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+const resolveRefPath = (headPath: string, ref: string) => {
+  if (!ref.startsWith("refs/")) {
+    return null;
+  }
+  if (path.isAbsolute(ref)) {
+    return null;
+  }
+  if (ref.split(/[/]/).includes("..")) {
+    return null;
+  }
+  const gitDir = path.dirname(headPath);
+  const resolved = path.resolve(gitDir, ref);
+  const rel = path.relative(gitDir, resolved);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+    return null;
+  }
+  return resolved;
+};
 
 const readCommitFromPackageJson = () => {
   try {
@@ -79,15 +113,19 @@ export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessE
       cachedCommit = null;
       return cachedCommit;
     }
-    const head = fs.readFileSync(headPath, "utf-8").trim();
+    const head = safeReadFilePrefix(headPath).trim();
     if (!head) {
       cachedCommit = null;
       return cachedCommit;
     }
     if (head.startsWith("ref:")) {
       const ref = head.replace(/^ref:\s*/i, "").trim();
-      const refPath = path.resolve(path.dirname(headPath), ref);
-      const refHash = fs.readFileSync(refPath, "utf-8").trim();
+      const refPath = resolveRefPath(headPath, ref);
+      if (!refPath) {
+        cachedCommit = null;
+        return cachedCommit;
+      }
+      const refHash = safeReadFilePrefix(refPath).trim();
       cachedCommit = formatCommit(refHash);
       return cachedCommit;
     }
