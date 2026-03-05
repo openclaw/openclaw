@@ -389,20 +389,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           );
         }
       } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
-        try {
-          const statusChannelId = draftStream?.channelId();
-          const statusMessageId = draftStream?.messageId();
-          if (statusChannelId && statusMessageId) {
-            await ctx.app.client.chat.update({
-              token: ctx.botToken,
-              channel: statusChannelId,
-              ts: statusMessageId,
-              text: "Status: complete. Final answer posted below.",
-            });
-          }
-        } catch (err) {
-          logVerbose(`slack: status_final completion update failed (${String(err)})`);
-        }
+        // status_final preview is a temporary status line; remove it once the
+        // final reply is ready instead of leaving an extra completion banner.
+        await draftStream?.clear();
+        hasStreamedMessage = false;
+        statusUpdateCount = 0;
+        lastReasoningProgressText = "";
       } else if (mediaCount > 0) {
         await draftStream?.clear();
         hasStreamedMessage = false;
