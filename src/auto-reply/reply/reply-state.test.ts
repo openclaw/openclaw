@@ -202,6 +202,7 @@ describe("memory flush settings", () => {
     expect(settings?.enabled).toBe(true);
     expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
+    expect(settings?.prompt).toContain("Never create timestamped variant files");
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
   });
 
