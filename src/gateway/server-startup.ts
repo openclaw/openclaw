@@ -42,7 +42,10 @@ import { scheduleTaskContinuation } from "../infra/task-continuation.js";
 import { startTaskSelfDriving } from "../infra/task-self-driving.js";
 import { startTaskStepContinuation } from "../infra/task-step-continuation.js";
 import { startTaskTracker } from "../infra/task-tracker.js";
-import { cleanupStaleTasks } from "../plugins/core-hooks/task-enforcer.js";
+import {
+  cleanupStaleTasks,
+  registerTaskEnforcerHook,
+} from "../plugins/core-hooks/task-enforcer.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -110,6 +113,9 @@ export async function startGatewaySidecars(params: {
   } catch (err) {
     params.log.warn(`stale task cleanup failed on startup: ${String(err)}`);
   }
+
+  // Register the task enforcer hook so agents must call task_start() before work tools.
+  registerTaskEnforcerHook(params.pluginRegistry);
 
   // Start A2A conversation index (O(1) conversationId lookup, replaces NDJSON scan).
   try {
