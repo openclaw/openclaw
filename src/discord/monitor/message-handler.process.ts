@@ -1,4 +1,4 @@
-import { ChannelType } from "@buape/carbon";
+import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
@@ -161,15 +161,17 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
+  // Discord outbound helpers expect Carbon's request client shape explicitly.
+  const discordRest = client.rest as unknown as RequestClient;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
-        rest: client.rest as never,
+        rest: discordRest,
       });
     },
     removeReaction: async (emoji) => {
       await removeReactionDiscord(messageChannelId, message.id, emoji, {
-        rest: client.rest as never,
+        rest: discordRest,
       });
     },
   };
