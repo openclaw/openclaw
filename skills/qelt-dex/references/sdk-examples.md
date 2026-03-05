@@ -77,9 +77,12 @@ const token0 = new ethers.Contract(currency0, ERC20_ABI, signer);
 await token0.approve(CONTRACTS.permit2, ethers.MaxUint256);
 
 // 2. Approve PositionManager via Permit2
+// Permit2's approve() takes uint160 amount — use uint160 max, NOT ethers.MaxUint256 (uint256).
+// Passing MaxUint256 into a uint160 argument is out-of-range and causes the call to revert.
+const MaxUint160 = (2n ** 160n) - 1n;
 const permit2 = new ethers.Contract(CONTRACTS.permit2, PERMIT2_ABI, signer);
 const deadline = Math.floor(Date.now() / 1000) + 3600;
-await permit2.approve(currency0, CONTRACTS.positionManager, ethers.MaxUint256, deadline);
+await permit2.approve(currency0, CONTRACTS.positionManager, MaxUint160, deadline);
 
 // 3. Mint position
 const POSITION_MANAGER_ABI = [

@@ -71,7 +71,7 @@ Both formats accepted:
   "contractName": "MyContract",
   "optimizationUsed": true,
   "runs": 200,
-  "evmVersion": "cancun",
+  "evmVersion": "shanghai",
   "constructorArguments": "0x000...",
   "libraries": {
     "SafeMath": "0xABC..."
