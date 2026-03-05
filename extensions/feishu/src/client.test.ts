@@ -6,9 +6,19 @@ const wsClientCtorMock = vi.hoisted(() =>
     return { connected: true };
   }),
 );
+const clientCtorMock = vi.hoisted(() =>
+  vi.fn(function clientCtor() {
+    return { connected: true };
+  }),
+);
 const httpsProxyAgentCtorMock = vi.hoisted(() =>
   vi.fn(function httpsProxyAgentCtor(proxyUrl: string) {
     return { proxyUrl };
+  }),
+);
+const axiosCreateMock = vi.hoisted(() =>
+  vi.fn(function axiosCreate() {
+    return { axios: true };
   }),
 );
 
@@ -16,7 +26,7 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   AppType: { SelfBuild: "self" },
   Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
   LoggerLevel: { info: "info" },
-  Client: vi.fn(),
+  Client: clientCtorMock,
   WSClient: wsClientCtorMock,
   EventDispatcher: vi.fn(),
 }));
@@ -25,7 +35,13 @@ vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent: httpsProxyAgentCtorMock,
 }));
 
-import { createFeishuWSClient } from "./client.js";
+vi.mock("axios", () => ({
+  default: {
+    create: axiosCreateMock,
+  },
+}));
+
+import { createFeishuClient, createFeishuWSClient, clearClientCache } from "./client.js";
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
@@ -45,6 +61,11 @@ const baseAccount: ResolvedFeishuAccount = {
 
 function firstWsClientOptions(): { agent?: unknown } {
   const calls = wsClientCtorMock.mock.calls as unknown as Array<[options: { agent?: unknown }]>;
+  return calls[0]?.[0] ?? {};
+}
+
+function firstClientOptions(): { httpInstance?: unknown } {
+  const calls = clientCtorMock.mock.calls as unknown as Array<[options: { httpInstance?: unknown }]>;
   return calls[0]?.[0] ?? {};
 }
 
@@ -132,5 +153,62 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-http:8999");
     const options = firstWsClientOptions();
     expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
+  });
+});
+
+describe("createFeishuClient proxy handling", () => {
+  beforeEach(() => {
+    // Clear client cache before each test
+    clearClientCache();
+  });
+
+  it("does not create axios instance when proxy env is absent", () => {
+    createFeishuClient({
+      accountId: "test-no-proxy",
+      appId: "app_123",
+      appSecret: "secret_123",
+      domain: "feishu" as const,
+    });
+
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
+    expect(axiosCreateMock).not.toHaveBeenCalled();
+    const options = firstClientOptions();
+    expect(options.httpInstance).toBeUndefined();
+  });
+
+  it("creates axios instance with proxy agent when proxy env is set", () => {
+    process.env.https_proxy = "http://proxy.example:8080";
+
+    createFeishuClient({
+      accountId: "test-with-proxy",
+      appId: "app_123",
+      appSecret: "secret_123",
+      domain: "feishu" as const,
+    });
+
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://proxy.example:8080");
+    expect(axiosCreateMock).toHaveBeenCalledTimes(1);
+    const options = firstClientOptions();
+    expect(options.httpInstance).toEqual({ axios: true });
+  });
+
+  it("prefers HTTPS proxy vars over HTTP proxy vars", () => {
+    process.env.https_proxy = "http://lower-https:8001";
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    process.env.http_proxy = "http://lower-http:8003";
+    process.env.HTTP_PROXY = "http://upper-http:8004";
+
+    createFeishuClient({
+      accountId: "test-proxy-priority",
+      appId: "app_123",
+      appSecret: "secret_123",
+      domain: "feishu" as const,
+    });
+
+    const expectedProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    expect(expectedProxy).toBeTruthy();
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedProxy);
   });
 });
