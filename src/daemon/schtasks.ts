@@ -325,7 +325,7 @@ async function patchTaskScriptVersion(env: GatewayServiceEnv): Promise<void> {
     return;
   }
   const updated = content.replace(
-    /^(set OPENCLAW_SERVICE_VERSION=).+$/im,
+    /^(set OPENCLAW_SERVICE_VERSION=)[^\r\n]+$/im,
     `$1${VERSION}`,
   );
   if (updated !== content) {
