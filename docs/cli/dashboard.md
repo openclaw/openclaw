@@ -14,3 +14,8 @@ Open the Control UI using your current auth.
 openclaw dashboard
 openclaw dashboard --no-open
 ```
+
+Notes:
+
+- `dashboard` resolves configured `gateway.auth.token` SecretRefs when possible.
+- If `gateway.auth.token` is SecretRef-managed but unresolved in this command path, the command prints a non-tokenized URL and explicit remediation guidance instead of embedding an invalid token placeholder.
