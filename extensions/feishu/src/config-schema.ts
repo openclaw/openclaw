@@ -4,7 +4,20 @@ export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
+const GroupPolicySchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const normalized = value.trim().toLowerCase();
+    // Backward compatibility: legacy configs used "allowall" for open group policy.
+    if (normalized === "allowall") {
+      return "open";
+    }
+    return normalized;
+  },
+  z.enum(["open", "allowlist", "disabled"]),
+);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   z.string().url().startsWith("https://"),

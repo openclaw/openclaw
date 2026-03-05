@@ -24,6 +24,20 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy=allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+      accounts: {
+        main: {
+          groupPolicy: "ALLOWALL",
+        },
+      },
+    });
+
+    expect(result.groupPolicy).toBe("open");
+    expect(result.accounts?.main?.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
