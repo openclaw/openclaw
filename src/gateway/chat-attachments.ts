@@ -135,8 +135,12 @@ export async function parseMessageWithAttachments(
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
     const effectiveMime = sniffedMime ?? providedMime ?? mime;
 
-    // PDF documents
-    if (isPdfMime(sniffedMime) || isPdfMime(providedMime)) {
+    // PDF documents — trust sniffed MIME over client-provided MIME.
+    // If sniffing identified a type, use it exclusively; only fall back to
+    // providedMime when sniffing produced no result. This prevents a mislabeled
+    // file (e.g. a PNG renamed to .pdf) from being forced into a document block
+    // with the wrong media_type, which would cause provider-side validation errors.
+    if (isPdfMime(sniffedMime) || (!sniffedMime && isPdfMime(providedMime))) {
       documents.push({
         type: "document",
         data: b64,

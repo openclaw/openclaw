@@ -61,14 +61,40 @@ export function createDocumentInjectionWrapper(
       return underlying(model, context, options);
     }
 
-    // Inject the Anthropic PDF beta header
+    // Inject the Anthropic PDF beta header, preserving existing values.
+    // pi-ai's createClient injects its own defaultHeaders["anthropic-beta"] which
+    // can include critical betas like oauth-2025-04-20 (required for OAuth tokens)
+    // and fine-grained-tool-streaming-2025-05-14. Since pi-ai uses Object.assign
+    // (last-wins), setting options.headers["anthropic-beta"] overwrites those
+    // defaults. We must re-include them here, identical to the approach in
+    // createAnthropicBetaHeadersWrapper (extra-params.ts).
+    const PI_AI_DEFAULT_BETAS = [
+      "fine-grained-tool-streaming-2025-05-14",
+      "interleaved-thinking-2025-05-14",
+    ];
+    const PI_AI_OAUTH_BETAS = ["claude-code-20250219", "oauth-2025-04-20", ...PI_AI_DEFAULT_BETAS];
+    const isOAuth = typeof options?.apiKey === "string" && options.apiKey.includes("sk-ant-oat");
+    const piAiBetas = isOAuth ? PI_AI_OAUTH_BETAS : PI_AI_DEFAULT_BETAS;
+
     const existingHeaders =
       options && typeof options === "object" && "headers" in options
         ? (options as Record<string, unknown>).headers
         : undefined;
+    const headerMap =
+      existingHeaders && typeof existingHeaders === "object"
+        ? (existingHeaders as Record<string, string>)
+        : {};
+    const existingBeta = headerMap["anthropic-beta"] ?? "";
+    const existingBetas = existingBeta
+      ? existingBeta
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    const mergedBetas = [...new Set([...existingBetas, ...piAiBetas, "pdfs-2024-09-25"])];
     const pdfBetaHeaders = {
-      ...(existingHeaders && typeof existingHeaders === "object" ? existingHeaders : {}),
-      "anthropic-beta": "pdfs-2024-09-25",
+      ...headerMap,
+      "anthropic-beta": mergedBetas.join(","),
     };
 
     const originalOnPayload = options?.onPayload;
@@ -84,16 +110,21 @@ export function createDocumentInjectionWrapper(
             for (let i = messages.length - 1; i >= 0; i--) {
               if (messages[i].role === "user") {
                 const content = messages[i].content;
-                if (Array.isArray(content)) {
-                  const docBlocks: AnthropicDocBlock[] = documents.map((doc) => ({
-                    type: "document",
-                    source: {
-                      type: "base64",
-                      media_type: "application/pdf",
-                      data: doc.data,
-                    },
-                  }));
-                  // Prepend documents before text/image content
+                const docBlocks: AnthropicDocBlock[] = documents.map((doc) => ({
+                  type: "document",
+                  source: {
+                    type: "base64",
+                    media_type: "application/pdf",
+                    data: doc.data,
+                  },
+                }));
+                if (typeof content === "string") {
+                  // pi-ai may serialize a simple text prompt as a plain string.
+                  // Convert it to a text block and prepend document blocks so the
+                  // documents are never silently dropped.
+                  messages[i].content = [...docBlocks, { type: "text", text: content }];
+                } else if (Array.isArray(content)) {
+                  // Prepend documents before existing text/image content blocks.
                   messages[i].content = [...docBlocks, ...content];
                 }
                 break;
