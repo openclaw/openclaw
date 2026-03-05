@@ -589,6 +589,31 @@ describe("installPluginFromArchive", () => {
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
+  it("rejects extensions that escape plugin directory", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "escape-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["../outside.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "..", "outside.js"), "export {};", "utf-8");
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("openclaw.extensions entry escapes plugin directory");
+  });
+
   it("continues install when scanner throws", async () => {
     const scanSpy = vi
       .spyOn(skillScanner, "scanDirectoryWithSummary")
