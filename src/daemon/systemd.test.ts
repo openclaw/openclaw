@@ -51,6 +51,15 @@ describe("systemd availability", () => {
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
 
+  it("returns false when systemctl binary is missing (ENOENT)", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("spawn systemctl ENOENT") as Error & { code?: string };
+      err.code = "ENOENT";
+      cb(err, "", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+  });
+
   it("falls back to machine user scope when --user bus is unavailable", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -338,8 +347,8 @@ describe("systemd service control", () => {
   });
 
   it("throws when systemd bus is unavailable during service stop", async () => {
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      // assertSystemdAvailable: bus unreachable
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      // assertSystemdAvailable: bus unreachable (both direct and machine-scope fallback)
       const err = new Error("Failed to connect to bus") as Error & { code?: number };
       err.code = 1;
       cb(err, "", "Failed to connect to bus");

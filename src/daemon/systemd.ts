@@ -275,6 +275,10 @@ export async function isSystemdUserServiceAvailable(
   if (detail.includes("not supported")) {
     return false;
   }
+  // Catch missing/blocked systemctl binary (e.g. "spawn systemctl ENOENT").
+  if (isSystemctlMissing(detail)) {
+    return false;
+  }
   // Non-zero exit without any unavailability indicator means systemd is
   // present but has degraded/failed units — still available for our purposes.
   return true;
