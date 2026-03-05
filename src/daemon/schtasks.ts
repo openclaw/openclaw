@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { VERSION } from "../version.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -207,6 +208,89 @@ function buildTaskScript({
   return `${lines.join("\r\n")}\r\n`;
 }
 
+function upsertTaskScriptServiceVersion(script: string, serviceVersion: string): string {
+  const version = serviceVersion.trim();
+  if (!version) {
+    return script;
+  }
+
+  const newline = script.includes("\r\n") ? "\r\n" : "\n";
+  const lines = script.split(/\r?\n/);
+  const targetKey = "OPENCLAW_SERVICE_VERSION";
+  let didReplace = false;
+  let foundKey = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index] ?? "";
+    const trimmed = rawLine.trim();
+    if (!trimmed.toLowerCase().startsWith("set ")) {
+      continue;
+    }
+    const parsed = parseCmdSetAssignment(trimmed.slice(4));
+    if (!parsed || parsed.key.toUpperCase() !== targetKey) {
+      continue;
+    }
+
+    foundKey = true;
+    const rendered = renderCmdSetAssignment(targetKey, version);
+    if (rawLine !== rendered) {
+      lines[index] = rendered;
+      didReplace = true;
+    }
+    break;
+  }
+
+  if (!foundKey) {
+    const rendered = renderCmdSetAssignment(targetKey, version);
+    const insertAt = lines.findIndex((rawLine) => {
+      const trimmed = rawLine.trim();
+      if (!trimmed) {
+        return false;
+      }
+      const lower = trimmed.toLowerCase();
+      if (trimmed.startsWith("@echo")) {
+        return false;
+      }
+      if (lower.startsWith("rem ")) {
+        return false;
+      }
+      if (lower.startsWith("cd /d ")) {
+        return false;
+      }
+      if (lower.startsWith("set ")) {
+        return false;
+      }
+      return true;
+    });
+    lines.splice(insertAt === -1 ? lines.length : insertAt, 0, rendered);
+    didReplace = true;
+  }
+
+  if (!didReplace) {
+    return script;
+  }
+  return lines.join(newline);
+}
+
+async function syncTaskScriptServiceVersion(env: GatewayServiceEnv): Promise<void> {
+  const version = VERSION.trim();
+  if (!version) {
+    return;
+  }
+  const scriptPath = resolveTaskScriptPath(env);
+  let script: string;
+  try {
+    script = await fs.readFile(scriptPath, "utf8");
+  } catch {
+    return;
+  }
+  const updated = upsertTaskScriptServiceVersion(script, version);
+  if (updated === script) {
+    return;
+  }
+  await fs.writeFile(scriptPath, updated, "utf8");
+}
+
 async function assertSchtasksAvailable() {
   const res = await execSchtasks(["/Query"]);
   if (res.code === 0) {
@@ -315,7 +399,9 @@ export async function restartScheduledTask({
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  await syncTaskScriptServiceVersion(resolvedEnv);
+  const taskName = resolveTaskName(resolvedEnv);
   await execSchtasks(["/End", "/TN", taskName]);
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
