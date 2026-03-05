@@ -1556,9 +1556,19 @@ export async function runEmbeddedAttempt(
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
 
-      // Subscribe for LLM hook events (iteration tracking + after_llm_call)
+      // Subscribe for LLM hook events (iteration tracking + after_llm_call).
+      //
+      // IMPORTANT: after_llm_call gate is "best-effort" for async hooks.
+      // The gate is populated in a .then() microtask after runAfterLlmCall
+      // resolves. If the hook does async work (e.g. network policy lookup),
+      // tool dispatch may begin before the gate is set. For sync/fast hooks,
+      // the microtask resolves before tool execution in practice.
+      // This is an inherent limitation of the subscription-based architecture;
+      // fully synchronous gating would require restructuring pi-agent-core's
+      // event loop to await hooks between message_end and tool dispatch.
       const hookIterationRefEarly = { current: 0 };
       let hookTurnIteration = 0;
+      let hookRunDisposed = false;
       const hookEventUnsub =
         hookRunner?.hasHooks("after_llm_call") || hookRunner?.hasHooks("before_llm_call")
           ? activeSession.subscribe((event) => {
@@ -1611,7 +1621,7 @@ export async function runEmbeddedAttempt(
                     hookCtx,
                   )
                   .then((result) => {
-                    if (!params.sessionId) {
+                    if (!params.sessionId || hookRunDisposed) {
                       return;
                     }
                     // If hook returned no filter/block, clear any stale gate from
@@ -2099,6 +2109,9 @@ export async function runEmbeddedAttempt(
           );
         }
         try {
+          // Mark run as disposed BEFORE clearing gate — prevents late-resolving
+          // after_llm_call hooks from repopulating the gate after cleanup.
+          hookRunDisposed = true;
           hookEventUnsub?.();
           // Clean up after_llm_call gate to prevent stale decisions leaking
           if (params.sessionId) {

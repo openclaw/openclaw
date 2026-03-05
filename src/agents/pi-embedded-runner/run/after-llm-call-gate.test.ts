@@ -56,14 +56,16 @@ describe("after-llm-call-gate", () => {
     expect(result.reason).toContain("filtered");
   });
 
-  it("does not filter when toolCallId is not provided", () => {
+  it("blocks when toolCallId is missing but allowedToolCallIds is set", () => {
     setAfterLlmCallGate(SESSION, {
       blocked: false,
       allowedToolCallIds: new Set(["tc-1"]),
       iteration: 1,
     });
-    // Without a toolCallId, filtering can't match — should not block
-    expect(checkAfterLlmCallGate(SESSION).blocked).toBe(false);
+    // Without a toolCallId, we can't verify against the allowlist — must block
+    const result = checkAfterLlmCallGate(SESSION);
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain("no ID");
   });
 
   it("clearAfterLlmCallGate removes the gate", () => {

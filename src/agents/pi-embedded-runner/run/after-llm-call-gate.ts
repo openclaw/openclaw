@@ -57,11 +57,13 @@ export function checkAfterLlmCallGate(
     return { blocked: true, reason: gate.blockReason ?? "Blocked by after_llm_call hook" };
   }
 
-  if (gate.allowedToolCallIds && toolCallId) {
-    if (!gate.allowedToolCallIds.has(toolCallId)) {
+  if (gate.allowedToolCallIds) {
+    if (!toolCallId || !gate.allowedToolCallIds.has(toolCallId)) {
       return {
         blocked: true,
-        reason: `Tool call ${toolCallId} filtered by after_llm_call hook`,
+        reason: toolCallId
+          ? `Tool call ${toolCallId} filtered by after_llm_call hook`
+          : "Tool call has no ID and cannot be verified against after_llm_call allowlist",
       };
     }
   }

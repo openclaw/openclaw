@@ -53,9 +53,15 @@ export function wrapStreamFnWithHooks(
         }
 
         // Apply modifications — only create new context if something changed
-        if (result?.messages || result?.systemPrompt !== undefined || result?.tools) {
+        // Use !== undefined consistently: any explicit value (including [] or "")
+        // means the hook wants that exact value. Return undefined for "no change".
+        if (
+          result?.messages !== undefined ||
+          result?.systemPrompt !== undefined ||
+          result?.tools !== undefined
+        ) {
           let filteredTools = context.tools;
-          if (result.tools) {
+          if (result.tools !== undefined) {
             const allowedNames = new Set(result.tools.map((t) => t.name));
             filteredTools = (context.tools ?? []).filter((t) => allowedNames.has(t.name));
           }

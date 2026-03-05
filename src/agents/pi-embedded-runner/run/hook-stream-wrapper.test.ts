@@ -213,4 +213,24 @@ describe("wrapStreamFnWithHooks", () => {
     expect(streamFn).toHaveBeenCalledWith("gpt-4", context, {});
     expect(result).toBe(mockStream);
   });
+
+  it("treats messages:[] as explicit override (clears history)", async () => {
+    const hookRunner = makeMockHookRunner({
+      runBeforeLlmCall: vi.fn().mockResolvedValue({ messages: [] }),
+    });
+
+    const streamFn = vi.fn().mockResolvedValue(mockStream);
+    const wrapped = wrapStreamFnWithHooks(streamFn, {
+      hookRunner,
+      agentCtx,
+      iterationRef: { current: 1 },
+      modelId: "gpt-4",
+    });
+
+    await wrapped("gpt-4" as unknown as Model<Api>, makeBaseContext() as unknown as Context, {});
+
+    // messages: [] is an explicit "clear history" — not "no change"
+    const passedContext = streamFn.mock.calls[0][1];
+    expect(passedContext.messages).toEqual([]);
+  });
 });
