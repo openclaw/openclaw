@@ -98,7 +98,9 @@ export function createDingtalkReplyDispatcher(params: {
         const text = payload.text ?? "";
         if (!text.trim()) return;
 
-        // 流式输出中的 block/final 处理 / Handle block/final in streaming
+        // Drop block chunks when card streaming is off to avoid duplicate messages
+        if (info?.kind === "block" && !streamingEnabled) return;
+
         if (streamingEnabled && info?.kind === "block") {
           startStreaming();
           queueStreamingUpdate(text, true);
@@ -150,6 +152,7 @@ export function createDingtalkReplyDispatcher(params: {
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) return;
+            startStreaming();
             queueStreamingUpdate(payload.text);
           }
         : undefined,
