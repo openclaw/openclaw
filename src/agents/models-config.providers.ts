@@ -955,7 +955,15 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("kimi-coding") ??
     resolveApiKeyFromProfiles({ provider: "kimi-coding", store: authStore });
   if (kimiCodingKey) {
-    providers["kimi-coding"] = { ...buildKimiCodingProvider(), apiKey: kimiCodingKey };
+    // Bug fix for #36353: Respect user-configured baseUrl from explicit providers.
+    // When users configure a custom baseUrl (e.g., "https://api.kimi.com/coding"),
+    // the implicit provider should use it instead of the hardcoded default.
+    const explicitKimi = params.explicitProviders?.["kimi-coding"];
+    providers["kimi-coding"] = {
+      ...buildKimiCodingProvider(),
+      apiKey: kimiCodingKey,
+      ...(explicitKimi?.baseUrl && { baseUrl: explicitKimi.baseUrl }),
+    };
   }
 
   const syntheticKey =
