@@ -27,7 +27,10 @@ export function createSessionsYieldTool(opts?: { sessionId?: string }): AnyAgent
       ].join("\n\n");
       const steered = queueEmbeddedPiMessage(sessionId, steerText);
       if (!steered) {
-        return jsonResult({ status: "error", error: "Session not active or not streaming" });
+        return jsonResult({
+          status: "error",
+          error: "Session not active, not streaming, or compacting",
+        });
       }
       return jsonResult({ status: "yielded" });
     },
