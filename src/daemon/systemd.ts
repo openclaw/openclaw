@@ -32,17 +32,46 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
+const SYSTEMD_SERVICE_NAME_PATTERN = /^[A-Za-z0-9@:_.-]+$/;
+
+function normalizeSystemdServiceName(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.endsWith(".service") ? trimmed.slice(0, -".service".length) : trimmed;
+}
+
+function assertValidSystemdServiceName(name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Invalid systemd unit name: empty value.");
+  }
+  if (
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    trimmed.includes("..") ||
+    !SYSTEMD_SERVICE_NAME_PATTERN.test(trimmed)
+  ) {
+    throw new Error(`Invalid systemd unit name: ${name}`);
+  }
+}
+
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
+  assertValidSystemdServiceName(name);
   const home = toPosixPath(resolveHomeDir(env));
-  return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
+  const baseDir = path.posix.join(home, ".config", "systemd", "user");
+  const resolved = path.posix.resolve(baseDir, `${name}.service`);
+  if (!resolved.startsWith(`${baseDir}/`)) {
+    throw new Error("Resolved unit path escapes systemd user directory.");
+  }
+  return resolved;
 }
 
 function resolveSystemdServiceName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
-  if (override) {
-    return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
-  }
-  return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const candidate = override
+    ? normalizeSystemdServiceName(override)
+    : resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  assertValidSystemdServiceName(candidate);
+  return candidate;
 }
 
 function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
@@ -61,6 +90,7 @@ export type { SystemdUserLingerStatus };
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const serviceName = resolveSystemdServiceName(env);
   const unitPath = resolveSystemdUnitPathForName(env, serviceName);
   try {
     const content = await fs.readFile(unitPath, "utf8");

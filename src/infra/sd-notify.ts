@@ -1,4 +1,9 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+
+const SYSTEMD_NOTIFY_CANDIDATES = ["/usr/bin/systemd-notify", "/bin/systemd-notify"];
+let resolvedSystemdNotifyPath: string | null | undefined;
+let warnedSystemdNotifyMissing = false;
 
 function warnNotify(message: string, error: Error): void {
   try {
@@ -6,6 +11,44 @@ function warnNotify(message: string, error: Error): void {
   } catch {
     // stderr may be closed (EPIPE) when the service runs with stdio detached.
   }
+}
+
+function resolveSystemdNotifyPath(): string | undefined {
+  if (resolvedSystemdNotifyPath !== undefined) {
+    return resolvedSystemdNotifyPath ?? undefined;
+  }
+  for (const candidate of SYSTEMD_NOTIFY_CANDIDATES) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      resolvedSystemdNotifyPath = candidate;
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+  resolvedSystemdNotifyPath = null;
+  if (!warnedSystemdNotifyMissing) {
+    warnedSystemdNotifyMissing = true;
+    try {
+      process.stderr.write(
+        `sd-notify: could not find systemd-notify in ${SYSTEMD_NOTIFY_CANDIDATES.join(", ")}\n`,
+      );
+    } catch {
+      // stderr may be closed (EPIPE) when the service runs with stdio detached.
+    }
+  }
+  return undefined;
+}
+
+function execSystemdNotify(args: string[], onDone: (error: Error | null) => void): boolean {
+  const binary = resolveSystemdNotifyPath();
+  if (!binary) {
+    return false;
+  }
+  execFile(binary, args, { timeout: 5000 }, (error) => {
+    onDone(error ?? null);
+  });
+  return true;
 }
 
 /**
@@ -16,13 +59,11 @@ export function sdNotifyReady(): void {
   if (!process.env.NOTIFY_SOCKET) {
     return;
   }
-  execFile("systemd-notify", ["--ready"], { timeout: 5000 }, (error) => {
-    if (error) {
-      warnNotify(
-        "failed to send READY=1 — systemd will kill this unit after TimeoutStartSec",
-        error,
-      );
+  execSystemdNotify(["--ready"], (error) => {
+    if (!error) {
+      return;
     }
+    warnNotify("failed to send READY=1 — systemd will kill this unit after TimeoutStartSec", error);
   });
 }
 
@@ -39,10 +80,11 @@ export function sdNotifyExtendTimeout(seconds: number): void {
     return;
   }
   const usec = Math.max(0, Math.round(seconds * 1_000_000));
-  execFile("systemd-notify", [`EXTEND_TIMEOUT_USEC=${usec}`], { timeout: 5000 }, (error) => {
-    if (error) {
-      warnNotify("failed to extend startup timeout", error);
+  execSystemdNotify([`EXTEND_TIMEOUT_USEC=${usec}`], (error) => {
+    if (!error) {
+      return;
     }
+    warnNotify("failed to extend startup timeout", error);
   });
 }
 
@@ -69,16 +111,20 @@ export function sdNotifyWatchdog(): void {
     return;
   }
   watchdogInFlight = true;
-  execFile("systemd-notify", ["WATCHDOG=1"], { timeout: 5000 }, (error) => {
+  if (
+    !execSystemdNotify(["WATCHDOG=1"], (error) => {
+      watchdogInFlight = false;
+      if (error && !watchdogWarnedOnce) {
+        watchdogWarnedOnce = true;
+        warnNotify(
+          "failed to send WATCHDOG=1 — systemd will restart this unit after WatchdogSec",
+          error,
+        );
+      }
+    })
+  ) {
     watchdogInFlight = false;
-    if (error && !watchdogWarnedOnce) {
-      watchdogWarnedOnce = true;
-      warnNotify(
-        "failed to send WATCHDOG=1 — systemd will restart this unit after WatchdogSec",
-        error,
-      );
-    }
-  });
+  }
 }
 
 /**
@@ -109,4 +155,10 @@ export function startWatchdogHeartbeat(): (() => void) | undefined {
   timer.unref();
   sdNotifyWatchdog();
   return () => clearInterval(timer);
+}
+
+/** @internal Reset notify command resolution cache. Exported for testing only. */
+export function _resetSystemdNotifyPathForTests(): void {
+  resolvedSystemdNotifyPath = undefined;
+  warnedSystemdNotifyMissing = false;
 }

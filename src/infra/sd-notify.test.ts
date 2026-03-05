@@ -1,13 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const accessSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   execFile: execFileMock,
 }));
+vi.mock("node:fs", () => ({
+  default: {
+    accessSync: accessSyncMock,
+    constants: { X_OK: 1 },
+  },
+  accessSync: accessSyncMock,
+  constants: { X_OK: 1 },
+}));
 
 import {
   _resetWatchdogWarned,
+  _resetSystemdNotifyPathForTests,
   sdNotifyExtendTimeout,
   sdNotifyReady,
   sdNotifyWatchdog,
@@ -19,6 +29,14 @@ describe("sdNotifyReady", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    accessSyncMock.mockReset();
+    accessSyncMock.mockImplementation((candidate: string) => {
+      if (candidate === "/usr/bin/systemd-notify") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+    _resetSystemdNotifyPathForTests();
   });
 
   afterEach(() => {
@@ -40,7 +58,7 @@ describe("sdNotifyReady", () => {
     sdNotifyReady();
     expect(execFileMock).toHaveBeenCalledOnce();
     expect(execFileMock).toHaveBeenCalledWith(
-      "systemd-notify",
+      "/usr/bin/systemd-notify",
       ["--ready"],
       { timeout: 5000 },
       expect.any(Function),
@@ -60,6 +78,22 @@ describe("sdNotifyReady", () => {
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("failed to send READY=1"));
     stderrSpy.mockRestore();
   });
+
+  it("warns once and no-ops when systemd-notify binary is unavailable", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    accessSyncMock.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    sdNotifyReady();
+    sdNotifyReady();
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("could not find systemd-notify"),
+    );
+    stderrSpy.mockRestore();
+  });
 });
 
 describe("sdNotifyExtendTimeout", () => {
@@ -67,6 +101,14 @@ describe("sdNotifyExtendTimeout", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    accessSyncMock.mockReset();
+    accessSyncMock.mockImplementation((candidate: string) => {
+      if (candidate === "/usr/bin/systemd-notify") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+    _resetSystemdNotifyPathForTests();
   });
 
   afterEach(() => {
@@ -88,7 +130,7 @@ describe("sdNotifyExtendTimeout", () => {
     sdNotifyExtendTimeout(600);
     expect(execFileMock).toHaveBeenCalledOnce();
     expect(execFileMock).toHaveBeenCalledWith(
-      "systemd-notify",
+      "/usr/bin/systemd-notify",
       ["EXTEND_TIMEOUT_USEC=600000000"],
       { timeout: 5000 },
       expect.any(Function),
@@ -117,6 +159,14 @@ describe("sdNotifyWatchdog", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    accessSyncMock.mockReset();
+    accessSyncMock.mockImplementation((candidate: string) => {
+      if (candidate === "/usr/bin/systemd-notify") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+    _resetSystemdNotifyPathForTests();
     _resetWatchdogWarned();
   });
 
@@ -139,7 +189,7 @@ describe("sdNotifyWatchdog", () => {
     sdNotifyWatchdog();
     expect(execFileMock).toHaveBeenCalledOnce();
     expect(execFileMock).toHaveBeenCalledWith(
-      "systemd-notify",
+      "/usr/bin/systemd-notify",
       ["WATCHDOG=1"],
       { timeout: 5000 },
       expect.any(Function),
@@ -184,6 +234,25 @@ describe("sdNotifyWatchdog", () => {
     sdNotifyWatchdog(); // third call — should proceed (first completed)
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
+
+  it("does not get stuck in-flight when systemd-notify binary is missing", () => {
+    process.env.NOTIFY_SOCKET = "/run/user/1000/systemd/notify";
+    accessSyncMock.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+
+    sdNotifyWatchdog(); // binary missing; should not leave in-flight stuck
+
+    accessSyncMock.mockImplementation((candidate: string) => {
+      if (candidate === "/usr/bin/systemd-notify") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+    _resetSystemdNotifyPathForTests();
+    sdNotifyWatchdog();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("startWatchdogHeartbeat", () => {
@@ -192,6 +261,14 @@ describe("startWatchdogHeartbeat", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    accessSyncMock.mockReset();
+    accessSyncMock.mockImplementation((candidate: string) => {
+      if (candidate === "/usr/bin/systemd-notify") {
+        return;
+      }
+      throw new Error("ENOENT");
+    });
+    _resetSystemdNotifyPathForTests();
     _resetWatchdogWarned();
     vi.useFakeTimers();
   });
