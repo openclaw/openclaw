@@ -99,6 +99,10 @@ export async function runWatchMain(params = {}) {
     watcher.on("change", requestRestart);
     watcher.on("unlink", requestRestart);
     watcher.on("error", () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
       settle(1);
     });
 

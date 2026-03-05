@@ -146,4 +146,22 @@ describe("watch-node script", () => {
     const exitCode = await runPromise;
     expect(exitCode).toBe(130);
   });
+
+  it("kills child and exits when watcher emits an error", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    watcher.emit("error", new Error("watch failed"));
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
 });
