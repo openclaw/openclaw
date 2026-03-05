@@ -134,6 +134,9 @@ export const AgentDefaultsSchema = z
         z.literal("adaptive"),
       ])
       .optional(),
+    effortDefault: z
+      .union([z.literal("low"), z.literal("medium"), z.literal("high"), z.literal("max")])
+      .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

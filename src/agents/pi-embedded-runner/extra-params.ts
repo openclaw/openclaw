@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { EffortLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
@@ -44,9 +44,14 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetention = "none" | "short" | "long";
-type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
+type AdaptiveThinking = { type: "adaptive" };
+type ExtendedStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
+  /** Claude Opus 4.6+ adaptive thinking mode. */
+  thinking?: AdaptiveThinking;
+  /** Claude Opus 4.6+ effort parameter for adaptive thinking depth. */
+  output_config?: { effort: EffortLevel };
 };
 
 /**
@@ -102,6 +107,31 @@ function resolveCacheRetention(
   return "short";
 }
 
+/**
+ * Resolve adaptive thinking config from extraParams (Claude Opus 4.6+ only).
+ * Only applies to Anthropic provider.
+ *
+ * Claude Opus 4.6 uses adaptive thinking mode with effort parameter:
+ * - thinking: { type: "adaptive" }
+ * - output_config: { effort: "low" | "medium" | "high" | "max" }
+ */
+function resolveAdaptiveThinking(
+  extraParams: Record<string, unknown> | undefined,
+  provider: string,
+): { thinking: AdaptiveThinking; effort: EffortLevel } | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+  const val = extraParams?.effort;
+  if (val === "low" || val === "medium" || val === "high" || val === "max") {
+    return {
+      thinking: { type: "adaptive" },
+      effort: val,
+    };
+  }
+  return undefined;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -111,7 +141,7 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  const streamParams: CacheRetentionStreamOptions = {};
+  const streamParams: ExtendedStreamOptions = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
@@ -131,6 +161,12 @@ function createStreamFnWithExtraParams(
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
+  }
+  // Claude Opus 4.6+ adaptive thinking with effort parameter
+  const adaptiveThinking = resolveAdaptiveThinking(extraParams, provider);
+  if (adaptiveThinking) {
+    streamParams.thinking = adaptiveThinking.thinking;
+    streamParams.output_config = { effort: adaptiveThinking.effort };
   }
 
   // Extract OpenRouter provider routing preferences from extraParams.provider.

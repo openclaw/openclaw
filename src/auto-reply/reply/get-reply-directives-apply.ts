@@ -152,6 +152,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentThinkLevel: resolvedDefaultThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
+      currentEffortLevel,
       currentElevatedLevel,
     } = await resolveCurrentDirectiveLevels({
       sessionEntry,
@@ -164,7 +165,9 @@ export async function applyInlineDirectiveOverrides(params: {
       currentThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
+      currentEffortLevel,
       currentElevatedLevel,
+      effortDefault: agentCfg?.effortDefault as import("../thinking.js").EffortLevel | undefined,
       surface: ctx.Surface,
     });
     let statusReply: ReplyPayload | undefined;

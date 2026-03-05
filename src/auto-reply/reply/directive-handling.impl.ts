@@ -10,7 +10,13 @@ import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import {
+  formatEffortLevels,
+  formatThinkingLevels,
+  formatXHighModelHint,
+  supportsEffort,
+  supportsXHighThinking,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
@@ -80,7 +86,9 @@ export async function handleDirectiveOnly(
     currentThinkLevel,
     currentVerboseLevel,
     currentReasoningLevel,
+    currentEffortLevel,
     currentElevatedLevel,
+    effortDefault,
   } = params;
   const activeAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -167,6 +175,23 @@ export async function handleDirectiveOnly(
     }
     return {
       text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
+    };
+  }
+  if (directives.hasEffortDirective && !directives.effortLevel) {
+    if (!directives.rawEffortLevel) {
+      if (!supportsEffort(provider, model)) {
+        return {
+          text: `Effort level is only available for Claude Opus 4.5+ models with adaptive thinking.`,
+        };
+      }
+      const resolvedDefault = effortDefault ?? "high";
+      const level = currentEffortLevel ?? resolvedDefault;
+      return {
+        text: withOptions(`Current effort level: ${level}.`, formatEffortLevels()),
+      };
+    }
+    return {
+      text: `Unrecognized effort level "${directives.rawEffortLevel}". Valid levels: ${formatEffortLevels()}.`,
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -300,6 +325,15 @@ export async function handleDirectiveOnly(
     reasoningChanged =
       directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
   }
+  if (directives.hasEffortDirective && directives.effortLevel) {
+    const resolvedDefault = effortDefault ?? "high";
+    if (directives.effortLevel === resolvedDefault) {
+      // Matches configured default, so we can delete it from session
+      delete sessionEntry.effortLevel;
+    } else {
+      sessionEntry.effortLevel = directives.effortLevel;
+    }
+  }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
     // Unlike other toggles, elevated defaults can be "on".
     // Persist "off" explicitly so `/elevated off` actually overrides defaults.
@@ -397,6 +431,22 @@ export async function handleDirectiveOnly(
           ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
           : formatDirectiveAck("Reasoning visibility enabled."),
     );
+  }
+  if (directives.hasEffortDirective && directives.effortLevel) {
+    if (!supportsEffort(provider, model)) {
+      parts.push(
+        formatDirectiveAck(
+          `Effort level is only available for Claude Opus 4.5+ models. Current model: ${provider}/${model}.`,
+        ),
+      );
+    } else {
+      const resolvedDefault = effortDefault ?? "high";
+      parts.push(
+        directives.effortLevel === resolvedDefault
+          ? formatDirectiveAck(`Effort level reset to default (${resolvedDefault}).`)
+          : `Effort level set to ${directives.effortLevel} (Claude adaptive thinking).`,
+      );
+    }
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
     parts.push(

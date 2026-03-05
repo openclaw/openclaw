@@ -1,7 +1,9 @@
 import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import {
+  type EffortLevel,
   type ElevatedLevel,
+  normalizeEffortLevel,
   normalizeElevatedLevel,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
@@ -178,6 +180,24 @@ export function extractReasoningDirective(body?: string): {
   };
 }
 
+export function extractEffortDirective(body?: string): {
+  cleaned: string;
+  effortLevel?: EffortLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(body, ["effort", "eff"], normalizeEffortLevel);
+  return {
+    cleaned: extracted.cleaned,
+    effortLevel: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
 export function extractStatusDirective(body?: string): {
   cleaned: string;
   hasDirective: boolean;
@@ -188,5 +208,5 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
+export type { EffortLevel, ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";
