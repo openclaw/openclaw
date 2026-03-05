@@ -275,6 +275,12 @@ export const ToolsWebSearchSchema = z
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),

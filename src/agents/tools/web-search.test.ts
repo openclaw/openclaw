@@ -15,6 +15,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveBraveMode,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +270,20 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search brave mode resolution", () => {
+  it("defaults to web when mode is missing", () => {
+    expect(resolveBraveMode(undefined)).toBe("web");
+    expect(resolveBraveMode({})).toBe("web");
+  });
+
+  it("returns llm-context when explicitly configured", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("returns web when explicitly configured", () => {
+    expect(resolveBraveMode({ mode: "web" })).toBe("web");
   });
 });

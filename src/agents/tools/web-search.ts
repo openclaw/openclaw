@@ -26,6 +26,7 @@ const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
@@ -185,6 +186,22 @@ type BraveSearchResponse = {
   web?: {
     results?: BraveSearchResult[];
   };
+};
+
+type BraveLlmContextSnippet = string | { text?: string; snippet?: string };
+type BraveLlmContextResult = {
+  title?: string;
+  url?: string;
+  snippets?: BraveLlmContextSnippet[];
+};
+type BraveLlmContextResponse = {
+  grounding?: {
+    generic?: BraveLlmContextResult[];
+  };
+};
+
+type BraveConfig = {
+  mode?: "web" | "llm-context";
 };
 
 type PerplexityConfig = {
@@ -488,6 +505,24 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
 
   return "brave";
+}
+
+function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const brave = "brave" in search ? search.brave : undefined;
+  if (!brave || typeof brave !== "object") {
+    return {};
+  }
+  return brave as BraveConfig;
+}
+
+function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
+  if (brave?.mode === "llm-context") {
+    return "llm-context";
+  }
+  return "web";
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -1149,6 +1184,81 @@ async function runKimiSearch(params: {
   };
 }
 
+function normalizeBraveLlmSnippet(snippet: BraveLlmContextSnippet): string {
+  if (typeof snippet === "string") {
+    return snippet;
+  }
+  if (typeof snippet.text === "string") {
+    return snippet.text;
+  }
+  if (typeof snippet.snippet === "string") {
+    return snippet.snippet;
+  }
+  return "";
+}
+
+async function runBraveLlmContextSearch(params: {
+  query: string;
+  count: number;
+  apiKey: string;
+  timeoutSeconds: number;
+  country?: string;
+  search_lang?: string;
+}): Promise<
+  Array<{ title: string; url: string; content: string; siteName?: string; snippetCount: number }>
+> {
+  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("count", String(params.count));
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang) {
+    url.searchParams.set("search_lang", params.search_lang);
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: url.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-Subscription-Token": params.apiKey,
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`Brave LLM Context API error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const data = (await res.json()) as BraveLlmContextResponse;
+      const results = Array.isArray(data.grounding?.generic) ? (data.grounding?.generic ?? []) : [];
+      return results.map((entry) => {
+        const snippetValues = (entry.snippets ?? [])
+          .map((snippet) => normalizeBraveLlmSnippet(snippet).trim())
+          .filter(Boolean);
+        const title = entry.title ?? "";
+        const url = entry.url ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          content:
+            snippetValues.length > 0
+              ? wrapWebContent(snippetValues.join("\n\n"), "web_search")
+              : "",
+          siteName: resolveSiteName(url) || undefined,
+          snippetCount: snippetValues.length,
+        };
+      });
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1171,7 +1281,9 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
+  const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
     params.provider === "grok"
       ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
@@ -1181,7 +1293,9 @@ async function runWebSearch(params: {
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : "";
   const cacheKey = normalizeCacheKey(
-    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+    params.provider === "brave" && effectiveBraveMode === "llm-context"
+      ? `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}`
+      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1308,6 +1422,35 @@ async function runWebSearch(params: {
     throw new Error("Unsupported web search provider.");
   }
 
+  if (effectiveBraveMode === "llm-context") {
+    const mapped = await runBraveLlmContextSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      country: params.country,
+      search_lang: params.search_lang || params.language,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      mode: "llm-context" as const,
+      count: mapped.length,
+      snippetCount: mapped.reduce((total, entry) => total + entry.snippetCount, 0),
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped.map(({ snippetCount: _snippetCount, ...result }) => result),
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
@@ -1401,6 +1544,8 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const braveConfig = resolveBraveConfig(search);
+  const braveMode = resolveBraveMode(braveConfig);
 
   const description =
     provider === "perplexity"
@@ -1411,7 +1556,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : braveMode === "llm-context"
+              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content optimized for LLM grounding."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1494,6 +1641,14 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+      if (rawFreshness && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message:
+            "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness, provider) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
@@ -1516,6 +1671,14 @@ export function createWebSearchTool(options?: {
         return jsonResult({
           error: "unsupported_date_filter",
           message: `date_after/date_before filtering is not supported by the ${provider} provider. Only Brave and Perplexity support date filtering.`,
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if ((rawDateAfter || rawDateBefore) && provider === "brave" && braveMode === "llm-context") {
+        return jsonResult({
+          error: "unsupported_date_filter",
+          message:
+            "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1596,6 +1759,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        braveMode,
       });
       return jsonResult(result);
     },
@@ -1620,4 +1784,5 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveBraveMode,
 } as const;

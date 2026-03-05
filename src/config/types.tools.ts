@@ -450,6 +450,11 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Search mode: "web" (default) or "llm-context" for LLM-optimized context. */
+        mode?: "web" | "llm-context";
+      };
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {
         /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
