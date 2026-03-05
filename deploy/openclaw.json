@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openclaw/openclaw/main/docs/schema.json",
+  "agents": {
+    "defaults": {
+      "model": "openai/${OPENAI_MODEL}",
+      "workspace": "./workspace"
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "${OPENAI_BASE_URL}",
+        "apiKey": "${OPENAI_API_KEY}",
+        "models": [
+          { "id": "${OPENAI_MODEL}", "name": "${OPENAI_MODEL}", "api": "openai-completions" }
+        ]
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local"
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "accounts": {
+        "main": {
+          "appId": "${FEISHU_APP_ID}",
+          "appSecret": "${FEISHU_APP_SECRET}"
+        }
+      }
+    }
+  }
+}

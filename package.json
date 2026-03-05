@@ -30,7 +30,10 @@
     "dist/",
     "docs/",
     "extensions/",
-    "skills/"
+    "skills/",
+    "deploy/",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -444,7 +447,8 @@
       "koffi",
       "node-llama-cpp",
       "protobufjs",
-      "sharp"
+      "sharp",
+      "@tloncorp/api"
     ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {

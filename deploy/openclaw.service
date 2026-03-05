@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=你的用户名
+WorkingDirectory=/path/to/package
+# 注意：如果 pnpm 不在系统默认 PATH 内，请使用绝对路径（如 /usr/local/bin/pnpm）
+ExecStart=pnpm exec node dist/index.js gateway
+Restart=on-failure
+RestartSec=5
+# 引入环境变量
+Environment="OPENCLAW_CONFIG_PATH=/path/to/package/openclaw.json"
+Environment="OPENCLAW_STATE_DIR=/path/to/package"
+
+[Install]
+WantedBy=multi-user.target
