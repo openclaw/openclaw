@@ -206,6 +206,73 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;+15551234567");
     });
 
+    it("prefers iMessage chat over SMS when service is 'imessage' and both exist", async () => {
+      // Reproduces the SMS fallback bug: when a contact has both iMessage and SMS chats,
+      // targeting with service "imessage" should return the iMessage chat, not the first result.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                // SMS chat appears first in API response
+                guid: "SMS;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+              {
+                // iMessage chat appears second
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
+      });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      // Should return iMessage chat, not the SMS chat that appeared first
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("falls back to wrong-service chat when preferred service chat not found", async () => {
+      // If only an SMS chat exists but iMessage is requested, fall back to SMS
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [{ guid: "SMS;-;+15551234567", participants: [{ address: "+15551234567" }] }],
+            }),
+        })
+        // Empty second page to stop pagination
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("SMS;-;+15551234567");
+    });
+
     it("returns null when handle only exists in group chat (not DM)", async () => {
       // This is the critical fix: if a phone number only exists as a participant in a group chat
       // (no direct DM chat), we should NOT send to that group. Return null instead.

@@ -225,7 +225,16 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
+  // Track the best match by service specificity:
+  // - serviceMatch: direct handle match with the correct service (highest priority)
+  // - serviceAgnosticMatch: direct handle match but wrong service (fallback)
+  // - participantMatch: handle found in chat participant list (lowest priority)
+  let serviceAgnosticMatch: string | null = null;
   let participantMatch: string | null = null;
+  const targetService =
+    params.target.kind === "handle" && params.target.service !== "auto"
+      ? params.target.service
+      : null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -276,7 +285,18 @@ export async function resolveChatGuidForTarget(params: {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+          if (!targetService) {
+            // No service preference ("auto"): return first match immediately.
+            return guid;
+          }
+          // Service-aware: prefer chat whose GUID service matches target service.
+          const guidService = guid.split(";")[0]?.trim().toLowerCase();
+          if (guidService === targetService) {
+            return guid;
+          }
+          if (!serviceAgnosticMatch) {
+            serviceAgnosticMatch = guid;
+          }
         }
         if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
@@ -295,7 +315,7 @@ export async function resolveChatGuidForTarget(params: {
       }
     }
   }
-  return participantMatch;
+  return serviceAgnosticMatch ?? participantMatch;
 }
 
 /**
