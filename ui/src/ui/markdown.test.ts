@@ -82,4 +82,17 @@ describe("toSanitizedMarkdownHtml", () => {
     // Pipes from table delimiters must not appear as raw text
     expect(html).not.toContain("|------|");
   });
+
+  it("does not throw on deeply nested emphasis markers (#36213)", () => {
+    // Pathological patterns that can trigger catastrophic backtracking / recursion
+    const nested = "*".repeat(500) + "text" + "*".repeat(500);
+    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+    expect(toSanitizedMarkdownHtml(nested)).toBeTruthy();
+  });
+
+  it("does not throw on deeply nested brackets (#36213)", () => {
+    const nested = "[".repeat(200) + "link" + "]".repeat(200) + "(" + "x".repeat(200) + ")";
+    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+    expect(toSanitizedMarkdownHtml(nested)).toBeTruthy();
+  });
 });
