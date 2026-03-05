@@ -1,6 +1,6 @@
+import type { DWClientDownStream } from "dingtalk-stream";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/dingtalk";
 import { createDedupeCache } from "openclaw/plugin-sdk/dingtalk";
-import type { DWClientDownStream } from "dingtalk-stream";
 import { handleDingtalkMessage } from "./bot.js";
 import { monitorStream } from "./monitor.transport.js";
 import type { ResolvedDingtalkAccount, DingtalkRobotMessage } from "./types.js";

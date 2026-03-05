@@ -1,10 +1,7 @@
-import {
-  createReplyPrefixContext,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/dingtalk";
-import { sendTextMessage, sendMarkdownMessage } from "./send.js";
+import { createReplyPrefixContext, type ReplyPayload } from "openclaw/plugin-sdk/dingtalk";
 import { sendDingtalkCard, updateDingtalkCard } from "./card.js";
 import { getDingtalkRuntime } from "./runtime.js";
+import { sendTextMessage, sendMarkdownMessage } from "./send.js";
 import { containsMarkdown } from "./text-utils.js";
 import type { DingtalkMessageContext, ResolvedDingtalkAccount } from "./types.js";
 
@@ -116,11 +113,7 @@ export function createDingtalkReplyDispatcher(params: {
 
         // 非流式回复 / Non-streaming reply
         const useMarkdown = containsMarkdown(text);
-        for (const chunk of core.channel.text.chunkTextWithMode(
-          text,
-          textChunkLimit,
-          chunkMode,
-        )) {
+        for (const chunk of core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode)) {
           if (useMarkdown) {
             await sendMarkdownMessage({
               account,

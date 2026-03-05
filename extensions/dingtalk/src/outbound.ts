@@ -6,7 +6,11 @@ import { containsMarkdown } from "./text-utils.js";
 
 const GROUP_CID_RE = /^cid[A-Za-z0-9+/=]+$/;
 
-function resolveOutboundTarget(to: string): { conversationType: "1" | "2"; conversationId: string; senderStaffId: string } {
+function resolveOutboundTarget(to: string): {
+  conversationType: "1" | "2";
+  conversationId: string;
+  senderStaffId: string;
+} {
   if (GROUP_CID_RE.test(to)) {
     return { conversationType: "2", conversationId: to, senderStaffId: "" };
   }

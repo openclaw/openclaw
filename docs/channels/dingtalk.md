@@ -426,26 +426,26 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                                    | Description                             | Default     |
-| ---------------------------------------------------------- | --------------------------------------- | ----------- |
-| `channels.dingtalk.enabled`                                | Enable/disable channel                  | `true`      |
-| `channels.dingtalk.clientId`                               | App Client ID (AppKey)                  | -           |
-| `channels.dingtalk.clientSecret`                           | App Client Secret (AppSecret)           | -           |
-| `channels.dingtalk.robotCode`                              | Robot code (defaults to clientId)       | `clientId`  |
-| `channels.dingtalk.defaultAccount`                         | Default account ID for outbound routing | `default`   |
-| `channels.dingtalk.accounts.<id>.clientId`                 | Per-account Client ID                   | -           |
-| `channels.dingtalk.accounts.<id>.clientSecret`             | Per-account Client Secret               | -           |
-| `channels.dingtalk.dmPolicy`                               | DM policy                               | `pairing`   |
-| `channels.dingtalk.allowFrom`                              | DM allowlist (staffId list)             | -           |
-| `channels.dingtalk.groupPolicy`                            | Group policy                            | `open`      |
-| `channels.dingtalk.groupAllowFrom`                         | Group allowlist (conversationId list)   | -           |
-| `channels.dingtalk.requireMention`                         | Require @mention in groups              | `true`      |
-| `channels.dingtalk.groups.<conversationId>.requireMention` | Per-group @mention requirement          | `true`      |
-| `channels.dingtalk.groups.<conversationId>.enabled`        | Enable/disable group                    | `true`      |
-| `channels.dingtalk.textChunkLimit`                         | Message chunk size                      | `2000`      |
-| `channels.dingtalk.mediaMaxMb`                             | Media size limit                        | `20`        |
-| `channels.dingtalk.streaming`                              | Enable streaming card output            | `true`      |
-| `channels.dingtalk.resolveSenderNames`                     | Resolve sender display names            | `true`      |
+| Setting                                                    | Description                             | Default    |
+| ---------------------------------------------------------- | --------------------------------------- | ---------- |
+| `channels.dingtalk.enabled`                                | Enable/disable channel                  | `true`     |
+| `channels.dingtalk.clientId`                               | App Client ID (AppKey)                  | -          |
+| `channels.dingtalk.clientSecret`                           | App Client Secret (AppSecret)           | -          |
+| `channels.dingtalk.robotCode`                              | Robot code (defaults to clientId)       | `clientId` |
+| `channels.dingtalk.defaultAccount`                         | Default account ID for outbound routing | `default`  |
+| `channels.dingtalk.accounts.<id>.clientId`                 | Per-account Client ID                   | -          |
+| `channels.dingtalk.accounts.<id>.clientSecret`             | Per-account Client Secret               | -          |
+| `channels.dingtalk.dmPolicy`                               | DM policy                               | `pairing`  |
+| `channels.dingtalk.allowFrom`                              | DM allowlist (staffId list)             | -          |
+| `channels.dingtalk.groupPolicy`                            | Group policy                            | `open`     |
+| `channels.dingtalk.groupAllowFrom`                         | Group allowlist (conversationId list)   | -          |
+| `channels.dingtalk.requireMention`                         | Require @mention in groups              | `true`     |
+| `channels.dingtalk.groups.<conversationId>.requireMention` | Per-group @mention requirement          | `true`     |
+| `channels.dingtalk.groups.<conversationId>.enabled`        | Enable/disable group                    | `true`     |
+| `channels.dingtalk.textChunkLimit`                         | Message chunk size                      | `2000`     |
+| `channels.dingtalk.mediaMaxMb`                             | Media size limit                        | `20`       |
+| `channels.dingtalk.streaming`                              | Enable streaming card output            | `true`     |
+| `channels.dingtalk.resolveSenderNames`                     | Resolve sender display names            | `true`     |
 
 ---
 
@@ -484,16 +484,16 @@ Key options:
 
 ## Feature comparison with Feishu
 
-| Feature           | DingTalk | Feishu |
-| ----------------- | -------- | ------ |
-| Text messages     | ✅        | ✅      |
-| Markdown          | ✅        | ✅      |
-| Images            | ✅        | ✅      |
-| Files             | ✅ (DM)  | ✅      |
-| Audio/Video       | ✅ (DM)  | ✅      |
-| Streaming cards   | ✅        | ✅      |
-| Message reactions  | ❌        | ✅      |
-| Message editing   | ❌        | ✅      |
-| Reply/threads     | ❌        | ✅      |
-| Stickers          | ❌        | ✅      |
-| WebSocket (no URL) | ✅       | ✅      |
+| Feature            | DingTalk | Feishu |
+| ------------------ | -------- | ------ |
+| Text messages      | ✅       | ✅     |
+| Markdown           | ✅       | ✅     |
+| Images             | ✅       | ✅     |
+| Files              | ✅ (DM)  | ✅     |
+| Audio/Video        | ✅ (DM)  | ✅     |
+| Streaming cards    | ✅       | ✅     |
+| Message reactions  | ❌       | ✅     |
+| Message editing    | ❌       | ✅     |
+| Reply/threads      | ❌       | ✅     |
+| Stickers           | ❌       | ✅     |
+| WebSocket (no URL) | ✅       | ✅     |

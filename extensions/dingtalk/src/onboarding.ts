@@ -146,10 +146,7 @@ function setDingtalkGroupPolicy(
 }
 
 // 设置群组白名单 / Set group allowlist
-function setDingtalkGroupAllowFrom(
-  cfg: ClawdbotConfig,
-  groupAllowFrom: string[],
-): ClawdbotConfig {
+function setDingtalkGroupAllowFrom(cfg: ClawdbotConfig, groupAllowFrom: string[]): ClawdbotConfig {
   return {
     ...cfg,
     channels: {
@@ -192,7 +189,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const topLevelConfigured = Boolean(
       isClientIdConfigured(dingtalkCfg?.clientId) &&
-        hasConfiguredSecretInput(dingtalkCfg?.clientSecret),
+      hasConfiguredSecretInput(dingtalkCfg?.clientSecret),
     );
 
     const accountConfigured = Object.values(dingtalkCfg?.accounts ?? {}).some((account) => {
@@ -248,14 +245,12 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     const hasConfigSecret = hasConfiguredSecretInput(dingtalkCfg?.clientSecret);
     const hasConfigCreds = Boolean(
-      typeof dingtalkCfg?.clientId === "string" &&
-        dingtalkCfg.clientId.trim() &&
-        hasConfigSecret,
+      typeof dingtalkCfg?.clientId === "string" && dingtalkCfg.clientId.trim() && hasConfigSecret,
     );
     const canUseEnv = Boolean(
       !hasConfigCreds &&
-        process.env.DINGTALK_CLIENT_ID?.trim() &&
-        process.env.DINGTALK_CLIENT_SECRET?.trim(),
+      process.env.DINGTALK_CLIENT_ID?.trim() &&
+      process.env.DINGTALK_CLIENT_SECRET?.trim(),
     );
 
     let next = cfg;
@@ -295,8 +290,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
       clientId = await promptDingtalkClientId({
         prompter,
         initialValue:
-          normalizeString(dingtalkCfg?.clientId) ??
-          normalizeString(process.env.DINGTALK_CLIENT_ID),
+          normalizeString(dingtalkCfg?.clientId) ?? normalizeString(process.env.DINGTALK_CLIENT_ID),
       });
     }
 
@@ -321,10 +315,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
           clientSecret: clientSecretProbeValue ?? undefined,
         });
         if (probe.ok) {
-          await prompter.note(
-            `Connected (clientId: ${clientId})`,
-            "DingTalk connection test",
-          );
+          await prompter.note(`Connected (clientId: ${clientId})`, "DingTalk connection test");
         } else {
           await prompter.note(
             `Connection failed: ${probe.error ?? "unknown error"}`,
@@ -332,10 +323,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
           );
         }
       } catch (err) {
-        await prompter.note(
-          `Connection test failed: ${String(err)}`,
-          "DingTalk connection test",
-        );
+        await prompter.note(`Connection test failed: ${String(err)}`, "DingTalk connection test");
       }
     }
 
@@ -347,14 +335,10 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
         { value: "allowlist", label: "Allowlist - only respond in specific groups" },
         { value: "disabled", label: "Disabled - don't respond in groups" },
       ],
-      initialValue:
-        (next.channels?.dingtalk as DingtalkConfig | undefined)?.groupPolicy ?? "open",
+      initialValue: (next.channels?.dingtalk as DingtalkConfig | undefined)?.groupPolicy ?? "open",
     });
     if (groupPolicy) {
-      next = setDingtalkGroupPolicy(
-        next,
-        groupPolicy as "open" | "allowlist" | "disabled",
-      );
+      next = setDingtalkGroupPolicy(next, groupPolicy as "open" | "allowlist" | "disabled");
     }
 
     // 群组白名单 / Group allowlist

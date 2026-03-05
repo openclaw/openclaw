@@ -38,7 +38,9 @@ export function resolveDefaultDingtalkAccountSelection(cfg: ClawdbotConfig): {
   accountId: string;
   source: DingtalkDefaultAccountSelectionSource;
 } {
-  const preferredRaw = (cfg.channels?.dingtalk as DingtalkConfig | undefined)?.defaultAccount?.trim();
+  const preferredRaw = (
+    cfg.channels?.dingtalk as DingtalkConfig | undefined
+  )?.defaultAccount?.trim();
   const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
   if (preferred) {
     return { accountId: preferred, source: "explicit-default" };
