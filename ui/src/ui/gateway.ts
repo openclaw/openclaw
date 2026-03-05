@@ -53,7 +53,16 @@ export function resolveGatewayErrorDetailCode(
   return readConnectErrorDetailCode(error?.details);
 }
 
-/** Auth errors that won't resolve without user action — don't auto-reconnect. */
+/**
+ * Auth errors that won't resolve without user action — don't auto-reconnect.
+ *
+ * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
+ * browser client has a device-token fallback flow: a stale cached device token
+ * triggers a mismatch, sendConnect() clears it, and the next reconnect retries
+ * with opts.token (the shared gateway token). Blocking reconnect on mismatch
+ * would break that fallback. The rate limiter still catches persistent wrong
+ * tokens after N failures → AUTH_RATE_LIMITED stops the loop.
+ */
 function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
   if (!error) {
     return false;
@@ -61,7 +70,6 @@ function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean
   const code = resolveGatewayErrorDetailCode(error);
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
-    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
