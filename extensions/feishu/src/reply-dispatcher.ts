@@ -162,6 +162,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let toolUseCount = 0;
   let lastToolName: string | undefined;
   let hasThinkingPrelude = false;
+  let stagedStatusLine: string | undefined;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let finalTextEmitted = false;
@@ -260,17 +261,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const shouldRenderStreamingStatus = (): boolean =>
     renderMode === "card" || Boolean(streamingStartPromise) || Boolean(streaming?.isActive());
 
-  const queueThinkingPrelude = (options?: { forceStart?: boolean }): boolean => {
+  const queueThinkingPrelude = (): boolean => {
     if (hasThinkingPrelude) {
       return false;
     }
-    if (!options?.forceStart && !shouldRenderStreamingStatus()) {
-      return false;
-    }
     streamPhase = "thinking";
-    startStreaming();
+    stagedStatusLine = resolveStatusLine();
     hasThinkingPrelude = true;
-    queueStreamingRender(composeStreamingContent("live"));
     return true;
   };
 
@@ -289,8 +286,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
     }
+    const hadVisibleText = Boolean(streamText);
     mergeStreamingText(nextText);
+    const shouldRenderStagedStatus =
+      !hadVisibleText && Boolean(streamText) && Boolean(stagedStatusLine);
+    const stagedSnapshot = shouldRenderStagedStatus
+      ? `${stagedStatusLine}\n---\n${streamText}`
+      : undefined;
+    if (shouldRenderStagedStatus) {
+      stagedStatusLine = undefined;
+    }
     streamPhase = "streaming";
+    if (stagedSnapshot) {
+      queueStreamingRender(stagedSnapshot);
+      // Immediately follow with plain text so close(finalText) remains text-only.
+      queueStreamingRender();
+      return;
+    }
     queueStreamingRender();
   };
 
@@ -353,6 +365,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     toolUseCount = 0;
     lastToolName = undefined;
     hasThinkingPrelude = false;
+    stagedStatusLine = undefined;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -520,19 +533,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (renderMode !== "card") {
               return;
             }
-            queueThinkingPrelude({ forceStart: true });
+            queueThinkingPrelude();
           }
         : undefined,
       onReasoningStream: streamingEnabled
         ? () => {
-            if (queueThinkingPrelude()) {
-              return;
-            }
+            queueThinkingPrelude();
             streamPhase = "thinking";
+            stagedStatusLine = resolveStatusLine();
             if (!shouldRenderStreamingStatus()) {
               return;
             }
-            startStreaming();
+            if (!streaming?.isActive()) {
+              return;
+            }
             queueStreamingRender();
           }
         : undefined,
@@ -557,10 +571,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             queueThinkingPrelude();
             streamPhase = "tool";
+            stagedStatusLine = resolveStatusLine();
             if (!shouldRenderStreamingStatus()) {
               return;
             }
-            startStreaming();
+            if (!streaming?.isActive()) {
+              return;
+            }
             queueStreamingRender();
           }
         : undefined,
@@ -575,8 +592,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // streaming — text arrives as complete chunks via onPartialReply —
             // so the card must be started here. startStreaming() is idempotent
             // (guarded by streamingStartPromise), so calling it here is safe
-            // even when the card was already started by onReplyStart or deliver.
-            queueThinkingPrelude({ forceStart: true });
+            // even when the card was already started by deliver.
+            queueThinkingPrelude();
             startStreaming();
             queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
           }

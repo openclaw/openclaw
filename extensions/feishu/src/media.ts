@@ -296,7 +296,7 @@ export async function sendImageFeishu(params: {
   });
   const content = JSON.stringify({ image_key: imageKey });
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
       data: {
@@ -343,7 +343,7 @@ export async function sendFileFeishu(params: {
   });
   const content = JSON.stringify({ file_key: fileKey });
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
       data: {

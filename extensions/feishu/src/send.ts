@@ -340,7 +340,7 @@ export async function sendMessageFeishu(
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     let response;
     try {
       response = await client.im.message.reply({
@@ -413,7 +413,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     let response;
     try {
       response = await client.im.message.reply({

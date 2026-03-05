@@ -176,7 +176,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=file when replying with mp4", async () => {
+  it("uses message.create when replying with mp4 without replyInThread", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -185,14 +185,13 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyToMessageId: "om_parent",
     });
 
-    expect(messageReplyMock).toHaveBeenCalledWith(
+    expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        path: { message_id: "om_parent" },
         data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
 
-    expect(messageCreateMock).not.toHaveBeenCalled();
+    expect(messageReplyMock).not.toHaveBeenCalled();
   });
 
   it("passes reply_in_thread when replyInThread is true", async () => {
@@ -213,7 +212,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("omits reply_in_thread when replyInThread is false", async () => {
+  it("uses message.create when replyInThread is false", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -223,8 +222,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: false,
     });
 
-    const callData = messageReplyMock.mock.calls[0][0].data;
-    expect(callData).not.toHaveProperty("reply_in_thread");
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "file" }),
+      }),
+    );
+    expect(messageReplyMock).not.toHaveBeenCalled();
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {

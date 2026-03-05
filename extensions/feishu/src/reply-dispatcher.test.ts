@@ -236,7 +236,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("renders thinking before first partial text chunk in auto mode", async () => {
+  it("renders staged thinking status with first partial text chunk in auto mode", async () => {
     const dispatcher = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -248,9 +248,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
 
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(1, "💭 思考中...", {
-      mode: "replace",
-    });
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(
+      1,
+      "💭 思考中...\n---\n第一段答案",
+      {
+        mode: "replace",
+      },
+    );
     expect(streamingInstances[0].update).toHaveBeenNthCalledWith(2, "第一段答案", {
       mode: "replace",
     });
@@ -302,7 +306,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
   });
 
-  it("starts card streaming with thinking prelude on assistant message start", async () => {
+  it("stages thinking prelude on assistant message start without opening a card", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -324,18 +328,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await dispatcher.replyOptions.onAssistantMessageStart?.();
     await flushAsyncTasks();
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(1, "💭 思考中...", {
-      mode: "replace",
-    });
+    expect(streamingInstances).toHaveLength(0);
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.onIdle?.();
-    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).not.toHaveBeenCalled();
+    expect(streamingInstances).toHaveLength(0);
   });
 
-  it("renders thinking/tool status lines and keeps final close content text-only", async () => {
+  it("stages thinking/tool status lines until first text chunk and keeps final close content text-only", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -361,20 +361,24 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await flushAsyncTasks();
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("💭 思考中...", {
-      mode: "replace",
-    });
+    expect(streamingInstances).toHaveLength(0);
 
     await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("🔧 正在使用Read工具...", {
-      mode: "replace",
-    });
+
+    expect(streamingInstances).toHaveLength(0);
 
     await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
     await flushAsyncTasks();
-    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案", {
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(
+      1,
+      "🔧 正在使用Read工具...\n---\n第一段答案",
+      {
+        mode: "replace",
+      },
+    );
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(2, "第一段答案", {
       mode: "replace",
     });
 
@@ -395,7 +399,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案\n第二段答案");
   });
 
-  it("renders thinking prelude before tool status when tool event is first", async () => {
+  it("stages tool status when tool event is first and renders with first text", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -417,11 +421,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
     await flushAsyncTasks();
 
+    expect(streamingInstances).toHaveLength(0);
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(1, "💭 思考中...", {
-      mode: "replace",
-    });
-    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(2, "🔧 正在使用Read工具...", {
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(
+      1,
+      "🔧 正在使用Read工具...\n---\n第一段答案",
+      {
+        mode: "replace",
+      },
+    );
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(2, "第一段答案", {
       mode: "replace",
     });
   });
@@ -619,7 +632,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("discards streaming card when final content is empty", async () => {
+  it("does not create streaming card when final content is empty", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -646,9 +659,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.onIdle?.();
 
-    expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).not.toHaveBeenCalled();
+    expect(streamingInstances).toHaveLength(0);
   });
 
   it("passes replyInThread to media attachments", async () => {

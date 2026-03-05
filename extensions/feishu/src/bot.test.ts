@@ -1621,7 +1621,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("forces thread replies when inbound message contains thread_id", async () => {
+  it("respects replyInThread=disabled even when thread_id is present", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1654,14 +1654,14 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyInThread: true,
+        replyInThread: false,
         streamingInThread: false,
-        threadReply: true,
+        threadReply: false,
       }),
     );
   });
 
-  it("passes streamingInThread=false to dispatcher for thread replies when configured", async () => {
+  it("gates threadReply and rootId when replyInThread is disabled", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1695,9 +1695,9 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyInThread: true,
+        replyInThread: false,
         streamingInThread: false,
-        threadReply: true,
+        threadReply: false,
       }),
     );
   });
