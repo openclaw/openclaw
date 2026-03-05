@@ -494,6 +494,17 @@ function normalizeMentions(
   return result;
 }
 
+function normalizeFeishuCommandProbeBody(text: string): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
+    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Parse media keys from message content based on message type.
  */
@@ -1069,8 +1080,9 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
     });
+    const commandProbeBody = isGroup ? normalizeFeishuCommandProbeBody(ctx.content) : ctx.content;
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
-      ctx.content,
+      commandProbeBody,
       cfg,
     );
     const storeAllowFrom =
