@@ -25,6 +25,7 @@ const service = {
 };
 
 const runServiceRestart = vi.fn();
+const runServiceStop = vi.fn();
 const waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -51,21 +52,23 @@ vi.mock("./restart-health.js", () => ({
 vi.mock("./lifecycle-core.js", () => ({
   runServiceRestart,
   runServiceStart: vi.fn(),
-  runServiceStop: vi.fn(),
+  runServiceStop,
   runServiceUninstall: vi.fn(),
 }));
 
 describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
 
   beforeAll(async () => {
-    ({ runDaemonRestart } = await import("./lifecycle.js"));
+    ({ runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
   });
 
   beforeEach(() => {
     service.readCommand.mockClear();
     service.restart.mockClear();
     runServiceRestart.mockClear();
+    runServiceStop.mockClear();
     waitForGatewayHealthyRestart.mockClear();
     terminateStaleGatewayPids.mockClear();
     renderRestartDiagnostics.mockClear();
@@ -132,5 +135,20 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fail stop when fallback port resolution hits config errors", async () => {
+    service.readCommand.mockRejectedValueOnce(new Error("read failed"));
+    loadConfig.mockImplementation(() => {
+      throw new Error("broken config");
+    });
+
+    await expect(runDaemonStop({ json: true })).resolves.toBeUndefined();
+    expect(runServiceStop).toHaveBeenCalledTimes(1);
+    expect(runServiceStop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notLoadedPortSignalFallback: undefined,
+      }),
+    );
   });
 });

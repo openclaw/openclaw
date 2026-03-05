@@ -35,6 +35,18 @@ async function resolveGatewayServicePort() {
   return portFromArgs ?? resolveGatewayPort(loadConfig(), mergedEnv);
 }
 
+async function resolveGatewayServicePortForFallback(): Promise<number | null> {
+  try {
+    return await resolveGatewayServicePort();
+  } catch {
+    try {
+      return resolveGatewayPort(loadConfig(), process.env);
+    } catch {
+      return null;
+    }
+  }
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -55,18 +67,19 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
-  const stopPort = await resolveGatewayServicePort().catch(() =>
-    resolveGatewayPort(loadConfig(), process.env),
-  );
+  const stopPort = await resolveGatewayServicePortForFallback();
   return await runServiceStop({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     opts,
-    notLoadedPortSignalFallback: {
-      port: stopPort,
-      signal: "SIGTERM",
-      result: "stopped",
-    },
+    notLoadedPortSignalFallback:
+      stopPort == null
+        ? undefined
+        : {
+            port: stopPort,
+            signal: "SIGTERM",
+            result: "stopped",
+          },
   });
 }
 
