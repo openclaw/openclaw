@@ -305,6 +305,35 @@ describe("buildModelsKeyboard", () => {
 
     expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel/${model}`);
   });
+
+  it("marks ✓ only on the provider whose model is selected, not on identically-named models from other providers", () => {
+    // Regression test for #35476: when multiple providers expose a model with the
+    // same id (e.g. both "anthropic" and "nexus-d" expose "claude-opus-4"), selecting
+    // "nexus-d/claude-opus-4" must only show ✓ in the nexus-d page, not the anthropic page.
+    const models = ["claude-opus-4", "claude-sonnet-4"];
+
+    // Viewing the nexus-d page while nexus-d/claude-opus-4 is the current model.
+    const nexusDResult = buildModelsKeyboard({
+      provider: "nexus-d",
+      models,
+      currentModel: "nexus-d/claude-opus-4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(nexusDResult[0]?.[0]?.text).toBe("claude-opus-4 ✓"); // selected here
+    expect(nexusDResult[1]?.[0]?.text).toBe("claude-sonnet-4"); // not selected
+
+    // Viewing the anthropic page for the same model id — should NOT show ✓.
+    const anthropicResult = buildModelsKeyboard({
+      provider: "anthropic",
+      models,
+      currentModel: "nexus-d/claude-opus-4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(anthropicResult[0]?.[0]?.text).toBe("claude-opus-4"); // no ✓ for wrong provider
+    expect(anthropicResult[1]?.[0]?.text).toBe("claude-sonnet-4"); // not selected
+  });
 });
 
 describe("buildBrowseProvidersButton", () => {
