@@ -11,8 +11,9 @@ export function applyTargetToParams(params: {
   args: Record<string, unknown>;
 }): void {
   const target = typeof params.args.target === "string" ? params.args.target.trim() : "";
-  const hasLegacyTo = typeof params.args.to === "string";
-  const hasLegacyChannelId = typeof params.args.channelId === "string";
+  const hasLegacyTo = typeof params.args.to === "string" && params.args.to.trim() !== "";
+  const hasLegacyChannelId =
+    typeof params.args.channelId === "string" && params.args.channelId.trim() !== "";
   const mode =
     MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
 
