@@ -22,6 +22,16 @@ Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 Auth monitoring scripts are documented here:
 [/automation/auth-monitoring](/automation/auth-monitoring)
 
+## PR workflow scripts
+
+Use `scripts/pr` for structured review/prepare/merge flows when maintaining PRs:
+
+- `scripts/pr review-init <PR>`
+- `scripts/pr prepare-run <PR>`
+- `scripts/pr merge-verify <PR>`
+
+Before opening a new PR, complete the repository PR template in `.github/pull_request_template.md` and include reproducible verification evidence.
+
 ## When adding scripts
 
 - Keep scripts focused and documented.
