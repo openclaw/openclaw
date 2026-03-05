@@ -4,6 +4,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import {
   type ProcessSession,
   deleteSession,
@@ -63,6 +64,11 @@ const processSchema = Type.Object({
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
+  stripAnsi: Type.Optional(
+    Type.Boolean({
+      description: "Strip ANSI escape sequences from output (reduces transcript size)",
+    }),
+  ),
   timeout: Type.Optional(
     Type.Number({
       description: "For poll: wait up to this many milliseconds before returning",
@@ -175,6 +181,7 @@ export function createProcessTool(
         eof?: boolean;
         offset?: number;
         limit?: number;
+        stripAnsi?: boolean;
         timeout?: unknown;
       };
 
@@ -295,12 +302,17 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              const tailOutput = scopedFinished.tail
+                ? params.stripAnsi !== false
+                  ? stripAnsi(scopedFinished.tail)
+                  : scopedFinished.tail
+                : undefined;
               return {
                 content: [
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
+                      (tailOutput ||
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
@@ -353,7 +365,10 @@ export function createProcessTool(
               ? "completed"
               : "failed"
             : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          let output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          if (params.stripAnsi !== false) {
+            output = stripAnsi(output);
+          }
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
             ? undefined
@@ -405,8 +420,11 @@ export function createProcessTool(
               window.effectiveLimit,
             );
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
+            const outputText = params.stripAnsi !== false ? stripAnsi(slice || "") : slice || "";
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                { type: "text", text: (outputText || "(no output yet)") + logDefaultTailNote },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -427,9 +445,10 @@ export function createProcessTool(
             );
             const status = scopedFinished.status === "completed" ? "completed" : "failed";
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
+            const outputText = params.stripAnsi !== false ? stripAnsi(slice || "") : slice || "";
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                { type: "text", text: (outputText || "(no output recorded)") + logDefaultTailNote },
               ],
               details: {
                 status,
