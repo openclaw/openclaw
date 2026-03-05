@@ -339,7 +339,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     await this.ensureProviderInitialized();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
-      void this.sync({ reason: "search" }).catch((err) => {
+      // Await sync so newly added files are searchable on the first query
+      // after the watcher marks the index dirty.
+      await this.sync({ reason: "search" }).catch((err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
       });
     }
