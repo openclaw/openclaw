@@ -20,6 +20,7 @@ export type SetupChannelsOptions = {
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
   initialSelection?: ChannelId[];
+  secretInputMode?: "plaintext" | "ref";
 };
 
 export type PromptAccountIdParams = {

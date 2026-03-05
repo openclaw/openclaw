@@ -230,7 +230,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const text = await runThinkDirectiveAndGetText(home);
       expect(text).toContain("Current thinking level: high");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
+      expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 
       for (const model of ["openai-codex/gpt-5.2-codex", "openai/gpt-5.2"]) {
         const texts = await runThinkingDirective(home, model);

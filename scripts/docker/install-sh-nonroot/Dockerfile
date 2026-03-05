@@ -26,7 +26,8 @@ WORKDIR /home/app
 ENV NPM_CONFIG_FUND=false
 ENV NPM_CONFIG_AUDIT=false
 
-COPY run.sh /usr/local/bin/openclaw-install-nonroot
+COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
+COPY install-sh-nonroot/run.sh /usr/local/bin/openclaw-install-nonroot
 RUN sudo chmod +x /usr/local/bin/openclaw-install-nonroot
 
 ENTRYPOINT ["/usr/local/bin/openclaw-install-nonroot"]

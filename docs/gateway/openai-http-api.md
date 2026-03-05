@@ -28,6 +28,18 @@ Notes:
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
+## Security boundary (important)
+
+Treat this endpoint as a **full operator-access** surface for the gateway instance.
+
+- HTTP bearer auth here is not a narrow per-user scope model.
+- A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
+- Requests run through the same control-plane agent path as trusted operator actions.
+- If the target agent policy allows sensitive tools, this endpoint can use them.
+- Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+See [Security](/gateway/security) and [Remote access](/gateway/remote).
+
 ## Choosing an agent
 
 No custom headers required: encode the agent id in the OpenAI `model` field:
