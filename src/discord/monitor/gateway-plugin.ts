@@ -7,6 +7,34 @@ import type { DiscordAccountConfig } from "../../config/types.js";
 import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type GatewayPluginWithReconnectionHandler = GatewayPlugin & {
+  emitter?: {
+    emit: (event: string, payload?: unknown) => void;
+  };
+  handleReconnectionAttempt?: (...args: unknown[]) => unknown;
+};
+
+function withReconnectionErrorHandling(
+  plugin: GatewayPluginWithReconnectionHandler,
+  runtime: RuntimeEnv,
+): GatewayPluginWithReconnectionHandler {
+  const originalHandleReconnectionAttempt = plugin.handleReconnectionAttempt;
+  if (typeof originalHandleReconnectionAttempt !== "function") {
+    return plugin;
+  }
+
+  plugin.handleReconnectionAttempt = async (...args: unknown[]) => {
+    try {
+      await Promise.resolve(originalHandleReconnectionAttempt.apply(plugin, args));
+    } catch (error) {
+      plugin.emitter?.emit("error", error);
+      runtime.error?.(danger(`discord gateway reconnect failure: ${String(error)}`));
+    }
+  };
+
+  return plugin;
+}
+
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,
 ): number {
@@ -40,7 +68,7 @@ export function createDiscordGatewayPlugin(params: {
   };
 
   if (!proxy) {
-    return new GatewayPlugin(options);
+    return withReconnectionErrorHandling(new GatewayPlugin(options), params.runtime);
   }
 
   try {
@@ -79,9 +107,9 @@ export function createDiscordGatewayPlugin(params: {
       }
     }
 
-    return new ProxyGatewayPlugin();
+    return withReconnectionErrorHandling(new ProxyGatewayPlugin(), params.runtime);
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-    return new GatewayPlugin(options);
+    return withReconnectionErrorHandling(new GatewayPlugin(options), params.runtime);
   }
 }

@@ -3,6 +3,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   GatewayIntents,
   baseRegisterClientSpy,
+  handleReconnectionAttemptSpy,
+  gatewayErrorEmitterSpy,
   GatewayPlugin,
   HttpsProxyAgent,
   getLastAgent,
@@ -18,6 +20,8 @@ const {
   const restProxyAgentSpy = vi.fn();
   const undiciFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
+  const handleReconnectionAttemptSpy = vi.fn(async () => undefined);
+  const gatewayErrorEmitterSpy = vi.fn();
   const webSocketSpy = vi.fn();
 
   const GatewayIntents = {
@@ -34,12 +38,17 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    emitter: { emit: ReturnType<typeof vi.fn> };
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
+      this.emitter = { emit: (...args: unknown[]) => gatewayErrorEmitterSpy(...args) };
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
+    }
+    async handleReconnectionAttempt(...args: unknown[]) {
+      return handleReconnectionAttemptSpy(...args);
     }
   }
 
@@ -58,6 +67,8 @@ const {
 
   return {
     baseRegisterClientSpy,
+    handleReconnectionAttemptSpy,
+    gatewayErrorEmitterSpy,
     GatewayIntents,
     GatewayPlugin,
     HttpsProxyAgent,
@@ -127,6 +138,8 @@ describe("createDiscordGatewayPlugin", () => {
     undiciProxyAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
+    gatewayErrorEmitterSpy.mockClear();
+    handleReconnectionAttemptSpy.mockClear();
     resetLastAgent();
   });
 
@@ -193,5 +206,32 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles handleReconnectionAttempt failures by emitting gateway error instead of throwing", async () => {
+    const runtime = createRuntime();
+    handleReconnectionAttemptSpy.mockRejectedValueOnce(
+      new Error("Max reconnect attempts (0) reached after code 1006"),
+    );
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const pluginHandleReconnectionAttempt = (
+      plugin as {
+        handleReconnectionAttempt: (...args: unknown[]) => Promise<unknown>;
+        emitter: { emit: ReturnType<typeof vi.fn> };
+      }
+    ).handleReconnectionAttempt;
+
+    await expect(pluginHandleReconnectionAttempt(1006)).resolves.toBeUndefined();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway reconnect failure"),
+    );
+    expect(gatewayErrorEmitterSpy).toHaveBeenCalledWith("error", expect.any(Error));
+    expect(handleReconnectionAttemptSpy).toHaveBeenCalledWith(1006);
   });
 });
