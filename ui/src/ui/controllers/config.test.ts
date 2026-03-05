@@ -212,6 +212,55 @@ describe("applyConfig", () => {
 });
 
 describe("saveConfig", () => {
+  it("uses form payload in raw mode when raw text is unchanged but form is dirty", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configFormDirty = true;
+    state.configRawOriginal = "{\n}\n";
+    state.configRaw = "{\n}\n";
+    state.configForm = {
+      agents: {
+        list: [{ id: "momo", model: "openai-codex/gpt-5.3-codex" }],
+      },
+    };
+    state.configSnapshot = { hash: "hash-save-raw-form" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      agents: { list: Array<{ id: string; model: string }> };
+    };
+    expect(parsed.agents.list[0]?.model).toBe("openai-codex/gpt-5.3-codex");
+    expect(params.baseHash).toBe("hash-save-raw-form");
+  });
+
+  it("keeps raw payload in raw mode when raw text changed", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configFormDirty = true;
+    state.configRawOriginal = "{\n}\n";
+    state.configRaw = '{\n  "gateway": { "mode": "local" }\n}\n';
+    state.configForm = {
+      gateway: { mode: "remote" },
+    };
+    state.configSnapshot = { hash: "hash-save-raw-raw" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    expect(params.raw).toBe('{\n  "gateway": { "mode": "local" }\n}\n');
+    expect(params.baseHash).toBe("hash-save-raw-raw");
+  });
+
   it("coerces schema-typed values before config.set in form mode", async () => {
     const request = createRequestWithConfigGet();
     const state = createState();

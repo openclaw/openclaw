@@ -117,8 +117,18 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
-  if (state.configFormMode !== "form" || !state.configForm) {
+  if (!state.configForm) {
     return state.configRaw;
+  }
+
+  if (state.configFormMode === "raw") {
+    // Other UI panels (Agents/Channels/Nodes) edit `configForm` directly even when
+    // the Config view is in raw mode. If raw text is untouched, prefer form data
+    // so those edits are persisted by Save/Apply.
+    const rawUnchanged = state.configRaw === state.configRawOriginal;
+    if (!state.configFormDirty || !rawUnchanged) {
+      return state.configRaw;
+    }
   }
   const schema = asJsonSchema(state.configSchema);
   const form = schema
