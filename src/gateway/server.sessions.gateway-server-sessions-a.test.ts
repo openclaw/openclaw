@@ -502,7 +502,8 @@ describe("gateway server sessions", () => {
       listAfterDelete.payload?.sessions.some((s) => s.key === "agent:main:discord:group:dev"),
     ).toBe(false);
     const filesAfterDelete = await fs.readdir(dir);
-    expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
+    expect(filesAfterDelete).not.toContain("sess-group.jsonl");
+    expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(false);
 
     const reset = await rpcReq<{
       ok: true;

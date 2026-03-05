@@ -38,6 +38,7 @@ import {
 import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  deleteSessionTranscripts,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
@@ -588,14 +589,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return hadEntry;
     });
 
-    const archived =
-      deleted && deleteTranscript
-        ? archiveSessionTranscriptsForSession({
+    const removedTranscripts =
+      deleted && deleteTranscript && sessionId
+        ? await deleteSessionTranscripts({
             sessionId,
             storePath,
             sessionFile: entry?.sessionFile,
             agentId: target.agentId,
-            reason: "deleted",
+            restrictToStoreDir: true,
           })
         : [];
     if (deleted) {
@@ -607,7 +608,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+    respond(
+      true,
+      { ok: true, key: target.canonicalKey, deleted, archived: removedTranscripts },
+      undefined,
+    );
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

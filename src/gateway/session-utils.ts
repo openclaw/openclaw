@@ -50,6 +50,7 @@ export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   capArrayByJsonBytes,
+  deleteSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionTitleFieldsFromTranscript,
