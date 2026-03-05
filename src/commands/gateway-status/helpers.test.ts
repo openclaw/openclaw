@@ -195,4 +195,41 @@ describe("resolveAuthForTarget", () => {
 
     expect(auth).toEqual({ token: "remote-token", password: undefined });
   });
+
+  it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {
+    await withEnvAsync(
+      {
+        MISSING_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        const auth = await resolveAuthForTarget(
+          {
+            secrets: {
+              providers: {
+                default: { source: "env" },
+              },
+            },
+            gateway: {
+              auth: {
+                mode: "token",
+                token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+              },
+            },
+          },
+          {
+            id: "localLoopback",
+            kind: "localLoopback",
+            url: "ws://127.0.0.1:18789",
+            active: true,
+          },
+          {},
+        );
+
+        expect(auth.diagnostics).toContain(
+          "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
+        );
+        expect(auth.diagnostics?.join("\n")).not.toContain("missing or empty");
+      },
+    );
+  });
 });

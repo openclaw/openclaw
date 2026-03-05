@@ -216,6 +216,8 @@ describe("gateway-status command", () => {
     );
     expect(unresolvedWarning).toBeTruthy();
     expect(unresolvedWarning?.targetIds).toContain("localLoopback");
+    expect(unresolvedWarning?.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
+    expect(unresolvedWarning?.message).not.toContain("missing or empty");
   });
 
   it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {

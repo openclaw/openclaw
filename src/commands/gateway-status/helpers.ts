@@ -171,8 +171,11 @@ async function resolveConfiguredSecretInputValue(
         return { unresolvedRefReason: `${path} SecretRef resolved to an empty value.` };
       }
       return { value: trimmed };
-    } catch (err) {
-      return { unresolvedRefReason: `${path} SecretRef is unresolved (${String(err)}).` };
+    } catch {
+      const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
+      return {
+        unresolvedRefReason: `${path} SecretRef is unresolved (${refLabel}).`,
+      };
     }
   }
   if (typeof value === "string") {
