@@ -486,9 +486,6 @@ async function maybePinFirstDeliveredMessage(params: {
     await params.bot.api.pinChatMessage(params.chatId, params.firstDeliveredMessageId, {
       disable_notification: true,
     });
-    params.runtime.log?.(
-      `telegram pinChatMessage ok chat=${params.chatId} message=${params.firstDeliveredMessageId}`,
-    );
   } catch (err) {
     logVerbose(
       `telegram pinChatMessage failed chat=${params.chatId} message=${params.firstDeliveredMessageId}: ${formatErrorMessage(err)}`,
