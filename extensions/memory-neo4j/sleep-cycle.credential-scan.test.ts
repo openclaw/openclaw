@@ -180,6 +180,7 @@ function makeDb(overrides: Record<string, unknown> = {}): any {
     reconcileEntityMentionCounts: vi.fn().mockResolvedValue(undefined),
     findDuplicateEntityPairs: vi.fn().mockResolvedValue([]),
     mergeEntityPair: vi.fn().mockResolvedValue(true),
+    batchMergeEntityPairs: vi.fn().mockResolvedValue(0),
     countByExtractionStatus: vi
       .fn()
       .mockResolvedValue({ pending: 0, complete: 0, failed: 0, skipped: 0 }),
@@ -198,6 +199,7 @@ function makeDb(overrides: Record<string, unknown> = {}): any {
     // Credential scan methods — overridden per test
     fetchMemoriesForCredentialScan: vi.fn().mockResolvedValue([]),
     deleteMemoriesByIds: vi.fn().mockResolvedValue(0),
+    storeManyMemories: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
 }
@@ -228,9 +230,17 @@ describe("Phase 5b: credential scan — paginated batch loop", () => {
     vi.clearAllMocks();
   });
 
-  it("single batch (< 200 memories): fetches once, deletes credential, stops", async () => {
-    const cleanMemory = { id: "clean-1", text: "Remember to buy groceries" };
-    const credMemory = { id: "cred-1", text: "Use sk-abc123def456ghi789jkl012mno345 for the API" };
+  it("single batch (< 200 memories): fetches once with empty cursor, deletes credential, stops", async () => {
+    const cleanMemory = {
+      id: "clean-1",
+      text: "Remember to buy groceries",
+      createdAt: "2024-01-01T00:00:01Z",
+    };
+    const credMemory = {
+      id: "cred-1",
+      text: "Use sk-abc123def456ghi789jkl012mno345 for the API",
+      createdAt: "2024-01-01T00:00:02Z",
+    };
 
     const db = makeDb({
       fetchMemoriesForCredentialScan: vi.fn().mockResolvedValueOnce([cleanMemory, credMemory]),
@@ -239,16 +249,22 @@ describe("Phase 5b: credential scan — paginated batch loop", () => {
 
     const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
 
+    // Cursor-based: first call uses empty string cursor (not offset 0)
     expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(1);
-    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledWith(0, 200, undefined);
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledWith("", 200, undefined);
     expect(db.deleteMemoriesByIds).toHaveBeenCalledWith(["cred-1"]);
     expect(result.credentialScan.memoriesScanned).toBe(2);
     expect(result.credentialScan.credentialsFound).toBe(1);
     expect(result.credentialScan.memoriesRemoved).toBe(1);
   });
 
-  it("multiple batches: processes first batch of 200 then second batch of 50", async () => {
-    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+  it("cursor advances to last record's createdAt for second page", async () => {
+    // Batch 1: 200 records, last one has createdAt "2024-01-01T00:03:20Z"
+    const makeMem = (i: number) => ({
+      id: `mem-${i}`,
+      text: `Clean memory ${i}`,
+      createdAt: `2024-01-01T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`,
+    });
     const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
     const batch2 = Array.from({ length: 50 }, (_, i) => makeMem(200 + i));
 
@@ -262,14 +278,26 @@ describe("Phase 5b: credential scan — paginated batch loop", () => {
     const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
 
     expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(2);
-    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(1, 0, 200, undefined);
-    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(2, 200, 200, undefined);
+    // First call: empty cursor
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(1, "", 200, undefined);
+    // Second call: cursor = createdAt of last record in batch1
+    const expectedCursor = batch1[batch1.length - 1].createdAt;
+    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(
+      2,
+      expectedCursor,
+      200,
+      undefined,
+    );
     expect(result.credentialScan.memoriesScanned).toBe(250);
     expect(result.credentialScan.credentialsFound).toBe(0);
   });
 
-  it("batch boundary: exactly 200 triggers second fetch; empty second batch stops", async () => {
-    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+  it("batch boundary: exactly 200 triggers second fetch using cursor; empty second batch stops", async () => {
+    const makeMem = (i: number) => ({
+      id: `mem-${i}`,
+      text: `Clean memory ${i}`,
+      createdAt: `2024-01-01T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`,
+    });
     const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
 
     const db = makeDb({
@@ -282,18 +310,57 @@ describe("Phase 5b: credential scan — paginated batch loop", () => {
     const result = await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
 
     expect(db.fetchMemoriesForCredentialScan).toHaveBeenCalledTimes(2);
-    expect(db.fetchMemoriesForCredentialScan).toHaveBeenNthCalledWith(2, 200, 200, undefined);
+    // Second call uses cursor (not numeric offset)
+    const secondCallArgs = (db.fetchMemoriesForCredentialScan as ReturnType<typeof vi.fn>).mock
+      .calls[1];
+    expect(typeof secondCallArgs[0]).toBe("string"); // cursor is a string
+    expect(secondCallArgs[1]).toBe(200);
     expect(result.credentialScan.memoriesScanned).toBe(200);
+  });
+
+  it("uses WHERE m.createdAt > $cursor instead of SKIP $offset (cursor-based pagination)", async () => {
+    // Verify cursor-based pagination: first call uses "" (empty string, not 0),
+    // and second call uses the createdAt of the last record from page 1.
+    const makeMem = (i: number) => ({
+      id: `m${i}`,
+      text: `Clean memory ${i}`,
+      createdAt: `2024-06-01T12:00:${String(i % 60).padStart(2, "0")}.${String(i).padStart(3, "0")}Z`,
+    });
+    // Provide exactly 200 records so the loop tries a second page
+    const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
+
+    const db = makeDb({
+      fetchMemoriesForCredentialScan: vi
+        .fn()
+        .mockResolvedValueOnce(batch1)
+        .mockResolvedValueOnce([]),
+    });
+
+    await runSleepCycle(db, mockEmbeddings, mockConfig, mockLogger);
+
+    const calls = (db.fetchMemoriesForCredentialScan as ReturnType<typeof vi.fn>).mock.calls;
+    // First call: cursor is empty string, not numeric 0
+    expect(calls[0][0]).toBe("");
+    // Second call: cursor is the createdAt of the last record in batch1, not 200
+    expect(calls[1][0]).toBe(batch1[batch1.length - 1].createdAt);
+    expect(typeof calls[1][0]).toBe("string");
+    // Confirm it's NOT a number (the old SKIP offset pattern)
+    expect(calls[0][0]).not.toBe(0);
+    expect(calls[1][0]).not.toBe(200);
   });
 
   it("AbortSignal respected between batches: loop exits after first batch when signal aborted", async () => {
     const controller = new AbortController();
-    const makeMem = (i: number) => ({ id: `mem-${i}`, text: `Clean memory ${i}` });
+    const makeMem = (i: number) => ({
+      id: `mem-${i}`,
+      text: `Clean memory ${i}`,
+      createdAt: `2024-01-01T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`,
+    });
     const batch1 = Array.from({ length: 200 }, (_, i) => makeMem(i));
 
     const db = makeDb({
-      fetchMemoriesForCredentialScan: vi.fn().mockImplementation(async (offset: number) => {
-        if (offset === 0) {
+      fetchMemoriesForCredentialScan: vi.fn().mockImplementation(async (cursor: string) => {
+        if (cursor === "") {
           // Abort the signal after returning the first full batch
           controller.abort();
           return batch1;

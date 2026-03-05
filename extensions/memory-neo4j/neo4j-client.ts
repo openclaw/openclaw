@@ -321,6 +321,79 @@ export class Neo4jMemoryClient {
     });
   }
 
+  /**
+   * Store multiple memories in a single Cypher UNWIND statement (OP-107).
+   *
+   * Used by Phase 8 tip generation to batch-store all generated tips after
+   * a single embedBatch call, reducing 50×3 serial roundtrips to 2 operations.
+   * Applies the same write-time credential scan as storeMemory(); any tip
+   * containing a credential is silently skipped (not stored).
+   *
+   * @returns Number of memories actually stored
+   */
+  async storeManyMemories(inputs: StoreMemoryInput[]): Promise<number> {
+    if (inputs.length === 0) return 0;
+    await this.ensureInitialized();
+
+    // OP-97: Write-time credential scan — filter out any secrets before persisting
+    const safe = inputs.filter((inp) => {
+      const match = detectCredential(inp.text);
+      if (match !== null) {
+        this.logger.warn(
+          `memory-neo4j: storeManyMemories blocked entry — text contains a potential ${match}. Skipping.`,
+        );
+        return false;
+      }
+      return true;
+    });
+
+    if (safe.length === 0) return 0;
+
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        const now = new Date().toISOString();
+        const items = safe.map((inp) => ({
+          id: inp.id,
+          text: inp.text,
+          embedding: inp.embedding,
+          importance: inp.importance,
+          category: inp.category,
+          source: inp.source,
+          extractionStatus: inp.extractionStatus,
+          agentId: inp.agentId,
+          sessionKey: inp.sessionKey ?? null,
+          createdAt: now,
+          updatedAt: now,
+          originalCreatedAt: now,
+          validFrom: inp.validFrom ?? now,
+          retrievalCount: 0,
+          lastRetrievedAt: null,
+          extractionRetries: 0,
+        }));
+        const result = await session.run(
+          `UNWIND $items AS m
+           CREATE (n:Memory {
+             id: m.id, text: m.text, embedding: m.embedding,
+             importance: m.importance, category: m.category,
+             source: m.source, extractionStatus: m.extractionStatus,
+             agentId: m.agentId, sessionKey: m.sessionKey,
+             createdAt: m.createdAt, updatedAt: m.updatedAt,
+             originalCreatedAt: m.originalCreatedAt,
+             retrievalCount: m.retrievalCount, lastRetrievedAt: m.lastRetrievedAt,
+             extractionRetries: m.extractionRetries,
+             validFrom: m.validFrom, validUntil: null, supersededBy: null
+           })
+           RETURN count(*) AS stored`,
+          { items },
+        );
+        return (result.records[0]?.get("stored") as number) ?? 0;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
   async deleteMemory(id: string, agentId?: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
@@ -2415,6 +2488,95 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
   }
 
   /**
+   * Batch-merge multiple entity pairs in a single transaction (OP-106).
+   *
+   * Instead of N individual mergeEntityPair calls (N round-trips), this method
+   * processes all pairs at once using UNWIND:
+   * 1. Transfer all MENTIONS relationships in one query
+   * 2. Re-point inter-entity relationships — one UNWIND query per rel type
+   *    (7 types × 2 directions = 14 queries), but each covers all N pairs
+   * 3. Delete all removed entities in one query
+   *
+   * Callers must pre-filter pairs to avoid cascading merges (e.g., skip pairs
+   * where keepId or removeId has already been removed by an earlier merge).
+   *
+   * @returns Number of pairs merged (equals pairs.length on success, 0 on error)
+   */
+  async batchMergeEntityPairs(pairs: Array<{ keepId: string; removeId: string }>): Promise<number> {
+    if (pairs.length === 0) return 0;
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        await session.executeWrite(async (tx) => {
+          const now = new Date().toISOString();
+
+          // 1. Transfer MENTIONS (Memory→Entity) from all removed entities to their
+          //    corresponding kept entities — single UNWIND covers all pairs
+          await tx.run(
+            `UNWIND $pairs AS pair
+             MATCH (remove:Entity {id: pair.removeId})<-[r:MENTIONS]-(m:Memory)
+             MATCH (keep:Entity {id: pair.keepId})
+             MERGE (m)-[:MENTIONS]->(keep)
+             DELETE r`,
+            { pairs },
+          );
+
+          // 2. Re-point inter-entity relationships for all ALLOWED_RELATIONSHIP_TYPES.
+          //    Cypher requires literal relationship types, so one query per type —
+          //    but each query handles all N pairs via UNWIND (not N×7 individual calls).
+          for (const relType of ALLOWED_RELATIONSHIP_TYPES) {
+            // Outgoing: (remove)-[relType]->(other) → (keep)-[relType]->(other)
+            await tx.run(
+              `UNWIND $pairs AS pair
+               MATCH (remove:Entity {id: pair.removeId})-[r:${relType}]->(other:Entity)
+               MATCH (keep:Entity {id: pair.keepId})
+               WHERE keep <> other
+               MERGE (keep)-[:${relType}]->(other)
+               DELETE r`,
+              { pairs },
+            );
+            // Incoming: (other)-[relType]->(remove) → (other)-[relType]->(keep)
+            await tx.run(
+              `UNWIND $pairs AS pair
+               MATCH (other:Entity)-[r:${relType}]->(remove:Entity {id: pair.removeId})
+               MATCH (keep:Entity {id: pair.keepId})
+               WHERE other <> keep
+               MERGE (other)-[:${relType}]->(keep)
+               DELETE r`,
+              { pairs },
+            );
+          }
+
+          // 3. Update mentionCounts for all kept entities
+          await tx.run(
+            `UNWIND $pairs AS pair
+             MATCH (keep:Entity {id: pair.keepId})
+             OPTIONAL MATCH (m:Memory)-[:MENTIONS]->(keep)
+             WITH keep, count(m) AS actual
+             SET keep.mentionCount = actual, keep.lastSeen = $now`,
+            { pairs, now },
+          );
+
+          // 4. Delete all removed entities (DETACH handles any remaining stray rels)
+          await tx.run(
+            `UNWIND $pairs AS pair
+             MATCH (e:Entity {id: pair.removeId})
+             DETACH DELETE e`,
+            { pairs },
+          );
+        });
+
+        return pairs.length;
+      } catch {
+        return 0;
+      } finally {
+        await session.close();
+      }
+    });
+  }
+
+  /**
    * Delete non-core, non-pinned memories matching a regex pattern.
    * Used by the sleep cycle noise pattern cleanup.
    *
@@ -2442,33 +2604,37 @@ Return JSON: {"classification": "SUPERSEDES"|"COMPLEMENTS"|"UNRELATED"}`,
   }
 
   /**
-   * Fetch a paginated batch of memories (id + text) for credential scanning.
+   * Fetch a paginated batch of memories (id + text + createdAt) for credential scanning.
    * Used by the sleep cycle credential scanner — scans every memory
    * including core, since credentials must never be persisted regardless
    * of category or pin status.
    *
-   * Uses ORDER BY m.createdAt ASC for a stable cursor across pages.
+   * Uses cursor-based pagination (WHERE m.createdAt > $cursor) instead of
+   * SKIP to avoid O(N²) re-scanning from the beginning on each page (Perf-6).
+   * Pass cursor="" for the first page; subsequent pages use the createdAt of
+   * the last record from the previous batch.
    */
   async fetchMemoriesForCredentialScan(
-    offset: number,
+    cursor: string,
     limit: number,
     agentId?: string,
-  ): Promise<Array<{ id: string; text: string }>> {
+  ): Promise<Array<{ id: string; text: string; createdAt: string }>> {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE ($agentId IS NULL OR m.agentId = $agentId)
-         RETURN m.id AS id, m.text AS text
+           AND m.createdAt > $cursor
+         RETURN m.id AS id, m.text AS text, m.createdAt AS createdAt
          ORDER BY m.createdAt ASC
-         SKIP $offset
          LIMIT $limit`,
-        { agentId: agentId ?? null, offset, limit },
+        { agentId: agentId ?? null, cursor, limit },
       );
       return result.records.map((r) => ({
         id: r.get("id") as string,
         text: r.get("text") as string,
+        createdAt: r.get("createdAt") as string,
       }));
     } finally {
       await session.close();

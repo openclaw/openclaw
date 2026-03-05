@@ -35,6 +35,14 @@ vi.mock("./task-ledger.js", () => ({
   reviewAndArchiveStaleTasks: vi.fn(),
 }));
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readdir: vi.fn().mockResolvedValue([]),
+    stat: vi.fn().mockResolvedValue({ mtimeMs: Date.now() }),
+    readFile: vi.fn().mockResolvedValue(""),
+  },
+}));
+
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
@@ -57,6 +65,7 @@ function createMockDb(): Neo4jMemoryClient {
     reconcileEntityMentionCounts: vi.fn().mockResolvedValue(0),
     findDuplicateEntityPairs: vi.fn().mockResolvedValue([]),
     mergeEntityPair: vi.fn().mockResolvedValue(false),
+    batchMergeEntityPairs: vi.fn().mockResolvedValue(0),
     countByExtractionStatus: vi
       .fn()
       .mockResolvedValue({ pending: 0, complete: 0, failed: 0, skipped: 0 }),
@@ -80,12 +89,14 @@ function createMockDb(): Neo4jMemoryClient {
     searchMemoriesByKeywords: vi.fn().mockResolvedValue([]),
     findSimilar: vi.fn().mockResolvedValue([]),
     storeMemory: vi.fn().mockResolvedValue("mem-id"),
+    storeManyMemories: vi.fn().mockResolvedValue(0),
   } as unknown as Neo4jMemoryClient;
 }
 
 function createMockEmbeddings(): Embeddings {
   return {
     embed: vi.fn().mockResolvedValue([0.1, 0.2]),
+    embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2]]),
   } as unknown as Embeddings;
 }
 
@@ -199,5 +210,138 @@ describe("runSleepCycle orchestrator", () => {
     });
 
     expect(db.findDuplicateClusters).toHaveBeenCalledWith(0.75, undefined, true);
+  });
+
+  // --------------------------------------------------------------------------
+  // OP-106: Entity dedup uses batchMergeEntityPairs with UNWIND
+  // --------------------------------------------------------------------------
+
+  it("OP-106: calls batchMergeEntityPairs (not mergeEntityPair) when pairs are found", async () => {
+    const pairs = [
+      {
+        keepId: "keep-1",
+        keepName: "tarun",
+        removeId: "remove-1",
+        removeName: "tarun sukhani",
+        removeMentions: 3,
+      },
+    ];
+    (db.findDuplicateEntityPairs as ReturnType<typeof vi.fn>).mockResolvedValueOnce(pairs);
+    (db.batchMergeEntityPairs as ReturnType<typeof vi.fn>).mockResolvedValueOnce(1);
+
+    const result = await runSleepCycle(db, embeddings, baseConfig, logger, { ...fastOptions });
+
+    expect(db.batchMergeEntityPairs).toHaveBeenCalledTimes(1);
+    expect(db.batchMergeEntityPairs).toHaveBeenCalledWith([
+      { keepId: "keep-1", removeId: "remove-1" },
+    ]);
+    expect(db.mergeEntityPair).not.toHaveBeenCalled();
+    expect(result.entityDedup.merged).toBe(1);
+  });
+
+  it("OP-106: skips cascading pairs (removeId already removed by earlier merge)", async () => {
+    // Pair A→B and B→C: after A→B, B is removed so B→C should be skipped
+    const pairs = [
+      { keepId: "keep-A", keepName: "A", removeId: "remove-B", removeName: "B", removeMentions: 1 },
+      {
+        keepId: "remove-B",
+        keepName: "B",
+        removeId: "remove-C",
+        removeName: "C",
+        removeMentions: 1,
+      },
+    ];
+    (db.findDuplicateEntityPairs as ReturnType<typeof vi.fn>).mockResolvedValueOnce(pairs);
+    (db.batchMergeEntityPairs as ReturnType<typeof vi.fn>).mockResolvedValueOnce(1);
+
+    await runSleepCycle(db, embeddings, baseConfig, logger, { ...fastOptions });
+
+    // Only the first (non-cascading) pair should be passed to batch
+    const batchArg = (db.batchMergeEntityPairs as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Array<{ keepId: string; removeId: string }>;
+    expect(batchArg).toHaveLength(1);
+    expect(batchArg[0]).toEqual({ keepId: "keep-A", removeId: "remove-B" });
+  });
+
+  it("OP-106: skips batch call when no eligible pairs after cascade filter", async () => {
+    (db.findDuplicateEntityPairs as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    await runSleepCycle(db, embeddings, baseConfig, logger, { ...fastOptions });
+
+    expect(db.batchMergeEntityPairs).not.toHaveBeenCalled();
+  });
+
+  // --------------------------------------------------------------------------
+  // OP-107: Phase 8 tip generation uses embedBatch + storeManyMemories
+  // --------------------------------------------------------------------------
+
+  it("OP-107: calls embedBatch once for all tips and storeManyMemories once", async () => {
+    const fs = await import("node:fs/promises");
+    const mockFs = fs.default as {
+      readdir: ReturnType<typeof vi.fn>;
+      stat: ReturnType<typeof vi.fn>;
+      readFile: ReturnType<typeof vi.fn>;
+    };
+
+    // Provide one fake session file with a failure+correction pattern
+    const sessionJsonl = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "Bash",
+          content: [{ type: "text", text: "Error: command not found" }],
+          details: { exitCode: 1 },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "I will fix the path and retry." }],
+        },
+      }),
+    ].join("\n");
+
+    mockFs.readdir.mockResolvedValueOnce(["session-001.jsonl"]);
+    mockFs.stat.mockResolvedValueOnce({ mtimeMs: Date.now() });
+    mockFs.readFile.mockResolvedValueOnce(sessionJsonl);
+
+    const { callOpenRouter } = await import("./llm-client.js");
+    const mockCallOpenRouter = callOpenRouter as ReturnType<typeof vi.fn>;
+
+    const tipsJson = JSON.stringify({
+      tips: [
+        {
+          text: "Always verify your assumptions before committing code changes to main branch",
+          importance: 0.9,
+        },
+        {
+          text: "Use cursor-based pagination instead of SKIP for large dataset queries",
+          importance: 0.85,
+        },
+      ],
+    });
+    mockCallOpenRouter.mockResolvedValueOnce(tipsJson);
+
+    (embeddings.embedBatch as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      [0.1, 0.2, 0.3],
+      [0.4, 0.5, 0.6],
+    ]);
+    (db.storeManyMemories as ReturnType<typeof vi.fn>).mockResolvedValueOnce(2);
+
+    const enabledConfig = { ...baseConfig, enabled: true };
+
+    await runSleepCycle(db, embeddings, enabledConfig, logger, {
+      ...fastOptions,
+      skipTipGeneration: false,
+    });
+
+    // embedBatch should be called once for all tips (not once per tip)
+    expect(embeddings.embedBatch).toHaveBeenCalledTimes(1);
+    // storeManyMemories should be called once with all tips
+    expect(db.storeManyMemories).toHaveBeenCalledTimes(1);
+    // storeMemory (single-tip path) should NOT be called
+    expect(db.storeMemory).not.toHaveBeenCalled();
   });
 });

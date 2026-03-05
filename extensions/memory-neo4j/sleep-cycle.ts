@@ -788,26 +788,32 @@ export async function runSleepCycle(
       const pairs = await db.findDuplicateEntityPairs(agentId);
       result.entityDedup.pairsFound = pairs.length;
 
-      // Track removed entity IDs to skip cascading merges on already-deleted entities
-      const removedIds = new Set<string>();
-
-      for (const pair of pairs) {
-        if (abortSignal?.aborted) {
-          break;
-        }
-        // Skip if either entity was already removed in a previous merge
-        if (removedIds.has(pair.keepId) || removedIds.has(pair.removeId)) {
-          continue;
-        }
-
-        const merged = await db.mergeEntityPair(pair.keepId, pair.removeId);
-        if (merged) {
+      if (pairs.length > 0) {
+        // Pre-filter pairs to skip cascading merges: if entity B was already
+        // removed by an earlier merge (A→B), skip any later pair involving B.
+        // This sequential pass preserves correctness before the batch call.
+        const removedIds = new Set<string>();
+        const eligiblePairs: typeof pairs = [];
+        for (const pair of pairs) {
+          if (abortSignal?.aborted) break;
+          if (removedIds.has(pair.keepId) || removedIds.has(pair.removeId)) continue;
+          eligiblePairs.push(pair);
           removedIds.add(pair.removeId);
-          result.entityDedup.merged++;
-          onProgress?.(
-            "entityDedup",
-            `Merged "${pair.removeName}" → "${pair.keepName}" (${pair.removeMentions} mentions transferred)`,
+        }
+
+        if (eligiblePairs.length > 0 && !abortSignal?.aborted) {
+          // Batch all eligible merges in a single transaction via UNWIND (OP-106).
+          // This replaces N individual mergeEntityPair calls with 2+7×2+1 queries total.
+          const mergedCount = await db.batchMergeEntityPairs(
+            eligiblePairs.map((p) => ({ keepId: p.keepId, removeId: p.removeId })),
           );
+          result.entityDedup.merged += mergedCount;
+          for (const pair of eligiblePairs) {
+            onProgress?.(
+              "entityDedup",
+              `Merged "${pair.removeName}" → "${pair.keepName}" (${pair.removeMentions} mentions transferred)`,
+            );
+          }
         }
       }
 
@@ -1240,13 +1246,16 @@ export async function runSleepCycle(
 
     try {
       const CREDENTIAL_SCAN_BATCH = 200;
-      let offset = 0;
+      // Cursor-based pagination: start before the earliest possible timestamp.
+      // Each page fetches records where createdAt > lastSeen, avoiding the
+      // O(N²) re-scan from the start that SKIP-based pagination causes (Perf-6).
+      let lastSeen = "";
 
       while (true) {
         if (abortSignal?.aborted) break;
 
         const batch = await db.fetchMemoriesForCredentialScan(
-          offset,
+          lastSeen,
           CREDENTIAL_SCAN_BATCH,
           agentId,
         );
@@ -1270,15 +1279,14 @@ export async function runSleepCycle(
           }
         }
 
-        let deletedInThisBatch = 0;
         if (toRemove.length > 0) {
-          deletedInThisBatch = await db.deleteMemoriesByIds(toRemove);
+          const deletedInThisBatch = await db.deleteMemoriesByIds(toRemove);
           result.credentialScan.memoriesRemoved += deletedInThisBatch;
         }
 
         if (batch.length < CREDENTIAL_SCAN_BATCH) break; // last page
-        // Subtract deleted records so SKIP stays aligned after in-batch removals
-        offset += batch.length - deletedInThisBatch;
+        // Advance cursor to the createdAt of the last record in this batch
+        lastSeen = batch[batch.length - 1].createdAt;
       }
 
       logger.info(
@@ -1545,6 +1553,9 @@ export async function runSleepCycle(
             `Found ${allPatterns.length} failure patterns — generating tips`,
           );
 
+          // Phase 1: Collect all tip objects from all LLM batches (no embedding yet)
+          const collectedTips: Array<{ text: string; importance: number }> = [];
+
           const BATCH_SIZE = 10;
           for (let i = 0; i < allPatterns.length && !abortSignal?.aborted; i += BATCH_SIZE) {
             const batch = allPatterns.slice(i, i + BATCH_SIZE);
@@ -1588,44 +1599,54 @@ export async function runSleepCycle(
                     ? Math.min(1.0, Math.max(0.1, tipObj.importance))
                     : 0.8;
 
-                result.tipGeneration.tipsGenerated++;
-
-                let embedding: number[] = [];
-                try {
-                  embedding = await embeddings.embed(text);
-                } catch {
-                  continue;
-                }
-
-                // Dedup: skip if a very similar lesson already exists
-                const similar = await db.findSimilar(embedding, 0.9, 1, agentId);
-                if (similar.length > 0) {
-                  onProgress?.(
-                    "tipGeneration",
-                    `Skipped duplicate tip (${(similar[0].score * 100).toFixed(0)}% similar to existing)`,
-                  );
-                  continue;
-                }
-
-                try {
-                  await db.storeMemory({
-                    id: randomUUID(),
-                    text,
-                    embedding,
-                    importance,
-                    category: "lesson",
-                    source: "auto-capture-assistant",
-                    extractionStatus: "pending",
-                    agentId: agentId ?? "main",
-                  });
-                  result.tipGeneration.tipsStored++;
-                  onProgress?.("tipGeneration", `Stored lesson: "${text.slice(0, 80)}..."`);
-                } catch {
-                  // Skip on storage failure
-                }
+                collectedTips.push({ text, importance });
               }
             } catch {
               // Skip batch on LLM/parse failure
+            }
+          }
+
+          result.tipGeneration.tipsGenerated = collectedTips.length;
+
+          // Phase 2: Batch-embed all tip texts in one call (OP-107).
+          // Then batch-store all tips in a single UNWIND statement.
+          // This reduces up to 50×3 serial roundtrips to 2 operations.
+          if (collectedTips.length > 0 && !abortSignal?.aborted) {
+            let tipEmbeddings: number[][];
+            try {
+              tipEmbeddings = await embeddings.embedBatch(collectedTips.map((t) => t.text));
+            } catch {
+              tipEmbeddings = [];
+            }
+
+            const toStore = collectedTips
+              .map((tip, idx) => ({
+                tip,
+                embedding: tipEmbeddings[idx] ?? [],
+              }))
+              .filter(({ embedding }) => embedding.length > 0)
+              .map(({ tip, embedding }) => ({
+                id: randomUUID(),
+                text: tip.text,
+                embedding,
+                importance: tip.importance,
+                category: "lesson" as const,
+                source: "auto-capture-assistant" as const,
+                extractionStatus: "pending" as const,
+                agentId: agentId ?? "main",
+              }));
+
+            if (toStore.length > 0) {
+              try {
+                const stored = await db.storeManyMemories(toStore);
+                result.tipGeneration.tipsStored += stored;
+                onProgress?.(
+                  "tipGeneration",
+                  `Stored ${stored} lessons from ${collectedTips.length} generated tips`,
+                );
+              } catch {
+                // Skip on storage failure
+              }
             }
           }
         } else {

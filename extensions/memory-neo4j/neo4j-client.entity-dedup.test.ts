@@ -310,6 +310,97 @@ describe("Entity Deduplication", () => {
   });
 
   // --------------------------------------------------------------------------
+  // batchMergeEntityPairs() — OP-106
+  // --------------------------------------------------------------------------
+
+  describe("batchMergeEntityPairs", () => {
+    it("returns 0 for empty pairs array without touching the DB", async () => {
+      const result = await client.batchMergeEntityPairs([]);
+      expect(result).toBe(0);
+      expect(mockSession.executeWrite).not.toHaveBeenCalled();
+    });
+
+    it("uses UNWIND for MENTIONS transfer across all pairs in one query", async () => {
+      const mockTx = { run: vi.fn().mockResolvedValue({ records: [] }) };
+      mockSession.executeWrite.mockImplementationOnce(async (work: any) => work(mockTx));
+
+      const pairs = [
+        { keepId: "keep-1", removeId: "remove-1" },
+        { keepId: "keep-2", removeId: "remove-2" },
+      ];
+      const result = await client.batchMergeEntityPairs(pairs);
+
+      expect(result).toBe(2);
+
+      // The first tx.run should be the MENTIONS transfer using UNWIND
+      const mentionsQuery = mockTx.run.mock.calls[0][0] as string;
+      expect(mentionsQuery).toContain("UNWIND $pairs AS pair");
+      expect(mentionsQuery).toContain("MERGE (m)-[:MENTIONS]->(keep)");
+      expect(mentionsQuery).toContain("DELETE r");
+
+      // The pairs parameter should contain both pairs
+      const mentionsParams = mockTx.run.mock.calls[0][1] as { pairs: unknown[] };
+      expect(mentionsParams.pairs).toHaveLength(2);
+    });
+
+    it("re-points inter-entity relationships for all ALLOWED_RELATIONSHIP_TYPES via UNWIND", async () => {
+      const mockTx = { run: vi.fn().mockResolvedValue({ records: [] }) };
+      mockSession.executeWrite.mockImplementationOnce(async (work: any) => work(mockTx));
+
+      await client.batchMergeEntityPairs([{ keepId: "keep-1", removeId: "remove-1" }]);
+
+      // Collect all query strings
+      const queries = mockTx.run.mock.calls.map((call) => call[0] as string);
+
+      // Each inter-entity rel type should appear in at least one query
+      const relTypes = [
+        "WORKS_AT",
+        "LIVES_AT",
+        "KNOWS",
+        "MARRIED_TO",
+        "PREFERS",
+        "DECIDED",
+        "RELATED_TO",
+      ];
+      for (const relType of relTypes) {
+        const hasType = queries.some((q) => q.includes(`:${relType}`));
+        expect(hasType).toBe(true);
+      }
+
+      // All rel-type queries should use UNWIND (not individual MATCH per pair)
+      const relTypeQueries = queries.filter((q) => q.includes("WORKS_AT") || q.includes("KNOWS"));
+      for (const q of relTypeQueries) {
+        expect(q).toContain("UNWIND $pairs AS pair");
+      }
+    });
+
+    it("deletes all removed entities with a single UNWIND query", async () => {
+      const mockTx = { run: vi.fn().mockResolvedValue({ records: [] }) };
+      mockSession.executeWrite.mockImplementationOnce(async (work: any) => work(mockTx));
+
+      await client.batchMergeEntityPairs([
+        { keepId: "keep-1", removeId: "remove-1" },
+        { keepId: "keep-2", removeId: "remove-2" },
+      ]);
+
+      const queries = mockTx.run.mock.calls.map((call) => call[0] as string);
+      const deleteQuery = queries.find((q) => q.includes("DETACH DELETE e"));
+      expect(deleteQuery).toBeDefined();
+      expect(deleteQuery).toContain("UNWIND $pairs AS pair");
+    });
+
+    it("returns 0 on error", async () => {
+      mockSession.executeWrite.mockRejectedValueOnce(new Error("Neo4j connection lost"));
+
+      const result = await client.batchMergeEntityPairs([
+        { keepId: "keep-1", removeId: "remove-1" },
+      ]);
+
+      expect(result).toBe(0);
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // reconcileEntityMentionCounts()
   // --------------------------------------------------------------------------
 
