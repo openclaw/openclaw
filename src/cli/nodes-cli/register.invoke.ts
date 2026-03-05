@@ -13,8 +13,8 @@ import {
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
-import { formatExecCommand } from "../../infra/system-run-command.js";
 import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -91,7 +91,10 @@ function resolveExecDefaults(
   };
 }
 
-async function resolveNodeRuntimeInfo(opts: NodesRpcOpts, nodeId: string): Promise<NodeRuntimeInfo> {
+async function resolveNodeRuntimeInfo(
+  opts: NodesRpcOpts,
+  nodeId: string,
+): Promise<NodeRuntimeInfo> {
   try {
     const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
