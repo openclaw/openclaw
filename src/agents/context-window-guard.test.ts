@@ -146,4 +146,69 @@ describe("context-window-guard", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
   });
+
+  describe("model contextWindow capping (issue #24031)", () => {
+    // These tests verify the contract used by run.ts to cap model.contextWindow
+    // before passing to the SDK. When ctxInfo.source === "agentContextTokens",
+    // the capped value should replace model.contextWindow so that the SDK's
+    // shouldCompact() triggers at the user's budget, not the model's native window.
+
+    it("returns agentContextTokens source when budget < model window", () => {
+      const cfg = {
+        agents: { defaults: { contextTokens: 100_000 } },
+      } satisfies OpenClawConfig;
+      const info = resolveContextWindowInfo({
+        cfg,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        modelContextWindow: 272_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.source).toBe("agentContextTokens");
+      expect(info.tokens).toBe(100_000);
+    });
+
+    it("does not cap when budget >= model window", () => {
+      const cfg = {
+        agents: { defaults: { contextTokens: 300_000 } },
+      } satisfies OpenClawConfig;
+      const info = resolveContextWindowInfo({
+        cfg,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        modelContextWindow: 272_000,
+        defaultTokens: 200_000,
+      });
+      expect(info.source).toBe("model");
+      expect(info.tokens).toBe(272_000);
+    });
+
+    it("capped value is usable as model.contextWindow replacement", () => {
+      const cfg = {
+        agents: { defaults: { contextTokens: 100_000 } },
+      } satisfies OpenClawConfig;
+      const modelContextWindow = 272_000;
+      const info = resolveContextWindowInfo({
+        cfg,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        modelContextWindow,
+        defaultTokens: 200_000,
+      });
+      // Simulate the capping logic from run.ts:
+      // if (ctxInfo.source === "agentContextTokens" && ctxInfo.tokens < model.contextWindow)
+      //   model = { ...model, contextWindow: ctxInfo.tokens };
+      const cappedContextWindow =
+        info.source === "agentContextTokens" && info.tokens < modelContextWindow
+          ? info.tokens
+          : modelContextWindow;
+      expect(cappedContextWindow).toBe(100_000);
+      // SDK's shouldCompact: contextTokens > contextWindow - reserveTokens
+      // With capped window: compaction triggers at 100k - 16k = 84k (correct)
+      // Without capping: would trigger at 272k - 16k = 256k (bug)
+      const reserveTokens = 16_384;
+      expect(cappedContextWindow - reserveTokens).toBeLessThan(modelContextWindow - reserveTokens);
+      expect(cappedContextWindow - reserveTokens).toBe(100_000 - reserveTokens);
+    });
+  });
 });
