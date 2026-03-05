@@ -426,7 +426,7 @@ function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): 
       })
       .filter((part) => part != null);
 
-    if (content.length > 0) {
+    if (content.length > 0 || hasMeaningfulAssistantNonContentFields(entry)) {
       normalized.push({
         ...entry,
         content,
@@ -435,6 +435,13 @@ function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): 
   }
 
   return normalized;
+}
+
+function hasMeaningfulAssistantNonContentFields(entry: { [key: string]: unknown }): boolean {
+  return Object.entries(entry).some(
+    ([key, value]) =>
+      key !== "id" && key !== "type" && key !== "role" && key !== "content" && value != null,
+  );
 }
 
 function hasUsableTools(tools: unknown): boolean {

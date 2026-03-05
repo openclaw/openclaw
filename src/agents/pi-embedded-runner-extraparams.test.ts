@@ -1666,6 +1666,48 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("keeps assistant tool_calls entries when sanitized content becomes empty", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.3-codex-spark",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.3-codex-spark",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        input: [
+          {
+            role: "assistant",
+            content: [],
+            tool_calls: [
+              {
+                id: "call_123",
+                type: "function",
+                function: { name: "check_status", arguments: "{}" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.input).toEqual([
+      {
+        role: "assistant",
+        content: [],
+        tool_calls: [
+          {
+            id: "call_123",
+            type: "function",
+            function: { name: "check_status", arguments: "{}" },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("preserves string input for sub2api codex responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "sub2api",
