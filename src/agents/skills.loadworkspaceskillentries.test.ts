@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadWorkspaceSkillEntries } from "./skills.js";
+import { writeSkill } from "./skills.test-helpers.js";
 
 const tempDirs: string[] = [];
 
@@ -154,5 +155,130 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
+  });
+
+  it("loads skills from skills-index.json when indexFirst is enabled", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+
+    await fs.mkdir(extraRoot, { recursive: true });
+    await writeSkill({
+      dir: path.join(extraRoot, "indexed-skill"),
+      name: "indexed-skill",
+      description: "Loaded from index",
+    });
+    await fs.writeFile(
+      path.join(extraRoot, "skills-index.json"),
+      '{"version":1,"generated":"2026-03-05T00:00:00.000Z","skills":[{"name":"indexed-skill","path":"indexed-skill"}]}',
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("indexed-skill");
+  });
+
+  it("falls back to scanning when the index is missing", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+
+    await writeSkill({
+      dir: path.join(extraRoot, "fallback-skill"),
+      name: "fallback-skill",
+      description: "Loaded by scan fallback",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("fallback-skill");
+  });
+
+  it("does not fall back when strictIndex is enabled and the index is missing", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+
+    await writeSkill({
+      dir: path.join(extraRoot, "strict-skill"),
+      name: "strict-skill",
+      description: "Should not be loaded without an index",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            strictIndex: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("strict-skill");
+  });
+
+  it("skips out-of-root index entries", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraRoot = path.join(workspaceDir, "extra-skills");
+
+    await fs.mkdir(extraRoot, { recursive: true });
+    await writeSkill({
+      dir: path.join(workspaceDir, "outside-skill"),
+      name: "outside-skill",
+      description: "Outside the indexed root",
+    });
+    await fs.writeFile(
+      path.join(extraRoot, "skills-index.json"),
+      '{"version":1,"generated":"2026-03-05T00:00:00.000Z","skills":[{"name":"outside-skill","path":"../outside-skill"}]}',
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            indexFirst: true,
+            extraDirs: [extraRoot],
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
   });
 });

@@ -120,6 +120,17 @@ const MemorySchema = z
   .strict()
   .optional();
 
+export const skillsLoadConfigSchema = z
+  .object({
+    extraDirs: z.array(z.string()).optional(),
+    watch: z.boolean().optional(),
+    watchDebounceMs: z.number().int().min(0).optional(),
+    indexFileName: z.string().optional(),
+    indexFirst: z.boolean().optional(),
+    strictIndex: z.boolean().optional(),
+  })
+  .strict();
+
 const HttpUrlSchema = z
   .string()
   .url()
@@ -775,14 +786,7 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
-        load: z
-          .object({
-            extraDirs: z.array(z.string()).optional(),
-            watch: z.boolean().optional(),
-            watchDebounceMs: z.number().int().min(0).optional(),
-          })
-          .strict()
-          .optional(),
+        load: skillsLoadConfigSchema.optional(),
         install: z
           .object({
             preferBrew: z.boolean().optional(),
