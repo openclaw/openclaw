@@ -113,10 +113,12 @@ function resolveResponsesLimits(
         : DEFAULT_MAX_URL_PARTS,
     files: {
       ...fileLimits,
+      allowPrivateNetwork: files?.allowPrivateNetwork ?? false,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
+      allowPrivateNetwork: images?.allowPrivateNetwork ?? false,
       urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,

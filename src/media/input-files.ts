@@ -55,6 +55,7 @@ export type InputPdfLimits = {
 
 export type InputFileLimits = {
   allowUrl: boolean;
+  allowPrivateNetwork?: boolean;
   urlAllowlist?: string[];
   allowedMimes: Set<string>;
   maxBytes: number;
@@ -66,6 +67,7 @@ export type InputFileLimits = {
 
 export type InputFileLimitsConfig = {
   allowUrl?: boolean;
+  allowPrivateNetwork?: boolean;
   allowedMimes?: string[];
   maxBytes?: number;
   maxChars?: number;
@@ -80,6 +82,7 @@ export type InputFileLimitsConfig = {
 
 export type InputImageLimits = {
   allowUrl: boolean;
+  allowPrivateNetwork?: boolean;
   urlAllowlist?: string[];
   allowedMimes: Set<string>;
   maxBytes: number;
@@ -171,6 +174,7 @@ export function normalizeMimeList(values: string[] | undefined, fallback: string
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
   return {
     allowUrl: config?.allowUrl ?? true,
+    allowPrivateNetwork: config?.allowPrivateNetwork ?? false,
     allowedMimes: normalizeMimeList(config?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
     maxBytes: config?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
     maxChars: config?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -332,7 +336,7 @@ export async function extractImageContentFromSource(
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: limits.allowPrivateNetwork ?? false,
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_image",
@@ -376,7 +380,7 @@ export async function extractFileContentFromSource(params: {
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: limits.allowPrivateNetwork ?? false,
         hostnameAllowlist: limits.urlAllowlist,
       },
       auditContext: "openresponses.input_file",

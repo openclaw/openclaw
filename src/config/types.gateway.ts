@@ -213,6 +213,8 @@ export type GatewayHttpResponsesFilesConfig = {
   maxChars?: number;
   /** Max redirects when fetching a URL. Default: 3. */
   maxRedirects?: number;
+  /** Allow fetches to private/internal IP addresses (default: false). */
+  allowPrivateNetwork?: boolean;
   /** Fetch timeout in ms. Default: 10s. */
   timeoutMs?: number;
   /** PDF handling (application/pdf). */
@@ -240,6 +242,8 @@ export type GatewayHttpResponsesImagesConfig = {
   allowedMimes?: string[];
   /** Max bytes per image. Default: 10MB. */
   maxBytes?: number;
+  /** Allow fetches to private/internal IP addresses (default: false). */
+  allowPrivateNetwork?: boolean;
   /** Max redirects when fetching a URL. Default: 3. */
   maxRedirects?: number;
   /** Fetch timeout in ms. Default: 10s. */
