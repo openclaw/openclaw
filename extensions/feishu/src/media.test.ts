@@ -358,6 +358,36 @@ describe("sendMediaFeishu msg_type routing", () => {
     }
   });
 
+  it("resolves tilde paths consistently with loadWebMedia for local uploads (#32123)", async () => {
+    const homeDir = require("os").homedir();
+    const tmpDir = path.join(homeDir, ".openclaw-test-" + Date.now());
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, "doc.pdf");
+    await fs.writeFile(tmpFile, Buffer.from("fake-pdf"));
+    const tildePath = "~/.openclaw-test-" + path.basename(tmpDir).split("-").pop() + "/doc.pdf";
+
+    try {
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("ignored"),
+        fileName: "doc.pdf",
+        kind: "document",
+        contentType: "application/pdf",
+      });
+
+      await sendMediaFeishu({
+        cfg: {} as any,
+        to: "user:ou_target",
+        mediaUrl: tmpFile.replace(homeDir, "~"),
+      });
+
+      // Should use a ReadStream (not Buffer) for the upload
+      const createCall = fileCreateMock.mock.calls[0][0];
+      expect(createCall.data.file).toBeInstanceOf(fsSync.ReadStream);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("still uses buffer for remote URLs (not local paths)", async () => {
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("remote-file"),

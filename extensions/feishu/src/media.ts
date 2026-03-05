@@ -1,4 +1,5 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { Readable } from "stream";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
@@ -475,8 +476,10 @@ export async function sendMediaFeishu(params: {
     });
     // loadWebMedia succeeded → path is safe and within size limits.
     // Now use the raw file path for upload to preserve binary fidelity.
+    // Use os.homedir() for tilde expansion to stay consistent with
+    // loadWebMedia's internal resolveUserPath (which also uses os.homedir).
     const resolvedPath = mediaUrl.startsWith("~")
-      ? path.join(process.env.HOME ?? "", mediaUrl.slice(1))
+      ? path.join(os.homedir(), mediaUrl.slice(1))
       : mediaUrl;
     const name = fileName ?? (path.basename(resolvedPath) || "file");
     const ext = path.extname(name).toLowerCase();
