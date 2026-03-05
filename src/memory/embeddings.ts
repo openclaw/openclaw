@@ -41,7 +41,14 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "bedrock";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "bedrock";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
