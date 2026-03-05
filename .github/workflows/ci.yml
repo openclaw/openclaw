@@ -60,9 +60,28 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+  artifact-hygiene:
+    name: artifact-hygiene
+    needs: [docs-scope]
+    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Verify PR contains no blocked release/binary artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          node scripts/check-no-binary-artifacts.mjs --base "$BASE_SHA" --head HEAD
+
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [docs-scope, changed-scope]
+    needs: [docs-scope, changed-scope, artifact-hygiene]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
