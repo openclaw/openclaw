@@ -148,9 +148,11 @@ export function renderApp(state: AppViewState) {
     state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
       ? state.updateAvailable
       : null;
-  const updateDismissed = sessionStorage.getItem("updateBannerDismissed");
+  // Use reactive state property for dismiss tracking
   const effectiveUpdate =
-    availableUpdate && updateDismissed !== availableUpdate.latestVersion ? availableUpdate : null;
+    availableUpdate && state.updateDismissedVersion !== availableUpdate.latestVersion
+      ? availableUpdate
+      : null;
   const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -322,9 +324,8 @@ export function renderApp(state: AppViewState) {
               <button
                 class="btn btn--sm update-banner__close"
                 @click=${() => {
-                  sessionStorage.setItem("updateBannerDismissed", effectiveUpdate.latestVersion);
-                  // Force re-render without page reload
-                  requestAnimationFrame(() => renderApp(state));
+                  // Dismiss banner via reactive state (triggers Lit re-render)
+                  state.updateDismissedVersion = effectiveUpdate.latestVersion;
                 }}
               >✕</button>
             </div>`
