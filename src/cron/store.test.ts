@@ -1,3 +1,4 @@
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +74,38 @@ describe("cron store", () => {
 
     await saveCronStore(store.storePath, first);
     await saveCronStore(store.storePath, second);
+
+    const currentRaw = await fs.readFile(store.storePath, "utf-8");
+    const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
+    expect(JSON.parse(currentRaw)).toEqual(second);
+    expect(JSON.parse(backupRaw)).toEqual(first);
+  });
+
+  it("writes backup from pre-save snapshot even if store file changes before replace", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second = makeStore("job-2", false);
+
+    await saveCronStore(store.storePath, first);
+
+    const originalWriteFile = fsNode.promises.writeFile.bind(fsNode.promises);
+    let injected = false;
+    const writeSpy = vi
+      .spyOn(fsNode.promises, "writeFile")
+      .mockImplementation(async (file, data, options) => {
+        await originalWriteFile(file, data, options);
+        if (!injected && typeof file === "string" && file.endsWith(".tmp")) {
+          injected = true;
+          // Simulate a concurrent overwrite before backup creation.
+          await originalWriteFile(store.storePath, JSON.stringify(second, null, 2), "utf-8");
+        }
+      });
+
+    try {
+      await saveCronStore(store.storePath, second);
+    } finally {
+      writeSpy.mockRestore();
+    }
 
     const currentRaw = await fs.readFile(store.storePath, "utf-8");
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");

@@ -78,7 +78,7 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
   await fs.promises.writeFile(tmp, json, "utf-8");
   if (previous !== null) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      await fs.promises.writeFile(`${storePath}.bak`, previous, "utf-8");
     } catch {
       // best-effort
     }
