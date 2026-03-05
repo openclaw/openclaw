@@ -158,7 +158,8 @@ async function resolveChannelIdByName(params: {
     return cached;
   }
   const client = createMattermostClient({ baseUrl, botToken: token });
-  const teams = await fetchMattermostUserTeams(client);
+  const me = await fetchMattermostMe(client);
+  const teams = await fetchMattermostUserTeams(client, me.id);
   for (const team of teams) {
     try {
       const channel = await fetchMattermostChannelByName(client, team.id, name);

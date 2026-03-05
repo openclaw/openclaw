@@ -459,6 +459,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const unregisterInteractions = registerPluginHttpRoute({
     path: interactionPath,
     fallbackPath: "/mattermost/interactions/default",
+    auth: "plugin",
     handler: createMattermostInteractionHandler({
       client,
       botUserId,
