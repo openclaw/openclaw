@@ -169,7 +169,9 @@ describe("createDiscordGatewayPlugin", () => {
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
     undiciFetchMock.mockResolvedValue({
+      ok: true,
       json: async () => ({ url: "wss://gateway.discord.gg" }),
+      text: async () => "",
     } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
