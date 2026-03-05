@@ -184,4 +184,18 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts channels.signal.accountUuid for loop protection", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          accountUuid: "00000000-0000-4000-8000-000000000000",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
