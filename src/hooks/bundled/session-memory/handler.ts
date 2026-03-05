@@ -330,13 +330,20 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entry = entryParts.join("\n");
     }
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: typeof redirectPath === "string" ? path.basename(memoryFilePath) : filename,
-      data: entry,
-      encoding: "utf-8",
-    });
+    // Write session memory — use redirect path directly when set,
+    // otherwise write under memory root with alias-safe file validation.
+    if (typeof redirectPath === "string" && redirectPath.length > 0) {
+      const dir = path.dirname(memoryFilePath);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.appendFile(memoryFilePath, entry, "utf-8");
+    } else {
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+    }
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
