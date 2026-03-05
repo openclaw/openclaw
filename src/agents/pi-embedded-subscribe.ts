@@ -107,7 +107,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // mark that a cross-turn separator should be prepended to the next chunk.
     // This prevents text from separate tool-call cycles from being concatenated
     // together in the streaming UI (issue #35308).
-    const shouldInsertCrossTurnSeparator = blockChunking && state.deltaBuffer.length > 0;
+    const shouldInsertCrossTurnSeparator = Boolean(blockChunking && state.deltaBuffer.length > 0);
     state.deltaBuffer = "";
     state.blockBuffer = "";
     blockChunker?.reset();
