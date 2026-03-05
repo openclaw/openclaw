@@ -23,6 +23,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { logDebug, logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel, resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 
@@ -119,7 +120,10 @@ function resolveFilteredTools(params: {
     ],
   });
 
-  return policyFiltered.filter((t) => !NATIVE_TOOL_EXCLUDE.has(t.name));
+  return policyFiltered.filter(
+    (t) =>
+      !NATIVE_TOOL_EXCLUDE.has(t.name) && !DEFAULT_GATEWAY_HTTP_TOOL_DENY.includes(t.name as never),
+  );
 }
 
 // ---------- JSON-RPC helpers ----------

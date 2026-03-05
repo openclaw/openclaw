@@ -72,6 +72,8 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  /** Account ID forwarded to MCP loopback server via OPENCLAW_MCP_ACCOUNT_ID. */
+  accountId?: string;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -261,7 +263,9 @@ export async function runCliAgent(params: {
       if (!args.includes("--strict-mcp-config")) {
         args.push("--strict-mcp-config");
       }
-      args.push("--mcp-config", mcpConfigPath);
+      if (!args.includes("--mcp-config")) {
+        args.push("--mcp-config", mcpConfigPath);
+      }
     }
 
     const serialize = backend.serialize ?? true;
@@ -316,7 +320,7 @@ export async function runCliAgent(params: {
           }
           if (mcpConfigPath) {
             next.OPENCLAW_MCP_AGENT_ID = sessionAgentId ?? "";
-            next.OPENCLAW_MCP_ACCOUNT_ID = "";
+            next.OPENCLAW_MCP_ACCOUNT_ID = params.accountId ?? "";
             next.OPENCLAW_MCP_SESSION_KEY = params.sessionKey ?? "";
           }
           return next;
