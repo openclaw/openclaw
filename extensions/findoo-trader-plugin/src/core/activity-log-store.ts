@@ -20,7 +20,8 @@ export type ActivityCategory =
   | "decision"
   | "error"
   | "heartbeat"
-  | "seed";
+  | "seed"
+  | "ideation";
 
 export interface ActivityEntry {
   id: string;

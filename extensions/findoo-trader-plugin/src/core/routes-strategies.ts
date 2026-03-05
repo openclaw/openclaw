@@ -4,14 +4,7 @@
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { createStrategySchema } from "../schemas.js";
-import type {
-  HttpReq,
-  HttpRes,
-  RuntimeServices,
-  StrategyRegistryLike,
-  BacktestEngineLike,
-  DataProviderLike,
-} from "../types-http.js";
+import type { HttpReq, HttpRes, RuntimeServices, StrategyRegistryLike } from "../types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "../types-http.js";
 import type { StrategyTemplate } from "../types.js";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
@@ -272,21 +265,21 @@ export function registerStrategyRoutes(
           return;
         }
 
-        const backtestEngine = runtime.services?.get?.("fin-backtest-engine") as
-          | BacktestEngineLike
+        const remoteService = runtime.services?.get?.("fin-remote-backtest") as
+          | import("../strategy/remote-backtest-bridge.js").RemoteBacktestService
           | undefined;
-        if (!backtestEngine) {
-          errorResponse(res, 503, "Backtest engine not available");
+        if (!remoteService) {
+          errorResponse(
+            res,
+            503,
+            "Remote backtest service not available. Load findoo-backtest-plugin.",
+          );
           return;
         }
 
-        const dataProvider = runtime.services?.get?.("fin-data-provider") as
-          | DataProviderLike
-          | undefined;
-        if (!dataProvider) {
-          errorResponse(res, 503, "Data provider not available");
-          return;
-        }
+        const { RemoteBacktestBridge: BridgeClass } =
+          await import("../strategy/remote-backtest-bridge.js");
+        const bridge = new BridgeClass(() => remoteService);
 
         const strategies = registry.list();
         const results: Array<{
@@ -300,11 +293,19 @@ export function registerStrategyRoutes(
         for (const s of strategies) {
           try {
             const detail = registry.get?.(s.id);
-            const symbol = (detail as { symbol?: string } | undefined)?.symbol ?? "BTC/USDT";
-            const definition =
-              (detail as { definition?: Record<string, unknown> } | undefined)?.definition ?? {};
-            const ohlcv = await dataProvider.getOHLCV(symbol, "1d", 365);
-            const result = backtestEngine.run(definition, ohlcv, { initialCapital: 10000 });
+            const definition = (
+              detail as { definition?: import("../shared/types.js").StrategyDefinition } | undefined
+            )?.definition;
+            if (!definition) {
+              results.push({ id: s.id, name: s.name, success: false, error: "No definition" });
+              continue;
+            }
+            const result = await bridge.runBacktest(definition, {
+              capital: 10_000,
+              commissionRate: 0.001,
+              slippageBps: 5,
+              market: "crypto",
+            });
             registry.updateBacktest?.(s.id, result as unknown as Record<string, unknown>);
             results.push({
               id: s.id,

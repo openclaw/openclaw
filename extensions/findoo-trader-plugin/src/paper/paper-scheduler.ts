@@ -1,7 +1,7 @@
 import type { AgentWakeBridge } from "../core/agent-wake-bridge.js";
 import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import type { OHLCV, StrategyContext, StrategyDefinition, Signal } from "../shared/types.js";
-import { buildIndicatorLib } from "../strategy/backtest-engine.js";
+import { buildIndicatorLib } from "../strategy/indicator-lib.js";
 import type { PaperHealthMonitor } from "./paper-health-monitor.js";
 
 type DataProviderLike = {
@@ -37,6 +37,10 @@ type StrategyRegistryLike = {
   }>;
 };
 
+type RegimeDetectorLike = {
+  detect: (ohlcv: OHLCV[]) => string;
+};
+
 export type PaperSchedulerConfig = {
   paperEngine: PaperEngineLike;
   strategyRegistry: StrategyRegistryLike;
@@ -48,6 +52,8 @@ export type PaperSchedulerConfig = {
   wakeBridge?: AgentWakeBridge;
   /** Lazy resolver for dataProvider — called on each tick if dataProvider is still unset. */
   serviceResolver?: () => DataProviderLike | undefined;
+  /** Lazy resolver for regime detector — returns real market regime instead of hardcoded "sideways". */
+  regimeDetectorResolver?: () => RegimeDetectorLike | undefined;
   /** @deprecated Promotion checks moved to LifecycleEngine. Kept for backward compat. */
   fundManagerResolver?: () => FundManagerLike | undefined;
   tickIntervalMs?: number; // default 60_000 (1 min)
@@ -170,7 +176,7 @@ export class PaperScheduler {
           },
           history: ohlcv,
           indicators,
-          regime: "sideways",
+          regime: this._deps.regimeDetectorResolver?.()?.detect(ohlcv) ?? "sideways",
           memory: new Map(),
           log: () => {},
         };

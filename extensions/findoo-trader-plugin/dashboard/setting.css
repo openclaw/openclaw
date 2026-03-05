@@ -731,6 +731,14 @@
 }
 .notif-card__name { font-size: 12px; font-weight: 600; color: var(--text-hi); }
 .notif-card__desc { font-size: 10px; color: var(--text-dim); }
+.notif-card__fields {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 /* Plugin row */
 .plugin-row {

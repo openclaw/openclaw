@@ -1495,6 +1495,7 @@
 
           function startPolling() {
             var pollUrl = url.replace("/stream", "");
+            if (pollUrl === "/api/v1/fund") pollUrl = "/api/v1/fund/status";
             if (dotEl) dotEl.className = "sse-dot";
             fetch(pollUrl)
               .then(function (r) {
@@ -1575,7 +1576,7 @@
 
         // ── Initialize SSE connections ──
         function initSSE() {
-          connectSSE("evolution", "/api/v1/finance/evolution/stream", onEvolutionData, 10000);
+          connectSSE("strategy", "/api/v1/finance/strategy/stream", onEvolutionData, 10000);
           connectSSE("trade", "/api/v1/finance/trading/stream", onTradingData, 10000);
           connectSSE("fund", "/api/v1/fund/stream", onFundData, 10000);
         }
@@ -1614,16 +1615,8 @@
           },
           triggerEvolution: function () {
             $("botMsg").innerHTML = "<em>Triggering evolution cycle...</em>";
-            postApi("/api/v1/finance/evolution/trigger", {})
-              .then(function () {
-                toast("Evolution cycle triggered", "success");
-                $("botMsg").innerHTML =
-                  "<em>Evolution cycle running...</em> " + new Date().toLocaleTimeString();
-              })
-              .catch(function (e) {
-                toast("Evolution trigger failed: " + e.message, "error");
-                $("botMsg").textContent = "Evolution failed: " + e.message;
-              });
+            toast("Evolution is triggered by the AI agent automatically via heartbeat.", "info");
+            $("botMsg").innerHTML = "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
           },
           runAllBacktests: function () {
             $("botMsg").innerHTML = "<em>Running all backtests...</em>";
@@ -1638,7 +1631,7 @@
           },
           stratAction: function (id, action) {
             var url = "/api/v1/finance/strategies/" + action;
-            postApi(url, { strategyId: id })
+            postApi(url, { id: id })
               .then(function () {
                 toast("Strategy " + id + " \u2014 " + action + " OK", "success");
                 $("botMsg").innerHTML =

@@ -230,7 +230,7 @@ export function buildCustomStrategy(
   const buyRule = parseRule(rules.buy);
   const sellRule = parseRule(rules.sell);
 
-  return {
+  const def: StrategyDefinition & { _rules?: CustomRules } = {
     id: `custom-${Date.now()}`,
     name,
     version: "1.0.0",
@@ -238,6 +238,7 @@ export function buildCustomStrategy(
     symbols: symbols ?? ["BTC/USDT"],
     timeframes: timeframes ?? ["1d"],
     parameters: { ...params },
+    _rules: rules, // persisted for hydration after JSON deserialization
     async onBar(bar: OHLCV, ctx: StrategyContext): Promise<Signal | null> {
       const hasPosition = ctx.portfolio.positions.some(
         (p) => p.symbol === (symbols?.[0] ?? "BTC/USDT"),
@@ -268,6 +269,7 @@ export function buildCustomStrategy(
       return null;
     },
   };
+  return def;
 }
 
 // Re-export for testing

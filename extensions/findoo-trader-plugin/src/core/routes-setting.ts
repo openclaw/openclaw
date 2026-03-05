@@ -289,4 +289,39 @@ export function registerSettingRoutes(deps: SettingRouteDeps): void {
       }
     },
   });
+
+  // ── PUT /api/v1/finance/config/notifications — Update notification config (Telegram) ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/config/notifications",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      try {
+        const body = await parseJsonBody(req);
+        const telegramBotToken =
+          typeof body.telegramBotToken === "string" ? body.telegramBotToken.trim() : undefined;
+        const telegramChatId =
+          typeof body.telegramChatId === "string" ? body.telegramChatId.trim() : undefined;
+
+        // Persist via the plugin config store if available
+        const pluginConfig = (api as unknown as { pluginConfig?: Record<string, unknown> })
+          .pluginConfig;
+        if (pluginConfig) {
+          const notif = (pluginConfig.notifications ?? {}) as Record<string, unknown>;
+          if (telegramBotToken !== undefined) notif.telegramBotToken = telegramBotToken;
+          if (telegramChatId !== undefined) notif.telegramChatId = telegramChatId;
+          pluginConfig.notifications = notif;
+        }
+
+        eventStore.addEvent({
+          type: "system",
+          title: "Notification config updated",
+          detail: `Telegram Chat ID: ${telegramChatId ? "set" : "unchanged"}, Bot Token: ${telegramBotToken ? "set" : "unchanged"}`,
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "updated" });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
 }

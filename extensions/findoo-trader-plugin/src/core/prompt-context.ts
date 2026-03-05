@@ -5,6 +5,8 @@
  */
 
 export interface PromptContextDeps {
+  /** Optional HEARTBEAT-FINANCIAL.md checklist content to inject into the prompt. */
+  heartbeatChecklist?: string;
   paperEngine?: {
     listAccounts?: () => Array<{ id: string; equity?: number }>;
     getAccountState?: (id: string) => { equity: number; initialCapital: number } | null;
@@ -39,6 +41,13 @@ export interface PromptContextDeps {
       running: boolean;
       cycleCount: number;
       pendingApprovals: number;
+    };
+  };
+  ideationScheduler?: {
+    getStats?: () => {
+      running: boolean;
+      cycleCount: number;
+      lastCycleAt: number | null;
     };
   };
 }
@@ -153,7 +162,29 @@ export function buildFinancialContext(deps: PromptContextDeps): string {
     // silent
   }
 
-  if (parts.length === 0) return "";
+  // 6. Ideation scheduler status
+  try {
+    const ideationStats = deps.ideationScheduler?.getStats?.();
+    if (ideationStats) {
+      const status = ideationStats.running ? "running" : "stopped";
+      const lastAt = ideationStats.lastCycleAt
+        ? new Date(ideationStats.lastCycleAt).toISOString()
+        : "never";
+      parts.push(
+        `Ideation scanner: ${status}, cycles=${ideationStats.cycleCount}, last_scan=${lastAt}`,
+      );
+    }
+  } catch {
+    // silent
+  }
 
-  return ["Financial Context:", ...parts].join("\n");
+  if (parts.length === 0 && !deps.heartbeatChecklist) return "";
+
+  const header = ["Financial Context:", ...parts].join("\n");
+
+  if (deps.heartbeatChecklist) {
+    return header + "\n---\nFinancial Heartbeat Checklist:\n" + deps.heartbeatChecklist;
+  }
+
+  return header;
 }

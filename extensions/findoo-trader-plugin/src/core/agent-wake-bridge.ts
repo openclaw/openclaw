@@ -20,15 +20,52 @@ export interface AgentWakeBridgeConfig {
   activityLog?: ActivityLogStore;
 }
 
+export interface PendingWake {
+  wakeId: string;
+  firedAt: number;
+  contextKey: string;
+}
+
 export class AgentWakeBridge {
   private enqueue: EnqueueFn;
   private resolveSessionKey: () => string | undefined;
   private activityLog?: ActivityLogStore;
+  private pendingWakes = new Map<string, PendingWake>();
+  /** contextKeys fired during the current cycle (reset each reconcile). */
+  private currentCycleFired = new Set<string>();
+  private wakeCounter = 0;
 
   constructor(config: AgentWakeBridgeConfig) {
     this.enqueue = config.enqueueSystemEvent;
     this.resolveSessionKey = config.sessionKeyResolver;
     this.activityLog = config.activityLog;
+  }
+
+  /** Returns pending (unresolved) wake entries. */
+  getPending(): PendingWake[] {
+    return [...this.pendingWakes.values()];
+  }
+
+  /**
+   * Reconcile pending wakes: any contextKey that was NOT re-fired this cycle
+   * is considered resolved (the underlying condition has cleared).
+   */
+  reconcilePending(): number {
+    let resolved = 0;
+    for (const [key, wake] of this.pendingWakes) {
+      if (!this.currentCycleFired.has(key)) {
+        this.pendingWakes.delete(key);
+        resolved++;
+        this.activityLog?.append({
+          category: "wake",
+          action: "wake_resolved",
+          detail: `Wake resolved: ${wake.contextKey} (fired at ${new Date(wake.firedAt).toISOString()})`,
+          metadata: { wakeId: wake.wakeId, contextKey: wake.contextKey },
+        });
+      }
+    }
+    this.currentCycleFired.clear();
+    return resolved;
   }
 
   /** Health alert detected (DD, consecutive loss, low Sharpe). */
@@ -92,6 +129,20 @@ export class AgentWakeBridge {
     );
   }
 
+  /** Market ideation scan complete — wake Agent to analyze and generate strategies. */
+  onIdeationScanComplete(info: { symbolCount: number; prompt: string }): void {
+    this.activityLog?.append({
+      category: "ideation",
+      action: "ideation_scan_wake",
+      detail: `Ideation scan: ${info.symbolCount} symbols analyzed. Waking LLM for strategy generation.`,
+      metadata: { symbolCount: info.symbolCount },
+    });
+    this.wake(
+      `[findoo-trader] Market ideation scan complete: ${info.symbolCount} symbols analyzed.\n\n${info.prompt}`,
+      "cron:findoo:ideation-scan",
+    );
+  }
+
   /** L2→L3 requires user approval — wake Agent to notify user. */
   onApprovalNeeded(info: { strategyId: string; strategyName: string }): void {
     this.activityLog?.append({
@@ -108,6 +159,11 @@ export class AgentWakeBridge {
   }
 
   private wake(text: string, contextKey: string): void {
+    // Track for pending wake reconciliation
+    this.currentCycleFired.add(contextKey);
+    const wakeId = `wake-${++this.wakeCounter}-${Date.now()}`;
+    this.pendingWakes.set(contextKey, { wakeId, firedAt: Date.now(), contextKey });
+
     const sessionKey = this.resolveSessionKey();
     if (!sessionKey) return; // no active session — skip silently
     try {

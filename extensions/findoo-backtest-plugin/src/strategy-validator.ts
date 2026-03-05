@@ -251,6 +251,20 @@ async function checkYaml(dir: string): Promise<ValidationIssue[]> {
     );
   }
 
+  // identity.id is required by the remote Backtest Agent (FEP v1.1)
+  const usesV11Identity = /^identity\s*:/im.test(content);
+  if (usesV11Identity && !/\bid\s*:/m.test(content)) {
+    issues.push(
+      issue(
+        "error",
+        "yaml",
+        "fep.yaml missing identity.id (required by Backtest Agent)",
+        "fep.yaml",
+        "Add 'id: my-strategy-id' under identity section",
+      ),
+    );
+  }
+
   if (!hasClassification) {
     issues.push(
       issue(

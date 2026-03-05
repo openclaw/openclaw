@@ -5,8 +5,8 @@ import {
   type PaperSchedulerConfig,
 } from "../../src/paper/paper-scheduler.js";
 
-// Mock backtest-engine to avoid complex imports
-vi.mock("../../src/strategy/backtest-engine.js", () => ({
+// Mock indicator-lib to avoid complex imports
+vi.mock("../../src/strategy/indicator-lib.js", () => ({
   buildIndicatorLib: vi.fn(() => ({
     sma: () => [],
     ema: () => [],

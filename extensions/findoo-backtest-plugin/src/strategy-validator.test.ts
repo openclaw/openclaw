@@ -273,6 +273,54 @@ symbols: [BTC-USD]
     expect(result.errors.filter((e) => e.category === "yaml")).toHaveLength(0);
   });
 
+  // -- YAML v1.1 identity.id check --
+
+  it("error when v1.1 identity: section missing id field", async () => {
+    await createValidStrategy();
+    await writeFile(
+      join(tmpDir, "fep.yaml"),
+      `
+identity:
+  name: test-strategy
+  version: "1.0"
+  author: test
+technical:
+  asset_class: crypto
+  timeframe: 1d
+`,
+    );
+    const result = await validateStrategy(tmpDir);
+    expect(
+      result.errors.some((e) => e.category === "yaml" && e.message.includes("identity.id")),
+    ).toBe(true);
+  });
+
+  it("passes when v1.1 identity: section has id field", async () => {
+    await createValidStrategy();
+    await writeFile(
+      join(tmpDir, "fep.yaml"),
+      `
+identity:
+  id: my-strategy
+  name: test-strategy
+  version: "1.0"
+  author: test
+technical:
+  asset_class: crypto
+  timeframe: 1d
+`,
+    );
+    const result = await validateStrategy(tmpDir);
+    expect(result.errors.filter((e) => e.message.includes("identity.id"))).toHaveLength(0);
+  });
+
+  it("no identity.id error for v1.0 section_a format", async () => {
+    await createValidStrategy();
+    // section_a format (v1.0) does not require identity.id
+    const result = await validateStrategy(tmpDir);
+    expect(result.errors.filter((e) => e.message.includes("identity.id"))).toHaveLength(0);
+  });
+
   // -- Data checks --
 
   it("warning when fep.yaml symbol not referenced in strategy.py", async () => {

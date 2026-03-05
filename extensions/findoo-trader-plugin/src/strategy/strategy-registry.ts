@@ -1,5 +1,15 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { createBollingerBands } from "./builtin-strategies/bollinger-bands.js";
+import { buildCustomStrategy } from "./builtin-strategies/custom-rule-engine.js";
+import { createMacdDivergence } from "./builtin-strategies/macd-divergence.js";
+import { createMultiTimeframeConfluence } from "./builtin-strategies/multi-timeframe-confluence.js";
+import { createRegimeAdaptive } from "./builtin-strategies/regime-adaptive.js";
+import { createRiskParityTripleScreen } from "./builtin-strategies/risk-parity-triple-screen.js";
+import { createRsiMeanReversion } from "./builtin-strategies/rsi-mean-reversion.js";
+import { createSmaCrossover } from "./builtin-strategies/sma-crossover.js";
+import { createTrendFollowingMomentum } from "./builtin-strategies/trend-following-momentum.js";
+import { createVolatilityMeanReversion } from "./builtin-strategies/volatility-mean-reversion.js";
 import type {
   BacktestResult,
   StrategyDefinition,
@@ -8,6 +18,47 @@ import type {
   StrategyStatus,
   WalkForwardResult,
 } from "./types.js";
+
+/** Map strategy type prefix → factory that restores onBar/init/onDayEnd functions. */
+function hydrateDefinition(def: StrategyDefinition): StrategyDefinition {
+  if (typeof def.onBar === "function") return def; // already hydrated
+
+  const type = def.id.replace(/-\d+$/, ""); // strip timestamp suffix e.g. "sma-crossover-1709..." → "sma-crossover"
+  const params = def.parameters ?? {};
+
+  const factories: Record<string, () => StrategyDefinition> = {
+    "sma-crossover": () => createSmaCrossover(params),
+    "rsi-mean-reversion": () => createRsiMeanReversion(params),
+    "bollinger-bands": () => createBollingerBands(params),
+    "macd-divergence": () => createMacdDivergence(params),
+    "trend-following-momentum": () => createTrendFollowingMomentum(params),
+    "volatility-mean-reversion": () => createVolatilityMeanReversion(params),
+    "regime-adaptive": () => createRegimeAdaptive(params),
+    "multi-timeframe-confluence": () => createMultiTimeframeConfluence(params),
+    "risk-parity-triple-screen": () => createRiskParityTripleScreen(params),
+  };
+
+  const factory = factories[type];
+  if (factory) {
+    const fresh = factory();
+    // Restore functions from the factory, keep serialized metadata from disk
+    def.onBar = fresh.onBar;
+    if (fresh.init) def.init = fresh.init;
+    if (fresh.onDayEnd) def.onDayEnd = fresh.onDayEnd;
+    return def;
+  }
+
+  // Custom rule-engine strategies: type prefix is "custom"
+  if (type === "custom" && (def as Record<string, unknown>)._rules) {
+    const rules = (def as Record<string, unknown>)._rules as { buy: string; sell: string };
+    const fresh = buildCustomStrategy(def.name, rules, params, def.symbols, def.timeframes);
+    def.onBar = fresh.onBar;
+    if (fresh.init) def.init = fresh.init;
+    return def;
+  }
+
+  return def; // unknown type — leave as-is (will fail on onBar call with clear error)
+}
 
 /**
  * Persistent strategy registry backed by a JSON file.
@@ -97,7 +148,7 @@ export class StrategyRegistry {
     writeFileSync(this.filePath, JSON.stringify(data, null, 2), "utf-8");
   }
 
-  /** Load state from disk. */
+  /** Load state from disk, re-hydrating strategy functions lost in JSON serialization. */
   private load(): void {
     if (!existsSync(this.filePath)) return;
     try {
@@ -105,6 +156,7 @@ export class StrategyRegistry {
       const data = JSON.parse(raw) as StrategyRecord[];
       this.records.clear();
       for (const record of data) {
+        record.definition = hydrateDefinition(record.definition);
         this.records.set(record.id, record);
       }
     } catch {

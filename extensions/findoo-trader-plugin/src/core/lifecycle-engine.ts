@@ -76,6 +76,15 @@ type PaperEngineLike = {
 
 // ── Engine ────────────────────────────────────────────────────────────
 
+type LiveHealthMonitorLike = {
+  check(): Promise<{ circuitBroken: boolean; lossPct: number; strategiesAffected: string[] }>;
+};
+
+type LiveReconcilerLike = {
+  reconcile(): Promise<Array<{ strategyId: string; driftPct: number; severity: string }>>;
+  getConsecutiveCritical(strategyId: string): number;
+};
+
 export type LifecycleEngineDeps = {
   strategyRegistry: StrategyRegistryLike;
   fundManagerResolver: () => FundManagerLike | undefined;
@@ -83,6 +92,10 @@ export type LifecycleEngineDeps = {
   eventStore: AgentEventSqliteStore;
   activityLog: ActivityLogStore;
   wakeBridge: AgentWakeBridge;
+  /** Optional L3 live health monitor — circuit breaker for cumulative loss. */
+  liveHealthMonitor?: LiveHealthMonitorLike;
+  /** Optional L3 live reconciler — detects drift between live and paper positions. */
+  liveReconciler?: LiveReconcilerLike;
 };
 
 export type LifecycleEngineStats = {
@@ -224,6 +237,54 @@ export class LifecycleEngine {
         action: "lifecycle_cycle_error",
         detail: `Cycle error: ${err instanceof Error ? err.message : String(err)}`,
       });
+    }
+
+    // ── 3. L3 Live Health Monitor — circuit breaker ──
+    try {
+      const healthResult = await this.deps.liveHealthMonitor?.check();
+      if (healthResult?.circuitBroken) {
+        for (const sid of healthResult.strategiesAffected) {
+          const rec = strategyRegistry.list().find((r) => r.id === sid);
+          if (rec && rec.level === "L3_LIVE") {
+            this.executeDemotion(sid, rec.name, "L3_LIVE", "L2_PAPER", [
+              `Circuit breaker: ${healthResult.lossPct.toFixed(1)}% cumulative loss`,
+            ]);
+            demoted++;
+          }
+        }
+      }
+    } catch {
+      errors++;
+    }
+
+    // ── 4. L3 Live Reconciler — position drift detection ──
+    try {
+      const drifts = await this.deps.liveReconciler?.reconcile();
+      if (drifts) {
+        for (const d of drifts) {
+          if (
+            d.severity === "critical" &&
+            (this.deps.liveReconciler?.getConsecutiveCritical(d.strategyId) ?? 0) >= 2
+          ) {
+            const rec = strategyRegistry.list().find((r) => r.id === d.strategyId);
+            if (rec && rec.level === "L3_LIVE") {
+              this.executeDemotion(d.strategyId, rec.name, "L3_LIVE", "L2_PAPER", [
+                `Position drift ${d.driftPct.toFixed(1)}% (critical for 2+ cycles)`,
+              ]);
+              demoted++;
+            }
+          }
+        }
+      }
+    } catch {
+      errors++;
+    }
+
+    // Reconcile pending wake events — conditions that cleared since last cycle
+    try {
+      this.deps.wakeBridge.reconcilePending?.();
+    } catch {
+      // non-critical
     }
 
     this.cycleCount++;
