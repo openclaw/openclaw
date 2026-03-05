@@ -170,10 +170,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (!displayText) {
+        // Even if there's no new content to display, we may need to render
+        // (e.g., for thinking content updates). Always request a render.
+        tui.requestRender();
         return;
       }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
+      tui.requestRender();
+      return;
     }
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
@@ -215,20 +220,25 @@ export function createEventHandlers(context: EventHandlerContext) {
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
       });
+      tui.requestRender();
+      return;
     }
     if (evt.state === "aborted") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
+      tui.requestRender();
+      return;
     }
     if (evt.state === "error") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
+      tui.requestRender();
+      return;
     }
-    tui.requestRender();
   };
 
   const handleAgentEvent = (payload: unknown) => {

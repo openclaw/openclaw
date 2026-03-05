@@ -403,6 +403,37 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("calls requestRender when delta event has no displayable content (ingestDelta returns null)", () => {
+    const { tui, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, showThinking: false },
+    });
+
+    // First delta with actual content
+    handleChatEvent({
+      runId: "run-think",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: { content: [{ type: "text", text: "hello" }] },
+    });
+
+    expect(tui.requestRender).toHaveBeenCalled();
+    const renderCount = tui.requestRender.mock.calls.length;
+
+    // Second delta with only thinking content (showThinking: false means no display text)
+    handleChatEvent({
+      runId: "run-think",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        content: [{ type: "thinking", thinking: "internal thought", signature: "sig" }],
+      },
+    });
+
+    // Even though ingestDelta returns null for thinking-only with showThinking:false,
+    // requestRender should still be called
+    expect(tui.requestRender).toHaveBeenCalledTimes(renderCount + 1);
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
