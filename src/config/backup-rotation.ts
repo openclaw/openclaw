@@ -18,6 +18,7 @@ export interface BackupRotationFs {
 
 export interface BackupMaintenanceFs extends BackupRotationFs {
   copyFile: (from: string, to: string) => Promise<void>;
+  mkdir?: (path: string, options?: { recursive?: boolean }) => Promise<void>;
 }
 
 /**
@@ -33,7 +34,8 @@ export function getBackupCount(config?: BackupConfig): number {
  */
 export function getBackupPath(configPath: string, config?: BackupConfig): string {
   if (config?.path) {
-    return path.resolve(config.path.replace("~", os.homedir()));
+    // Replace all occurrences of ~ with homedir (not just the first)
+    return path.resolve(config.path.replace(/^~/, os.homedir()));
   }
   // Default: same directory as config file
   return path.dirname(configPath);
@@ -156,23 +158,41 @@ export async function cleanOrphanBackups(
 }
 
 /**
+ * Check if backup should be triggered based on config.
+ * - "write" (default): Backup on every config write
+ * - "interact": Backup on user interaction (requires external trigger)
+ */
+export function shouldTriggerBackup(config?: BackupConfig): boolean {
+  // Default to "write" behavior if not specified
+  const trigger = config?.trigger ?? "write";
+  // For "write" trigger, we always backup on write
+  // For "interact" trigger, backup is handled by interaction hooks
+  return trigger === "write";
+}
+
+/**
  * Run the full backup maintenance cycle around config writes.
- * Order matters: rotate ring -> create new .bak -> harden modes -> prune orphan .bak.* files.
+ * Order matters: ensure dir -> rotate ring -> create new .bak -> harden modes -> prune orphan .bak.* files.
  */
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
   config?: BackupConfig,
 ): Promise<void> {
+  // Check if we should trigger backup based on config
+  if (!shouldTriggerBackup(config)) {
+    return;
+  }
+
   const backupDir = getBackupPath(configPath, config);
 
   // Ensure backup directory exists (best-effort)
-  try {
-    await ioFs.rename(backupDir, backupDir).catch(() => {
-      // Directory doesn't exist, try to create it
-    });
-  } catch {
-    // Ignore errors - best-effort
+  if (ioFs.mkdir) {
+    try {
+      await ioFs.mkdir(backupDir, { recursive: true });
+    } catch {
+      // Directory may already exist or creation failed - continue best-effort
+    }
   }
 
   await rotateConfigBackups(configPath, ioFs, config);
