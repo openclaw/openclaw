@@ -580,7 +580,7 @@ export const wecomChannelPlugin = {
       // Layer 3a: Webhook Bot (group notifications via webhook:name target)
       const target = resolveWecomTarget(to);
       if (target?.webhook) {
-        const webhookUrl = resolveWebhookUrl(target.webhook);
+        const webhookUrl = resolveWebhookUrl(target.webhook, accountId);
         if (webhookUrl) {
           try {
             await webhookSendText({ url: webhookUrl, content: text });
@@ -894,7 +894,7 @@ export const wecomChannelPlugin = {
       // Layer 2a: Webhook Bot fallback for media (group notifications)
       const target = resolveWecomTarget(to);
       if (target?.webhook) {
-        const webhookUrl = resolveWebhookUrl(target.webhook);
+        const webhookUrl = resolveWebhookUrl(target.webhook, accountId);
         if (webhookUrl) {
           try {
             // Resolve file to buffer

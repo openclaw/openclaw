@@ -12,20 +12,41 @@ const UPLOAD_BASE_DIR = join(
   "wecom-upload",
 );
 
-// Simple per-IP rate limiter for upload endpoint.
+// ---------------------------------------------------------------------------
+// Per-IP rate limiter (applies to both GET and POST endpoints)
+// Allows max UPLOAD_RATE_MAX requests per UPLOAD_RATE_WINDOW_MS per IP.
+// Uses a Map<ip, { count, resetAt }> so callers can check resetAt easily.
+// Expired entries are pruned every 5 minutes to prevent unbounded growth.
+// ---------------------------------------------------------------------------
 const UPLOAD_RATE_WINDOW_MS = 60_000; // 1 minute
-const UPLOAD_RATE_MAX = 10; // max uploads per window per IP
+const UPLOAD_RATE_MAX = 10; // max requests per window per IP
 const uploadRateBuckets = new Map();
 
-function isUploadRateLimited(req) {
-  const ip =
+// Periodic cleanup: remove buckets whose window has already expired.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of uploadRateBuckets) {
+    if (now >= bucket.resetAt) {
+      uploadRateBuckets.delete(ip);
+    }
+  }
+}, 5 * 60_000).unref(); // .unref() so this timer won't keep the process alive
+
+function getClientIp(req) {
+  return (
     req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
     req.socket?.remoteAddress ||
-    "unknown";
+    "unknown"
+  );
+}
+
+function isUploadRateLimited(req) {
+  const ip = getClientIp(req);
   const now = Date.now();
   let bucket = uploadRateBuckets.get(ip);
-  if (!bucket || now - bucket.windowStart > UPLOAD_RATE_WINDOW_MS) {
-    bucket = { windowStart: now, count: 0 };
+  if (!bucket || now >= bucket.resetAt) {
+    // Start a fresh window for this IP
+    bucket = { count: 0, resetAt: now + UPLOAD_RATE_WINDOW_MS };
     uploadRateBuckets.set(ip, bucket);
   }
   bucket.count += 1;
@@ -217,6 +238,12 @@ export async function wecomUploadHttpHandler(req, res) {
   }
 
   if (req.method === "GET") {
+    if (isUploadRateLimited(req)) {
+      const html = renderFormPage({ error: "请求过于频繁，请稍后再试。" });
+      res.writeHead(429, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return true;
+    }
     const userId = url.searchParams.get("u") || "";
     const note = url.searchParams.get("note") || "";
     const html = renderFormPage({ userId, note });
@@ -230,6 +257,15 @@ export async function wecomUploadHttpHandler(req, res) {
     res.end("Method Not Allowed");
     return true;
   }
+
+  // Authentication note: this endpoint intentionally does not require a
+  // pre-upload auth token.  The upload-ticket system (upload-ticket.js) works
+  // in the *opposite* direction — a pickup code (ticket) is *generated* by
+  // this handler after a successful upload and is then redeemed inside the
+  // WeCom bot chat via consumeUploadTicket().  The upload form is meant to be
+  // accessible without login so that internal staff can send files to the bot
+  // without needing a separate account.  The rate limiter below (10 req/min
+  // per IP) and the 25 MB file-size cap are the primary DoS mitigations.
 
   if (isUploadRateLimited(req)) {
     const html = renderFormPage({ error: "上传过于频繁，请稍后再试。" });

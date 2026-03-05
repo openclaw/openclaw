@@ -18,15 +18,35 @@ function enforceByteLimit(content) {
     bytes: contentBytes,
   });
   const buf = Buffer.from(content, "utf8").subarray(0, MAX_STREAM_BYTES);
-  // Walk backwards past any incomplete UTF-8 continuation bytes (0x80–0xBF)
-  // to avoid producing U+FFFD replacement characters.
+  // Walk backwards past any UTF-8 continuation bytes (10xxxxxx, 0x80–0xBF).
   let end = buf.length;
-  while (end > 0 && buf[end - 1] >= 0x80 && buf[end - 1] <= 0xbf) {
+  while (end > 0 && (buf[end - 1] & 0xc0) === 0x80) {
     end--;
   }
-  // If we stopped on a multi-byte lead byte, drop it too (it's incomplete).
-  if (end > 0 && buf[end - 1] >= 0xc0) {
-    end--;
+  // Now buf[end - 1] is either ASCII (0x00–0x7F) or a multi-byte lead byte
+  // (0xC0–0xFF). For lead bytes, check whether enough continuation bytes
+  // follow it inside the slice; if not, drop the lead byte too.
+  if (end > 0) {
+    const lead = buf[end - 1];
+    // Determine how many total bytes this lead byte's sequence requires.
+    let seqLen;
+    if ((lead & 0x80) === 0x00) {
+      seqLen = 1; // 0xxxxxxx — single-byte ASCII, always complete
+    } else if ((lead & 0xe0) === 0xc0) {
+      seqLen = 2; // 110xxxxx
+    } else if ((lead & 0xf0) === 0xe0) {
+      seqLen = 3; // 1110xxxx
+    } else if ((lead & 0xf8) === 0xf0) {
+      seqLen = 4; // 11110xxx
+    } else {
+      seqLen = 1; // malformed — drop it to be safe
+    }
+    // Continuation bytes that actually follow the lead within the slice.
+    const continuationCount = buf.length - end;
+    if (continuationCount < seqLen - 1) {
+      // The sequence is incomplete; drop the lead byte.
+      end--;
+    }
   }
   return buf.subarray(0, end).toString("utf8");
 }

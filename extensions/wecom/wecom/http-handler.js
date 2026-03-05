@@ -164,6 +164,9 @@ export async function wecomHttpHandler(req, res) {
         isCommand: content.startsWith("/"),
       });
 
+      // Stamp accountId onto the message so getMessageStreamKey generates an
+      // account-scoped key, matching the prefixed streamKey in inbound-processor.
+      msg.accountId = target.account.accountId;
       const streamKey = getMessageStreamKey(msg);
       const isCommand = content.startsWith("/");
       const leadingCommand = extractLeadingSlashCommand(content);
