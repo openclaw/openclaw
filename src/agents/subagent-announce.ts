@@ -1,5 +1,6 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -27,6 +28,7 @@ import {
   buildAnnounceIdempotencyKey,
   resolveQueueAnnounceId,
 } from "./announce-idempotency.js";
+import { resolveChannelMessageToolHints } from "./channel-tools.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   isEmbeddedPiRunActive,
@@ -781,6 +783,28 @@ async function sendSubagentAnnounceDirectly(params: {
         (params.completionRouteMode === "bound" || params.completionRouteMode === "hook");
       const forceCronDirectDelivery = params.announceType === "cron job";
       let shouldSendCompletionDirectly = true;
+      if (!forceBoundSessionDirectDelivery && !forceCronDirectDelivery) {
+        const completionMessageToolHints = resolveChannelMessageToolHints({
+          cfg,
+          channel: completionChannel,
+          accountId: completionDirectOrigin?.accountId ?? undefined,
+        });
+        if (completionMessageToolHints.length > 0) {
+          try {
+            const outbound = await loadChannelOutboundAdapter(
+              completionChannel as Parameters<typeof loadChannelOutboundAdapter>[0],
+            );
+            if (outbound?.chunkerMode === "text") {
+              // Channels that require text-mode chunking often rely on model-side
+              // messageToolHints (for format rewrites). Route through requester
+              // agent so completion output can be reformatted before delivery.
+              shouldSendCompletionDirectly = false;
+            }
+          } catch {
+            // Best-effort only; keep historical direct-send behavior on lookup errors.
+          }
+        }
+      }
       if (!forceBoundSessionDirectDelivery && !forceCronDirectDelivery) {
         let pendingDescendantRuns = 0;
         try {

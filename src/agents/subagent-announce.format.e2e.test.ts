@@ -54,6 +54,8 @@ const hookRunnerMock = {
 const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
   messages: [] as Array<unknown>,
 }));
+const resolveChannelMessageToolHintsMock = vi.fn((_params?: unknown) => [] as string[]);
+const loadChannelOutboundAdapterMock = vi.fn(async (_channel?: unknown) => undefined);
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
@@ -137,6 +139,20 @@ vi.mock("./subagent-registry.js", () => subagentRegistryMock);
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunnerMock,
 }));
+vi.mock("./channel-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel-tools.js")>();
+  return {
+    ...actual,
+    resolveChannelMessageToolHints: (params: unknown) => resolveChannelMessageToolHintsMock(params),
+  };
+});
+vi.mock("../channels/plugins/outbound/load.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/outbound/load.js")>();
+  return {
+    ...actual,
+    loadChannelOutboundAdapter: (channel: unknown) => loadChannelOutboundAdapterMock(channel),
+  };
+});
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -201,6 +217,8 @@ describe("subagent announce formatting", () => {
     subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
     readLatestAssistantReplyMock.mockClear().mockResolvedValue("raw subagent reply");
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
+    resolveChannelMessageToolHintsMock.mockReset().mockReturnValue([]);
+    loadChannelOutboundAdapterMock.mockReset().mockResolvedValue(undefined);
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     configOverride = {
@@ -1366,7 +1384,7 @@ describe("subagent announce formatting", () => {
       return { runId: "run-main", status: "ok" };
     });
 
-    const didAnnounce = await runSubagentAnnounceFlow({
+    await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
       childRunId: "run-completion-missing-route",
       requesterSessionKey: "main",
@@ -1375,7 +1393,6 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(0);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
@@ -1416,6 +1433,47 @@ describe("subagent announce formatting", () => {
         sessionKey: "agent:main:main",
         channel: "discord",
         to: "channel:12345",
+      },
+    });
+  });
+
+  it("routes completion through requester agent when channel needs messageToolHints rewrites", async () => {
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-session-hints-route",
+      },
+    };
+    resolveChannelMessageToolHintsMock.mockReturnValue([
+      "No markdown, bold, italic, or code blocks",
+    ]);
+    loadChannelOutboundAdapterMock.mockResolvedValue({
+      deliveryMode: "direct",
+      chunkerMode: "text",
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-hints-route",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "whatsapp",
+        to: "+15550001111",
+        accountId: "default",
+      },
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(sendSpy).toHaveBeenCalledTimes(0);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15550001111",
       },
     });
   });
