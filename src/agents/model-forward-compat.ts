@@ -24,6 +24,9 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+// Also handle gemini-3.1-flash-lite (e.g., gemini-3.1-flash-lite-preview)
+const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
+const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
@@ -183,8 +186,11 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   const lower = trimmed.toLowerCase();
 
   let templateIds: readonly string[];
+  // Check flash-lite before flash because flash-lite starts with "flash"
   if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
     templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
+    templateIds = GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS;
   } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
     templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
   } else {
