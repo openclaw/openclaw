@@ -5,7 +5,7 @@ metadata:
   tags: map, map animation, mapbox
 ---
 
-Maps can be added to a Remotion video with Mapbox.  
+Maps can be added to a Remotion video with Mapbox.
 The [Mapbox documentation](https://docs.mapbox.com/mapbox-gl-js/api/) has the API reference.
 
 ## Prerequisites
@@ -169,7 +169,7 @@ Unless I request it, do not add additional points to the lines.
 
 ## Map style
 
-By default, use the `mapbox://styles/mapbox/standard` style.  
+By default, use the `mapbox://styles/mapbox/standard` style.
 Hide the labels from the base map style.
 
 Unless I request otherwise, remove all features from the Mapbox Standard style.
