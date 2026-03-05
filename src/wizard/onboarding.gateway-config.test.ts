@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
@@ -219,51 +216,47 @@ describe("configureGatewayForOnboarding", () => {
     }
   });
 
-  it("resolves quickstart file SecretRefs for gateway token bootstrap", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gw-token-"));
-    const tokenFilePath = path.join(tmpDir, "gateway-token.txt");
-    fs.writeFileSync(tokenFilePath, "token-from-file\n", { encoding: "utf8", mode: 0o600 });
-    fs.chmodSync(tokenFilePath, 0o600);
+  it("resolves quickstart exec SecretRefs for gateway token bootstrap", async () => {
+    const quickstartGateway = {
+      ...createQuickstartGateway("token"),
+      token: {
+        source: "exec" as const,
+        provider: "gatewayTokens",
+        id: "gateway/auth/token",
+      },
+    };
+    const runtime = createRuntime();
+    const prompter = createPrompter({
+      selectQueue: [],
+      textQueue: [],
+    });
 
-    try {
-      const quickstartGateway = {
-        ...createQuickstartGateway("token"),
-        token: {
-          source: "file" as const,
-          provider: "gatewayTokens",
-          id: "value",
-        },
-      };
-      const runtime = createRuntime();
-      const prompter = createPrompter({
-        selectQueue: [],
-        textQueue: [],
-      });
-
-      const result = await configureGatewayForOnboarding({
-        flow: "quickstart",
-        baseConfig: {},
-        nextConfig: {
-          secrets: {
-            providers: {
-              gatewayTokens: {
-                source: "file",
-                path: tokenFilePath,
-                mode: "singleValue",
-              },
+    const result = await configureGatewayForOnboarding({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {
+        secrets: {
+          providers: {
+            gatewayTokens: {
+              source: "exec",
+              command: process.execPath,
+              allowInsecurePath: true,
+              allowSymlinkCommand: true,
+              args: [
+                "-e",
+                "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
+              ],
             },
           },
         },
-        localPort: 18789,
-        quickstartGateway,
-        prompter,
-        runtime,
-      });
+      },
+      localPort: 18789,
+      quickstartGateway,
+      prompter,
+      runtime,
+    });
 
-      expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
-      expect(result.settings.gatewayToken).toBe("token-from-file");
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
+    expect(result.settings.gatewayToken).toBe("token-from-exec");
   });
 });
