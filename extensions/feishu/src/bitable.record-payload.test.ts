@@ -1,4 +1,3 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { registerFeishuBitableTools } from "./bitable.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
@@ -11,7 +10,7 @@ vi.mock("./tool-account.js", () => ({
   createFeishuToolClient: (...args: unknown[]) => createFeishuToolClientMock(...args),
 }));
 
-function createConfig(): OpenClawPluginApi["config"] {
+function createConfig() {
   return {
     channels: {
       feishu: {
@@ -24,7 +23,7 @@ function createConfig(): OpenClawPluginApi["config"] {
         },
       },
     },
-  } as OpenClawPluginApi["config"];
+  };
 }
 
 function setupTool(name: "feishu_bitable_create_record" | "feishu_bitable_update_record") {
@@ -55,7 +54,7 @@ function captureToolParameters(name: string): Record<string, unknown> {
     registerTool: (tool: unknown, opts?: { name?: string }) => {
       registered.push({ tool, opts });
     },
-  } as unknown as OpenClawPluginApi;
+  } as Parameters<typeof registerFeishuBitableTools>[0];
 
   registerFeishuBitableTools(api);
   const hit = registered.find((entry) => entry.opts?.name === name);
