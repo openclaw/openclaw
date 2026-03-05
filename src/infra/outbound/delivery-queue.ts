@@ -387,6 +387,8 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // Feishu / Lark: invalid recipient (e.g. cross-app open_id mismatch)
+  /invalid receive.?id/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
