@@ -553,6 +553,7 @@ describe("session-memory hook", () => {
   it("sessionSaveRedirectPath writes to alternate location", async () => {
     const tempDir = await createCaseWorkspace("redirect");
     const quarantine = path.join(tempDir, "quarantine");
+    await fs.mkdir(quarantine, { recursive: true });
     const sessionsDir = path.join(tempDir, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = await writeWorkspaceFile({
