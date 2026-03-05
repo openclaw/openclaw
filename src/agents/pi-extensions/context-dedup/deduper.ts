@@ -166,10 +166,13 @@ Each entry uses: <¯REF_XXXX= [content] END_REF¯>
  * Deduplicate content in messages.
  *
  * Algorithm:
- * 1. Scan tool/toolResult message text blocks for exact duplicate strings
- * 2. Build ref table for content appearing >1 time AND larger than ref tag
- * 3. Replace matching full blocks in eligible messages with refs
- * 4. Return modified messages + ref table
+ * 1. Scan tool/toolResult text blocks for exact duplicate strings
+ * 2. Keep the first occurrence intact
+ * 3. Replace later occurrences with a plain-language pointer to the first one
+ *
+ * Notes:
+ * - This intentionally avoids symbolic ref-table tags to keep smaller models stable.
+ * - We still return a DedupResult shape with an empty refTable for compatibility.
  */
 export function deduplicateMessages(messages: any[], config: DedupConfig): DedupResult {
   if (config.mode === "off") {
@@ -180,71 +183,68 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
     };
   }
 
-  // Step 1: Count content occurrences and store unique content
-  const contentCounts = new Map<string, number>();
-  const hashToContent = new Map<string, string>(); // hash -> content
+  type FirstOccurrence = {
+    text: string;
+    messageIndex: number;
+    blockIndex: number;
+    toolCallId?: string;
+  };
+
+  const counts = new Map<string, number>();
+  const firstByHash = new Map<string, FirstOccurrence>();
 
   for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
     const msg = messages[msgIdx];
-
-    // Only dedup tool/toolResult payloads (e.g., repeated file-read results).
     if (!isDedupEligibleMessage(msg)) {
       continue;
     }
 
-    // Handle different content structures
     const contents = Array.isArray(msg.content) ? msg.content : [msg.content];
-
     for (let blockIdx = 0; blockIdx < contents.length; blockIdx++) {
       const block = contents[blockIdx] as TextLikeBlock;
       const text = getBlockText(block);
-
-      // Skip non-text content
-      if (typeof text !== "string") {
-        continue;
-      }
-
-      // Ignore whitespace-only blocks, but keep exact-content matching otherwise.
-      if (!text.trim()) {
+      if (typeof text !== "string" || !text.trim()) {
         continue;
       }
 
       const hash = contentHash(text);
-      const count = (contentCounts.get(hash) || 0) + 1;
-      contentCounts.set(hash, count);
+      counts.set(hash, (counts.get(hash) || 0) + 1);
 
-      if (!hashToContent.has(hash)) {
-        hashToContent.set(hash, text);
+      if (!firstByHash.has(hash)) {
+        firstByHash.set(hash, {
+          text,
+          messageIndex: msgIdx,
+          blockIndex: blockIdx,
+          toolCallId: typeof msg?.toolCallId === "string" ? msg.toolCallId : undefined,
+        });
       }
     }
   }
 
-  // Step 2: Build ref table for content that appears >1 time AND is larger than ref tag
-  const refTagSize = getRefTagSize(config);
-  const refMap = new Map<string, string>(); // hash -> refId
-  const refTable: RefTable = {};
-
-  for (const [hash, count] of contentCounts) {
+  const dedupHashes = new Set<string>();
+  for (const [hash, count] of counts) {
     if (count <= 1) {
-      continue; // Only deduplicate content that appears multiple times
+      continue;
     }
-
-    const content = hashToContent.get(hash);
-    if (!content || content.length < config.minContentSize) {
-      continue; // Skip if content is too small
+    const first = firstByHash.get(hash);
+    if (!first) {
+      continue;
     }
-
-    if (content.length <= refTagSize) {
-      continue; // No space savings
+    if (first.text.length < config.minContentSize) {
+      continue;
     }
-
-    // Add to ref table
-    const refId = `REF_${hash}`;
-    refMap.set(hash, refId);
-    refTable[refId] = content;
+    dedupHashes.add(hash);
   }
 
-  // Step 3: Replace content with refs where applicable
+  function makePlainPointer(first: FirstOccurrence): string {
+    const toolHint = first.toolCallId ? ` (toolCallId ${first.toolCallId})` : "";
+    return (
+      `[Repeated content omitted]\n` +
+      `Same as context message #${first.messageIndex}, block #${first.blockIndex}${toolHint}.`
+    );
+  }
+
+  const seenOrder = new Map<string, number>();
   const newMessages: any[] = messages.map((msg) => {
     if (!isDedupEligibleMessage(msg)) {
       return msg;
@@ -255,22 +255,34 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
 
     const newContents = contents.map((block: TextLikeBlock) => {
       const text = getBlockText(block);
-      if (typeof text !== "string") {
-        return block;
-      }
-
-      if (!text.trim()) {
+      if (typeof text !== "string" || !text.trim()) {
         return block;
       }
 
       const hash = contentHash(text);
-
-      if (refMap.has(hash)) {
-        const refId = refMap.get(hash)!;
-        return replaceBlockText(block, makeRefTag(refId, config));
+      if (!dedupHashes.has(hash)) {
+        return block;
       }
 
-      return block;
+      const seenCount = seenOrder.get(hash) || 0;
+      seenOrder.set(hash, seenCount + 1);
+
+      // Keep the first occurrence as full content; only replace repeats.
+      if (seenCount === 0) {
+        return block;
+      }
+
+      const first = firstByHash.get(hash);
+      if (!first) {
+        return block;
+      }
+
+      const pointer = makePlainPointer(first);
+      if (pointer.length >= text.length) {
+        return block;
+      }
+
+      return replaceBlockText(block, pointer);
     });
 
     return {
@@ -281,8 +293,8 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
 
   return {
     messages: newMessages,
-    refTable,
-    refTagSize,
+    refTable: {},
+    refTagSize: getRefTagSize(config),
   };
 }
 
