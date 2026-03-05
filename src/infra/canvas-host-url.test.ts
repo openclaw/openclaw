@@ -24,4 +24,25 @@ describe("resolveCanvasHostUrl", () => {
 
     expect(resolved).toBe("https://openclaw.example.com:8443");
   });
+
+  it("falls back to requestHost when no forwarded headers are present", () => {
+    const resolved = resolveCanvasHostUrl({
+      canvasPort: 18789,
+      requestHost: "myhost.local:18789",
+      localAddress: "127.0.0.1",
+    });
+
+    expect(resolved).toBe("http://myhost.local:18789");
+  });
+
+  it("reuses requestHost port when forwardedHost omits port", () => {
+    const resolved = resolveCanvasHostUrl({
+      canvasPort: 18789,
+      requestHost: "openclaw.example.com:8443",
+      forwardedHost: "openclaw.example.com",
+      forwardedProto: "https",
+    });
+
+    expect(resolved).toBe("https://openclaw.example.com:8443");
+  });
 });

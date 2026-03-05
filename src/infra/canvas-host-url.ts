@@ -69,7 +69,7 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
 
   const override = normalizeHost(params.hostOverride, true);
   const parsedForwardedHost = parseHostHeader(parseForwardedHeaderValue(params.forwardedHost));
-  const forwardedHost = normalizeHost(parsedForwardedHost.host, !!override);
+  const forwardedHost = normalizeHost(parsedForwardedHost.host, true);
   const parsedRequestHost = parseHostHeader(params.requestHost);
   const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override || forwardedHost));
   const localAddress = normalizeHost(
@@ -86,10 +86,14 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   // internal listener still runs on 18789. In that case, expose the public port instead of
   // advertising the internal one back to clients.
   let exposedPort = port;
-  if (!override && (forwardedHost || requestHost) && port === 18789) {
+  if (!override && forwardedHost && port === 18789) {
     if (parsedForwardedHost.port && parsedForwardedHost.port > 0) {
       exposedPort = parsedForwardedHost.port;
-    } else if (!forwardedHost && parsedRequestHost.port && parsedRequestHost.port > 0) {
+    } else if (
+      parsedRequestHost.port &&
+      parsedRequestHost.port > 0 &&
+      parsedRequestHost.host === parsedForwardedHost.host
+    ) {
       exposedPort = parsedRequestHost.port;
     } else if (scheme === "https") {
       exposedPort = 443;
