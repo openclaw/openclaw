@@ -248,6 +248,38 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
+export function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+): FailoverReason | null {
+  if (typeof status !== "number" || !Number.isFinite(status)) {
+    return null;
+  }
+
+  if (status === 402) {
+    return "billing";
+  }
+  if (status === 429) {
+    return "rate_limit";
+  }
+  if (status === 401 || status === 403) {
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    return "auth";
+  }
+  if (status === 408) {
+    return "timeout";
+  }
+  if (TRANSIENT_HTTP_ERROR_CODES.has(status)) {
+    return "timeout";
+  }
+  if (status === 400) {
+    return "format";
+  }
+  return null;
+}
+
 function stripFinalTagsFromText(text: string): string {
   if (!text) {
     return text;
