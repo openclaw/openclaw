@@ -16,7 +16,12 @@ function asText(text: string): TextContent {
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
   const parts: string[] = [];
   for (const block of content) {
-    if (block.type === "text") {
+    if (
+      block != null &&
+      typeof block === "object" &&
+      block.type === "text" &&
+      typeof block.text === "string"
+    ) {
       parts.push(block.text);
     }
   }
@@ -89,7 +94,7 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
 
 function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boolean {
   for (const block of content) {
-    if (block.type === "image") {
+    if (block != null && typeof block === "object" && block.type === "image") {
       return true;
     }
   }
@@ -99,7 +104,10 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
 function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text") {
+    if (block == null || typeof block !== "object") {
+      continue;
+    }
+    if (block.type === "text" && typeof block.text === "string") {
       chars += block.text.length;
     }
     if (block.type === "image") {
@@ -121,11 +129,14 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "assistant") {
     let chars = 0;
     for (const b of message.content) {
-      if (b.type === "text") {
+      if (b == null || typeof b !== "object") {
+        continue;
+      }
+      if (b.type === "text" && typeof b.text === "string") {
         chars += b.text.length;
       }
-      if (b.type === "thinking") {
-        chars += b.thinking.length;
+      if (b.type === "thinking" && typeof (b as Record<string, unknown>).thinking === "string") {
+        chars += ((b as Record<string, unknown>).thinking as string).length;
       }
       if (b.type === "toolCall") {
         try {
