@@ -422,14 +422,12 @@ export function detectFileType(
 async function resolveMediaDurationMs(
   buffer: Buffer,
   fileName: string,
-  fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream",
+  fileType: ReturnType<typeof detectFileType>,
 ): Promise<number | undefined> {
   if (fileType !== "opus" && fileType !== "mp4") return undefined;
   try {
     const { parseBuffer } = await import("music-metadata");
-    const fileInfo: IFileInfo | undefined = fileName
-      ? { size: buffer.byteLength, path: fileName }
-      : undefined;
+    const fileInfo: IFileInfo = { size: buffer.byteLength, path: fileName };
     const metadata = await parseBuffer(buffer, fileInfo, {
       duration: true,
       skipCovers: true,
