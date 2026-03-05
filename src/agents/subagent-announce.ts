@@ -21,6 +21,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -82,7 +83,10 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
 }): string {
-  const findingsText = params.findings.trim();
+  const findingsText = parseInlineDirectives(params.findings, {
+    stripAudioTag: false,
+    stripReplyTags: true,
+  }).text;
   if (isAnnounceSkip(findingsText)) {
     return "";
   }

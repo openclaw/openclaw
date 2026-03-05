@@ -465,39 +465,38 @@ export async function dispatchCronDelivery(
       }
     } else {
       const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
-      if (announceResult) {
-        // Fall back to direct delivery only when the announce send was
-        // actually attempted and failed.  Early returns from
-        // deliverViaAnnounce (active subagents, interim suppression,
-        // SILENT_REPLY_TOKEN) are intentional suppressions that must NOT
-        // trigger direct delivery — doing so would bypass the suppression
-        // guard and leak partial/stale content to the channel.  (#32432)
-        if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
-          const directFallback = await deliverViaDirect(params.resolvedDelivery);
-          if (directFallback) {
-            return {
-              result: directFallback,
-              delivered,
-              deliveryAttempted,
-              summary,
-              outputText,
-              synthesizedText,
-              deliveryPayloads,
-            };
-          }
-          // If direct delivery succeeded (returned null without error),
-          // `delivered` has been set to true by deliverViaDirect.
-          if (delivered) {
-            return {
-              delivered,
-              deliveryAttempted,
-              summary,
-              outputText,
-              synthesizedText,
-              deliveryPayloads,
-            };
-          }
+      // Fall back to direct delivery only when the announce send was actually
+      // attempted and failed. Early returns from deliverViaAnnounce (active
+      // subagents, interim suppression, SILENT_REPLY_TOKEN) are intentional
+      // suppressions that must NOT trigger direct delivery — doing so would
+      // bypass the suppression guard and leak partial/stale content.
+      if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
+        const directFallback = await deliverViaDirect(params.resolvedDelivery);
+        if (directFallback) {
+          return {
+            result: directFallback,
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
         }
+        // If direct delivery succeeded (returned null without error),
+        // `delivered` has been set to true by deliverViaDirect.
+        if (delivered) {
+          return {
+            delivered,
+            deliveryAttempted,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        }
+      }
+      if (announceResult) {
         return {
           result: announceResult,
           delivered,
