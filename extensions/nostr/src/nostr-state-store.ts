@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getNostrRuntime } from "./runtime.js";
@@ -112,6 +113,37 @@ export async function writeNostrBusState(params: {
   });
   await fs.chmod(tmp, 0o600);
   await fs.rename(tmp, filePath);
+}
+
+/**
+ * Synchronous version of writeNostrBusState for use during shutdown.
+ * Ensures state is persisted before process exit.
+ */
+export function writeNostrBusStateSync(params: {
+  accountId?: string;
+  lastProcessedAt: number;
+  gatewayStartedAt: number;
+  recentEventIds?: string[];
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const filePath = resolveNostrStatePath(params.accountId, params.env);
+  const dir = path.dirname(filePath);
+  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(
+    dir,
+    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`
+  );
+  const payload: NostrBusState = {
+    version: STORE_VERSION,
+    lastProcessedAt: params.lastProcessedAt,
+    gatewayStartedAt: params.gatewayStartedAt,
+    recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
+  };
+  fsSync.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
+    encoding: "utf-8",
+  });
+  fsSync.chmodSync(tmp, 0o600);
+  fsSync.renameSync(tmp, filePath);
 }
 
 /**
