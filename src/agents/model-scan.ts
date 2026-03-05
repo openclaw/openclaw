@@ -326,7 +326,9 @@ async function probeImage(
 }
 
 function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  const inputModes = Array.isArray(model.input) ? model.input : ["text"];
+  const inputModes: Array<"text" | "image"> = Array.isArray(model.input)
+    ? model.input.filter((mode): mode is "text" | "image" => mode === "text" || mode === "image")
+    : ["text"];
   if (inputModes.includes("image")) {
     return model;
   }
