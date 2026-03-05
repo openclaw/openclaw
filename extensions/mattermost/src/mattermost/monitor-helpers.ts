@@ -2,8 +2,8 @@ import {
   formatInboundFromLabel as formatInboundFromLabelShared,
   resolveThreadSessionKeys as resolveThreadSessionKeysShared,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/compat";
-export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/mattermost";
+export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk/mattermost";
 
 export type ResponsePrefixContext = {
   model?: string;
