@@ -160,12 +160,14 @@ function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    // Do not preserve a stale plaintext key when the current auth source is
-    // a SecretRef (sentinel).  The runtime async path will resolve the real
-    // credential at request time.  (#34335)
+    // Do not preserve a stale key when either side uses the sentinel.
+    // - newEntry is sentinel → current auth is SecretRef, don't keep old plaintext
+    // - existing is sentinel → stale sentinel must not overwrite a real new key
+    // The runtime async path resolves the real credential at request time. (#34335)
     if (
       typeof existing.apiKey === "string" &&
       existing.apiKey &&
+      existing.apiKey !== REDACTED_API_KEY_SENTINEL &&
       newEntry.apiKey !== REDACTED_API_KEY_SENTINEL
     ) {
       preserved.apiKey = existing.apiKey;

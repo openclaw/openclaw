@@ -1,14 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-/**
- * Sentinel value written to models.json instead of a real API key when the
- * auth source is an exec/keychain SecretRef that cannot be resolved
- * synchronously.  The runtime async path (resolveApiKeyForProvider) handles
- * actual credential resolution at request time.  See #34335.
- */
-export const REDACTED_API_KEY_SENTINEL = "__redacted__";
-
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
@@ -61,6 +53,14 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+
+/**
+ * Sentinel value written to models.json instead of a real API key when the
+ * auth source is an exec/file SecretRef that cannot be resolved synchronously.
+ * The runtime async path (resolveApiKeyForProvider) handles actual credential
+ * resolution at request time.  See #34335.
+ */
+export const REDACTED_API_KEY_SENTINEL = "__redacted__";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];

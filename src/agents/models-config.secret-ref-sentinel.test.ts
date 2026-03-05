@@ -62,3 +62,22 @@ describe("getCustomProviderApiKey filters sentinel", () => {
     expect(getCustomProviderApiKey(cfg, "openai")).toBeUndefined();
   });
 });
+
+describe("stale sentinel is never preserved", () => {
+  it("existing sentinel does not overwrite new real key", () => {
+    // Scenario: user switches from SecretRef back to inline key
+    // existing models.json has sentinel, new config has real key
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-new-real-key",
+            models: [],
+          },
+        },
+      },
+    } as unknown as Parameters<typeof getCustomProviderApiKey>[0];
+    // The real key should survive, not be overwritten by stale sentinel
+    expect(getCustomProviderApiKey(cfg, "openai")).toBe("sk-new-real-key");
+  });
+});
