@@ -491,6 +491,30 @@ Ref behavior:
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 
+## Best practices for reliable runs
+
+Use this checklist when wiring browser actions into repeatable workflows:
+
+1. Start each action block with a fresh snapshot (`openclaw browser snapshot --interactive`).
+2. Treat refs as short-lived; never cache them across navigation or major DOM updates.
+3. Arm event-driven actions before triggering them:
+   - upload: `openclaw browser upload <file>`
+   - download: `openclaw browser download <ref> <filename>`
+   - dialogs: `openclaw browser dialog --accept|--dismiss`
+4. Prefer role refs (`e12`) from interactive snapshots when clicking/typing.
+5. Use `openclaw browser wait` guards (`--url`, `--load`, `--fn`) before the next step.
+6. If a command fails, re-snapshot first, then retry with the new ref.
+
+## Common failure patterns
+
+| Symptom                                 | Likely cause                              | Fast fix                                                           |
+| --------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ | ------------------------- |
+| `unknown ref` / element not found       | Ref is stale after navigation/DOM refresh | Re-run `snapshot` and use the new ref                              |
+| File chooser did not open for upload    | Upload was not armed first                | Run `openclaw browser upload <file>` before the triggering click   |
+| Download file not created               | Download arm missing or wrong trigger ref | Run `openclaw browser download <ref> <filename>` before the action |
+| Dialog closed immediately or was missed | Dialog was not armed                      | Run `openclaw browser dialog --accept                              | --dismiss` before trigger |
+| `strict mode violation` on click/type   | Ambiguous or hidden target                | Use `snapshot --interactive`, then `highlight <ref>` and retry     |
+
 ## Wait power-ups
 
 You can wait on more than just time/text:
