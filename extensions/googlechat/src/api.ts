@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { fetchWithSsrFGuard, getProtectedDestinationMap, guardWrite } from "openclaw/plugin-sdk/googlechat";
+import {
+  fetchWithSsrFGuard,
+  getProtectedDestinationMap,
+  guardWrite,
+} from "openclaw/plugin-sdk/googlechat";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
