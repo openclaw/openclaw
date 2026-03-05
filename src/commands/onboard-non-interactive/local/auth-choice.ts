@@ -13,6 +13,7 @@ import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyAipingConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
@@ -35,6 +36,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setAipingApiKey,
   setByteplusApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -468,6 +470,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyPrimaryModel(nextConfig, "byteplus-plan/ark-code-latest");
+  }
+
+  if (authChoice === "aiping-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "aiping",
+      cfg: baseConfig,
+      flagValue: opts.aipingApiKey,
+      flagName: "--aiping-api-key",
+      envVar: "AIPING_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAipingApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "aiping:default",
+      provider: "aiping",
+      mode: "api_key",
+    });
+    return applyAipingConfig(nextConfig);
   }
 
   if (authChoice === "qianfan-api-key") {

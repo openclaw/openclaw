@@ -30,6 +30,7 @@ type AuthChoiceFlagOptions = Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "aipingApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
   | "customBaseUrl"
