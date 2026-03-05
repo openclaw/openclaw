@@ -20,6 +20,21 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
+function isExplicitReplyToCurrentPayload(
+  payload: ReplyPayload,
+  currentMessageId?: string,
+): boolean {
+  if (payload.replyToCurrent === true) {
+    return true;
+  }
+  if (!payload.replyToTag) {
+    return false;
+  }
+  const currentId = currentMessageId?.trim();
+  const replyToId = payload.replyToId?.trim();
+  return Boolean(currentId && replyToId && currentId === replyToId);
+}
+
 export function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -134,7 +149,11 @@ export function buildReplyPayloads(params: {
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
           )
         : mediaFilteredPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+  const replyPayloads = suppressMessagingToolReplies
+    ? filteredPayloads.filter((payload) =>
+        isExplicitReplyToCurrentPayload(payload, params.currentMessageId),
+      )
+    : filteredPayloads;
 
   return {
     replyPayloads,

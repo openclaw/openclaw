@@ -114,6 +114,25 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps explicit [[reply_to_current]] replies for same-target generic sends", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "[[reply_to_current]]hello world!" }],
+      replyToMode: "all",
+      replyToChannel: "feishu",
+      messageProvider: "heartbeat",
+      originatingChannel: "feishu",
+      originatingTo: "ou_abc123",
+      currentMessageId: "om_current",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "ou_abc123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
+    expect(replyPayloads[0]?.replyToId).toBe("om_current");
+  });
+
   it("does not suppress same-target replies when accountId differs", () => {
     const { replyPayloads } = buildReplyPayloads({
       ...baseParams,
