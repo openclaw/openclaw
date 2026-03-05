@@ -148,6 +148,7 @@ async function runNonStreamingChatSend(params: {
   idempotencyKey: string;
   message?: string;
   sessionKey?: string;
+  deliver?: boolean;
   client?: unknown;
   expectBroadcast?: boolean;
 }) {
@@ -155,6 +156,7 @@ async function runNonStreamingChatSend(params: {
     params: {
       sessionKey: params.sessionKey ?? "main",
       message: params.message ?? "hello",
+      ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
       idempotencyKey: params.idempotencyKey,
     },
     respond: params.respond as unknown as Parameters<
@@ -538,6 +540,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-main-no-cross-route",
       sessionKey: "main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
+
+  it("chat.send keeps webchat routing when deliver=false on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-channel-no-deliver-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "discord",
+        to: "discord:1234567890",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "discord:1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-channel-no-deliver",
+      sessionKey: "agent:main:discord:direct:1234567890",
+      deliver: false,
       expectBroadcast: false,
     });
 

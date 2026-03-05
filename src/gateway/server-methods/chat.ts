@@ -889,7 +889,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         !isChannelAgnosticSessionScope &&
         (isChannelScopedSession || hasLegacyChannelPeerShape),
       );
+      const shouldDeliverExternally = p.deliver !== false;
       const hasDeliverableRoute =
+        shouldDeliverExternally &&
         canInheritDeliverableRoute &&
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
