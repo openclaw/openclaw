@@ -487,7 +487,7 @@ function renderAgentOverview(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${!configForm || configSaving || !configDirty}
+            ?disabled=${configLoading || configSaving || !configDirty}
             @click=${onConfigSave}
           >
             ${configSaving ? "Saving…" : "Save"}

@@ -144,7 +144,7 @@ export function renderAgentTools(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${!params.configForm || params.configSaving || !params.configDirty}
+            ?disabled=${params.configLoading || params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
             ${params.configSaving ? "Saving…" : "Save"}
@@ -380,7 +380,7 @@ export function renderAgentSkills(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${!params.configForm || params.configSaving || !params.configDirty}
+            ?disabled=${params.configLoading || params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
             ${params.configSaving ? "Saving…" : "Save"}
