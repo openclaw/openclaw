@@ -728,6 +728,85 @@ describe("preflightDiscordMessage", () => {
     expect(result?.hasAnyMention).toBe(false);
   });
 
+  it("allows unlisted guild channels when only systemPrompt channel entries exist", async () => {
+    const channelId = "channel-systemprompt-fallback-1";
+    const guildId = "guild-systemprompt-fallback-1";
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-systemprompt-fallback-1",
+      content: "hello from general",
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {} as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "allowlist",
+      threadBindings: createNoopThreadBindingManager("default"),
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+          channels: {
+            coder: { systemPrompt: "Keep responses concise." },
+          },
+        },
+      },
+      data: {
+        channel_id: channelId,
+        guild_id: guildId,
+        guild: {
+          id: guildId,
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(result).not.toBeNull();
+  });
+
   it("uses attachment content_type for guild audio preflight mention detection", async () => {
     transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
 
