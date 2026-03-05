@@ -84,6 +84,7 @@ describe("gateway auth browser hardening", () => {
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect(res.error?.message ?? "").toContain("origin=https://attacker.example");
       } finally {
         ws.close();
       }

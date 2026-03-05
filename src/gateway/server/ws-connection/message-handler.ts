@@ -507,8 +507,11 @@ export function attachGatewayWsMessageHandler(params: {
             isLocalClient,
           });
           if (!originCheck.ok) {
+            const observedOrigin = requestOrigin?.trim() || "n/a";
+            const observedHost = requestHost?.trim() || "n/a";
             const errorMessage =
-              "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+              `origin not allowed (origin=${observedOrigin}, host=${observedHost}; ` +
+              "open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
             markHandshakeFailure("origin-mismatch", {
               origin: requestOrigin ?? "n/a",
               host: requestHost ?? "n/a",
