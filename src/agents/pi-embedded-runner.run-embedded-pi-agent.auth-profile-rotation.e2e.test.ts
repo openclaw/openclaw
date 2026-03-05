@@ -639,6 +639,15 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
   });
 
+  it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-rotation",
+      runId: "run:overloaded-rotation",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+  });
+
   it("rotates on timeout without cooling down the timed-out profile", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "request ended without sending any chunks",
