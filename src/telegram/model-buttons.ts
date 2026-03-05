@@ -195,9 +195,14 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
+  const parsedCurrentModel = currentModel?.includes("/")
+    ? (() => {
+        const idx = currentModel.indexOf("/");
+        return { provider: currentModel.slice(0, idx), model: currentModel.slice(idx + 1) };
+      })()
+    : currentModel
+      ? { provider: undefined as string | undefined, model: currentModel }
+      : null;
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
@@ -206,7 +211,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel = parsedCurrentModel
+      ? parsedCurrentModel.provider === provider && model === parsedCurrentModel.model
+      : false;
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

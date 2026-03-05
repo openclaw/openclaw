@@ -294,6 +294,31 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("does not mark model as selected when it belongs to a different provider", () => {
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models: ["claude-opus-4-6", "gpt-4.1"],
+      currentModel: "anthropic/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    // Neither model should have ✓ because the current provider is "anthropic", not "openrouter"
+    expect(result[0]?.[0]?.text).toBe("claude-opus-4-6");
+    expect(result[1]?.[0]?.text).toBe("gpt-4.1");
+  });
+
+  it("marks model as selected only for the matching provider", () => {
+    const result = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["claude-opus-4-6", "claude-sonnet-4"],
+      currentModel: "anthropic/claude-opus-4-6",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("claude-opus-4-6 ✓");
+    expect(result[1]?.[0]?.text).toBe("claude-sonnet-4");
+  });
+
   it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
     const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const result = buildModelsKeyboard({
