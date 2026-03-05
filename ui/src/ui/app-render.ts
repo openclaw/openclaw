@@ -261,14 +261,11 @@ export function renderApp(state: AppViewState) {
       state.agentAddSubmitting = true;
       state.agentAddError = null;
       try {
-        const agentId = name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-        const workspace = `~/.openclaw/workspaces/${agentId}`;
         const createResult = await state.client.request<{
           ok: boolean;
           agentId: string;
         }>("agents.create", {
           name,
-          workspace,
           ...(state.agentAddCopyAuth ? { copyAuthFromDefault: true } : {}),
         });
         if (!createResult?.ok) {

@@ -31,6 +31,7 @@ import type {
   StatusSummary,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type { AgentAuthProvider } from "./views/agents.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
@@ -137,18 +138,7 @@ export type AppViewState = {
   agentAddAuthMethod: string;
   agentAddApiKey: string;
   agentAddUseEnvVar: boolean;
-  agentAddProviders: Array<{
-    id: string;
-    label: string;
-    hint?: string;
-    methods: Array<{
-      id: string;
-      label: string;
-      hint?: string;
-      envVar?: string;
-      envVarMasked?: string;
-    }>;
-  }> | null;
+  agentAddProviders: AgentAuthProvider[] | null;
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;

@@ -84,6 +84,7 @@ import type {
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import type { AgentAuthProvider } from "./views/agents.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
@@ -229,18 +230,7 @@ export class OpenClawApp extends LitElement {
   @state() agentAddAuthMethod = "";
   @state() agentAddApiKey = "";
   @state() agentAddUseEnvVar = false;
-  @state() agentAddProviders: Array<{
-    id: string;
-    label: string;
-    hint?: string;
-    methods: Array<{
-      id: string;
-      label: string;
-      hint?: string;
-      envVar?: string;
-      envVarMasked?: string;
-    }>;
-  }> | null = null;
+  @state() agentAddProviders: AgentAuthProvider[] | null = null;
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;

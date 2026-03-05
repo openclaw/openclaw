@@ -456,9 +456,8 @@ export function renderAddAgentModal(props: AgentAddModalProps) {
                                       }}
                                     />
                                     <span>
-                                      Use existing
-                                      <span class="mono">${selectedMethod?.envVar}</span>
-                                      (env: <span class="mono">${selectedMethod?.envVar}</span>,
+                                      Use existing env var
+                                      (<span class="mono">${selectedMethod?.envVar}</span>:
                                       <span class="mono">${selectedMethod?.envVarMasked}</span>)
                                     </span>
                                   </label>
