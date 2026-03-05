@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -30,21 +33,24 @@ describe("systemd availability", () => {
 
   it("returns false when systemd user bus is unavailable", async () => {
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
-      const err = new Error("Failed to connect to bus") as Error & {
+      expect(_args).toEqual(["--user", "--version"]);
+      const err = new Error("permission denied") as Error & {
         stderr?: string;
         code?: number;
       };
-      err.stderr = "Failed to connect to bus";
+      err.stderr = "permission denied";
       err.code = 1;
       cb(err, "", "");
     });
-    await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "root", USER: "root" })).resolves.toBe(
+      false,
+    );
   });
 
   it("falls back to machine user scope when --user bus is unavailable", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "status"]);
+        expect(args).toEqual(["--user", "--version"]);
         const err = new Error(
           "Failed to connect to user scope bus via local transport",
         ) as Error & {
@@ -57,7 +63,7 @@ describe("systemd availability", () => {
         cb(err, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        expect(args).toEqual(["--machine", "debian@", "--user", "--version"]);
         cb(null, "", "");
       });
 
@@ -102,12 +108,12 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(false);
   });
 
-  it("throws when systemctl is-enabled fails for non-state errors", async () => {
+  it("returns false when systemctl is-enabled fails for non-state errors", async () => {
     const { isSystemdServiceEnabled } = await import("./systemd.js");
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
-        const err = new Error("Failed to connect to bus") as Error & { code?: number };
+        const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "Failed to connect to bus");
       })
@@ -118,10 +124,64 @@ describe("isSystemdServiceEnabled", () => {
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "permission denied");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--user",
+          "show",
+          "openclaw-gateway.service",
+          "-p",
+          "UnitFileState",
+          "--value",
+        ]);
+        const err = new Error("failed to connect to bus") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
       });
-    await expect(isSystemdServiceEnabled({ env: {} })).rejects.toThrow(
-      "systemctl is-enabled unavailable: permission denied",
-    );
+    const result = await isSystemdServiceEnabled({ env: { SUDO_USER: "root", USER: "root" } });
+    expect(result).toBe(false);
+  });
+
+  it("falls back to filesystem marker when is-enabled is unusable", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-service-"));
+    const unitDir = path.join(tmpDir, ".config", "systemd", "user");
+    const wantsDir = path.join(unitDir, "default.target.wants");
+    const unitPath = path.join(unitDir, "openclaw-gateway.service");
+    const enabledMarkerPath = path.join(wantsDir, "openclaw-gateway.service");
+    try {
+      await fs.mkdir(wantsDir, { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\n");
+      await fs.writeFile(enabledMarkerPath, "");
+
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
+          const err = new Error("permission denied") as Error & { code?: number };
+          err.code = 1;
+          cb(err, "", "permission denied");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual([
+            "--user",
+            "show",
+            "openclaw-gateway.service",
+            "-p",
+            "UnitFileState",
+            "--value",
+          ]);
+          const err = new Error("permission denied") as Error & { code?: number };
+          err.code = 1;
+          cb(err, "", "permission denied");
+        });
+
+      const result = await isSystemdServiceEnabled({
+        env: { HOME: tmpDir, SUDO_USER: "root", USER: "root" },
+      });
+      expect(result).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {

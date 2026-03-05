@@ -183,6 +183,13 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
+function resolveGatewayServiceEnv(env?: GatewayServiceEnv): GatewayServiceEnv {
+  if (!env || Object.keys(env).length === 0) {
+    return process.env as GatewayServiceEnv;
+  }
+  return { ...process.env, ...env };
+}
+
 function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
   const sudoUser = env.SUDO_USER?.trim();
   if (sudoUser && sudoUser !== "root") {
@@ -252,7 +259,8 @@ async function execSystemctlUser(
 export async function isSystemdUserServiceAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<boolean> {
-  const res = await execSystemctlUser(env, ["status"]);
+  const resolvedEnv = resolveGatewayServiceEnv(env);
+  const res = await execSystemctlUser(resolvedEnv, ["--version"]);
   if (res.code === 0) {
     return true;
   }
@@ -276,6 +284,72 @@ export async function isSystemdUserServiceAvailable(
     return false;
   }
   return false;
+}
+
+function isUnitFileStateEnabled(state: string): boolean | null {
+  const normalized = state.toLowerCase();
+  if (normalized === "enabled" || normalized === "enabled-runtime") {
+    return true;
+  }
+  if (normalized === "disabled" || normalized === "masked") {
+    return false;
+  }
+  return null;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isSystemdServiceEnabledByFilesystem(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean | null> {
+  const serviceName = unitName.endsWith(".service")
+    ? unitName.slice(0, -".service".length)
+    : unitName;
+  const unitPath = resolveSystemdUnitPathForName(env, serviceName);
+  if (!(await pathExists(unitPath))) {
+    return null;
+  }
+
+  const unitDir = path.posix.dirname(unitPath);
+  const enabled = await pathExists(path.posix.join(unitDir, "default.target.wants", unitName));
+  if (enabled) {
+    return true;
+  }
+  return false;
+}
+
+async function isSystemdServiceEnabledByUnitFileState(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean | null> {
+  const state = await execSystemctlUser(env, ["show", unitName, "-p", "UnitFileState", "--value"]);
+  if (state.code !== 0) {
+    return null;
+  }
+  const normalized = `${state.stdout} ${state.stderr}`.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return isUnitFileStateEnabled(normalized);
+}
+
+async function fallbackSystemdServiceEnabled(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean | null> {
+  const commandState = await isSystemdServiceEnabledByUnitFileState(env, unitName);
+  if (commandState !== null) {
+    return commandState;
+  }
+  return isSystemdServiceEnabledByFilesystem(env, unitName);
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -422,7 +496,7 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const env = args.env ?? process.env;
+  const env = resolveGatewayServiceEnv(args.env);
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, ["is-enabled", unitName]);
@@ -433,7 +507,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  const fallbackEnabled = await fallbackSystemdServiceEnabled(env, unitName);
+  if (fallbackEnabled !== null) {
+    return fallbackEnabled;
+  }
+  return false;
 }
 
 export async function readSystemdServiceRuntime(
