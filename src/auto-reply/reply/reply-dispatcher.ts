@@ -21,7 +21,7 @@ type ReplyDispatchSkipHandler = (
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+) => Promise<boolean | void>;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -205,7 +205,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         let success = true;
         let deliveryError: unknown;
         try {
-          await options.deliver(effectivePayload, { kind });
+          const delivered = await options.deliver(effectivePayload, { kind });
+          if (delivered === false) {
+            success = false;
+          }
         } catch (err) {
           success = false;
           deliveryError = err;

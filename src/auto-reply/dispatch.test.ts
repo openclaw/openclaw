@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
+import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
+import {
+  dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcher,
+  withReplyDispatcher,
+} from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -87,5 +92,37 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("derives channel context for buffered dispatcher message hooks", async () => {
+    const runMessageSending = vi.fn().mockResolvedValue(undefined);
+    const hookRunner = {
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    };
+    const hookSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue(hookRunner as never);
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({
+        Surface: "slack",
+        From: "channel:C123",
+        AccountId: "acc-1",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(runMessageSending.mock.calls[0]?.[1]).toMatchObject({
+      channelId: "slack",
+      accountId: "acc-1",
+      conversationId: "channel:C123",
+    });
+    hookSpy.mockRestore();
   });
 });

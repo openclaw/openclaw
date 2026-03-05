@@ -1417,6 +1417,30 @@ describe("createReplyDispatcher", () => {
     hookSpy.mockRestore();
   });
 
+  it("marks message_sent as unsuccessful when deliver returns false", async () => {
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    const hookRunner = {
+      hasHooks: (name: string) => name === "message_sent",
+      runMessageSent,
+    };
+    const hookSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue(hookRunner as never);
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => false,
+    });
+
+    dispatcher.sendFinalReply({ text: "x" });
+    await dispatcher.waitForIdle();
+
+    expect(runMessageSent).toHaveBeenCalledTimes(1);
+    expect(runMessageSent.mock.calls[0]?.[0]).toMatchObject({
+      success: false,
+      error: undefined,
+    });
+    hookSpy.mockRestore();
+  });
+
   it("does not block queue on pending message_sent hooks", async () => {
     let resolveSent: (() => void) | undefined;
     const pendingSent = new Promise<void>((resolve) => {
