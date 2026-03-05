@@ -96,7 +96,10 @@ def package_skill(skill_path, output_dir=None):
                     continue
 
                 rel_parts = file_path.relative_to(skill_path).parts
-                if any(part in EXCLUDED_DIRS for part in rel_parts):
+                # Exclude by directory names only. This avoids dropping regular files
+                # that happen to be named like excluded directories (e.g. "build"/"dist").
+                parent_dir_parts = rel_parts if file_path.is_dir() else rel_parts[:-1]
+                if any(part in EXCLUDED_DIRS for part in parent_dir_parts):
                     continue
 
                 if file_path.is_file():
