@@ -63,12 +63,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir?: "asc" | "desc";
       agentId?: string;
       sessionKey?: string;
-      ownerOverride?: boolean;
     };
     const callerContext = {
       agentId: p.agentId,
       sessionKey: p.sessionKey,
-      ownerOverride: p.ownerOverride,
     };
     const page = await context.cron.listPage(
       {
@@ -156,7 +154,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       patch: Record<string, unknown>;
       agentId?: string;
       sessionKey?: string;
-      ownerOverride?: boolean;
     };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
@@ -182,7 +179,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const callerContext = {
       agentId: p.agentId,
       sessionKey: p.sessionKey,
-      ownerOverride: p.ownerOverride,
     };
     const job = await context.cron.update(jobId, patch, callerContext);
     context.logGateway.info("cron: job updated", { jobId });
@@ -205,7 +201,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId?: string;
       agentId?: string;
       sessionKey?: string;
-      ownerOverride?: boolean;
     };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
@@ -219,7 +214,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const callerContext = {
       agentId: p.agentId,
       sessionKey: p.sessionKey,
-      ownerOverride: p.ownerOverride,
     };
     const result = await context.cron.remove(jobId, callerContext);
     if (result.removed) {
@@ -245,7 +239,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       mode?: "due" | "force";
       agentId?: string;
       sessionKey?: string;
-      ownerOverride?: boolean;
     };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
