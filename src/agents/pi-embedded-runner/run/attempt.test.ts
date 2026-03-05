@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaBaseUrlForRun,
@@ -54,6 +55,8 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result).toEqual({
       prependContext: "from-cache",
       systemPrompt: "legacy-system",
+      prependSystemContext: undefined,
+      appendSystemContext: undefined,
     });
   });
 
@@ -70,6 +73,58 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
     expect(result.prependContext).toBe("from-hook");
+  });
+
+  it("merges prompt-build and legacy context fields in deterministic order", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "prompt context",
+        prependSystemContext: "prompt prepend",
+        appendSystemContext: "prompt append",
+      })),
+      runBeforeAgentStart: vi.fn(async () => ({
+        prependContext: "legacy context",
+        prependSystemContext: "legacy prepend",
+        appendSystemContext: "legacy append",
+      })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
+    expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("composeSystemPromptWithHookContext", () => {
+  it("returns undefined when no hook system context is provided", () => {
+    expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
+  });
+
+  it("builds prepend/base/append system prompt order", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "  base system  ",
+        prependSystemContext: "  prepend  ",
+        appendSystemContext: "  append  ",
+      }),
+    ).toBe("prepend\n\nbase system\n\nappend");
+  });
+
+  it("avoids blank separators when base system prompt is empty", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "   ",
+        appendSystemContext: "  append only  ",
+      }),
+    ).toBe("append only");
   });
 });
 
