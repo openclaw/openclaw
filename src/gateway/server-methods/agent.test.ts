@@ -41,6 +41,7 @@ vi.mock("../../config/sessions.js", async () => {
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
+  agentCommandFromIngress: mocks.agentCommand,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -525,8 +526,13 @@ describe("gateway agent handler", () => {
       { reqId: "4" },
     );
 
-    const call = await expectResetCall(BARE_SESSION_RESET_PROMPT);
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
+    const call = readLastAgentCommandCall();
+    // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Current time:");
+    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
   });
 

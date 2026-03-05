@@ -600,6 +600,67 @@ describe("doctor config flow", () => {
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
 
+  it("migrates top-level heartbeat into agents.defaults.heartbeat on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        heartbeat: {
+          model: "anthropic/claude-3-5-haiku-20241022",
+          every: "30m",
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      heartbeat?: unknown;
+      agents?: {
+        defaults?: {
+          heartbeat?: {
+            model?: string;
+            every?: string;
+          };
+        };
+      };
+    };
+    expect(cfg.heartbeat).toBeUndefined();
+    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
+      model: "anthropic/claude-3-5-haiku-20241022",
+      every: "30m",
+    });
+  });
+
+  it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        heartbeat: {
+          showOk: true,
+          showAlerts: false,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      heartbeat?: unknown;
+      channels?: {
+        defaults?: {
+          heartbeat?: {
+            showOk?: boolean;
+            showAlerts?: boolean;
+            useIndicator?: boolean;
+          };
+        };
+      };
+    };
+    expect(cfg.heartbeat).toBeUndefined();
+    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
+      showOk: true,
+      showAlerts: false,
+    });
+  });
+
   it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

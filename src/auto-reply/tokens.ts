@@ -56,15 +56,34 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== trimmed.toUpperCase()) {
+    return false;
+  }
+  const normalized = trimmed.toUpperCase();
   if (!normalized) {
     return false;
   }
-  if (!normalized.includes("_")) {
+  if (normalized.length < 2) {
     return false;
   }
   if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
-  return token.toUpperCase().startsWith(normalized);
+  const tokenUpper = token.toUpperCase();
+  if (!tokenUpper.startsWith(normalized)) {
+    return false;
+  }
+  if (normalized.includes("_")) {
+    return true;
+  }
+  // Keep underscore guard for generic tokens to avoid suppressing unrelated
+  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
+  // because NO_REPLY streaming can transiently emit that fragment.
+  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }
