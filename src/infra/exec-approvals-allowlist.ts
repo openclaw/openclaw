@@ -100,17 +100,21 @@ function isPathScopedExecutableToken(token: string): boolean {
 
 function isTrustedAbsoluteShellWrapperPath(rawExecutable: string, resolvedPath?: string): boolean {
   const raw = rawExecutable.trim();
-  if (!path.isAbsolute(raw)) {
+  if (!path.isAbsolute(raw) || !resolvedPath) {
     return false;
   }
-  if (!resolvedPath || resolvedPath !== raw) {
+  const normalizedRaw = path.resolve(raw);
+  const normalizedResolved = path.resolve(resolvedPath);
+  if (normalizedResolved !== normalizedRaw) {
     return false;
   }
-  if (!isShellWrapperExecutable(raw)) {
+  if (!isShellWrapperExecutable(normalizedResolved)) {
     return false;
   }
   return (
-    raw.startsWith("/bin/") || raw.startsWith("/usr/bin/") || raw.startsWith("/usr/local/bin/")
+    normalizedResolved.startsWith("/bin/") ||
+    normalizedResolved.startsWith("/usr/bin/") ||
+    normalizedResolved.startsWith("/usr/local/bin/")
   );
 }
 
@@ -233,17 +237,21 @@ function evaluateSegments(
         ? segment.resolution.effectiveArgv
         : segment.argv;
 
-    const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(segment.argv);
+    let unwrappedArgv = segment.argv;
+    for (let depth = 0; depth < 3; depth += 1) {
+      const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(unwrappedArgv);
+      if (dispatchUnwrap.kind !== "unwrapped" || dispatchUnwrap.argv.length === 0) {
+        break;
+      }
+      unwrappedArgv = dispatchUnwrap.argv;
+    }
+
     const allowlistSegment =
-      dispatchUnwrap.kind === "unwrapped" && dispatchUnwrap.argv.length > 0
+      unwrappedArgv !== segment.argv
         ? {
-            raw: dispatchUnwrap.argv.join(" "),
-            argv: dispatchUnwrap.argv,
-            resolution: resolveCommandResolutionFromArgv(
-              dispatchUnwrap.argv,
-              params.cwd,
-              params.env,
-            ),
+            raw: unwrappedArgv.join(" "),
+            argv: unwrappedArgv,
+            resolution: resolveCommandResolutionFromArgv(unwrappedArgv, params.cwd, params.env),
           }
         : segment;
 
