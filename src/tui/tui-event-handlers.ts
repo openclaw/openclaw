@@ -135,10 +135,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
-  const maybeRefreshHistoryForRun = (runId: string) => {
-    if (isLocalRunId?.(runId)) {
+  const maybeRefreshHistoryForRun = (runId: string, opts?: { allowLocal?: boolean }) => {
+    const isLocal = isLocalRunId?.(runId) ?? false;
+    if (isLocal) {
       forgetLocalRunId?.(runId);
-      return;
+      if (!opts?.allowLocal) {
+        return;
+      }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -178,7 +181,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
-        maybeRefreshHistoryForRun(evt.runId);
+        // Some runs finalize without an inline message payload.
+        // For locally-started runs, reload history so the assistant reply appears.
+        maybeRefreshHistoryForRun(evt.runId, { allowLocal: true });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
