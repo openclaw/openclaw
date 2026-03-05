@@ -175,6 +175,22 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts browser.profiles.*.driver value "openclaw"', () => {
+    const res = validateConfigObject({
+      browser: {
+        profiles: {
+          default: {
+            cdpPort: 9222,
+            driver: "openclaw",
+            color: "#FF4500",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
