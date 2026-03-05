@@ -61,7 +61,7 @@ scripts/platinumfang-mode.sh model-toggle   # flip local/cloud chain
 scripts/platinumfang-mode.sh discord-off    # disable Discord channel
 scripts/platinumfang-mode.sh discord-on     # re-enable Discord channel
 scripts/platinumfang-mode.sh discord-toggle # flip Discord enabled state
-scripts/platinumfang-mode.sh profile-toggle # flip tools profile messaging/default
+scripts/platinumfang-mode.sh profile-toggle # flip tools profile messaging/full
 scripts/platinumfang-mode.sh toggle-all     # flip all main switches at once
 scripts/platinumfang-mode.sh power          # more permissive mode
 scripts/platinumfang-mode.sh safe           # hardened default

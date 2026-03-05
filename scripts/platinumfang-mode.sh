@@ -45,7 +45,7 @@ Switches:
   local-only    Local model primary + local-only fallback chain
   cloud-only    Cloud model primary + cloud fallback chain
   model-toggle  Toggle model chain between local-only and cloud-only
-  profile-toggle Toggle tools.profile between messaging and default
+  profile-toggle Toggle tools.profile between messaging and full
   toggle-all    Toggle Discord, mention, model chain, and tools profile
   help          Show this help
 
@@ -109,7 +109,7 @@ safe_mode() {
 
 power_mode() {
   set_model_chain_hybrid_power
-  run_cli config set tools.profile default
+  run_cli config set tools.profile full
   run_cli config set tools.deny '["gateway","cron","sessions_spawn","sessions_send"]' --strict-json
   run_cli config set tools.elevated.enabled false --json
   run_cli config set session.dmScope per-channel-peer
@@ -160,7 +160,7 @@ profile_toggle() {
   local current
   current="$(get_value tools.profile)"
   if [[ "$current" == "messaging" ]]; then
-    run_cli config set tools.profile default
+    run_cli config set tools.profile full
   else
     run_cli config set tools.profile messaging
   fi

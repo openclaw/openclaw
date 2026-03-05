@@ -67,7 +67,7 @@ Why:
 ### `scripts/platinumfang-mode.sh power`
 
 Changes:
-- `tools.profile = default` (broader capabilities)
+- `tools.profile = full` (broader capabilities)
 - keeps key dangerous control-plane delegations denied
 - guild mention requirement off
 - model chain shifts cloud-first
@@ -102,7 +102,7 @@ Why:
 - `scripts/platinumfang-mode.sh model-toggle`
   - Flips model chain between local-only and cloud-only.
 - `scripts/platinumfang-mode.sh profile-toggle`
-  - Flips `tools.profile` between `messaging` and `default`.
+  - Flips `tools.profile` between `messaging` and `full`.
 - `scripts/platinumfang-mode.sh toggle-all`
   - Runs all four toggles above in sequence and prints status.
 
