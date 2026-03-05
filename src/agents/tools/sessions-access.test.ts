@@ -108,7 +108,7 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
-  it("surfaces actionable guidance when cross-agent visibility is restricted", async () => {
+  it("surfaces visibility-only guidance when agent-to-agent is already enabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",
       requesterSessionKey: "agent:main:main",
@@ -121,6 +121,23 @@ describe("createSessionVisibilityGuard", () => {
           },
         },
       } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+    });
+  });
+
+  it("surfaces combined guidance in default config", async () => {
+    const cfg = {} as OpenClawConfig;
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: resolveSessionToolsVisibility(cfg),
+      a2aPolicy: createAgentToAgentPolicy(cfg),
     });
 
     expect(guard.check("agent:ops:main")).toEqual({
