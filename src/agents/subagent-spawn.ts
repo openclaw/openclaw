@@ -437,6 +437,7 @@ export async function spawnSubagentDirect(
     if (modelPatchError) {
       return {
         status: "error",
+        modelApplied: false,
         error: modelPatchError,
         childSessionKey,
       };

@@ -204,6 +204,49 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
+function inferProviderFromModelHint(params: {
+  cfg: OpenClawConfig;
+  model: string;
+}): string | undefined {
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: params.model,
+  });
+  if (inferredProvider) {
+    return inferredProvider;
+  }
+  const lower = params.model.toLowerCase();
+  if (lower === "gemini" || lower.startsWith("gemini-")) {
+    return "google";
+  }
+  return undefined;
+}
+
+function normalizeSubagentSpawnModelSelection(params: {
+  cfg: OpenClawConfig;
+  model: string;
+  defaultProvider: string;
+}): string {
+  const trimmed = params.model.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.includes("/")) {
+    const parsed = parseModelRef(trimmed, params.defaultProvider);
+    if (!parsed) {
+      return trimmed;
+    }
+    return `${parsed.provider}/${parsed.model}`;
+  }
+  const inferredProvider = inferProviderFromModelHint({
+    cfg: params.cfg,
+    model: trimmed,
+  });
+  const selectedProvider = normalizeProviderId(inferredProvider ?? params.defaultProvider);
+  const selectedModel = normalizeProviderModelId(selectedProvider, trimmed);
+  return `${selectedProvider}/${selectedModel}`;
+}
+
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
@@ -371,13 +414,38 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const resolvedModelOverride = params.modelOverride
+    ? normalizeSubagentSpawnModelSelection({
+        cfg: params.cfg,
+        model: normalizeModelSelection(params.modelOverride) ?? "",
+        defaultProvider: runtimeDefault.provider,
+      })
+    : undefined;
+  const resolvedConfiguredModel = resolveSubagentConfiguredModelSelection({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const normalizedConfiguredModel = resolvedConfiguredModel
+    ? normalizeSubagentSpawnModelSelection({
+        cfg: params.cfg,
+        model: resolvedConfiguredModel,
+        defaultProvider: runtimeDefault.provider,
+      })
+    : undefined;
+  const normalizedPrimaryModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)
+    ? normalizeSubagentSpawnModelSelection({
+        cfg: params.cfg,
+        model:
+          normalizeModelSelection(
+            resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
+          ) ?? "",
+        defaultProvider: runtimeDefault.provider,
+      })
+    : undefined;
   return (
-    normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    resolvedModelOverride ??
+    normalizedConfiguredModel ??
+    normalizedPrimaryModel ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
 }

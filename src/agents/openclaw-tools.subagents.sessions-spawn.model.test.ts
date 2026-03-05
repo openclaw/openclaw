@@ -134,7 +134,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     );
     expect(patchCall?.params).toMatchObject({
       key: expect.stringContaining("subagent:"),
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
     });
   });
 
@@ -252,7 +252,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       acceptedAtBase: 4000,
       patch: async (request) => {
         const model = (request.params as { model?: unknown } | undefined)?.model;
-        if (model === "bad-model") {
+        if (model === "anthropic/bad-model" || model === "bad-model") {
           throw new Error("invalid model: bad-model");
         }
         return { ok: true };
@@ -271,9 +271,40 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
     expect(result.details).toMatchObject({
       status: "error",
+      modelApplied: false,
     });
     expect(String((result.details as { error?: string }).error ?? "")).toContain("invalid model");
     expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
+  it("sessions_spawn maps bare Gemini model names to the Google provider", async () => {
+    const calls: GatewayCall[] = [];
+    mockLongRunningSpawnFlow({
+      calls,
+      acceptedAtBase: 4500,
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-gemini", {
+      task: "do thing",
+      model: "gemini-2.5-flash",
+      runTimeoutSeconds: 1,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "google/gemini-2.5-flash",
+    });
   });
 
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {
