@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -87,6 +88,26 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
+  const isSessionMatch = (sessionKey: string) => {
+    const current = state.currentSessionKey.trim().toLowerCase();
+    const incoming = sessionKey.trim().toLowerCase();
+    if (current === incoming) {
+      return true;
+    }
+    const currentParsed = parseAgentSessionKey(current);
+    const incomingParsed = parseAgentSessionKey(incoming);
+    if (!currentParsed) {
+      return false;
+    }
+    if (incomingParsed) {
+      return (
+        incomingParsed.agentId === currentParsed.agentId &&
+        incomingParsed.rest === currentParsed.rest
+      );
+    }
+    return currentParsed.rest === incoming;
+  };
+
   const noteFinalizedRun = (runId: string) => {
     finalizedRuns.set(runId, Date.now());
     sessionRuns.delete(runId);
@@ -152,7 +173,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (evt.sessionKey !== state.currentSessionKey) {
+    if (!isSessionMatch(evt.sessionKey)) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {

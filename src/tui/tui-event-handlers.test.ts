@@ -193,6 +193,23 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
   });
 
+  it("accepts chat events when canonical and legacy main session keys are equivalent", () => {
+    const { state, chatLog, handleChatEvent, tui } = createHandlersHarness({
+      state: { currentSessionKey: "agent:main:main", activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-alias",
+      sessionKey: "main",
+      state: "delta",
+      message: { content: "hello" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-alias");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
   it("clears run mapping when the session changes", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
