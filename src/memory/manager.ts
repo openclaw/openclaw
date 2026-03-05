@@ -135,11 +135,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     const createPromise = (async () => {
+      const remoteApiKey = settings.remote?.apiKey;
+      const resolvedRemote = settings.remote
+        ? {
+            ...settings.remote,
+            apiKey: typeof remoteApiKey === "string" ? remoteApiKey : undefined,
+          }
+        : undefined;
       const providerResult = await createEmbeddingProvider({
         config: cfg,
         agentDir: resolveAgentDir(cfg, agentId),
         provider: settings.provider,
-        remote: settings.remote,
+        remote: resolvedRemote,
         model: settings.model,
         fallback: settings.fallback,
         local: settings.local,

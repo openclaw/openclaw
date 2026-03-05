@@ -985,11 +985,18 @@ export abstract class MemoryManagerSyncOps {
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
                 : this.settings.model;
 
+    const remoteApiKey = this.settings.remote?.apiKey;
+    const resolvedRemote = this.settings.remote
+      ? {
+          ...this.settings.remote,
+          apiKey: typeof remoteApiKey === "string" ? remoteApiKey : undefined,
+        }
+      : undefined;
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
       provider: fallback,
-      remote: this.settings.remote,
+      remote: resolvedRemote,
       model: fallbackModel,
       fallback: "none",
       local: this.settings.local,
