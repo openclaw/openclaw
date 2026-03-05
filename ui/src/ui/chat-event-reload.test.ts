@@ -23,6 +23,19 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(true);
   });
 
+  it("returns false for active-run final events without payload message", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+        },
+        { activeRunId: "run-1" },
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when final event includes assistant payload", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
