@@ -423,4 +423,23 @@ describe("context-pruning", () => {
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
   });
+
+  it("ignores malformed text blocks in tool results during pruning", () => {
+    const malformedToolResult: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [
+        { type: "text" } as unknown as ToolResultMessage["content"][number],
+        { type: "text", text: "x".repeat(20_000) },
+      ],
+      isError: false,
+      timestamp: Date.now(),
+    };
+    const messages: AgentMessage[] = [makeUser("u1"), malformedToolResult];
+
+    const next = pruneWithAggressiveDefaults(messages);
+
+    expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
+  });
 });
