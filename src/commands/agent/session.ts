@@ -9,6 +9,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  canonicalizeMainSessionAlias,
   evaluateSessionFreshness,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -136,10 +137,39 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
-  const fresh = sessionEntry
-    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
-        .fresh
-    : false;
+
+  const shouldBypassFreshnessReset =
+    Boolean(sessionEntry) &&
+    resetType === "direct" &&
+    Boolean(sessionKey?.toLowerCase().startsWith("agent:")) &&
+    (() => {
+      const key = sessionKey!.trim().toLowerCase();
+      const agentId = resolveAgentIdFromSessionKey(key);
+      if (!agentId) {
+        return false;
+      }
+      const canonicalized = canonicalizeMainSessionAlias({
+        cfg: opts.cfg,
+        agentId,
+        sessionKey: key,
+      });
+      const agentMainKey = resolveExplicitAgentSessionKey({
+        cfg: opts.cfg,
+        agentId,
+      });
+      // Named agent sessions should resume their existing transcript even when
+      // the default "direct" reset policy would consider them stale (e.g. daily
+      // resets). This keeps sessions_send targets stable across days (#14459).
+      //
+      // Main sessions remain subject to reset policies.
+      return canonicalized === key && agentMainKey !== undefined && canonicalized !== agentMainKey;
+    })();
+
+  const fresh =
+    Boolean(sessionEntry) &&
+    (shouldBypassFreshnessReset ||
+      evaluateSessionFreshness({ updatedAt: sessionEntry!.updatedAt, now, policy: resetPolicy })
+        .fresh);
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;

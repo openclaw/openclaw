@@ -22,7 +22,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
-const { resolveSessionKeyForRequest } = await import("./session.js");
+const { resolveSession, resolveSessionKeyForRequest } = await import("./session.js");
 
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
@@ -175,5 +175,52 @@ describe("resolveSessionKeyForRequest", () => {
     expect(storePaths).toHaveLength(2);
     expect(storePaths).toContain(MAIN_STORE_PATH);
     expect(storePaths).toContain(MYBOT_STORE_PATH);
+  });
+});
+
+describe("resolveSession", () => {
+  const MAIN_STORE_PATH = "/tmp/main-store.json";
+  const cfg: OpenClawConfig = {
+    session: { scope: "per-sender", mainKey: "main" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+  });
+
+  it("reuses sessionId for named agent sessions even when reset policy marks them stale (#14459)", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:sip-v3": {
+        sessionId: "544c1a32-da1b-43c0-a4de-e3fb5a1cffb4",
+        updatedAt: 0,
+      },
+    });
+
+    const result = resolveSession({
+      cfg,
+      sessionKey: "agent:main:sip-v3",
+    });
+
+    expect(result.sessionId).toBe("544c1a32-da1b-43c0-a4de-e3fb5a1cffb4");
+    expect(result.isNewSession).toBe(false);
+  });
+
+  it("still applies reset policy to the agent main session", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "00000000-0000-4000-8000-000000000000",
+        updatedAt: 0,
+      },
+    });
+
+    const result = resolveSession({
+      cfg,
+      sessionKey: "agent:main:main",
+    });
+
+    expect(result.sessionId).not.toBe("00000000-0000-4000-8000-000000000000");
+    expect(result.isNewSession).toBe(true);
   });
 });
