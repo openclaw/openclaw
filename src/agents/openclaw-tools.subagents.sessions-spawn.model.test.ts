@@ -94,6 +94,11 @@ async function expectSpawnUsesConfiguredModel(params: {
   expect(patchCall?.params).toMatchObject({
     model: params.expectedModel,
   });
+  // Model should also be passed inline in the agent call (#27858)
+  const agentCall = calls.find((call) => call.method === "agent");
+  expect(agentCall?.params).toMatchObject({
+    model: params.expectedModel,
+  });
 }
 
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
@@ -129,11 +134,18 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(patchIndex).toBeGreaterThan(-1);
     expect(agentIndex).toBeGreaterThan(-1);
     expect(patchIndex).toBeLessThan(agentIndex);
+    // Model should be included in the consolidated sessions.patch call
     const patchCall = calls.find(
       (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
     );
     expect(patchCall?.params).toMatchObject({
       key: expect.stringContaining("subagent:"),
+      model: "claude-haiku-4-5",
+      spawnDepth: expect.any(Number),
+    });
+    // Model should also be passed inline in the agent call to avoid the race (#27858)
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({
       model: "claude-haiku-4-5",
     });
   });

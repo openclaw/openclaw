@@ -81,6 +81,8 @@ export const AgentParamsSchema = Type.Object(
     sessionId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
+    /** Inline model override — applied atomically at agent start (no separate sessions.patch). */
+    model: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     channel: Type.Optional(Type.String()),

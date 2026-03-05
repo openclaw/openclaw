@@ -730,6 +730,21 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
+    // Inline model override from the gateway `agent` call takes highest priority.
+    // This avoids the race condition where a separate sessions.patch for the model
+    // may not complete before this code reads from the session store (#27858).
+    const inlineModelRaw = opts.model?.trim();
+    if (inlineModelRaw) {
+      const slashIdx = inlineModelRaw.indexOf("/");
+      const inlineProvider = slashIdx > 0 ? inlineModelRaw.slice(0, slashIdx) : defaultProvider;
+      const inlineModel = slashIdx > 0 ? inlineModelRaw.slice(slashIdx + 1) : inlineModelRaw;
+      if (inlineModel) {
+        const normalized = normalizeModelRef(inlineProvider, inlineModel);
+        provider = normalized.provider;
+        model = normalized.model;
+      }
+    }
+
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
       if (authProfileId) {

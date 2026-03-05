@@ -41,6 +41,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Inline model override passed from the gateway agent call (avoids sessions.patch race). */
+  model?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;
