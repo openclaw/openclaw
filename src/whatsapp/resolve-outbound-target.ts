@@ -39,9 +39,12 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (allowList.includes(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
+    // Return a clearer error when target is valid but not in allowFrom list
     return {
       ok: false,
-      error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+      error: new Error(
+        `Target "${trimmed}" is not listed in the configured WhatsApp allowFrom policy.`,
+      ),
     };
   }
 
