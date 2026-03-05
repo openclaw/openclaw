@@ -217,6 +217,31 @@ describe("web_search grok response parsing", () => {
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
   });
+
+  it("skips malformed output/content entries without throwing", () => {
+    expect(() =>
+      extractGrokContent({
+        output: [
+          null as unknown as { type?: string },
+          {
+            type: "message",
+            content: [null as unknown as { type?: string }, { type: "output_text", text: "ok" }],
+          },
+        ],
+      } as Parameters<typeof extractGrokContent>[0]),
+    ).not.toThrow();
+
+    const result = extractGrokContent({
+      output: [
+        null as unknown as { type?: string },
+        {
+          type: "message",
+          content: [null as unknown as { type?: string }, { type: "output_text", text: "ok" }],
+        },
+      ],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("ok");
+  });
 });
 
 describe("web_search kimi config resolution", () => {

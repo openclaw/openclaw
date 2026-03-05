@@ -281,33 +281,52 @@ function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
 } {
+  const asRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    return value as Record<string, unknown>;
+  };
+
   // xAI Responses API format: find the message output with text content
-  for (const output of data.output ?? []) {
-    if (output.type === "message") {
-      for (const block of output.content ?? []) {
+  for (const outputEntry of data.output ?? []) {
+    const output = asRecord(outputEntry);
+    if (!output) {
+      continue;
+    }
+    const outputType = typeof output.type === "string" ? output.type : undefined;
+
+    if (outputType === "message") {
+      const contentEntries = Array.isArray(output.content) ? output.content : [];
+      for (const blockEntry of contentEntries) {
+        const block = asRecord(blockEntry);
+        if (!block) {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter((a) => a.type === "url_citation" && typeof a.url === "string")
-            .map((a) => a.url as string);
+          const annotationEntries = Array.isArray(block.annotations) ? block.annotations : [];
+          const urls = annotationEntries
+            .map((entry) => asRecord(entry))
+            .filter(
+              (entry): entry is Record<string, unknown> =>
+                entry !== null && entry.type === "url_citation" && typeof entry.url === "string",
+            )
+            .map((entry) => entry.url as string);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
         }
       }
     }
     // Some xAI responses place output_text blocks directly in the output array
     // without a message wrapper.
-    if (
-      output.type === "output_text" &&
-      "text" in output &&
-      typeof output.text === "string" &&
-      output.text
-    ) {
-      const rawAnnotations =
-        "annotations" in output && Array.isArray(output.annotations) ? output.annotations : [];
+    if (outputType === "output_text" && typeof output.text === "string" && output.text) {
+      const rawAnnotations = Array.isArray(output.annotations) ? output.annotations : [];
       const urls = rawAnnotations
+        .map((entry) => asRecord(entry))
         .filter(
-          (a: Record<string, unknown>) => a.type === "url_citation" && typeof a.url === "string",
+          (entry): entry is Record<string, unknown> =>
+            entry !== null && entry.type === "url_citation" && typeof entry.url === "string",
         )
-        .map((a: Record<string, unknown>) => a.url as string);
+        .map((entry) => entry.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
   }
