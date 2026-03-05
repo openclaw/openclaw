@@ -2304,6 +2304,10 @@ Docs: https://docs.openclaw.ai
 - fix(ui): refresh agent files after external edits.
 - Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
 
+### Changes
+
+- Telegram: inherit forum topic bindings from parent group for routing. Forum topics now automatically use their parent group's agent binding when no direct topic binding exists. (#7224) Thanks @Buywatermelon.
+
 ## 2026.2.1
 
 ### Changes
