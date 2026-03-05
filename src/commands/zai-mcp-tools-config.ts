@@ -39,11 +39,12 @@ export async function configureZaiMcpTools(apiKey: string, workspaceDir: string)
     config = { mcpServers: {} };
   }
 
-  // Configure MCP tools
-  const authHeader = `Bearer ${apiKey}`;
+  // Normalize API key: strip existing "Bearer " prefix if present
+  const normalizedKey = apiKey.replace(/^Bearer\s+/i, "");
+  const authHeader = `Bearer ${normalizedKey}`;
 
-  config.mcpServers = {
-    ...config.mcpServers,
+  // Z.AI MCP server configurations
+  const zaiServers: Record<string, unknown> = {
     // zread: GitHub repo analysis
     zread: {
       baseUrl: "https://api.z.ai/api/mcp/zread/mcp",
@@ -55,7 +56,7 @@ export async function configureZaiMcpTools(apiKey: string, workspaceDir: string)
     "zai-vision": {
       command: "npx -y @z_ai/mcp-server",
       env: {
-        Z_AI_API_KEY: apiKey,
+        Z_AI_API_KEY: normalizedKey,
       },
     },
     // zai-web-search: Web search
@@ -67,6 +68,13 @@ export async function configureZaiMcpTools(apiKey: string, workspaceDir: string)
       },
     },
   };
+
+  // Only add Z.AI servers that don't already exist (preserve user customizations)
+  for (const [name, serverConfig] of Object.entries(zaiServers)) {
+    if (!config.mcpServers[name]) {
+      config.mcpServers[name] = serverConfig;
+    }
+  }
 
   // Write config
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
