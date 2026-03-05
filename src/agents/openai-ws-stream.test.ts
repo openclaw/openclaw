@@ -489,6 +489,64 @@ describe("convertMessagesToInputItems", () => {
     expect(items[0]?.type).toBe("function_call");
   });
 
+  it("preserves replayable reasoning before function calls", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_reasoning", type: "reasoning" }),
+        },
+        { type: "toolCall", id: "call_2|fc_123", name: "read", arguments: { path: "/etc/hosts" } },
+      ],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      type: "reasoning",
+      content: "internal reasoning",
+    });
+    expect(items[1]).toMatchObject({
+      type: "function_call",
+      call_id: "call_2|fc_123",
+      name: "read",
+    });
+  });
+
+  it("does not emit reasoning for non-replayable thinking blocks", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        { type: "thinking", thinking: "internal reasoning", thinkingSignature: "reasoning" },
+        { type: "toolCall", id: "call_2", name: "read", arguments: { path: "/etc/hosts" } },
+      ],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_2",
+      name: "read",
+    });
+  });
+
   it("drops assistant tool calls with empty ids", () => {
     const msg = assistantMsg([], [{ id: "   ", name: "read", args: { path: "/tmp/a" } }]);
     const items = convertMessagesToInputItems([msg] as Parameters<

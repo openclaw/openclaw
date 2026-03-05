@@ -17,16 +17,19 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       }),
     ]);
 
-  const makeMessages = (withReasoning: boolean): AgentMessage[] => [
+  const makeMessages = (params: { withReasoning: boolean; reasoningId?: string }): AgentMessage[] => [
     castAgentMessage({
       role: "assistant",
       content: [
-        ...(withReasoning
+        ...(params.withReasoning
           ? [
               {
                 type: "thinking",
                 thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+                thinkingSignature: JSON.stringify({
+                  id: params.reasoningId ?? "rs_123",
+                  type: "reasoning",
+                }),
               },
             ]
           : []),
@@ -51,11 +54,18 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     {
       name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
       withReasoning: true,
+      reasoningId: "rs_123",
       expectedToolId: "call_123|fc_123",
     },
-  ])("$name", async ({ withReasoning, expectedToolId }) => {
+    {
+      name: "strips fc ids when reasoning id is not the paired rs_ suffix",
+      withReasoning: true,
+      reasoningId: "rs_other",
+      expectedToolId: "call_123",
+    },
+  ])("$name", async ({ withReasoning, expectedToolId, reasoningId }) => {
     const result = await sanitizeSessionHistory({
-      messages: makeMessages(withReasoning),
+      messages: makeMessages({ withReasoning, reasoningId }),
       modelApi: "openai-responses",
       provider: "openai",
       modelId: "gpt-5.2-codex",

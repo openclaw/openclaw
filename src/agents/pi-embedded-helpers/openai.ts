@@ -16,7 +16,7 @@ type OpenAIReasoningSignature = {
   type: string;
 };
 
-function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
+export function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
   }
@@ -78,6 +78,13 @@ function splitOpenAIFunctionCallPairing(id: string): {
   };
 }
 
+function expectedReasoningIdForFunctionCallPairing(itemId: string): string | null {
+  if (!itemId.startsWith("fc_")) {
+    return null;
+  }
+  return `rs_${itemId.slice(3)}`;
+}
+
 function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
@@ -113,7 +120,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
       }
 
       const localRewrittenIds = new Map<string, string>();
-      let seenReplayableReasoning = false;
+      const seenReplayableReasoningIds = new Set<string>();
       let assistantChanged = false;
       const nextContent = assistantMsg.content.map((block) => {
         if (!block || typeof block !== "object") {
@@ -121,11 +128,9 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         }
 
         const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
-          seenReplayableReasoning = true;
+        const parsedThinkingSignature = parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature);
+        if (thinkingBlock.type === "thinking" && parsedThinkingSignature) {
+          seenReplayableReasoningIds.add(parsedThinkingSignature.id);
           return block;
         }
 
@@ -135,16 +140,20 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         }
 
         const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
+        if (!pairing.itemId) {
           return block;
         }
+        const expectedReasoningId = expectedReasoningIdForFunctionCallPairing(pairing.itemId);
+        if (!expectedReasoningId || !seenReplayableReasoningIds.has(expectedReasoningId)) {
+          assistantChanged = true;
+          localRewrittenIds.set(toolCallBlock.id, pairing.callId);
+          return {
+            ...(block as unknown as Record<string, unknown>),
+            id: pairing.callId,
+          } as typeof block;
+        }
 
-        assistantChanged = true;
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...(block as unknown as Record<string, unknown>),
-          id: pairing.callId,
-        } as typeof block;
+        return block;
       });
 
       pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;

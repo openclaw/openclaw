@@ -41,6 +41,7 @@ import {
   type ResponseObject,
 } from "./openai-ws-connection.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { parseOpenAIReasoningSignature } from "./pi-embedded-helpers/openai.js";
 import {
   buildAssistantMessage,
   buildAssistantMessageWithZeroUsage,
@@ -107,6 +108,18 @@ function toNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function flushTextContent(textParts: string[], items: InputItem[]): void {
+  if (textParts.length === 0) {
+    return;
+  }
+  items.push({
+    type: "message",
+    role: "assistant",
+    content: textParts.join(""),
+  });
+  textParts.length = 0;
 }
 
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
@@ -204,21 +217,21 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
           name?: string;
           arguments?: Record<string, unknown>;
           thinking?: string;
+          thinkingSignature?: unknown;
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
-          } else if (block.type === "thinking" && typeof block.thinking === "string") {
-            // Skip thinking blocks — not sent back to the model
+          } else if (block.type === "thinking") {
+            flushTextContent(textParts, items);
+            if (parseOpenAIReasoningSignature(block.thinkingSignature)) {
+              items.push({
+                type: "reasoning",
+                content: typeof block.thinking === "string" ? block.thinking : undefined,
+              });
+            }
           } else if (block.type === "toolCall") {
             // Push accumulated text first
-            if (textParts.length > 0) {
-              items.push({
-                type: "message",
-                role: "assistant",
-                content: textParts.join(""),
-              });
-              textParts.length = 0;
-            }
+            flushTextContent(textParts, items);
             const callId = toNonEmptyString(block.id);
             const toolName = toNonEmptyString(block.name);
             if (!callId || !toolName) {
@@ -236,13 +249,7 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
             });
           }
         }
-        if (textParts.length > 0) {
-          items.push({
-            type: "message",
-            role: "assistant",
-            content: textParts.join(""),
-          });
-        }
+        flushTextContent(textParts, items);
       } else {
         const text = contentToText(m.content);
         if (text) {
