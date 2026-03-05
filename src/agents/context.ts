@@ -42,8 +42,11 @@ export function applyDiscoveredContextWindows(params: {
     }
     const existing = params.cache.get(model.id);
     // When multiple providers expose the same model id with different limits,
-    // prefer the smaller window so token budgeting is fail-safe (no overestimation).
-    if (existing === undefined || contextWindow < existing) {
+    // prefer the larger window.  Runtime token budgeting already resolves the
+    // correct limit from the active provider; the cache is only used for
+    // display (/status) where showing the smaller cross-provider minimum is
+    // misleading (e.g. gemini-3.1-pro shows 128k instead of 1024k).
+    if (existing === undefined || contextWindow > existing) {
       params.cache.set(model.id, contextWindow);
     }
   }
