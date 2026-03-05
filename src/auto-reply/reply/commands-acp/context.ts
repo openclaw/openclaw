@@ -131,13 +131,18 @@ export function resolveAcpCommandParentConversationId(
     return undefined;
   }
   if (channel === SLACK_THREAD_BINDING_CHANNEL) {
+    const fromTargets = resolveParentConversationIdFromTargets({
+      targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
+    });
+    if (fromTargets) {
+      return fromTargets;
+    }
     const fromContext = normalizeString(params.ctx.ThreadParentId);
     if (fromContext) {
       return fromContext;
     }
-    return resolveParentConversationIdFromTargets({
-      targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
-    });
+    const fromOriginatingConversationId = normalizeString(params.ctx.OriginatingConversationId);
+    return fromOriginatingConversationId || undefined;
   }
   return undefined;
 }
