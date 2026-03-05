@@ -128,3 +128,6 @@ dist/protocol.schema.json
 
 # Internal projects (each has own git)
 Projects/
+
+# Matrix landing page (separate project)
+matrix-landing/

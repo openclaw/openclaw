@@ -4,6 +4,29 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.3.5
+
+> Fork-specific changes. Upstream sync base: `v2026.3.2`.
+
+### Changes
+
+- **feat(matrix)**: planning-first workflow for all 34 agents — Tier 2 and Tier 3 agents follow structured brief → plan → review → implement workflow with task classification (Trivial/Simple/Medium/Complex).
+- **feat(matrix)**: project context system — Operator1 gains PM dual role with multi-project awareness, session-to-project binding, cross-project spawn rules, and project detection.
+- **feat(matrix)**: `projects.*` gateway RPC methods (list, get, add, update, archive, bindSession, unbindSession, getContext) with `MarkdownProjectStore` backed by PROJECTS.md registry.
+- **feat(matrix)**: 30 Tier 3 specialist agent templates — full SOUL.md, IDENTITY.md, AGENTS.md, and MEMORY.md for all specialist roles across engineering, marketing, and finance departments.
+- **feat(matrix)**: `.openclaw/` project scaffolding for operator1 (SOUL.md, AGENTS.md, MEMORY.md, TOOLS.md).
+- **feat(matrix)**: `Projects/` folder for internal projects (gitignored, each project manages own git).
+- **feat(matrix)**: project memory sections added to all agent tiers — `## Project Work Log` for Tier 2, `## Project Context` for Tier 3 (templates + live workspaces).
+- **feat(ui)**: ClawhHub marketplace page, nav sidebar expansion, agent detail panel enhancements.
+- **feat(visualize)**: pixel engine zone layout expansion, world-state improvements, renderer enhancements.
+
+### Fixes
+
+- **fix(matrix-init)**: improved test coverage and CLI robustness for `matrix init` command.
+- **fix(billing)**: additional billing error message pattern matching in Pi embedded helpers.
+
+---
+
 ## [Operator1] 2026.3.4
 
 > Fork-specific changes. Upstream sync base: `v2026.3.2`.
