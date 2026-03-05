@@ -274,10 +274,44 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = [60_000, 300_000, 1_500_000, 3_600_000] as const;
+
+function normalizeRateLimitBackoffSequence(input: unknown): number[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const normalized = input
+    .map((entry) => {
+      if (typeof entry !== "number" || !Number.isFinite(entry) || entry <= 0) {
+        return null;
+      }
+      return Math.trunc(entry);
+    })
+    .filter((entry): entry is number => entry !== null);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function calculateRateLimitCooldownMs(
+  errorCount: number,
+  sequenceMs: readonly number[] = DEFAULT_RATE_LIMIT_BACKOFF_MS,
+): number {
+  const normalized = Math.max(1, errorCount);
+  if (!Array.isArray(sequenceMs) || sequenceMs.length === 0) {
+    return calculateAuthProfileCooldownMs(normalized);
+  }
+  const index = Math.min(normalized - 1, sequenceMs.length - 1);
+  const selected = sequenceMs[index];
+  if (typeof selected !== "number" || !Number.isFinite(selected) || selected <= 0) {
+    return calculateAuthProfileCooldownMs(normalized);
+  }
+  return Math.trunc(selected);
+}
+
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
   failureWindowMs: number;
+  rateLimitBackoffMs: readonly number[];
 };
 
 function resolveAuthCooldownConfig(params: {
@@ -321,6 +355,9 @@ function resolveAuthCooldownConfig(params: {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    rateLimitBackoffMs:
+      normalizeRateLimitBackoffSequence(cooldowns?.rateLimitBackoffMs) ??
+      DEFAULT_RATE_LIMIT_BACKOFF_MS,
   };
 }
 
@@ -426,7 +463,10 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = params.reason;
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs =
+      params.reason === "rate_limit"
+        ? calculateRateLimitCooldownMs(nextErrorCount, params.cfgResolved.rateLimitBackoffMs)
+        : calculateAuthProfileCooldownMs(nextErrorCount);
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
