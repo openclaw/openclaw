@@ -1,4 +1,8 @@
 import { vi } from "vitest";
+import {
+  makeIsolatedAgentJobFixture,
+  makeIsolatedAgentParamsFixture,
+} from "./isolated-agent/job-fixtures.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -21,3 +25,6 @@ vi.mock("../agents/model-selection.js", async (importOriginal) => {
 vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
+
+export const makeIsolatedAgentJob = makeIsolatedAgentJobFixture;
+export const makeIsolatedAgentParams = makeIsolatedAgentParamsFixture;

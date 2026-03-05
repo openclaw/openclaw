@@ -1,5 +1,5 @@
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
@@ -79,9 +79,9 @@ export async function upsertAuthProfileWithLock(params: {
 }
 
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = normalizeProviderId(provider);
+  const providerKey = normalizeProviderIdForAuth(provider);
   return Object.entries(store.profiles)
-    .filter(([, cred]) => normalizeProviderId(cred.provider) === providerKey)
+    .filter(([, cred]) => normalizeProviderIdForAuth(cred.provider) === providerKey)
     .map(([id]) => id);
 }
 

@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
-import { mediaKindFromMime } from "../media/constants.js";
+import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
@@ -129,7 +129,7 @@ export async function sendMessageIMessage(
     });
     filePath = resolved.path;
     if (!message.trim()) {
-      const kind = mediaKindFromMime(resolved.contentType ?? undefined);
+      const kind = kindFromMime(resolved.contentType ?? undefined);
       if (kind) {
         message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
       }

@@ -322,6 +322,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "action",
           description: "Action to run",
           type: "string",
+          preferAutocomplete: true,
           choices: [
             "spawn",
             "cancel",
