@@ -23,7 +23,7 @@ describe("whatsappPlugin.actions.handleAction react participant fallback", () =>
     installRuntime();
   });
 
-  it("uses requesterSenderId as participant fallback when param is omitted", async () => {
+  it("uses requesterSenderId as participant fallback for @s.whatsapp.net JIDs", async () => {
     await whatsappPlugin.actions!.handleAction!({
       channel: "whatsapp",
       action: "react",
@@ -39,6 +39,48 @@ describe("whatsappPlugin.actions.handleAction react participant fallback", () =>
     expect(handleWhatsAppAction).toHaveBeenCalledWith(
       expect.objectContaining({
         participant: "201006884440@s.whatsapp.net",
+      }),
+      enabledConfig,
+    );
+  });
+
+  it("uses requesterSenderId as participant fallback for @lid JIDs", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      cfg: enabledConfig,
+      params: {
+        chatJid: "group123@g.us",
+        messageId: "msg1",
+        emoji: "✅",
+      },
+      requesterSenderId: "143134247891105@lid",
+    });
+
+    expect(handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participant: "143134247891105@lid",
+      }),
+      enabledConfig,
+    );
+  });
+
+  it("ignores requesterSenderId from non-WhatsApp contexts", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      cfg: enabledConfig,
+      params: {
+        chatJid: "group123@g.us",
+        messageId: "msg1",
+        emoji: "✅",
+      },
+      requesterSenderId: "discord-user-123",
+    });
+
+    expect(handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participant: undefined,
       }),
       enabledConfig,
     );
