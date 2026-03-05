@@ -135,6 +135,27 @@ describe("message hook mappers", () => {
     );
   });
 
+  it("prefers ReplyToIdFull over ReplyToId (matching messageId pattern)", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        ReplyToIdFull: "full-reply-id-99",
+        ReplyToId: "short-reply-99",
+      }),
+    );
+
+    expect(canonical.replyToId).toBe("full-reply-id-99");
+  });
+
+  it("falls back to ReplyToId when ReplyToIdFull is absent", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        ReplyToId: "reply-msg-99",
+      }),
+    );
+
+    expect(canonical.replyToId).toBe("reply-msg-99");
+  });
+
   it("omits reply-to fields when message is not a reply", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx());
 

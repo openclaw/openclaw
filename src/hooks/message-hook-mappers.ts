@@ -112,7 +112,7 @@ export function deriveInboundMessageHookContext(
     channelName: ctx.GroupChannel,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
-    replyToId: ctx.ReplyToId,
+    replyToId: ctx.ReplyToIdFull ?? ctx.ReplyToId,
     replyToBody: ctx.ReplyToBody,
     replyToSender: ctx.ReplyToSender,
     replyToIsQuote: ctx.ReplyToIsQuote,
