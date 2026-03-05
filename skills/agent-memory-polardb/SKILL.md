@@ -52,12 +52,12 @@ This toolset provides long-term memory capabilities based on PolarDB, enabling t
 # Configuration
 To enable the PolarDB-powered memory system, follow these steps:
 1. **Access the Console**: Visit the [Alibaba Cloud PolarDB Console](https://polardb.console.aliyun.com/cn-hangzhou/mem0).
-2. **Activate Mem0**: Enable the Mem0 service within your PolarDB instance and retrieve your unique `MEM0_API_KEY` and `MEM0_ORG_ID`.
+2. **Activate Mem0**: Enable the Mem0 service within your PolarDB instance and retrieve your unique `MEM0_API_KEY` and `MEM0_HOST`.
 3. **Endpoint Details**:
-   - - **Service Host**: The connection is managed via `handler.py`. Ensure the host (IP or Domain) is correctly configured in the `_get_client()` function.
+   - - **Service Host**: The connection is managed via `handler.py`. Ensure the host (IP or Domain) is correctly configured.
 4. **Set Environment Variables**:
    - `/env set MEM0_API_KEY=your_key`
-   - `/env set MEM0_ORG_ID=your_id`
+   - `/env set MEM0_HOST=PolarDB_mem0_host`
 
 # Output Format
 1. **Natural Integration**: Do not explicitly mention "searching memory." Incorporate retrieved facts naturally into the conversation (e.g., "Since you're learning Rust, you might like...").
@@ -93,7 +93,7 @@ To enable the PolarDB-powered memory system, follow these steps:
 - **Logic**: PolarDB calculates relevance based on timestamps. If a project was mentioned years ago and never touched again, its weight decays. The Agent can then respond intelligently: "Are you referring to the old Project X from 2023, or the Project Y we discussed last week?"
 
 # Security & Privacy
-- **Data Isolation**: Memories are strictly isolated by `MEM0_ORG_ID` and `user_id`. No cross-user data leakage is possible.
+- **Data Isolation**: Memories are strictly isolated by  `user_id` and `agent_id` and. No cross-user data leakage is possible.
 - **Encryption**: All data transmitted to `mem0test01.polardb.com` is encrypted via TLS 1.3.
 - **Compliance**: Powered by Alibaba Cloud PolarDB, adhering to global data protection standards.
 
