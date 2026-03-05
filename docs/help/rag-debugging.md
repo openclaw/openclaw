@@ -26,24 +26,24 @@ this page as a deeper runbook for retrieval-heavy and tool-routed failures.
 
 ## Quick reference
 
-| # | Failure mode | Likely layer |
-| --- | --- | --- |
-| 1 | [Documents not ingested](#1-documents-not-ingested) | Ingestion |
-| 2 | [Wrong or stale documents](#2-wrong-or-stale-documents) | Ingestion / index |
-| 3 | [Chunking boundary mismatch](#3-chunking-boundary-mismatch) | Chunking |
-| 4 | [Missing source metadata](#4-missing-source-metadata) | Chunking / provenance |
-| 5 | [Embedding model mismatch](#5-embedding-model-mismatch) | Embedding |
-| 6 | [Similarity configuration mismatch](#6-similarity-configuration-mismatch) | Vector store |
-| 7 | [Index fragmentation or staleness](#7-index-fragmentation-or-staleness) | Vector store |
-| 8 | [Retrieval noise or low recall](#8-retrieval-noise-or-low-recall) | Retrieval |
-| 9 | [Ranking mismatch](#9-ranking-mismatch) | Retrieval |
-| 10 | [Context window pressure](#10-context-window-pressure) | Context |
-| 11 | [Grounding instruction drift](#11-grounding-instruction-drift) | Prompt |
-| 12 | [Good retrieval, bad answer](#12-good-retrieval-bad-answer) | Prompt / model |
-| 13 | [Wrong tool selected](#13-wrong-tool-selected) | Tool routing |
-| 14 | [Tool looping](#14-tool-looping) | Tool routing |
-| 15 | [Tool output not applied](#15-tool-output-not-applied) | Tool routing |
-| 16 | [Multi-agent handoff failure](#16-multi-agent-handoff-failure) | Orchestration |
+| #   | Failure mode                                                              | Likely layer          |
+| --- | ------------------------------------------------------------------------- | --------------------- |
+| 1   | [Documents not ingested](#1-documents-not-ingested)                       | Ingestion             |
+| 2   | [Wrong or stale documents](#2-wrong-or-stale-documents)                   | Ingestion / index     |
+| 3   | [Chunking boundary mismatch](#3-chunking-boundary-mismatch)               | Chunking              |
+| 4   | [Missing source metadata](#4-missing-source-metadata)                     | Chunking / provenance |
+| 5   | [Embedding model mismatch](#5-embedding-model-mismatch)                   | Embedding             |
+| 6   | [Similarity configuration mismatch](#6-similarity-configuration-mismatch) | Vector store          |
+| 7   | [Index fragmentation or staleness](#7-index-fragmentation-or-staleness)   | Vector store          |
+| 8   | [Retrieval noise or low recall](#8-retrieval-noise-or-low-recall)         | Retrieval             |
+| 9   | [Ranking mismatch](#9-ranking-mismatch)                                   | Retrieval             |
+| 10  | [Context window pressure](#10-context-window-pressure)                    | Context               |
+| 11  | [Grounding instruction drift](#11-grounding-instruction-drift)            | Prompt                |
+| 12  | [Good retrieval, bad answer](#12-good-retrieval-bad-answer)               | Prompt / model        |
+| 13  | [Wrong tool selected](#13-wrong-tool-selected)                            | Tool routing          |
+| 14  | [Tool looping](#14-tool-looping)                                          | Tool routing          |
+| 15  | [Tool output not applied](#15-tool-output-not-applied)                    | Tool routing          |
+| 16  | [Multi-agent handoff failure](#16-multi-agent-handoff-failure)            | Orchestration         |
 
 ## Ingestion and indexing
 
