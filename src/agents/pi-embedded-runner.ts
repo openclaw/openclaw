@@ -9,7 +9,10 @@ export {
   limitHistoryTurns,
 } from "./pi-embedded-runner/history.js";
 export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
-export { runEmbeddedPiAgent } from "./pi-embedded-runner/run.js";
+export {
+  __resetProviderRateLimitCooldownForTests,
+  runEmbeddedPiAgent,
+} from "./pi-embedded-runner/run.js";
 export {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,

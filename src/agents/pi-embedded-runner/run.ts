@@ -80,6 +80,8 @@ const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const PROVIDER_RATE_LIMIT_FAST_FAIL_MS = 30_000;
+const providerRateLimitUntilByProvider = new Map<string, number>();
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -89,6 +91,35 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
   );
+}
+
+function getProviderRateLimitRemainingMs(providerId: string, profileId?: string): number {
+  const providerKey = normalizeProviderId(providerId);
+  const profileKey = profileId ? `${providerKey}::${profileId}` : providerKey;
+  const until = providerRateLimitUntilByProvider.get(profileKey);
+  if (!until) {
+    return 0;
+  }
+  const remaining = until - Date.now();
+  if (remaining <= 0) {
+    providerRateLimitUntilByProvider.delete(profileKey);
+    return 0;
+  }
+  return remaining;
+}
+
+function markProviderRateLimited(providerId: string, profileId?: string) {
+  const providerKey = normalizeProviderId(providerId);
+  const key = profileId ? `${providerKey}::${profileId}` : providerKey;
+  const until = Date.now() + PROVIDER_RATE_LIMIT_FAST_FAIL_MS;
+  const existing = providerRateLimitUntilByProvider.get(key) ?? 0;
+  if (until > existing) {
+    providerRateLimitUntilByProvider.set(key, until);
+  }
+}
+
+export function __resetProviderRateLimitCooldownForTests() {
+  providerRateLimitUntilByProvider.clear();
 }
 
 type UsageAccumulator = {
@@ -284,6 +315,23 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       });
+
+      const lockedProfileFromParams =
+        params.authProfileIdSource === "user" ? params.authProfileId?.trim() : undefined;
+      const providerFastFailMs = getProviderRateLimitRemainingMs(provider, lockedProfileFromParams);
+      if (providerFastFailMs > 0) {
+        throw new FailoverError(
+          `Provider ${provider}${lockedProfileFromParams ? ` (${lockedProfileFromParams})` : ""} is in cooldown after rate-limit. Retry in ${Math.ceil(providerFastFailMs / 1000)}s.`,
+          {
+            reason: "rate_limit",
+            provider,
+            model: modelId,
+            profileId: lockedProfileFromParams,
+            status: 429,
+          },
+        );
+      }
+
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -408,6 +456,19 @@ export async function runEmbeddedPiAgent(
         : profileOrder.length > 0
           ? profileOrder
           : [undefined];
+      const allCandidatesInFastFailCooldown = profileCandidates.every((candidate) =>
+        candidate
+          ? getProviderRateLimitRemainingMs(provider, candidate) > 0
+          : getProviderRateLimitRemainingMs(provider) > 0,
+      );
+      if (!lockedProfileId && allCandidatesInFastFailCooldown) {
+        throw new FailoverError(`All ${provider} profiles are in temporary rate-limit cooldown.`, {
+          reason: "rate_limit",
+          provider,
+          model: modelId,
+          status: 429,
+        });
+      }
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -612,7 +673,11 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          const inAuthCooldown = candidate ? isProfileInCooldown(authStore, candidate) : false;
+          const inFastFailCooldown =
+            getProviderRateLimitRemainingMs(provider, candidate) > 0 ||
+            (!candidate && getProviderRateLimitRemainingMs(provider) > 0);
+          if (inAuthCooldown || inFastFailCooldown) {
             nextIndex += 1;
             continue;
           }
@@ -635,11 +700,14 @@ export async function runEmbeddedPiAgent(
       try {
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
-          if (
-            candidate &&
-            candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
-          ) {
+          const inAuthCooldown =
+            candidate && candidate !== lockedProfileId
+              ? isProfileInCooldown(authStore, candidate)
+              : false;
+          const inFastFailCooldown =
+            getProviderRateLimitRemainingMs(provider, candidate) > 0 ||
+            (!candidate && getProviderRateLimitRemainingMs(provider) > 0);
+          if (inAuthCooldown || inFastFailCooldown) {
             profileIndex += 1;
             continue;
           }
@@ -1121,6 +1189,9 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
+            if (promptFailoverReason === "rate_limit") {
+              markProviderRateLimited(provider, lastProfileId);
+            }
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptFailoverReason,
@@ -1174,6 +1245,9 @@ export async function runEmbeddedPiAgent(
           const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
+          if (assistantFailoverReason === "rate_limit" || rateLimitFailure) {
+            markProviderRateLimited(provider, lastProfileId);
+          }
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
