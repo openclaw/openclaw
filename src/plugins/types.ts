@@ -811,8 +811,9 @@ export type PluginHookAfterLlmCallEvent = {
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   iteration: number;
   model: string;
-  /** Wall-clock LLM call duration. Undefined when not measurable. */
+  /** Wall-clock LLM call duration. Reserved for future use — not yet populated. */
   latencyMs?: number;
+  /** Token usage for this call. Reserved for future use — not yet populated. */
   tokenUsage?: { input: number; output: number };
 };
 
