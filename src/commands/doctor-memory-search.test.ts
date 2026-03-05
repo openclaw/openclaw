@@ -135,6 +135,21 @@ describe("noteMemorySearchHealth", () => {
     await expectNoWarningWithConfiguredRemoteApiKey("openai");
   });
 
+  it("does not warn for explicit Hugging Face local model URI", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {
+        modelPath:
+          "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+      },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn in auto mode when remote apiKey is configured", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("auto");
   });
