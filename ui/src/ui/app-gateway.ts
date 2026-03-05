@@ -112,6 +112,8 @@ export function resolveControlUiClientVersion(params: {
   }
 }
 
+const visibilityListenerCleanupByHost = new WeakMap<GatewayHost, () => void>();
+
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
   defaults: SessionDefaultsSnapshot,
@@ -171,6 +173,12 @@ export function connectGateway(host: GatewayHost) {
   host.connected = false;
   host.execApprovalQueue = [];
   host.execApprovalError = null;
+
+  const previousVisibilityCleanup = visibilityListenerCleanupByHost.get(host);
+  if (previousVisibilityCleanup) {
+    previousVisibilityCleanup();
+    visibilityListenerCleanupByHost.delete(host);
+  }
 
   const previousClient = host.client;
   const clientVersion = resolveControlUiClientVersion({
@@ -276,6 +284,13 @@ export function connectGateway(host: GatewayHost) {
     }, 300);
   };
   document.addEventListener("visibilitychange", onVisibilityChange);
+  visibilityListenerCleanupByHost.set(host, () => {
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    if (visibilityDebounce !== null) {
+      clearTimeout(visibilityDebounce);
+      visibilityDebounce = null;
+    }
+  });
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {

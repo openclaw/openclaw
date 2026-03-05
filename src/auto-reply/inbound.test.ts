@@ -10,6 +10,7 @@ import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
   resetInboundDedupe,
+  resolveInboundMessageSid,
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./reply/inbound-text.js";
@@ -209,6 +210,64 @@ describe("inbound dedupe", () => {
     expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
   });
 
+  it("falls back to MessageSidFull when MessageSid is missing", () => {
+    const ctx: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      MessageSid: "   ",
+      MessageSidFull: "full-42",
+    };
+    expect(resolveInboundMessageSid(ctx)).toBe("full-42");
+    expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|full-42");
+  });
+
+  it("uses first non-empty trimmed SID by precedence", () => {
+    const ctx: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      MessageSidFull: "  full-42  ",
+      MessageSid: "sid-42",
+      MessageSidFirst: "first-42",
+      MessageSidLast: "last-42",
+    };
+    expect(resolveInboundMessageSid(ctx)).toBe("full-42");
+  });
+
+  it("falls back to MessageSidFirst then MessageSidLast", () => {
+    const firstOnly: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      MessageSidFull: " ",
+      MessageSid: " ",
+      MessageSidFirst: "first-42",
+      MessageSidLast: "last-42",
+    };
+    expect(resolveInboundMessageSid(firstOnly)).toBe("first-42");
+
+    const lastOnly: MsgContext = {
+      ...firstOnly,
+      MessageSidFirst: "  ",
+    };
+    expect(resolveInboundMessageSid(lastOnly)).toBe("last-42");
+  });
+
+  it("returns null when all SID fields are missing/blank", () => {
+    const ctx: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      MessageSid: "  ",
+      MessageSidFull: "",
+      MessageSidFirst: " ",
+      MessageSidLast: "\t",
+    };
+    expect(resolveInboundMessageSid(ctx)).toBeNull();
+    expect(buildInboundDedupeKey(ctx)).toBeNull();
+  });
+
   it("skips duplicates with the same key", () => {
     resetInboundDedupe();
     const ctx: MsgContext = {
@@ -252,6 +311,34 @@ describe("inbound dedupe", () => {
     ).toBe(false);
     expect(
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
+    ).toBe(true);
+  });
+
+  it("keeps account/thread context in dedupe key to avoid cross-chat collisions", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1",
+      MessageSid: "same-sid",
+    };
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, AccountId: "acct-a", MessageThreadId: "thread-a" },
+        { now: 100 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, AccountId: "acct-b", MessageThreadId: "thread-b" },
+        { now: 200 },
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, AccountId: "acct-a", MessageThreadId: "thread-a" },
+        { now: 300 },
+      ),
     ).toBe(true);
   });
 });

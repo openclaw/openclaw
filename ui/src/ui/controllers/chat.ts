@@ -50,44 +50,110 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
-function messageKeyForMerge(message: unknown, index: number): string {
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function textMergeFingerprint(message: unknown): string | null {
+  const text = extractText(message);
+  if (typeof text !== "string") {
+    return null;
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return `${normalized.length}:${normalized.slice(0, 200)}`;
+}
+
+function messageMergeKeys(message: unknown): string[] {
   const m = message as Record<string, unknown>;
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  const role = nonEmptyString(m.role) ?? "unknown";
+  const keys: string[] = [];
+
+  const toolCallId = nonEmptyString(m.toolCallId);
   if (toolCallId) {
-    return `tool:${toolCallId}`;
+    keys.push(`tool:${toolCallId}`);
   }
-  const id = typeof m.id === "string" ? m.id : "";
-  if (id) {
-    return `msg:${id}`;
-  }
-  const messageId = typeof m.messageId === "string" ? m.messageId : "";
+
+  const messageId = nonEmptyString(m.messageId);
   if (messageId) {
-    return `msg:${messageId}`;
+    keys.push(`msg:${messageId}`);
   }
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-  const role = typeof m.role === "string" ? m.role : "unknown";
+
+  const clientMessageId = nonEmptyString(m.clientMessageId) ?? nonEmptyString(m.clientId);
+  if (clientMessageId) {
+    keys.push(`client:${clientMessageId}`);
+  }
+
+  const id = nonEmptyString(m.id);
+  if (id) {
+    keys.push(`id:${id}`);
+  }
+
+  const clientCreatedAtMs = finiteNumber(m.clientCreatedAtMs);
+  if (clientCreatedAtMs != null) {
+    keys.push(`client-ts:${role}:${clientCreatedAtMs}`);
+  }
+
+  const textFingerprint = textMergeFingerprint(message);
+  if (textFingerprint) {
+    keys.push(`text:${role}:${textFingerprint}`);
+  }
+
+  const timestamp = finiteNumber(m.timestamp);
   if (timestamp != null) {
-    return `msg:${role}:${timestamp}:${index}`;
+    keys.push(`ts:${role}:${timestamp}`);
   }
-  return `msg:${role}:${index}`;
+
+  if (keys.length === 0) {
+    keys.push(`fallback:${role}:${JSON.stringify(m.content ?? "")}`);
+  }
+
+  return keys;
 }
 
 function mergeByStableKey(existing: unknown[], incoming: unknown[]): unknown[] {
-  const incomingMap = new Map<string, unknown>();
-  incoming.forEach((msg, i) => incomingMap.set(messageKeyForMerge(msg, i), msg));
-  // Start with existing messages, update any that also appear in incoming
-  const merged = existing.map((msg, i) => {
-    const key = messageKeyForMerge(msg, i);
-    return incomingMap.has(key) ? incomingMap.get(key)! : msg;
-  });
-  // Append any incoming messages not already in existing
-  const existingKeys = new Set(existing.map((msg, i) => messageKeyForMerge(msg, i)));
-  incoming.forEach((msg, i) => {
-    const key = messageKeyForMerge(msg, i);
-    if (!existingKeys.has(key)) {
-      merged.push(msg);
+  const merged = [...existing];
+  const keyToIndex = new Map<string, number>();
+
+  merged.forEach((msg, index) => {
+    for (const key of messageMergeKeys(msg)) {
+      keyToIndex.set(key, index);
     }
   });
+
+  for (const incomingMessage of incoming) {
+    const incomingKeys = messageMergeKeys(incomingMessage);
+    const existingIndex = incomingKeys
+      .map((key) => keyToIndex.get(key))
+      .find((index): index is number => index !== undefined);
+
+    if (existingIndex !== undefined) {
+      merged[existingIndex] = incomingMessage;
+      for (const key of incomingKeys) {
+        keyToIndex.set(key, existingIndex);
+      }
+      continue;
+    }
+
+    const index = merged.push(incomingMessage) - 1;
+    for (const key of incomingKeys) {
+      keyToIndex.set(key, index);
+    }
+  }
+
   return merged;
 }
 

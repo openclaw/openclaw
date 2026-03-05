@@ -566,3 +566,62 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 });
+
+describe("loadChatHistory merge behavior", () => {
+  it("reconciles optimistic assistant message with server message by text fingerprint", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          id: "srv-1",
+          role: "assistant",
+          timestamp: 999,
+          content: [{ type: "text", text: "hello from server" }],
+        },
+      ],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [
+        {
+          role: "assistant",
+          timestamp: 111,
+          content: [{ type: "text", text: "hello from server" }],
+        },
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual({
+      id: "srv-1",
+      role: "assistant",
+      timestamp: 999,
+      content: [{ type: "text", text: "hello from server" }],
+    });
+  });
+
+  it("does not duplicate messages when incoming order differs from existing order", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { messageId: "m0", role: "assistant", content: [{ type: "text", text: "older" }] },
+        { messageId: "m1", role: "assistant", content: [{ type: "text", text: "one" }] },
+        { messageId: "m2", role: "assistant", content: [{ type: "text", text: "two" }] },
+      ],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [
+        { messageId: "m1", role: "assistant", content: [{ type: "text", text: "one" }] },
+        { messageId: "m2", role: "assistant", content: [{ type: "text", text: "two" }] },
+      ],
+    });
+
+    await loadChatHistory(state);
+
+    const ids = state.chatMessages.map((message) => (message as { messageId?: string }).messageId);
+    expect(ids).toEqual(["m1", "m2", "m0"]);
+  });
+});

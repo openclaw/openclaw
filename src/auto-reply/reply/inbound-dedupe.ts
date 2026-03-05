@@ -12,12 +12,41 @@ const inboundDedupeCache = createDedupeCache({
 
 const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
 
+function firstNonEmptyId(
+  ...values: Array<string | number | bigint | null | undefined>
+): string | null {
+  for (const value of values) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+      continue;
+    }
+    if (typeof value === "number" || typeof value === "bigint") {
+      return String(value);
+    }
+  }
+  return null;
+}
+
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
+export function resolveInboundMessageSid(ctx: MsgContext): string | null {
+  // Keep precedence aligned with other inbound mappers (dispatch-acp, hook mapper)
+  // to avoid subtle identity drift across code paths.
+  return firstNonEmptyId(
+    ctx.MessageSidFull,
+    ctx.MessageSid,
+    ctx.MessageSidFirst,
+    ctx.MessageSidLast,
+  );
+}
+
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+  const messageId = resolveInboundMessageSid(ctx);
   if (!provider || !messageId) {
     return null;
   }
