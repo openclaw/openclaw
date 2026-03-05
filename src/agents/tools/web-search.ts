@@ -680,7 +680,7 @@ async function runGeminiSearch(params: {
       }
 
       if (data.error) {
-        const rawMsg = data.error.message || data.error.status || "unknown";
+        const rawMsg = String(data.error.message || data.error.status || "unknown");
         const safeMsg = rawMsg.replace(/key=[^&\s]+/gi, "key=***");
         throw new Error(`Gemini API error (${data.error.code}): ${safeMsg}`);
       }

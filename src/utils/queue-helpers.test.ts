@@ -5,6 +5,7 @@ import {
   clearQueueSummaryState,
   drainCollectItemIfNeeded,
   previewQueueSummaryPrompt,
+  waitForQueueDebounce,
 } from "./queue-helpers.js";
 
 describe("applyQueueRuntimeSettings", () => {
@@ -165,5 +166,19 @@ describe("drainCollectItemIfNeeded", () => {
 
     expect(result).toBe("empty");
     expect(forced).toBe(true);
+  });
+});
+
+describe("waitForQueueDebounce", () => {
+  it("resolves immediately when debounceMs is NaN", async () => {
+    const start = Date.now();
+    await waitForQueueDebounce({ debounceMs: NaN, lastEnqueuedAt: Date.now() });
+    expect(Date.now() - start).toBeLessThan(50);
+  });
+
+  it("resolves immediately when debounceMs is 0", async () => {
+    const start = Date.now();
+    await waitForQueueDebounce({ debounceMs: 0, lastEnqueuedAt: Date.now() });
+    expect(Date.now() - start).toBeLessThan(50);
   });
 });

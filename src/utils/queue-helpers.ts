@@ -116,7 +116,7 @@ export function waitForQueueDebounce(queue: {
     return Promise.resolve();
   }
   const debounceMs = Math.max(0, queue.debounceMs);
-  if (debounceMs <= 0) {
+  if (!(debounceMs > 0)) {
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
