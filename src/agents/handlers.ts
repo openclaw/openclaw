@@ -1,5 +1,8 @@
 import { registerCommandHandler } from "../process/command-queue.js";
-import { compactEmbeddedPiSessionDirect } from "./pi-embedded-runner/compact.js";
+import {
+  compactEmbeddedPiSessionDirect,
+  type CompactEmbeddedPiSessionParams,
+} from "./pi-embedded-runner/compact.js";
 
 /**
  * Register task handlers for crash recovery.
@@ -23,6 +26,6 @@ export function initializeAgentHandlers() {
   });
 
   registerCommandHandler("EMBEDDED_PI_COMPACT", async (payload: unknown) => {
-    return compactEmbeddedPiSessionDirect(payload);
+    return compactEmbeddedPiSessionDirect(payload as CompactEmbeddedPiSessionParams);
   });
 }
