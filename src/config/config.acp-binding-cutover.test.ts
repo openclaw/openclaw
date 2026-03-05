@@ -108,4 +108,40 @@ describe("ACP binding cutover schema", () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it("rejects ACP bindings on unsupported channels", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "slack",
+            accountId: "default",
+            peer: { kind: "channel", id: "C123456" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects non-canonical Telegram ACP topic peer IDs", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "42" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });
