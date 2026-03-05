@@ -694,6 +694,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.bestEffortDeliver === "boolean") {
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
+  if (Array.isArray(patch.fallbacks)) {
+    next.fallbacks = patch.fallbacks;
+  }
   return next;
 }
 
@@ -762,6 +765,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     channel: patch.channel,
     to: patch.to,
     bestEffortDeliver: patch.bestEffortDeliver,
+    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
   };
 }
 

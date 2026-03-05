@@ -76,6 +76,25 @@ describe("Cron issue regressions", () => {
       expect(patched.payload.message).toBe("hi");
     }
 
+    // Regression: cron.update should persist payload.fallbacks (issue #36263).
+    const withFallbacks = await cron.update(unsafeToggle.id, {
+      payload: { kind: "agentTurn", fallbacks: ["gpt-4o", "claude-haiku-4-5-20251001"] },
+    });
+    expect(withFallbacks.payload.kind).toBe("agentTurn");
+    if (withFallbacks.payload.kind === "agentTurn") {
+      expect(withFallbacks.payload.fallbacks).toEqual(["gpt-4o", "claude-haiku-4-5-20251001"]);
+      // Other fields must be preserved across a same-kind merge.
+      expect(withFallbacks.payload.message).toBe("hi");
+    }
+
+    // Clearing fallbacks by passing an empty array should also be persisted.
+    const cleared = await cron.update(unsafeToggle.id, {
+      payload: { kind: "agentTurn", fallbacks: [] },
+    });
+    if (cleared.payload.kind === "agentTurn") {
+      expect(cleared.payload.fallbacks).toEqual([]);
+    }
+
     cron.stop();
   });
 
