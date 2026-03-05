@@ -32,9 +32,9 @@ function mergeFileEntry(
   return { ...list, files: nextFiles };
 }
 
-export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
+export async function loadAgentFiles(state: AgentFilesState, agentId: string): Promise<boolean> {
   if (!state.client || !state.connected || state.agentFilesLoading) {
-    return;
+    return false;
   }
   state.agentFilesLoading = true;
   state.agentFilesError = null;
@@ -48,8 +48,10 @@ export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
         state.agentFileActive = null;
       }
     }
+    return true;
   } catch (err) {
     state.agentFilesError = String(err);
+    return false;
   } finally {
     state.agentFilesLoading = false;
   }
