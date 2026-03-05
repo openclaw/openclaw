@@ -57,6 +57,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 408;
     case "format":
       return 400;
+    case "content_policy":
+      return 400;
     case "model_not_found":
       return 404;
     case "session_expired":
@@ -151,6 +153,16 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return err.reason;
   }
 
+  const message = getErrorMessage(err);
+  // Important: content policy violations often arrive as HTTP 400s.
+  // We must classify by message BEFORE the status===400 -> "format" fallback.
+  if (message) {
+    const inferred = classifyFailoverReason(message);
+    if (inferred === "content_policy") {
+      return inferred;
+    }
+  }
+
   const status = getStatusCode(err);
   if (status === 402) {
     return "billing";
@@ -159,8 +171,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "rate_limit";
   }
   if (status === 401 || status === 403) {
-    const msg = getErrorMessage(err);
-    if (msg && isAuthPermanentErrorMessage(msg)) {
+    if (message && isAuthPermanentErrorMessage(message)) {
       return "auth_permanent";
     }
     return "auth";
@@ -198,7 +209,6 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "timeout";
   }
 
-  const message = getErrorMessage(err);
   if (!message) {
     return null;
   }
