@@ -54,6 +54,19 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
+function normalizeExplicitBinaryVersion(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // "dev" is a placeholder used by some package wrappers.
+  // Prefer concrete package/build metadata when available.
+  if (trimmed.toLowerCase() === "dev") {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
@@ -77,10 +90,18 @@ export function resolveBinaryVersion(params: {
   bundledVersion?: string;
   fallback?: string;
 }): string {
+  const injectedVersion = normalizeExplicitBinaryVersion(params.injectedVersion);
+  const bundledVersion = normalizeExplicitBinaryVersion(params.bundledVersion);
+  const placeholderFallback =
+    firstNonEmpty(params.injectedVersion, params.bundledVersion)?.trim().toLowerCase() === "dev"
+      ? "dev"
+      : undefined;
+
   return (
-    firstNonEmpty(params.injectedVersion) ||
+    injectedVersion ||
     resolveVersionFromModuleUrl(params.moduleUrl) ||
-    firstNonEmpty(params.bundledVersion) ||
+    bundledVersion ||
+    placeholderFallback ||
     params.fallback ||
     "0.0.0"
   );

@@ -133,6 +133,32 @@ describe("version resolution", () => {
     });
   });
 
+  it("treats dev as a placeholder and prefers package/build metadata", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
+      const moduleUrl = await ensureModuleFixture(root);
+
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          injectedVersion: "dev",
+          bundledVersion: "dev",
+          fallback: "0.0.0",
+        }),
+      ).toBe("2.3.4");
+    });
+  });
+
+  it("keeps dev only when no concrete metadata exists", () => {
+    expect(
+      resolveBinaryVersion({
+        moduleUrl: "not-a-valid-url",
+        injectedVersion: "dev",
+        fallback: "0.0.0",
+      }),
+    ).toBe("dev");
+  });
+
   it("prefers OPENCLAW_VERSION over service and package versions", () => {
     expect(
       resolveRuntimeServiceVersion({
