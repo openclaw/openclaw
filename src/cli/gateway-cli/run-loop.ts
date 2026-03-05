@@ -193,7 +193,19 @@ export async function runGatewayLoop(params: {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
-      server = await params.start();
+      try {
+        server = await params.start();
+      } catch (err) {
+        // If startup fails (e.g., invalid config after a config-triggered
+        // restart), keep the process alive and wait for the next SIGUSR1
+        // instead of crashing. A crash here would respawn a new process that
+        // loses macOS Full Disk Access (TCC permissions are PID-bound). (#35862)
+        server = null;
+        gatewayLog.error(
+          `gateway startup failed: ${err instanceof Error ? err.message : String(err)}. ` +
+            "Process will stay alive; fix the issue and restart.",
+        );
+      }
       await new Promise<void>((resolve) => {
         restartResolver = resolve;
       });
