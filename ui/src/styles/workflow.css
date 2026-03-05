@@ -1,0 +1,299 @@
+/* Workflow Dashboard Styles */
+
+.workflow-filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.workflow-section {
+  margin-top: 20px;
+}
+
+.workflow-section__title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-empty {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  padding: 20px;
+  text-align: center;
+  background: var(--muted);
+  border-radius: var(--radius);
+}
+
+/* Workflow Card */
+.workflow-card {
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.workflow-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.workflow-card__icon {
+  font-size: 16px;
+}
+
+.workflow-card__title {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-card__source {
+  font-size: 11px;
+}
+
+.workflow-card__meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-bottom: 8px;
+}
+
+.workflow-card__time {
+  font-size: 11px;
+}
+
+/* Progress Bar */
+.workflow-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-progress__bar {
+  flex: 1;
+  height: 6px;
+  background: var(--muted);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.workflow-progress__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width var(--transition-normal);
+}
+
+.workflow-progress__text {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* Status Colors */
+.workflow-status--completed .workflow-progress__fill {
+  background: var(--success, #22c55e);
+}
+
+.workflow-status--in-progress .workflow-progress__fill {
+  background: var(--accent);
+}
+
+.workflow-status--failed .workflow-progress__fill,
+.workflow-card.workflow-status--failed {
+  border-color: var(--destructive, #ef4444);
+}
+
+.workflow-status--failed .workflow-progress__fill {
+  background: var(--destructive, #ef4444);
+}
+
+/* Plan Detail View */
+.workflow-detail {
+  animation: fadeIn var(--transition-fast);
+}
+
+.workflow-detail__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.workflow-detail__title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.workflow-detail__meta {
+  margin-bottom: 16px;
+}
+
+.workflow-detail__status {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-detail__desc {
+  margin: 12px 0;
+  color: var(--muted-foreground);
+}
+
+.workflow-detail__times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 12px;
+}
+
+.workflow-detail__reported {
+  margin-top: 12px;
+  color: var(--success, #22c55e);
+  font-size: 13px;
+}
+
+/* Task List */
+.workflow-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.workflow-task {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid transparent;
+}
+
+.workflow-task.workflow-status--completed {
+  border-left-color: var(--success, #22c55e);
+}
+
+.workflow-task.workflow-status--in-progress {
+  border-left-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.workflow-task.workflow-status--failed {
+  border-left-color: var(--destructive, #ef4444);
+}
+
+.workflow-task.workflow-status--skipped {
+  opacity: 0.7;
+}
+
+.workflow-task__icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.workflow-task__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-task__text {
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.workflow-task__result {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+
+.workflow-task__error {
+  font-size: 12px;
+  color: var(--destructive, #ef4444);
+  margin-top: 4px;
+}
+
+.workflow-task__time {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Workflow Graph Styles */
+.workflow-graph-wrapper {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+.workflow-graph-wrapper workflow-graph {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Graph view toggle buttons */
+.workflow-detail .btn-group {
+  display: inline-flex;
+  gap: 0;
+}
+
+.workflow-detail .btn-group .btn {
+  border-radius: 0;
+}
+
+.workflow-detail .btn-group .btn:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.workflow-detail .btn-group .btn:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.workflow-detail .btn--active {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}

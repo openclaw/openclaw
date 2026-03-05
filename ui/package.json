@@ -9,6 +9,9 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@antv/x6": "^2.19.2",
+    "@antv/x6-plugin-minimap": "^2.0.7",
+    "@antv/x6-plugin-selection": "^2.2.2",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@noble/ed25519": "3.0.0",
