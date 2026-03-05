@@ -9,6 +9,7 @@ import type {
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
@@ -572,6 +573,19 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   await processMessage(messageContext);
+
+  // Clear pending history after a handled group turn so stale skipped messages
+  // don't replay on subsequent mentions ("since last reply" semantics).
+  if (isGroup && context.groupHistories) {
+    const historyKey = groupId ?? roomId;
+    if (historyKey) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: context.groupHistories,
+        historyKey,
+        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      });
+    }
+  }
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
