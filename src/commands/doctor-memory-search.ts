@@ -26,7 +26,8 @@ export async function noteMemorySearchHealth(
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
-  const hasRemoteApiKey = Boolean(resolved?.remote?.apiKey?.trim());
+  const apiKey = resolved?.remote?.apiKey;
+  const hasRemoteApiKey = Boolean(typeof apiKey === "string" && apiKey.trim());
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
