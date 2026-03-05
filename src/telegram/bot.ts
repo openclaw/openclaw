@@ -56,6 +56,8 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /** Callback to update the channel account status snapshot (e.g. lastEventAt). */
+  setStatus?: (next: Record<string, unknown>) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -163,6 +165,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   });
+
+  // Track event liveness: update lastEventAt on every inbound update so the
+  // health monitor can detect long-polling sessions that have gone silent. (#36259)
+  if (opts.setStatus) {
+    const trackEvent = opts.setStatus;
+    bot.use(async (ctx, next) => {
+      trackEvent({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
+      await next();
+    });
+  }
 
   bot.use(sequentialize(getTelegramSequentialKey));
 

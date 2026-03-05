@@ -63,6 +63,10 @@ const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
 }));
 
+const { capturedBotSetStatus } = vi.hoisted(() => ({
+  capturedBotSetStatus: [] as Array<((next: Record<string, unknown>) => void) | undefined>,
+}));
+
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
   sleepWithAbort: vi.fn(async () => undefined),
@@ -135,7 +139,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts: { setStatus?: (next: Record<string, unknown>) => void }) => {
+    capturedBotSetStatus.push(opts?.setStatus);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -210,6 +215,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    capturedBotSetStatus.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -488,5 +494,31 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("passes setStatus callback to createTelegramBot for polling (#36259)", async () => {
+    const setStatus = vi.fn();
+    await monitorWithAutoAbort({ setStatus });
+
+    expect(capturedBotSetStatus[0]).toBe(setStatus);
+  });
+
+  it("does not pass setStatus when not provided", async () => {
+    await monitorWithAutoAbort();
+
+    expect(capturedBotSetStatus[0]).toBeUndefined();
+  });
+
+  it("passes setStatus to startTelegramWebhook for webhook mode (#36259)", async () => {
+    const setStatus = vi.fn();
+    await monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+      setStatus,
+    });
+
+    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(expect.objectContaining({ setStatus }));
   });
 });

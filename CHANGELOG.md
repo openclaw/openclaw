@@ -20,7 +20,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+
+- # iMessage/cron completion announces: strip leaked inline reply tags (for example `[[reply_to:6100]]`) from user-visible completion text so announcement deliveries do not expose threading metadata. (#24600) Thanks @vincentkoc.
+- Telegram/health-monitor: thread `setStatus` into Telegram long-polling (and webhook) so the channel health monitor can detect and recover stale/silent Telegram connections the same way it already does for Slack, WhatsApp, and Discord. (#36259)
+  > > > > > > > a1d6f9f68 (fix(telegram): thread setStatus into long-polling for health-monitor watchdog (#36259))
 - Security/skill env leak: strip skill-injected env vars (e.g. `OPENAI_API_KEY` from `openai-image-gen`) from exec child process environments so ACP harnesses and unrelated tools that have their own auth (e.g. Codex CLI via OAuth) no longer inherit skill API keys and silently switch to API billing. (#36280)
 - Control UI/Core Files: re-fetch active file content (with `force: true`) when the Refresh button is clicked so external edits (e.g. CLI writes) become visible immediately without a full page reload. (#35428)
 - Browser/chrome-extension: remove stray top-level `nonce` from the extension's gateway connect params; the field is not allowed by the connect schema (`additionalProperties: false`) and caused handshake rejection with `unexpected property 'nonce'` for all extension connections. (#35405)

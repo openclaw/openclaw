@@ -87,6 +87,8 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   healthPath?: string;
   publicUrl?: string;
+  /** Callback to update the channel account status snapshot (e.g. lastEventAt). */
+  setStatus?: (next: Record<string, unknown>) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -107,6 +109,7 @@ export async function startTelegramWebhook(opts: {
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    setStatus: opts.setStatus,
   });
   await initializeTelegramWebhookBot({
     bot,
