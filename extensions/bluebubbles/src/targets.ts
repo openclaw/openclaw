@@ -162,13 +162,9 @@ export function normalizeBlueBubblesMessagingTarget(raw: string): string | undef
       return `chat_id:${parsed.chatId}`;
     }
     if (parsed.kind === "chat_guid") {
-      // For DM chat_guids, normalize to just the handle for easier comparison.
-      // This allows "chat_guid:iMessage;-;+1234567890" to match "+1234567890".
-      const handle = extractHandleFromChatGuid(parsed.chatGuid);
-      if (handle) {
-        return handle;
-      }
-      // For group chats or unrecognized formats, keep the full chat_guid
+      // Preserve the full chat_guid to retain service info (iMessage vs SMS).
+      // Stripping to just the handle loses service routing and causes SMS fallback
+      // when both iMessage and SMS chats exist for the same contact.
       return `chat_guid:${parsed.chatGuid}`;
     }
     if (parsed.kind === "chat_identifier") {

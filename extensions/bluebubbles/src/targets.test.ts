@@ -22,17 +22,15 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     );
   });
 
-  it("extracts handle from DM chat_guid for cross-context matching", () => {
-    // DM format: service;-;handle
+  it("preserves service info in DM chat_guid for correct routing", () => {
     expect(normalizeBlueBubblesMessagingTarget("chat_guid:iMessage;-;+19257864429")).toBe(
-      "+19257864429",
+      "chat_guid:iMessage;-;+19257864429",
     );
     expect(normalizeBlueBubblesMessagingTarget("chat_guid:SMS;-;+15551234567")).toBe(
-      "+15551234567",
+      "chat_guid:SMS;-;+15551234567",
     );
-    // Email handles
     expect(normalizeBlueBubblesMessagingTarget("chat_guid:iMessage;-;user@example.com")).toBe(
-      "user@example.com",
+      "chat_guid:iMessage;-;user@example.com",
     );
   });
 
@@ -47,7 +45,9 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     expect(normalizeBlueBubblesMessagingTarget("iMessage;+;chat660250192681427962")).toBe(
       "chat_guid:iMessage;+;chat660250192681427962",
     );
-    expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe("+19257864429");
+    expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe(
+      "chat_guid:iMessage;-;+19257864429",
+    );
   });
 
   it("normalizes chat<digits> pattern to chat_identifier format", () => {

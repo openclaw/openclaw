@@ -352,8 +352,12 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
-      // Decode base64 to buffer
-      const buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+      let buffer: Uint8Array;
+      try {
+        buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+      } catch {
+        throw new Error("BlueBubbles setGroupIcon: invalid base64 buffer");
+      }
 
       await setGroupIconBlueBubbles(resolvedChatGuid, buffer, filename, {
         ...opts,
@@ -416,8 +420,11 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
       let buffer: Uint8Array;
       if (base64Buffer) {
-        // Decode base64 to buffer
-        buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+        try {
+          buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+        } catch {
+          throw new Error("BlueBubbles sendAttachment: invalid base64 buffer");
+        }
       } else if (filePath) {
         // Read file from path (will be handled by caller providing buffer)
         throw new Error(

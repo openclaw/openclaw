@@ -276,9 +276,13 @@ export async function resolveChatGuidForTarget(params: {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
-        }
-        if (!participantMatch && guid) {
+          if (guid.toLowerCase().startsWith("imessage;")) {
+            return guid;
+          }
+          if (!participantMatch) {
+            participantMatch = guid;
+          }
+        } else if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
