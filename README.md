@@ -134,6 +134,15 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
 
+## 🚀 SACS-2026 Core Upgrades (New)
+
+- **[Anchored Iterative Context Compressor](https://docs.openclaw.ai/gateway/memory)** — Intelligent incremental merging of chat history (replaces naive summarization).
+- **[LLM-based Intent Router](https://docs.openclaw.ai/gateway/routing)** — Advanced task dispatching using Qwen2.5 (replaces keyword matching).
+- **[Pipeline Executor](https://docs.openclaw.ai/concepts/pipeline)** — Support for complex multi-agent chains (Planner → Executor → Auditor).
+- **[Aesthetic Design System](https://docs.openclaw.ai/web/design)** — New premium Glassmorphism UI with dynamic micro-animations.
+- **[Hot-Reload Engine](https://docs.openclaw.ai/gateway/configuration)** — Real-time configuration updates via `watchdog` monitoring.
+- **[Health & Metrics Hub](https://docs.openclaw.ai/gateway/health)** — Integrated Prometheus metrics and `/health` server for HFT monitoring.
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)

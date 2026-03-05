@@ -30,49 +30,78 @@ source venv/bin/activate
 # Обновляем пакеты, если нужно 
 echo "🔄 Установка зависимостей..."
 pip install --upgrade pip -q
-pip install aiogram aiohttp psutil -q
+pip install aiogram aiohttp psutil pydantic structlog watchdog aiosqlite prometheus-client scikit-learn pandas websockets -q
 
-# --- НАСТРОЙКА WEBHOOK СЕРВЕРА (CLOUDFLARE TUNNEL) ---
-if [ ! -f "cloudflared" ]; then
-    echo "☁️ Скачивание Cloudflare Tunnel (для Webhook)..."
-    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
-    chmod +x cloudflared
-fi
+# --- НАСТРОЙКА DNS (Критично для работы туннелей в WSL2) ---
+echo "🛠️ Настройка DNS..."
+# Удаляем старый resolv.conf если это ссылка и создаем новый статический
+sudo rm -f /etc/resolv.conf
+echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf > /dev/null
+# Запрещаем автоматическое перезаписывание (опционально, но полезно)
+# sudo chattr +i /etc/resolv.conf 2>/dev/null || true
 
-# ФИКС DNS (более агрессивный, удаляем symlink если он есть)
-if [ ! -f "/etc/resolv.conf.bak" ]; then
-    sudo cp /etc/resolv.conf /etc/resolv.conf.bak || true
-fi
-echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf > /dev/null
+# --- НАСТРОЙКА WEBHOOK СЕРВЕРА ---
+pkill -f cloudflared
+pkill -f ngrok
+rm -f cloudflared.log ngrok.log
 
-echo "🌐 Запуск локального Webhook сервера..."
-pkill -f cloudflared # Убиваем старые туннели
-rm -f cloudflared.log
-
-# Запускаем туннель с принудительным IPv4, протоколом HTTP2 (TCP) и отключенным автоапдейтом
-# HTTP2 (порт 443 TCP) намного стабильнее в WSL, чем QUIC (UDP), который часто блокируется
-export TUNNEL_UPDATE_DISABLE=true
-
-./cloudflared tunnel --edge-ip-version 4 --protocol http2 --url http://localhost:8080 > cloudflared.log 2>&1 &
-
-echo "⏳ Ожидание генерации публичного URL..."
-for i in {1..25}; do
-    sleep 1
-    # Ищем ссылку, которая НЕ является api.trycloudflare.com и начинается с https://
-    PUBLIC_URL=$(grep -o 'https://[-a-zA-Z0-9]*\.trycloudflare\.com' cloudflared.log | grep -v 'api.trycloudflare.com' | head -1)
-    if [ -n "$PUBLIC_URL" ]; then
-        break
+# Функция для запуска Cloudflare
+start_cloudflare() {
+    if [ ! -f "cloudflared" ]; then
+        echo "☁️ Скачивание Cloudflare Tunnel..."
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+        chmod +x cloudflared
     fi
-done
+    echo "🌐 Запуск Cloudflare Tunnel..."
+    ./cloudflared tunnel --edge-ip-version 4 --protocol http2 --url http://localhost:8080 > cloudflared.log 2>&1 &
+    
+    for i in {1..15}; do
+        sleep 1
+        PUBLIC_URL=$(grep -o 'https://[-a-zA-Z0-9]*\.trycloudflare\.com' cloudflared.log | grep -v 'api.trycloudflare.com' | head -1)
+        if [ -n "$PUBLIC_URL" ]; then
+            echo "✅ Cloudflare Webhook URL: ${PUBLIC_URL}"
+            return 0
+        fi
+    done
+    return 1
+}
 
-if [ -z "$PUBLIC_URL" ]; then
-    echo "⚠️ Не удалось получить ссылку Cloudflare (проверьте интернет в WSL)."
-    echo "Будет использован Long-Polling (стандартный метод)."
-    export USE_WEBHOOK=0
-else
-    echo "✅ Webhook URL получен: ${PUBLIC_URL}"
+# Функция для запуска Ngrok
+start_ngrok() {
+    if ! command -v ngrok &> /dev/null; then
+        echo "🌀 Установка ngrok (fallback)..."
+        curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+        echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list >/dev/null
+        sudo apt-get update -v -q
+        sudo apt-get install -y ngrok -q
+    fi
+    echo "🌐 Запуск ngrok..."
+    ngrok http 8080 --log=stdout > ngrok.log 2>&1 &
+    
+    for i in {1..15}; do
+        sleep 1
+        PUBLIC_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o 'https://[-a-zA-Z0-9.]*\.ngrok-free\.app' | head -1)
+        if [ -n "$PUBLIC_URL" ]; then
+            echo "✅ Ngrok Webhook URL: ${PUBLIC_URL}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Пытаемся запустить провайдеров
+if start_cloudflare; then
     export USE_WEBHOOK=1
+elif start_ngrok; then
+    export USE_WEBHOOK=1
+else
+    echo "⚠️ Не удалось поднять туннель (проверьте интернет)."
+    echo "Будет использован Long-Polling."
+    export USE_WEBHOOK=0
+fi
+
+if [ "$USE_WEBHOOK" -eq 1 ]; then
     export WEBHOOK_URL="${PUBLIC_URL}/webhook"
 fi
 
@@ -84,7 +113,8 @@ echo "==========================================="
 # Запуск бота 
 python3 main.py
 
-# Очистка после звершения бота (Ctrl+C)
-echo "🛑 Остановка локального Webhook сервера (Cloudflare Tunnel)..."
+# Очистка
+echo "🛑 Остановка туннелей..."
 pkill -f cloudflared
-echo "✅ Завершено чисто!"
+pkill -f ngrok
+echo "✅ Завершено!"

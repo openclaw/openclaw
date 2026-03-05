@@ -18,5 +18,11 @@
   "typescript.reportStyleChecksAsWarnings": false,
   "typescript.updateImportsOnFileMove.enabled": "always",
   "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.experimental.useTsgo": true
+  "typescript.experimental.useTsgo": true,
+  "cline.customSkillPaths": [
+    "D:\\openclaw_bot\\workspace\\skills",
+    "D:\\Dmarket_bot\\skills",
+    "D:\\openclaw_bot\\openclaw_bot\\.venv\\lib\\python3.14\\site-packages",
+    "D:\\openclaw_bot\\openclaw_bot\\.venv\\Lib\\site-packages"
+  ]
 }

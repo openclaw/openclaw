@@ -4,6 +4,21 @@
 ### Core Philosophy
 The OpenClaw multi-agent framework operates on strictly defined workflows where logic generation, execution, and validation are segregated roles. This ensures that no single model hallucinates undetected, preserving absolute code integrity. It minimizes context poisoning and optimizes limited hardware (8GB VRAM) via discrete, single-task loading.
 
+**Новые базовые механизмы (v2.1):**
+*   **Memory Bank:** Вместо огромных файлов контекста используется RAG-иерархия (`Hot_Memory`, `Domain_Experts`, `Cold_Memory`).
+*   **STAR Фреймворк:** Главный Оркестратор обязан использовать метод Situation-Task-Action-Result перед делегированием.
+*   **Context Compression:** Длинные ответы (особенно API Dmarket) и логи всегда фильтруются через bash-утилиты (jq/ripgrep) перед передачей в LLM.
+*   **Deterministic Feedback:** Код должен проходить авто-линтеры и type-check.
+
+---
+
+### Grounded AI Communication Directives (v2.1)
+Для всего фреймворка введен **Kill List** роботизированных фраз.
+*   **СТРОГИЙ ЗАПРЕТ** на: "Я как языковая модель...", "Относительно моей архитектуры...", "С точки зрения восприятия...". 
+*   **Анти-Бульшит**: Запрет на сухие нумерованные списки вместо живого текста там, где это уместно.
+*   **Динамичный Контекст Личностей**: Модели мгновенно переключаются при загрузке: либо в "олдскульного сисадмина" (OpenClaw), либо в "азартного трейдера" (Dmarket), либо в "остроумного PM Аркадия". Признаки ИИ должны скрываться за аутентичностью.
+*   **Автокоррекция**: При возникновении ИИ-галлюцинаций агент должен прерывать себя сам и перефразировать текст живым языком.
+
 ---
 
 ### Domain Isolation: "The Tool" vs "The Project"
@@ -47,8 +62,8 @@ To maintain secure boundaries and prevent the system from destroying itself ("Б
    - Example Context Briefing: *"Executor_API successfully mapped Dmarket endpoints. Currently waiting for down-stream validation."*
    - This briefing is prefaced in the context window of whichever model is loaded next.
 
-5. **Hardware Conservation Directive (AMD RX 6600)**
-   - **Rule 1: Singularity.** Only ONE 7B-9B parameter model resides in VRAM at any given nanosecond. 
+### 5. Hardware Conservation Directive (AMD RX 6600)
+   - **Rule 1: Singularity (Model Thrashing Prevention).** Загружается ТОЛЬКО ОДНА физическая модель (например `qwen2.5-coder:7b`) для всех агентов. Управление 20 агентами (в т.ч. Оркестратором и Прорабами) происходит ИСКЛЮЧИТЕЛЬНО путем подмены системных промптов (System Prompts) и переключения KV-кэша. Параллельная загрузка нескольких тяжелых моделей в VRAM строго запрещена.
    - **Rule 2: Purge on Exit.** `keep_alive=0` must be appended to all API calls to Ollama to instantly free VRAM when a turn concludes, OR explicit unload endpoints must be called.
    - **Rule 3: Quantization Discipline.** Models are strictly quantized to maximum 4-bit (Q4_K_M) or 5-bit (Q5_K_M) logic. The Auditor should preferably run as Q5 for higher defect-reasoning accuracy, while smaller models can run as Q4.
 

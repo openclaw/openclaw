@@ -21,6 +21,12 @@ repos:
       - id: detect-private-key
         exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
 
+  # Gitleaks for strict API key / Secrets scanning
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -67,7 +73,8 @@ repos:
     rev: v1.22.0
     hooks:
       - id: zizmor
-        args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
+        args:
+          [--persona=regular, --min-severity=medium, --min-confidence=medium]
         exclude: "^(vendor/|Swabble/)"
 
   # Python checks for skills scripts
@@ -84,7 +91,7 @@ repos:
         name: skills python tests
         entry: pytest -q skills
         language: python
-        additional_dependencies: [pytest>=8, <9]
+        additional_dependencies: ["pytest>=8,<9"]
         pass_filenames: false
         files: "^skills/.*\\.py$"
 

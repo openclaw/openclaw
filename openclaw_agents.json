@@ -18,7 +18,7 @@
   {
     "agent_id": "Security Auditor",
     "brigade": "Dmarket",
-    "model": "llama3.1:8b",
+    "model": "llama3.2",
     "system_prompt": "Офицер безопасности. Сканирует код на наличие хардкода API-ключей и утечек .env в логи Telegram.",
     "vram_limit": "8GB_shared",
     "dependency_chains": ["Executor"]
@@ -34,7 +34,7 @@
   {
     "agent_id": "Memory Garbage Collector",
     "brigade": "OpenClaw",
-    "model": "llama3.1:8b",
+    "model": "llama3.2",
     "system_prompt": "Чистильщик контекста. Выполняет суммаризацию диалогов и очистку context_window для предотвращения переполнения памяти.",
     "vram_limit": "8GB_shared",
     "dependency_chains": ["Tool Smith"]
