@@ -237,13 +237,45 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refreshing…`;
       host.lastErrorCode = null;
+      void loadChatHistory(host as unknown as OpenClawApp).then(() => {
+        if (host.lastError?.includes("event gap")) {
+          host.lastError = null;
+        }
+      });
+    },
+    onReconnect: () => {
+      if (host.client !== client) {
+        return;
+      }
+      void loadChatHistory(host as unknown as OpenClawApp);
     },
   });
   host.client = client;
   previousClient?.stop();
   client.start();
+
+  // Resync chat when user returns to the tab (e.g. after iOS Safari backgrounding)
+  let visibilityDebounce: ReturnType<typeof setTimeout> | null = null;
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== "visible" || host.client !== client) {
+      return;
+    }
+    if (visibilityDebounce !== null) {
+      clearTimeout(visibilityDebounce);
+    }
+    visibilityDebounce = setTimeout(() => {
+      visibilityDebounce = null;
+      if (host.connected && host.client === client) {
+        if (host.lastError?.includes("event gap")) {
+          host.lastError = null;
+        }
+        void loadChatHistory(host as unknown as OpenClawApp);
+      }
+    }, 300);
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
@@ -286,7 +318,10 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   handleTerminalChatEvent(host, payload, state);
   if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as OpenClawApp);
+    // PATCH: Delay history reload to avoid clobbering in-memory messages
+    // that may not yet be persisted to gateway transcript.
+    // Use 500ms delay and always merge instead of replace.
+    setTimeout(() => void loadChatHistory(host as unknown as OpenClawApp), 500);
   }
 }
 

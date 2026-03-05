@@ -50,6 +50,47 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+function messageKeyForMerge(message: unknown, index: number): string {
+  const m = message as Record<string, unknown>;
+  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
+  if (toolCallId) {
+    return `tool:${toolCallId}`;
+  }
+  const id = typeof m.id === "string" ? m.id : "";
+  if (id) {
+    return `msg:${id}`;
+  }
+  const messageId = typeof m.messageId === "string" ? m.messageId : "";
+  if (messageId) {
+    return `msg:${messageId}`;
+  }
+  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  if (timestamp != null) {
+    return `msg:${role}:${timestamp}:${index}`;
+  }
+  return `msg:${role}:${index}`;
+}
+
+function mergeByStableKey(existing: unknown[], incoming: unknown[]): unknown[] {
+  const incomingMap = new Map<string, unknown>();
+  incoming.forEach((msg, i) => incomingMap.set(messageKeyForMerge(msg, i), msg));
+  // Start with existing messages, update any that also appear in incoming
+  const merged = existing.map((msg, i) => {
+    const key = messageKeyForMerge(msg, i);
+    return incomingMap.has(key) ? incomingMap.get(key)! : msg;
+  });
+  // Append any incoming messages not already in existing
+  const existingKeys = new Set(existing.map((msg, i) => messageKeyForMerge(msg, i)));
+  incoming.forEach((msg, i) => {
+    const key = messageKeyForMerge(msg, i);
+    if (!existingKeys.has(key)) {
+      merged.push(msg);
+    }
+  });
+  return merged;
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -65,7 +106,16 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const incoming = messages.filter((message) => !isAssistantSilentReply(message));
+    // PATCH: Always merge instead of replacing to prevent clobbering
+    // in-memory messages not yet persisted to gateway transcript.
+    // This prevents the "disappearing message" bug where chat.history
+    // returns a stale result during or right after streaming.
+    if (state.chatMessages.length > 0) {
+      state.chatMessages = mergeByStableKey(state.chatMessages, incoming);
+    } else {
+      state.chatMessages = incoming;
+    }
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
