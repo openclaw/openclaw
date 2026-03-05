@@ -103,7 +103,8 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     delete normalized.old_string;
   }
   // new_string → newText (edit)
-  if (normalized.new_string && !normalized.newText) {
+  // Keep "in" check for source: new_string: "" is a valid deletion operation (allowEmpty).
+  if ("new_string" in normalized && !normalized.newText) {
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
