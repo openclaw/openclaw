@@ -705,6 +705,73 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("rebuilds qmd index once when qmd update fails with duplicate document constraint", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const indexDir = path.join(stateDir, "agents", agentId, "qmd", "xdg-cache", "qmd");
+    const indexPath = path.join(indexDir, "index.sqlite");
+    await fs.mkdir(indexDir, { recursive: true });
+    await fs.writeFile(indexPath, "stale-index");
+    await fs.writeFile(`${indexPath}-wal`, "stale-wal");
+    await fs.writeFile(`${indexPath}-shm`, "stale-shm");
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(
+            child,
+            "stderr",
+            "SQLite error: UNIQUE constraint failed: documents.collection, documents.path",
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => {
+          child.closeWith(0);
+        });
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]", 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
+
+    const addCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "collection" && args[1] === "add")
+      .map((args) => args[args.indexOf("--name") + 1]);
+
+    expect(updateCalls).toBe(2);
+    expect(addCalls).toEqual(["memory-root-main", "memory-alt-main", "memory-dir-main"]);
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("duplicate document path metadata"),
+    );
+    await expect(fs.stat(indexPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${indexPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${indexPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
   it("does not rebuild collections for generic qmd update failures", async () => {
     cfg = {
       ...cfg,

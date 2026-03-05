@@ -215,6 +215,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
   private attemptedNullByteCollectionRepair = false;
+  private attemptedDuplicateDocumentsRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -600,6 +601,46 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
   }
 
+  private isDuplicateDocumentsConstraintError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("unique constraint failed") &&
+      lower.includes("documents.collection") &&
+      lower.includes("documents.path")
+    );
+  }
+
+  private async rebuildQmdIndex(): Promise<void> {
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
+    await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
+    await fs.rm(this.indexPath, { force: true });
+    await fs.rm(`${this.indexPath}-wal`, { force: true });
+    await fs.rm(`${this.indexPath}-shm`, { force: true });
+  }
+
+  private async tryRepairDuplicateDocumentsConstraint(
+    err: unknown,
+    reason: string,
+  ): Promise<boolean> {
+    if (this.attemptedDuplicateDocumentsRepair) {
+      return false;
+    }
+    if (!this.isDuplicateDocumentsConstraintError(err)) {
+      return false;
+    }
+    this.attemptedDuplicateDocumentsRepair = true;
+    log.warn(
+      `qmd update failed with duplicate document path metadata (${reason}); rebuilding index and re-binding collections before retry`,
+    );
+    await this.rebuildQmdIndex();
+    await this.ensureCollections();
+    return true;
+  }
+
   private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
     if (this.attemptedNullByteCollectionRepair) {
       return false;
@@ -961,7 +1002,11 @@ export class QmdMemoryManager implements MemorySearchManager {
         discardOutput: true,
       });
     } catch (err) {
-      if (!(await this.tryRepairNullByteCollections(err, reason))) {
+      const repairedNullByte = await this.tryRepairNullByteCollections(err, reason);
+      const repairedDuplicates = repairedNullByte
+        ? false
+        : await this.tryRepairDuplicateDocumentsConstraint(err, reason);
+      if (!repairedNullByte && !repairedDuplicates) {
         throw err;
       }
       await this.runQmd(["update"], {
