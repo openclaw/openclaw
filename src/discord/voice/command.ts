@@ -167,7 +167,6 @@ async function authorizeVoiceCommand(
       name: sender.name,
       tag: sender.tag,
     },
-    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
   const authorizers = params.useAccessGroups

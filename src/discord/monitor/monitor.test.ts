@@ -26,6 +26,7 @@ import {
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
+  resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
   resolveDiscordRoleAllowed,
 } from "./allow-list.js";
@@ -529,20 +530,46 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches only when enabled", () => {
-    const defaultResult = resolveDiscordOwnerAllowFrom({
+  it("never matches by display name (ID-only for owner authorization)", () => {
+    const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
-    expect(defaultResult).toBeUndefined();
+    expect(result).toBeUndefined();
+  });
 
-    const enabledResult = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+  it("matches by ID even when sender has a matching display name", () => {
+    const result = resolveDiscordOwnerAllowFrom({
+      channelConfig: { allowed: true, users: ["999"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
-      allowNameMatching: true,
     });
+    expect(result).toEqual(["999"]);
+  });
+});
 
-    expect(enabledResult).toEqual(["some-user"]);
+describe("resolveDiscordOwnerAccess", () => {
+  it("grants access when sender ID matches the allowlist", () => {
+    const { ownerAllowed } = resolveDiscordOwnerAccess({
+      allowFrom: ["12345"],
+      sender: { id: "12345", name: "Spoofed Owner" },
+    });
+    expect(ownerAllowed).toBe(true);
+  });
+
+  it("rejects access when only display name matches (ID-only enforcement)", () => {
+    const { ownerAllowed } = resolveDiscordOwnerAccess({
+      allowFrom: ["spoofed-owner"],
+      sender: { id: "99999", name: "Spoofed Owner", tag: "spoofed-owner" },
+    });
+    expect(ownerAllowed).toBe(false);
+  });
+
+  it("rejects access when only tag matches (ID-only enforcement)", () => {
+    const { ownerAllowed } = resolveDiscordOwnerAccess({
+      allowFrom: ["user:owner-tag"],
+      sender: { id: "99999", name: "Unrelated", tag: "owner-tag" },
+    });
+    expect(ownerAllowed).toBe(false);
   });
 });
 

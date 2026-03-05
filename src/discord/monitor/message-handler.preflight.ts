@@ -639,7 +639,6 @@ export async function preflightDiscordMessage(
         name: sender.name,
         tag: sender.tag,
       },
-      allowNameMatching,
     });
     const commandGate = resolveControlCommandGate({
       useAccessGroups,

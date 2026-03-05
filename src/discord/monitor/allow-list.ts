@@ -245,7 +245,6 @@ export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   sender: { id: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
 }): string[] | undefined {
   const rawAllowList = params.channelConfig?.users ?? params.guildInfo?.users;
   if (!Array.isArray(rawAllowList) || rawAllowList.length === 0) {
@@ -262,7 +261,7 @@ export function resolveDiscordOwnerAllowFrom(params: {
       name: params.sender.name,
       tag: params.sender.tag,
     },
-    allowNameMatching: params.allowNameMatching,
+    allowNameMatching: false,
   });
   if (!match.allowed || !match.matchKey || match.matchKey === "*") {
     return undefined;
@@ -273,7 +272,6 @@ export function resolveDiscordOwnerAllowFrom(params: {
 export function resolveDiscordOwnerAccess(params: {
   allowFrom?: string[];
   sender: { id: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
 }): {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
@@ -290,7 +288,7 @@ export function resolveDiscordOwnerAccess(params: {
           name: params.sender.name,
           tag: params.sender.tag,
         },
-        { allowNameMatching: params.allowNameMatching },
+        { allowNameMatching: false },
       )
     : false;
   return { ownerAllowList, ownerAllowed };

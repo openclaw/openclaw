@@ -783,7 +783,6 @@ export class DiscordVoiceManager {
         name: params.name,
         tag: params.tag,
       },
-      allowNameMatching: this.allowDangerousNameMatching,
     }).ownerAllowed;
   }
 

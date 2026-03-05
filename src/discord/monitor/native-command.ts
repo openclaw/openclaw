@@ -1295,7 +1295,6 @@ async function dispatchDiscordCommandInteraction(params: {
       name: sender.name,
       tag: sender.tag,
     },
-    allowNameMatching,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
@@ -1587,7 +1586,6 @@ async function dispatchDiscordCommandInteraction(params: {
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching,
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,

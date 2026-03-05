@@ -773,7 +773,6 @@ function resolveComponentCommandAuthorized(params: {
       name: interactionCtx.user.username,
       tag: formatDiscordUserTag(interactionCtx.user),
     },
-    allowNameMatching: params.allowNameMatching,
   });
 
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
@@ -861,7 +860,6 @@ async function dispatchDiscordComponentEvent(params: {
     channelConfig,
     guildInfo,
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
-    allowNameMatching,
   });
   const pinnedMainDmOwner = interactionCtx.isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
