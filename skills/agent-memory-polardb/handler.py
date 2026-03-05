@@ -1,8 +1,6 @@
 import os
 import json
 import subprocess
-from mem0 import Memory
-from mem0 import MemoryClient
 
 # =================================================================
 # DEVELOPER GUIDE: CLOUD CREDENTIALS SETUP
