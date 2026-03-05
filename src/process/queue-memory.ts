@@ -10,7 +10,7 @@ import type { TaskRecord, TaskStatus } from "./queue-db.js";
 let nextId = 1;
 const tasks = new Map<number, TaskRecord>();
 
-export function insertTask(lane: string, taskType: string, payload: any): number {
+export function insertTask(lane: string, taskType: string, payload: unknown): number {
   const id = nextId++;
   const now = Date.now();
   tasks.set(id, {
@@ -60,11 +60,17 @@ export function rejectTask(id: number, errorMsg: string) {
 export function countQueueByStatus(lane?: string, status?: TaskStatus): number {
   let count = 0;
   for (const task of tasks.values()) {
-    if (lane && task.lane !== lane) continue;
+    if (lane && task.lane !== lane) {
+      continue;
+    }
     if (status) {
-      if (task.status !== status) continue;
+      if (task.status !== status) {
+        continue;
+      }
     } else {
-      if (task.status !== "PENDING" && task.status !== "RUNNING") continue;
+      if (task.status !== "PENDING" && task.status !== "RUNNING") {
+        continue;
+      }
     }
     count++;
   }
@@ -74,7 +80,9 @@ export function countQueueByStatus(lane?: string, status?: TaskStatus): number {
 export function countTotalQueue(): number {
   let count = 0;
   for (const task of tasks.values()) {
-    if (task.status === "PENDING" || task.status === "RUNNING") count++;
+    if (task.status === "PENDING" || task.status === "RUNNING") {
+      count++;
+    }
   }
   return count;
 }
@@ -105,7 +113,9 @@ export function getPendingTaskIdsForLane(lane: string): number[] {
 
 export function hasActiveTasks(): boolean {
   for (const task of tasks.values()) {
-    if (task.status === "RUNNING") return true;
+    if (task.status === "RUNNING") {
+      return true;
+    }
   }
   return false;
 }
@@ -126,7 +136,9 @@ export function getTaskResult(
   id: number,
 ): { status: TaskStatus; result: unknown; error_msg: string | null } | null {
   const task = tasks.get(id);
-  if (!task) return null;
+  if (!task) {
+    return null;
+  }
   return {
     status: task.status,
     result: task.result ? JSON.parse(task.result) : null,
@@ -137,7 +149,9 @@ export function getTaskResult(
 export function getPendingLanes(): string[] {
   const lanes = new Set<string>();
   for (const task of tasks.values()) {
-    if (task.status === "PENDING") lanes.add(task.lane);
+    if (task.status === "PENDING") {
+      lanes.add(task.lane);
+    }
   }
   return Array.from(lanes);
 }

@@ -2,7 +2,6 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
@@ -110,7 +109,7 @@ export type RunEmbeddedPiAgentParams = {
   lane?: string;
   enqueue?: <T>(
     taskType: string,
-    payload: any,
+    payload: unknown,
     opts?: {
       warnAfterMs?: number;
       onWait?: (waitMs: number, queuedAhead: number) => void;

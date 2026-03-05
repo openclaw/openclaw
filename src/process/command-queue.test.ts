@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   enqueueCommandInLane,
   registerCommandHandler,
@@ -12,9 +12,9 @@ import {
   setCommandLaneConcurrency,
   _resetForTests,
 } from "./command-queue.js";
+import { CommandLane } from "./lanes.js";
 import * as queueBackend from "./queue-backend.js";
 import * as queueMemory from "./queue-memory.js";
-import { CommandLane } from "./lanes.js";
 
 describe("command-queue", () => {
   beforeEach(() => {
@@ -79,7 +79,7 @@ describe("command-queue", () => {
       const p1 = enqueueCommandInLane("lane1", "LANE_TASK", { lane: "A" });
       const p2 = enqueueCommandInLane("lane2", "LANE_TASK", { lane: "B" });
       await Promise.all([p1, p2]);
-      expect(processedLanes.sort()).toEqual(["A", "B"].sort());
+      expect(processedLanes.toSorted()).toEqual(["A", "B"].toSorted());
     });
 
     it("should not interleave tasks in the same lane", async () => {
@@ -305,9 +305,14 @@ describe("command-queue", () => {
   describe("executeFn override", () => {
     it("should prefer executeFn over registered handler", async () => {
       registerCommandHandler("FN_TASK", async () => "from-handler");
-      const result = await enqueueCommandInLane("fn-lane", "FN_TASK", {}, {
-        executeFn: async () => "from-executeFn",
-      });
+      const result = await enqueueCommandInLane(
+        "fn-lane",
+        "FN_TASK",
+        {},
+        {
+          executeFn: async () => "from-executeFn",
+        },
+      );
       expect(result).toBe("from-executeFn");
     });
 
@@ -320,23 +325,38 @@ describe("command-queue", () => {
     it("should propagate executeFn errors correctly", async () => {
       registerCommandHandler("ERR_FN_TASK", async () => "handler");
       await expect(
-        enqueueCommandInLane("err-fn-lane", "ERR_FN_TASK", {}, {
-          executeFn: async () => {
-            throw new Error("executeFn failed");
+        enqueueCommandInLane(
+          "err-fn-lane",
+          "ERR_FN_TASK",
+          {},
+          {
+            executeFn: async () => {
+              throw new Error("executeFn failed");
+            },
           },
-        }),
+        ),
       ).rejects.toThrow("executeFn failed");
     });
 
     it("should support nested executeFn (session + global lane pattern)", async () => {
       registerCommandHandler("SESSION_LOCK", async () => undefined);
       registerCommandHandler("WORK_TASK", async () => "handler-work");
-      const result = await enqueueCommandInLane("session-lane", "SESSION_LOCK", {}, {
-        executeFn: () =>
-          enqueueCommandInLane("global-lane", "WORK_TASK", {}, {
-            executeFn: async () => "closure-work",
-          }),
-      });
+      const result = await enqueueCommandInLane(
+        "session-lane",
+        "SESSION_LOCK",
+        {},
+        {
+          executeFn: () =>
+            enqueueCommandInLane(
+              "global-lane",
+              "WORK_TASK",
+              {},
+              {
+                executeFn: async () => "closure-work",
+              },
+            ),
+        },
+      );
       expect(result).toBe("closure-work");
     });
   });

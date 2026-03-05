@@ -15,7 +15,7 @@ import * as memoryBackend from "./queue-memory.js";
 export type QueueMode = "memory" | "persistent";
 
 export interface QueueBackendAPI {
-  insertTask(lane: string, taskType: string, payload: any): number;
+  insertTask(lane: string, taskType: string, payload: unknown): number;
   claimNextPendingTask(lane: string): TaskRecord | null;
   resolveTask(id: number, result?: unknown): void;
   rejectTask(id: number, errorMsg: string): void;

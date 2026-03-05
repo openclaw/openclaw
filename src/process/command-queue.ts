@@ -31,7 +31,7 @@ type LaneState = {
   generation: number;
 };
 
-export type TaskHandler<T = any> = (payload: T) => Promise<unknown>;
+export type TaskHandler<T = unknown> = (payload: T) => Promise<unknown>;
 
 const handlers = new Map<string, TaskHandler>();
 
@@ -148,8 +148,7 @@ function drainLane(lane: string) {
             backend.rejectTask(dbTask.id, String(err));
 
             const completedCurrentGeneration = completeTask(state, memTaskId, taskGeneration);
-            const isProbeLane =
-              lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (!isProbeLane) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
@@ -192,7 +191,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
 export function enqueueCommandInLane<T>(
   lane: string,
   taskType: string,
-  payload: any,
+  payload: unknown,
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
@@ -227,7 +226,7 @@ export function enqueueCommandInLane<T>(
 
 export function enqueueCommand<T>(
   taskType: string,
-  payload: any,
+  payload: unknown,
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;

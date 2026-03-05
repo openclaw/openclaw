@@ -1,8 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as queueDb from "./queue-db.js";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 
 describe("queue-db", () => {
   let tempDbPath: string;
@@ -187,7 +187,7 @@ describe("queue-db", () => {
       const id2 = queueDb.insertTask("lane1", "TEST", {});
       queueDb.insertTask("lane2", "TEST", {});
       const ids = queueDb.getPendingTaskIdsForLane("lane1");
-      expect(ids.sort((a, b) => a - b)).toEqual([id1, id2].sort((a, b) => a - b));
+      expect(ids.toSorted((a, b) => a - b)).toEqual([id1, id2].toSorted((a, b) => a - b));
     });
 
     it("should return empty array if no PENDING tasks", () => {
@@ -233,7 +233,7 @@ describe("queue-db", () => {
       queueDb.claimNextPendingTask("lane1");
       queueDb.claimNextPendingTask("lane2");
       const lanes = queueDb.recoverRunningTasks();
-      expect(lanes.sort()).toEqual(["lane1", "lane2"].sort());
+      expect(lanes.toSorted()).toEqual(["lane1", "lane2"].toSorted());
     });
   });
 
@@ -260,7 +260,7 @@ describe("queue-db", () => {
       queueDb.insertTask("lane1", "TEST", {});
       queueDb.insertTask("lane2", "TEST", {});
       const lanes = queueDb.getPendingLanes();
-      expect(lanes.sort()).toEqual(["lane1", "lane2"].sort());
+      expect(lanes.toSorted()).toEqual(["lane1", "lane2"].toSorted());
     });
 
     it("should not include lanes with only RUNNING tasks", () => {
@@ -303,7 +303,7 @@ describe("queue-db", () => {
       const tasks = queueDb.getRecoverableTasks();
       expect(tasks.length).toBe(3);
       const parsedPayloads = tasks.map((t) => JSON.parse(t.payload));
-      expect(parsedPayloads.map((p) => p.data).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+      expect(parsedPayloads.map((p) => p.data).toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
     });
 
     it("should not include RUNNING tasks", () => {

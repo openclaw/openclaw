@@ -1,6 +1,6 @@
-import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "path";
+import Database from "better-sqlite3";
 import { resolveStateDir } from "../config/paths.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 
@@ -66,7 +66,7 @@ export function closeQueueDB() {
   }
 }
 
-export function insertTask(lane: string, taskType: string, payload: any): number {
+export function insertTask(lane: string, taskType: string, payload: unknown): number {
   const conn = initQueueDB();
   const now = Date.now();
   const stmt = conn.prepare(`
@@ -132,7 +132,9 @@ export function getTaskResult(
   const row = conn
     .prepare("SELECT status, result, error_msg FROM task_queue WHERE id = ?")
     .get(id) as { status: TaskStatus; result: string | null; error_msg: string | null } | undefined;
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
   return {
     status: row.status,
     result: row.result ? JSON.parse(row.result) : null,

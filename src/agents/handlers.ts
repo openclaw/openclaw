@@ -14,7 +14,7 @@ export function initializeAgentHandlers() {
     // No-op: session locks are pure concurrency gates.
   });
 
-  registerCommandHandler("EMBEDDED_PI_RUN", async (_payload: any) => {
+  registerCommandHandler("EMBEDDED_PI_RUN", async (_payload: unknown) => {
     console.warn(
       "[queue-recovery] EMBEDDED_PI_RUN task recovered but cannot be re-executed " +
         "(streaming callbacks lost during serialization). Skipping.",
@@ -22,7 +22,7 @@ export function initializeAgentHandlers() {
     return undefined;
   });
 
-  registerCommandHandler("EMBEDDED_PI_COMPACT", async (payload: any) => {
+  registerCommandHandler("EMBEDDED_PI_COMPACT", async (payload: unknown) => {
     return compactEmbeddedPiSessionDirect(payload);
   });
 }

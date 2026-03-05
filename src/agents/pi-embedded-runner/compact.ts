@@ -121,7 +121,7 @@ export type CompactEmbeddedPiSessionParams = {
   lane?: string;
   enqueue?: <T>(
     taskType: string,
-    payload: any,
+    payload: unknown,
     opts?: {
       warnAfterMs?: number;
       onWait?: (waitMs: number, queuedAhead: number) => void;
@@ -765,12 +765,22 @@ export async function compactEmbeddedPiSession(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
 
-  return enqueueCommandInLane<EmbeddedPiCompactResult>(sessionLane, "SESSION_LOCK", {}, {
-    onWait: params.onWait,
-    executeFn: () =>
-      enqueueCommandInLane<EmbeddedPiCompactResult>(globalLane, "EMBEDDED_PI_COMPACT", {}, {
-        onWait: params.onWait,
-        executeFn: () => compactEmbeddedPiSessionDirect(params),
-      }),
-  });
+  return enqueueCommandInLane<EmbeddedPiCompactResult>(
+    sessionLane,
+    "SESSION_LOCK",
+    {},
+    {
+      onWait: params.onWait,
+      executeFn: () =>
+        enqueueCommandInLane<EmbeddedPiCompactResult>(
+          globalLane,
+          "EMBEDDED_PI_COMPACT",
+          {},
+          {
+            onWait: params.onWait,
+            executeFn: () => compactEmbeddedPiSessionDirect(params),
+          },
+        ),
+    },
+  );
 }
