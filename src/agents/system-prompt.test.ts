@@ -564,6 +564,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("includes Discord Components v2 guidance when discord runtime supports inlineButtons", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    // Should use Components v2 API, not Telegram buttons
+    expect(prompt).toContain("Discord Components v2");
+    expect(prompt).toContain("components=");
+    expect(prompt).toContain("type:\"actions\"");
+    expect(prompt).not.toContain("buttons=[[{text,callback_data");
+  });
+
+  it("does not show inline buttons not-enabled hint on discord for missing inlineButtons capability", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: [],
+      },
+    });
+
+    // Discord never shows the "set inlineButtons" nag — Components v2 is always available
+    expect(prompt).not.toContain("Inline buttons not enabled for discord");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

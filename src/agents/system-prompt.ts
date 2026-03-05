@@ -143,8 +143,14 @@ function buildMessagingSection(params: {
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
-            : params.runtimeChannel
+            ? params.runtimeChannel === "discord"
+              ? "- Discord Components v2 available. Use `action=send` with `components={text?:string,reusable?:bool,blocks:[...]}`." +
+                " Block types: `{type:\"actions\",buttons:[{label,style?:\"primary\"|\"secondary\"|\"success\"|\"danger\",url?,emoji?,disabled?,allowedUsers?:[id,...]}]}`," +
+                " `{type:\"text\",text}`, `{type:\"section\",text?,texts?:[],accessory?:{type:\"thumbnail\",url}|{type:\"button\",button:{...}}}`," +
+                " `{type:\"separator\",spacing?:\"small\"|\"large\",divider?:bool}`, `{type:\"media-gallery\",items:[{url,description?,spoiler?}]}`." +
+                " Set `reusable:true` to keep buttons active after a click (default: single-use)."
+              : "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
+            : params.runtimeChannel && params.runtimeChannel !== "discord"
               ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
           ...(params.messageToolHints ?? []),

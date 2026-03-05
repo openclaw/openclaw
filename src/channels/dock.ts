@@ -359,6 +359,19 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         hasRepliedRef,
       }),
     },
+    agentPrompt: {
+      messageToolHints: ({ cfg, accountId }) => {
+        const account = resolveDiscordAccount({ cfg, accountId });
+        if (account.config.agentComponents?.enabled === false) {
+          return [];
+        }
+        return [
+          "- Discord Components v2 (`components=`) lets you send rich interactive messages:" +
+            " buttons, select menus, text sections, separators, and media galleries." +
+            " Example: `components={text:\"Pick an option:\",reusable:true,blocks:[{type:\"actions\",buttons:[{label:\"Yes\",style:\"success\"},{label:\"No\",style:\"danger\"}]}]}`.",
+        ];
+      },
+    },
   },
   irc: {
     id: "irc",
