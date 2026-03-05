@@ -1,14 +1,17 @@
 /**
  * Recall Module
  *
- * Retrieves memories using a hybrid scoring formula:
+ * Retrieves memories using a hybrid scoring formula (7 channels):
  *
- *   Score = α·VectorSimilarity + β·Recency + γ·Importance + δ·GraphConnections
+ *   Score = α·Vector + β·Recency + γ·Importance + δ·Graph + ε·Reinforcement
+ *        + ζ·Temporal + η·Emotional
  *
  * This is significantly better than pure vector search because:
  * - Recent memories are boosted (recency decay)
  * - Important memories (0.9 vs 0.3) are weighted higher
  * - Memories connected to other entities in the graph get a bonus
+ * - Temporal relevance: events close to today are boosted
+ * - Emotional alignment: emotional context influences ranking
  *
  * Also enriches results with knowledge graph connections.
  */
@@ -26,7 +29,15 @@ export interface MemoryEntry {
   importance: number;
   category: string;
   createdAt: number;
-  recallCount?: number; // How many times this memory was recalled (reinforcement)
+  recallCount?: number;
+  /** ISO date string when the event happened (e.g. "2026-03-05") */
+  happenedAt?: string | null;
+  /** ISO date string when this fact expires */
+  validUntil?: string | null;
+  /** Emotional tone: stressed, happy, neutral, etc. */
+  emotionalTone?: string | null;
+  /** Emotional valence: -1.0 (negative) to 1.0 (positive) */
+  emotionScore?: number | null;
 }
 
 export interface ScoredMemory {
@@ -36,6 +47,8 @@ export interface ScoredMemory {
   importanceScore: number;
   graphScore: number;
   reinforcementScore: number;
+  temporalScore: number;
+  emotionalScore: number;
   finalScore: number;
 }
 
@@ -43,13 +56,15 @@ export interface ScoredMemory {
 // Scoring Weights
 // ============================================================================
 
-// Tunable weights for the hybrid scoring formula (5 channels)
+// Tunable weights for the hybrid scoring formula (7 channels)
 const WEIGHTS = {
-  vector: 0.50, // Semantic similarity is still king
-  recency: 0.12, // Newer memories get a slight boost
-  importance: 0.18, // User-defined or LLM-assigned importance
-  graph: 0.10, // Graph connectivity bonus
-  reinforcement: 0.10, // Frequently recalled memories are boosted
+  vector: 0.42, // Semantic similarity is still king
+  recency: 0.1, // Newer memories get a slight boost
+  importance: 0.16, // User-defined or LLM-assigned importance
+  graph: 0.08, // Graph connectivity bonus
+  reinforcement: 0.08, // Frequently recalled memories are boosted
+  temporal: 0.1, // Events close to "now" in time are boosted
+  emotional: 0.06, // Emotional alignment bonus
 };
 
 // Recency decay: memories lose ~50% score after 30 days
@@ -78,10 +93,7 @@ function recencyScore(createdAt: number): number {
  * More graph connections = higher score.
  * Normalized to 0-1 range using: connections / (connections + 3)
  */
-function graphConnectivityScore(
-  text: string,
-  graphDB: GraphDB,
-): number {
+function graphConnectivityScore(text: string, graphDB: GraphDB): number {
   const edges = graphDB.findEdgesForTexts([text], 20);
   if (edges.length === 0) return 0;
   // Soft normalization: 1 edge → 0.25, 3 edges → 0.5, 9 edges → 0.75
@@ -96,6 +108,51 @@ function graphConnectivityScore(
 function reinforcementScore(recallCount: number): number {
   if (recallCount <= 0) return 0;
   return recallCount / (recallCount + 3);
+}
+
+/**
+ * Calculate temporal relevance score.
+ * Boost memories whose happenedAt is close to today.
+ * Also penalize expired memories (validUntil < today).
+ * Score 1.0 if happened today, decays over days.
+ */
+function temporalRelevanceScore(entry: MemoryEntry): number {
+  const now = Date.now();
+
+  // If validUntil is set and has passed, heavily penalize
+  if (entry.validUntil) {
+    const expiry = Date.parse(entry.validUntil);
+    if (!isNaN(expiry) && expiry < now) {
+      return 0.05; // Expired fact — near-zero but not invisible
+    }
+  }
+
+  // If happenedAt is set, boost based on proximity to today
+  if (entry.happenedAt) {
+    const eventTime = Date.parse(entry.happenedAt);
+    if (!isNaN(eventTime)) {
+      const daysDiff = Math.abs(now - eventTime) / (1000 * 60 * 60 * 24);
+      // Same day → 1.0, 7 days → 0.5, 30 days → 0.14
+      return 1 / (1 + daysDiff / 7);
+    }
+  }
+
+  // No temporal data → neutral score (0.5)
+  return 0.5;
+}
+
+/**
+ * Calculate emotional alignment score.
+ * Uses the absolute value of emotionScore as intensity.
+ * Stronger emotions (positive or negative) get boosted.
+ * Neutral → 0.3, Strong emotion → 0.8+
+ */
+function emotionalAlignmentScore(entry: MemoryEntry): number {
+  const score = entry.emotionScore;
+  if (score == null || score === 0) return 0.3; // Neutral baseline
+  // Use absolute intensity: |emotionScore|
+  // Scale to 0.3–1.0 range: 0.3 + 0.7 * |score|
+  return 0.3 + 0.7 * Math.abs(score);
 }
 
 // ============================================================================
@@ -117,13 +174,17 @@ export function hybridScore(
       const imp = r.entry.importance;
       const gs = graphConnectivityScore(r.entry.text, graphDB);
       const rf = reinforcementScore(r.entry.recallCount ?? 0);
+      const ts = temporalRelevanceScore(r.entry);
+      const es = emotionalAlignmentScore(r.entry);
 
       const finalScore =
         WEIGHTS.vector * vs +
         WEIGHTS.recency * rs +
         WEIGHTS.importance * imp +
         WEIGHTS.graph * gs +
-        WEIGHTS.reinforcement * rf;
+        WEIGHTS.reinforcement * rf +
+        WEIGHTS.temporal * ts +
+        WEIGHTS.emotional * es;
 
       return {
         entry: r.entry,
@@ -132,6 +193,8 @@ export function hybridScore(
         importanceScore: imp,
         graphScore: gs,
         reinforcementScore: rf,
+        temporalScore: ts,
+        emotionalScore: es,
         finalScore,
       };
     })
@@ -143,10 +206,7 @@ export function hybridScore(
  * Uses multi-hop traversal (2 hops) for deeper context.
  * Returns a human-readable string of graph relationships.
  */
-export function getGraphEnrichment(
-  results: ScoredMemory[],
-  graphDB: GraphDB,
-): string {
+export function getGraphEnrichment(results: ScoredMemory[], graphDB: GraphDB): string {
   // Find all texts from results (not just entities)
   const allTexts = results.map((r) => r.entry.text);
 
@@ -164,9 +224,7 @@ export function getGraphEnrichment(
   // Step 3: Traverse 2 hops from seed nodes for deeper context
   const traversal = graphDB.traverse(Array.from(seedNodes), 2, 15);
 
-  const lines = traversal.edges.map(
-    (e) => `- ${e.source} --[${e.relation}]--> ${e.target}`,
-  );
+  const lines = traversal.edges.map((e) => `- ${e.source} --[${e.relation}]--> ${e.target}`);
 
   return `\n\nKnowledge Graph Connections:\n${lines.join("\n")}`;
 }

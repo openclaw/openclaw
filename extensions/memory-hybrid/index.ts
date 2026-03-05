@@ -92,6 +92,10 @@ class MemoryDB {
           category: "other",
           createdAt: 0,
           recallCount: 0,
+          happenedAt: "",
+          validUntil: "",
+          emotionalTone: "neutral",
+          emotionScore: 0,
         },
       ]);
       await this.table.delete('id = "__schema__"');
@@ -676,6 +680,52 @@ const memoryPlugin = {
           });
 
         memory
+          .command("timeline")
+          .description("Show memories sorted by event date (temporal view)")
+          .option("--limit <n>", "Max results", "20")
+          .action(async (opts) => {
+            const allMemories = await db.listAll();
+            const withDates = allMemories
+              .filter((m) => m.happenedAt && m.happenedAt !== "")
+              .sort((a, b) => {
+                const dateA = Date.parse(a.happenedAt ?? "");
+                const dateB = Date.parse(b.happenedAt ?? "");
+                if (isNaN(dateA)) return 1;
+                if (isNaN(dateB)) return -1;
+                return dateB - dateA; // newest first
+              })
+              .slice(0, parseInt(opts.limit));
+
+            if (withDates.length === 0) {
+              console.log("No temporal memories found yet. Chat more to build your timeline! ⏳");
+              return;
+            }
+
+            console.log(`📅 Memory Timeline (${withDates.length} events):\n`);
+            for (const m of withDates) {
+              const expired = m.validUntil && Date.parse(m.validUntil) < Date.now();
+              const emoji =
+                m.emotionalTone === "happy" || m.emotionalTone === "excited"
+                  ? "😊"
+                  : m.emotionalTone === "stressed" ||
+                      m.emotionalTone === "frustrated" ||
+                      m.emotionalTone === "angry"
+                    ? "😤"
+                    : m.emotionalTone === "sad"
+                      ? "😢"
+                      : m.emotionalTone === "curious"
+                        ? "🤔"
+                        : "📌";
+              const expiryTag = expired
+                ? " [EXPIRED]"
+                : m.validUntil
+                  ? ` [until ${m.validUntil}]`
+                  : "";
+              console.log(`  ${m.happenedAt} ${emoji} ${m.text}${expiryTag}`);
+            }
+          });
+
+        memory
           .command("consolidate")
           .description("Merge similar memories into stronger facts (sleep mode)")
           .option("--threshold <n>", "Similarity threshold (0-1)", "0.85")
@@ -917,6 +967,10 @@ const memoryPlugin = {
                     vector,
                     importance: fact.importance,
                     category: fact.category,
+                    happenedAt: fact.happenedAt ?? null,
+                    validUntil: fact.validUntil ?? null,
+                    emotionalTone: fact.emotionalTone ?? "neutral",
+                    emotionScore: fact.emotionScore ?? 0,
                   });
                   stored++;
 

@@ -29,6 +29,8 @@ export interface ReflectionResult {
   summary: string;
   /** Key patterns detected across memories */
   patterns: string[];
+  /** Emotional patterns detected (e.g. "stressed when coding at night") */
+  emotionalPatterns: string[];
   /** Total memories analyzed */
   memoriesAnalyzed: number;
   /** Timestamp of reflection */
@@ -40,6 +42,9 @@ export interface MemoryFact {
   category: string;
   importance: number;
   recallCount?: number;
+  emotionalTone?: string | null;
+  emotionScore?: number | null;
+  happenedAt?: string | null;
 }
 
 // ============================================================================
@@ -58,6 +63,7 @@ export async function generateReflection(
     return {
       summary: "Not enough memories yet. Need at least 5 facts to generate a reflection.",
       patterns: [],
+      emotionalPatterns: [],
       memoriesAnalyzed: memories.length,
       generatedAt: Date.now(),
     };
@@ -91,9 +97,26 @@ export async function generateReflection(
     }
   }
 
+  // Add emotional context
+  const emotionalFacts = topMemories.filter(
+    (m) => m.emotionalTone && m.emotionalTone !== "neutral",
+  );
+  if (emotionalFacts.length > 0) {
+    factLines.push(`\n[EMOTIONAL CONTEXT]`);
+    for (const m of emotionalFacts.slice(0, 15)) {
+      const score =
+        m.emotionScore != null
+          ? ` (${m.emotionScore > 0 ? "+" : ""}${m.emotionScore.toFixed(1)})`
+          : "";
+      const when = m.happenedAt ? ` on ${m.happenedAt}` : "";
+      factLines.push(`- [${m.emotionalTone}${score}${when}] ${m.text}`);
+    }
+  }
+
   const prompt = `You are a psychologist and data analyst. Analyze these facts about a user and produce:
 1. A concise SUMMARY (2-3 sentences) describing who this person is, their interests, and their current focus.
 2. A list of KEY PATTERNS you noticed (3-5 bullet points).
+3. A list of EMOTIONAL PATTERNS — when/how the user's mood changes (2-4 bullet points).
 
 Context: Today is ${new Date().toISOString().split("T")[0]}.
 Facts are sorted by importance.
@@ -104,7 +127,8 @@ ${factLines.join("\n")}
 Return ONLY valid JSON:
 {
   "summary": "...",
-  "patterns": ["pattern1", "pattern2", "pattern3"]
+  "patterns": ["pattern1", "pattern2", "pattern3"],
+  "emotional_patterns": ["pattern1", "pattern2"]
 }`;
 
   try {
@@ -121,6 +145,7 @@ Return ONLY valid JSON:
     const data = JSON.parse(cleanJson) as {
       summary?: string;
       patterns?: string[];
+      emotional_patterns?: string[];
     };
 
     return {
@@ -128,13 +153,17 @@ Return ONLY valid JSON:
       patterns: Array.isArray(data.patterns)
         ? data.patterns.filter((p): p is string => typeof p === "string")
         : [],
-      memoriesAnalyzed: memories.length, // We report total, even if we analyzed subset
+      emotionalPatterns: Array.isArray(data.emotional_patterns)
+        ? data.emotional_patterns.filter((p): p is string => typeof p === "string")
+        : [],
+      memoriesAnalyzed: memories.length,
       generatedAt: Date.now(),
     };
   } catch {
     return {
       summary: "Reflection failed (LLM error). Try again later.",
       patterns: [],
+      emotionalPatterns: [],
       memoriesAnalyzed: memories.length,
       generatedAt: Date.now(),
     };
