@@ -25,7 +25,12 @@ import {
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { makeZeroUsageSnapshot, normalizeUsage, type UsageLike } from "../usage.js";
+import {
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type AssistantUsageSnapshot,
+  type UsageLike,
+} from "../usage.js";
 import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
@@ -210,14 +215,38 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
   const cacheRead = normalized.cacheRead ?? 0;
   const cacheWrite = normalized.cacheWrite ?? 0;
   const totalTokens = normalized.total ?? input + output + cacheRead + cacheWrite;
+  const cost = normalizeAssistantUsageCost(usage);
   return {
     ...makeZeroUsageSnapshot(),
+    cost,
     input,
     output,
     cacheRead,
     cacheWrite,
     totalTokens,
   };
+}
+
+function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] {
+  const base = makeZeroUsageSnapshot().cost;
+  if (!usage || typeof usage !== "object") {
+    return base;
+  }
+  const rawCost = (usage as { cost?: unknown }).cost;
+  if (!rawCost || typeof rawCost !== "object") {
+    return base;
+  }
+  const cost = rawCost as Record<string, unknown>;
+  const input = toFiniteCostNumber(cost.input) ?? base.input;
+  const output = toFiniteCostNumber(cost.output) ?? base.output;
+  const cacheRead = toFiniteCostNumber(cost.cacheRead) ?? base.cacheRead;
+  const cacheWrite = toFiniteCostNumber(cost.cacheWrite) ?? base.cacheWrite;
+  const total = toFiniteCostNumber(cost.total) ?? input + output + cacheRead + cacheWrite;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+function toFiniteCostNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
@@ -233,14 +262,25 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     const normalizedUsage = normalizeAssistantUsageSnapshot(message.usage);
+    const usageCost =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { cost?: unknown }).cost
+        : undefined;
     if (
       message.usage &&
       typeof message.usage === "object" &&
+      usageCost &&
+      typeof usageCost === "object" &&
       (message.usage as { input?: unknown }).input === normalizedUsage.input &&
       (message.usage as { output?: unknown }).output === normalizedUsage.output &&
       (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
       (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
-      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens
+      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      (usageCost as { input?: unknown }).input === normalizedUsage.cost.input &&
+      (usageCost as { output?: unknown }).output === normalizedUsage.cost.output &&
+      (usageCost as { cacheRead?: unknown }).cacheRead === normalizedUsage.cost.cacheRead &&
+      (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cost.cacheWrite &&
+      (usageCost as { total?: unknown }).total === normalizedUsage.cost.total
     ) {
       continue;
     }

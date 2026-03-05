@@ -379,6 +379,83 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
+  it("preserves existing usage cost while normalizing token fields", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with partial usage and cost" }],
+        usage: {
+          output: 3,
+          cache_read_input_tokens: 9,
+          cost: {
+            input: 1.25,
+            output: 2.5,
+            cacheRead: 0.25,
+            cacheWrite: 0,
+            total: 4,
+          },
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      ...makeZeroUsageSnapshot(),
+      input: 0,
+      output: 3,
+      cacheRead: 9,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: {
+        input: 1.25,
+        output: 2.5,
+        cacheRead: 0.25,
+        cacheWrite: 0,
+        total: 4,
+      },
+    });
+  });
+
+  it("adds missing usage cost even when token fields already match", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = castAgentMessages([
+      { role: "user", content: "question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer with complete numeric usage but no cost" }],
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 3,
+          cacheWrite: 4,
+          totalTokens: 10,
+        },
+      },
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+
+    expect(assistant?.usage).toEqual({
+      ...makeZeroUsageSnapshot(),
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 10,
+    });
+  });
+
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
