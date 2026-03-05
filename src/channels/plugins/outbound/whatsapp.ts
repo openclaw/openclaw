@@ -3,6 +3,7 @@ import { shouldLogVerbose } from "../../../globals.js";
 import { sendPollWhatsApp } from "../../../web/outbound.js";
 import { resolveWhatsAppOutboundTarget } from "../../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { sendTextMediaPayload } from "./direct-text-media.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
@@ -12,21 +13,25 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
+  sendPayload: async (ctx) =>
+    await sendTextMediaPayload({ channel: "whatsapp", ctx, adapter: whatsappOutbound }),
+  sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
+      cfg,
       accountId: accountId ?? undefined,
       gifPlayback,
     });
     return { channel: "whatsapp", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
+      cfg,
       mediaUrl,
       mediaLocalRoots,
       accountId: accountId ?? undefined,
@@ -34,9 +39,10 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "whatsapp", ...result };
   },
-  sendPoll: async ({ to, poll, accountId }) =>
+  sendPoll: async ({ cfg, to, poll, accountId }) =>
     await sendPollWhatsApp(to, poll, {
       verbose: shouldLogVerbose(),
       accountId: accountId ?? undefined,
+      cfg,
     }),
 };

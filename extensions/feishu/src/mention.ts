@@ -53,7 +53,7 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
     return false;
   }
 
-  const isDirectMessage = event.message.chat_type === "p2p";
+  const isDirectMessage = event.message.chat_type !== "group";
   const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
 
   if (isDirectMessage) {
