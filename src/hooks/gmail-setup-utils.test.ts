@@ -128,7 +128,7 @@ describe("gwsCredentialsPaths", () => {
   it("returns paths including ~/.config/gws/client_secret.json", () => {
     const paths = gwsCredentialsPaths();
     expect(paths.length).toBeGreaterThan(0);
-    const hasGwsPath = paths.some((p) => p.includes("gws/client_secret.json"));
+    const hasGwsPath = paths.some((p) => p.includes(path.join("gws", "client_secret.json")));
     expect(hasGwsPath).toBe(true);
   });
 
