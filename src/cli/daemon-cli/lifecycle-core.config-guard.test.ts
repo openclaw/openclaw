@@ -143,3 +143,64 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("runServiceStart config pre-flight (#35862)", () => {
+  let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+
+  beforeAll(async () => {
+    ({ runServiceStart } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    runtimeLogs.length = 0;
+    readConfigFileSnapshotMock.mockReset();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.isLoaded.mockClear();
+    service.restart.mockClear();
+    service.isLoaded.mockResolvedValue(true);
+    service.restart.mockResolvedValue(undefined);
+  });
+
+  it("aborts start when config is invalid", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with start when config is valid", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+});
