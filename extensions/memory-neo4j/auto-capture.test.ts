@@ -534,17 +534,18 @@ describe("runAutoCapture", () => {
       embeddings,
       enabledConfig,
       mockLogger,
+      undefined, // workspaceDir
+      true, // captureAssistant — required to capture assistant messages
     );
 
     // Both should be stored
     const storeCalls = storeMemoryMock.mock.calls;
-    if (storeCalls.length === 2) {
-      // User message: importance * 1.0 discount
-      expect(storeCalls[0][0].source).toBe("auto-capture");
-      // Assistant message: importance * 0.75 discount
-      expect(storeCalls[1][0].source).toBe("auto-capture-assistant");
-      expect(storeCalls[1][0].importance).toBeLessThan(storeCalls[0][0].importance);
-    }
+    expect(storeCalls).toHaveLength(2);
+    // User message: importance * 1.0 discount
+    expect(storeCalls[0][0].source).toBe("auto-capture");
+    // Assistant message: importance * 0.75 discount
+    expect(storeCalls[1][0].source).toBe("auto-capture-assistant");
+    expect(storeCalls[1][0].importance).toBeLessThan(storeCalls[0][0].importance);
   });
 
   it("should return immediately when signal is already aborted", async () => {

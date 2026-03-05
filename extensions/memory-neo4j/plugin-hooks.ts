@@ -14,6 +14,38 @@ import { hybridSearch } from "./search.js";
 import { isRelatedToCompletedTask, loadCompletedTaskKeywords } from "./task-filter.js";
 import { parseTaskLedger } from "./task-ledger.js";
 
+/**
+ * Pure decision function for mid-session core memory refresh.
+ * Exported for unit testing so tests exercise the real logic path.
+ */
+export function _shouldRefreshForTest(params: {
+  contextWindowTokens: number | undefined;
+  estimatedUsedTokens: number | undefined;
+  refreshThreshold: number;
+  lastRefreshTokens: number;
+  minTokensSinceRefresh: number;
+}): boolean {
+  const {
+    contextWindowTokens,
+    estimatedUsedTokens,
+    refreshThreshold,
+    lastRefreshTokens,
+    minTokensSinceRefresh,
+  } = params;
+  if (!contextWindowTokens || !estimatedUsedTokens) {
+    return false;
+  }
+  const usagePercent = (estimatedUsedTokens / contextWindowTokens) * 100;
+  if (usagePercent < refreshThreshold) {
+    return false;
+  }
+  const tokensSinceRefresh = estimatedUsedTokens - lastRefreshTokens;
+  if (tokensSinceRefresh < minTokensSinceRefresh) {
+    return false;
+  }
+  return true;
+}
+
 export function registerMemoryHooks(
   api: OpenClawPluginApi,
   db: Neo4jMemoryClient,

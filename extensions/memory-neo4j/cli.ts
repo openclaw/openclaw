@@ -468,6 +468,16 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 `   Semantic Dedup: ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
               );
               console.log(`   Decay/Pruning:  ${result.decay.memoriesPruned} memories pruned`);
+              if ((result.temporalStaleness?.memoriesRemoved ?? 0) > 0) {
+                console.log(
+                  `   Temporal Stale: ${result.temporalStaleness?.memoriesChecked ?? 0} checked, ${result.temporalStaleness?.memoriesRemoved ?? 0} removed (Phase 3b)`,
+                );
+              }
+              if ((result.retroactiveConflictScan?.memoriesSuperseded ?? 0) > 0) {
+                console.log(
+                  `   Retro Conflict: ${result.retroactiveConflictScan?.memoriesScanned ?? 0} scanned, ${result.retroactiveConflictScan?.memoriesSuperseded ?? 0} superseded (Phase 3c)`,
+                );
+              }
               console.log(
                 `   Extraction:     ${result.extraction.succeeded}/${result.extraction.total} extracted` +
                   (result.extraction.failed > 0 ? ` (${result.extraction.failed} failed)` : ""),
@@ -487,6 +497,11 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                     ? ` (${result.taskLedger.archivedIds.join(", ")})`
                     : ""),
               );
+              if ((result.taskMemoryCleanup?.memoriesRemoved ?? 0) > 0) {
+                console.log(
+                  `   Task Mem Clean: ${result.taskMemoryCleanup?.tasksChecked ?? 0} tasks, ${result.taskMemoryCleanup?.memoriesEvaluated ?? 0} evaluated, ${result.taskMemoryCleanup?.memoriesRemoved ?? 0} removed (Phase 7)`,
+                );
+              }
               console.log(
                 `  ⚡ Tip Generation: ${result.tipGeneration.sessionsScanned} sessions, ${result.tipGeneration.failurePatternsFound} patterns, ${result.tipGeneration.tipsStored} tips stored`,
               );
