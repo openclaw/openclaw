@@ -21,8 +21,12 @@ title: "Claworc"
 
 ## Quick install
 
+<Warning>
+Claworc is a third-party tool not maintained by OpenClaw. Review the install script before running it.
+</Warning>
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gluk-w/claworc/main/install.sh | bash
+curl -fsSL https://claworc.com/install.sh | bash
 ```
 
 ## Deployment options
