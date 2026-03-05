@@ -8,7 +8,6 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
-import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
@@ -113,7 +112,10 @@ if (
     });
 
     child.once("error", (error) => {
-      console.error("[openclaw] Failed to respawn CLI:", formatUncaughtError(error));
+      console.error(
+        "[openclaw] Failed to respawn CLI:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
       process.exit(1);
     });
 
@@ -132,7 +134,10 @@ if (
         process.exit(0);
       })
       .catch((error) => {
-        console.error("[openclaw] Failed to resolve version:", formatUncaughtError(error));
+        console.error(
+          "[openclaw] Failed to resolve version:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
         process.exitCode = 1;
       });
     return true;
@@ -147,7 +152,10 @@ if (
         buildProgram().outputHelp();
       })
       .catch((error) => {
-        console.error("[openclaw] Failed to display help:", formatUncaughtError(error));
+        console.error(
+          "[openclaw] Failed to display help:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
         process.exitCode = 1;
       });
     return true;
@@ -173,7 +181,10 @@ if (
       import("./cli/run-main.js")
         .then(({ runCli }) => runCli(process.argv))
         .catch((error) => {
-          console.error("[openclaw] Failed to start CLI:", formatUncaughtError(error));
+          console.error(
+            "[openclaw] Failed to start CLI:",
+            error instanceof Error ? (error.stack ?? error.message) : error,
+          );
           process.exitCode = 1;
         });
     }

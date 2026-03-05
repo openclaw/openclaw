@@ -766,7 +766,7 @@ export async function runSecretsApply(params: {
         env,
         createConfigIO: (overrides = {}) =>
           createSecretsConfigIO({
-            env,
+            env: overrides.env ?? env,
             configPath: overrides.configPath,
           }),
         readConfigFileSnapshot: () => io.readConfigFileSnapshot(),

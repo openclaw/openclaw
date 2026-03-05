@@ -118,11 +118,16 @@ async function restorePreTransactionSnapshot(
   snapshot: ConfigFileSnapshot,
   transactionId: string,
 ): Promise<void> {
-  if (!snapshot.exists || typeof snapshot.raw !== "string") {
+  if (!snapshot.exists) {
     await ioFs.promises.rm(snapshot.path, { force: true }).catch(() => {
       // best-effort
     });
     return;
+  }
+  if (typeof snapshot.raw !== "string") {
+    throw new Error(
+      "cannot rollback: pre-transaction config existed but its content was unreadable",
+    );
   }
   await writeRawAtomically(ioFs, snapshot.path, snapshot.raw, `rollback-${transactionId}`);
 }
@@ -301,13 +306,35 @@ export async function runConfigWriteTransaction(
   try {
     await deps.writeConfigFile(params.config, writeOptions);
   } catch (err) {
+    // The write may have partially completed (e.g. Windows copy-fallback path).
+    // Re-read to check whether the on-disk file actually changed.
+    const postFailSnapshot = await deps.readConfigFileSnapshot().catch(() => null);
+    const postFailHash = postFailSnapshot ? resolveConfigSnapshotHash(postFailSnapshot) : null;
+    const fileChanged = postFailHash !== null && postFailHash !== beforeHash;
+    if (fileChanged) {
+      try {
+        await restorePreTransactionSnapshot(deps.fs, beforeSnapshot, transactionId);
+        deps.clearConfigCache();
+        return {
+          ok: false,
+          transactionId,
+          stage: "commit",
+          rolledBack: true,
+          beforeHash,
+          afterHash: postFailHash,
+          error: String(err),
+        };
+      } catch {
+        // Rollback also failed; report the commit-stage error with no rollback.
+      }
+    }
     return {
       ok: false,
       transactionId,
       stage: "commit",
       rolledBack: false,
       beforeHash,
-      afterHash: null,
+      afterHash: fileChanged ? postFailHash : null,
       error: String(err),
     };
   }

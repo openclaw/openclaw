@@ -406,12 +406,13 @@ export async function fixSecurityFootguns(opts?: {
 
   const createScopedConfigIO = (
     params: {
+      env?: NodeJS.ProcessEnv;
       configPath?: string;
       logger?: Pick<typeof console, "error" | "warn">;
     } = {},
   ) =>
     createConfigIO({
-      env,
+      env: params.env ?? env,
       configPath: params.configPath ?? configPath,
       logger: params.logger,
     });
@@ -449,6 +450,7 @@ export async function fixSecurityFootguns(opts?: {
             env,
             createConfigIO: (overrides = {}) =>
               createScopedConfigIO({
+                env: overrides.env ?? env,
                 configPath: overrides.configPath,
                 logger: overrides.logger,
               }),
