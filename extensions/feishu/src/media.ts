@@ -26,6 +26,9 @@ async function readFeishuResponseBuffer(params: {
   errorPrefix: string;
 }): Promise<Buffer> {
   const { response } = params;
+  if (response == null) {
+    throw new Error(`${params.errorPrefix}: received null/undefined response`);
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {

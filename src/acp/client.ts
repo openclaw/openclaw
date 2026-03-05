@@ -470,6 +470,10 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     windowsHide: spawnInvocation.windowsHide,
   });
 
+  agent.on("error", (err) => {
+    log(`acp agent spawn error: ${String(err)}`);
+  });
+
   if (!agent.stdin || !agent.stdout) {
     throw new Error("Failed to create ACP stdio pipes");
   }

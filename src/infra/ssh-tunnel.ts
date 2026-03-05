@@ -188,6 +188,9 @@ export async function startSshPortForward(opts: {
     await Promise.race([
       waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
       new Promise<void>((_, reject) => {
+        child.once("error", (err) => {
+          reject(err);
+        });
         child.once("exit", (code, signal) => {
           reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
         });
