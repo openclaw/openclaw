@@ -9,7 +9,7 @@ export const TAB_GROUPS = [
   },
   {
     label: "finance",
-    tabs: ["finOverview", "finTrading", "finStrategyLab"],
+    tabs: ["finOverview", "finTrading", "finStrategyLab", "finFlow", "finSetting"],
   },
   { label: "agent", tabs: ["agents", "skills", "nodes"] },
   { label: "settings", tabs: ["config", "debug", "logs"] },
@@ -26,6 +26,8 @@ export type Tab =
   | "finOverview"
   | "finTrading"
   | "finStrategyLab"
+  | "finFlow"
+  | "finSetting"
   | "skills"
   | "nodes"
   | "chat"
@@ -44,6 +46,8 @@ const TAB_PATHS: Record<Tab, string> = {
   finOverview: "/fin-overview",
   finTrading: "/fin-trading",
   finStrategyLab: "/fin-strategy-lab",
+  finFlow: "/fin-flow",
+  finSetting: "/fin-setting",
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
@@ -161,6 +165,10 @@ export function iconForTab(tab: Tab): IconName {
       return "candlestick";
     case "finStrategyLab":
       return "zap";
+    case "finFlow":
+      return "loader";
+    case "finSetting":
+      return "settings";
     case "config":
       return "settings";
     case "debug":

@@ -6,6 +6,7 @@
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { BacktestProgressStore } from "../strategy/backtest-progress-store.js";
 import type { HttpRes } from "../types-http.js";
+import type { ActivityLogStore } from "./activity-log-store.js";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
 import type { DataGatheringDeps } from "./data-gathering.js";
 import {
@@ -19,6 +20,7 @@ export function registerSseRoutes(
   deps: DataGatheringDeps,
   eventStore: AgentEventSqliteStore,
   progressStore?: BacktestProgressStore,
+  activityLog?: ActivityLogStore,
 ): void {
   // ── Finance config SSE (30s interval) ──
   api.registerHttpRoute({
@@ -105,6 +107,42 @@ export function registerSseRoutes(
       req.on("close", () => clearInterval(interval));
     },
   });
+
+  // ── Agent activity log SSE (subscription-based) ──
+  if (activityLog) {
+    api.registerHttpRoute({
+      path: "/api/v1/finance/agent-activity/stream",
+      handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+
+        // Send recent entries as initial payload
+        res.write(
+          `data: ${JSON.stringify({
+            type: "initial",
+            entries: activityLog.listRecent(50),
+          })}\n\n`,
+        );
+
+        // Subscribe to new entries
+        const unsubscribe = activityLog.subscribe((entry) => {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "new_entry",
+              entry,
+            })}\n\n`,
+          );
+        });
+
+        req.on("close", () => {
+          unsubscribe();
+        });
+      },
+    });
+  }
 
   // ── Backtest progress SSE (event-driven) ──
   if (progressStore) {

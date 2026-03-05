@@ -34,6 +34,13 @@ export interface PromptContextDeps {
       type?: string;
     }) => Array<{ type: string; title: string; detail: string }>;
   };
+  lifecycleEngine?: {
+    getStats?: () => {
+      running: boolean;
+      cycleCount: number;
+      pendingApprovals: number;
+    };
+  };
 }
 
 export function buildFinancialContext(deps: PromptContextDeps): string {
@@ -128,6 +135,22 @@ export function buildFinancialContext(deps: PromptContextDeps): string {
     parts.push(`Exchanges: ${names || "none configured"}`);
   } catch {
     parts.push("Exchanges: none configured");
+  }
+
+  // 5. Lifecycle engine status
+  try {
+    const engineStats = deps.lifecycleEngine?.getStats?.();
+    if (engineStats) {
+      const status = engineStats.running ? "running" : "stopped";
+      parts.push(
+        `Lifecycle engine: ${status}, cycles=${engineStats.cycleCount}, pending_approvals=${engineStats.pendingApprovals}`,
+      );
+      if (engineStats.pendingApprovals > 0) {
+        parts.push(`ACTION: ${engineStats.pendingApprovals} strategies awaiting L3 approval`);
+      }
+    }
+  } catch {
+    // silent
   }
 
   if (parts.length === 0) return "";

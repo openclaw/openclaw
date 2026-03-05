@@ -20,13 +20,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { resolveConfig } from "./src/config.js";
+import { ActivityLogStore } from "./src/core/activity-log-store.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
+import { AgentWakeBridge } from "./src/core/agent-wake-bridge.js";
 import { AlertEngine } from "./src/core/alert-engine.js";
 import { JsonConfigStore } from "./src/core/config-store.js";
 import { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 import type { DataGatheringDeps } from "./src/core/data-gathering.js";
 import { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/core/exchange-registry.js";
+import { LifecycleEngine } from "./src/core/lifecycle-engine.js";
 import { NotificationRouter } from "./src/core/notification-router.js";
 import { buildFinancialContext } from "./src/core/prompt-context.js";
 import { RiskController } from "./src/core/risk-controller.js";
@@ -86,6 +89,9 @@ export { CorrelationMonitor } from "./src/fund/correlation-monitor.js";
 export { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 export { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
 export { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
+export { ActivityLogStore } from "./src/core/activity-log-store.js";
+export { AgentWakeBridge } from "./src/core/agent-wake-bridge.js";
+export { LifecycleEngine } from "./src/core/lifecycle-engine.js";
 export { STRATEGY_PACKS, getStrategyPack } from "./src/fund/strategy-packs.js";
 export * from "./src/types.js";
 
@@ -129,6 +135,15 @@ const findooTraderPlugin = {
       id: "fin-event-store",
       start: () => {},
       instance: eventStore,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // ── Activity Log Store (agent audit trail for Flow timeline) ──
+
+    const activityLog = new ActivityLogStore(api.resolvePath("state/findoo-activity-log.sqlite"));
+    api.registerService({
+      id: "fin-activity-log",
+      start: () => {},
+      instance: activityLog,
     } as Parameters<typeof api.registerService>[0]);
 
     // ── Alert Engine ──
@@ -215,6 +230,35 @@ const findooTraderPlugin = {
     // ── Build shared deps for route + data-gathering modules ──
 
     const runtime = api.runtime as unknown as RuntimeServices;
+
+    // ── Agent Wake Bridge (enqueues system events to wake heartbeat runner) ──
+
+    const runtimeSystem = (
+      api.runtime as unknown as { system?: { enqueueSystemEvent?: (...args: unknown[]) => void } }
+    )?.system;
+    const wakeBridge = runtimeSystem?.enqueueSystemEvent
+      ? new AgentWakeBridge({
+          enqueueSystemEvent: runtimeSystem.enqueueSystemEvent as (
+            text: string,
+            options: { sessionKey: string; contextKey?: string },
+          ) => void,
+          sessionKeyResolver: () => {
+            // Use "main" session — the heartbeat runner's default session key
+            // This is resolved lazily because sessions may not exist at registration time
+            try {
+              const sessions = (runtime as unknown as { sessions?: Map<string, unknown> }).sessions;
+              if (sessions && sessions.size > 0) {
+                return sessions.keys().next().value as string;
+              }
+            } catch {
+              // fall through
+            }
+            return "main";
+          },
+          activityLog,
+        })
+      : undefined;
+
     const pluginEntries = (api.config.plugins?.entries ?? {}) as Record<
       string,
       { enabled?: boolean; config?: Record<string, unknown> }
@@ -235,6 +279,9 @@ const findooTraderPlugin = {
 
     // ── Register HTTP routes (API + dashboards) ──
 
+    // lifecycleEngine is created later — use a lazy reference
+    const lifecycleRef: { engine?: InstanceType<typeof LifecycleEngine> } = {};
+
     registerHttpRoutes({
       api,
       gatherDeps,
@@ -244,11 +291,14 @@ const findooTraderPlugin = {
       runtime,
       templates,
       registry,
+      get lifecycleEngine() {
+        return lifecycleRef.engine;
+      },
     });
 
     // ── Register SSE streams ──
 
-    registerSseRoutes(api, gatherDeps, eventStore, progressStore);
+    registerSseRoutes(api, gatherDeps, eventStore, progressStore, activityLog);
 
     // ── Register trading AI tools (5 tools from fin-trading) ──
 
@@ -371,11 +421,34 @@ const findooTraderPlugin = {
 
     registerFundRoutes(api, fundDeps);
 
+    // ── Lifecycle Engine (autonomous promotion/demotion, runs every 5 min) ──
+
+    const lifecycleEngine = new LifecycleEngine(
+      {
+        strategyRegistry,
+        fundManagerResolver: () => fundManager,
+        paperEngine,
+        eventStore,
+        activityLog,
+        wakeBridge:
+          wakeBridge ??
+          new AgentWakeBridge({
+            enqueueSystemEvent: () => {},
+            sessionKeyResolver: () => undefined,
+            activityLog,
+          }),
+      },
+      5 * 60_000, // 5 minutes
+    );
+    lifecycleEngine.start();
+    lifecycleRef.engine = lifecycleEngine;
+
     // ── Paper Health Monitor (rules layer: detect conditions → emit events → LLM decides) ──
 
     const healthMonitor = new PaperHealthMonitor({
       eventStore,
       paperEngine,
+      wakeBridge,
     });
 
     // ── Paper Scheduler (auto-tick L2_PAPER strategies) ──
@@ -384,6 +457,7 @@ const findooTraderPlugin = {
       paperEngine,
       strategyRegistry,
       healthMonitor,
+      wakeBridge,
       tickIntervalMs: 60_000,
       snapshotIntervalMs: 3_600_000,
       serviceResolver: () => {
@@ -391,6 +465,20 @@ const findooTraderPlugin = {
           return runtime.services?.get?.("fin-data-provider") as
             | typeof paperScheduler.deps.dataProvider
             | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      fundManagerResolver: () => {
+        try {
+          const svc = runtime.services?.get?.("fin-fund-manager") as
+            | { instance?: unknown }
+            | undefined;
+          return svc?.instance as typeof paperScheduler.deps extends {
+            fundManagerResolver?: () => infer R;
+          }
+            ? R
+            : never;
         } catch {
           return undefined;
         }
@@ -404,6 +492,7 @@ const findooTraderPlugin = {
       paperEngine,
       strategyRegistry,
       eventStore,
+      wakeBridge,
       intervalMs: 86_400_000, // 24 hours
     });
     briefScheduler.start();
@@ -417,6 +506,7 @@ const findooTraderPlugin = {
       strategyRegistry,
       backtestEngine,
       eventStore,
+      wakeBridge,
       dataProviderResolver: () => {
         try {
           const svc = runtime.services?.get?.("fin-data-provider");
@@ -529,7 +619,10 @@ const findooTraderPlugin = {
     }
 
     // Register Telegram approval callback route (always active — handles button clicks)
-    registerTelegramApprovalRoute(api, eventStore, { telegramBotToken });
+    registerTelegramApprovalRoute(api, eventStore, {
+      telegramBotToken,
+      lifecycleEngineResolver: () => lifecycleRef.engine,
+    });
 
     // ── Risk control hook: intercept fin_* trading tool calls ──
 
@@ -556,6 +649,8 @@ const findooTraderPlugin = {
         strategyRegistry,
         riskController,
         exchangeRegistry: registry,
+        eventStore,
+        lifecycleEngine: lifecycleRef.engine,
       });
       if (!context) return;
       return { prependContext: context };

@@ -48,7 +48,7 @@ export type PaperSchedulerConfig = {
   wakeBridge?: AgentWakeBridge;
   /** Lazy resolver for dataProvider — called on each tick if dataProvider is still unset. */
   serviceResolver?: () => DataProviderLike | undefined;
-  /** Lazy resolver for FundManager — called on snapshot to check promotions. */
+  /** @deprecated Promotion checks moved to LifecycleEngine. Kept for backward compat. */
   fundManagerResolver?: () => FundManagerLike | undefined;
   tickIntervalMs?: number; // default 60_000 (1 min)
   snapshotIntervalMs?: number; // default 3_600_000 (1 hour)
@@ -233,46 +233,10 @@ export class PaperScheduler {
       }
     }
 
-    // Check L2 strategies for promotion eligibility → wake Agent
-    this.checkPromotions();
+    // Promotion checks are now handled by LifecycleEngine (runs every 5 min).
+    // PaperScheduler focuses only on ticking strategies and recording snapshots.
 
     return { snapshots: accounts.length };
-  }
-
-  /** Check L2 strategies for promotion eligibility and wake Agent if found. */
-  private checkPromotions(): void {
-    const { strategyRegistry, wakeBridge, fundManagerResolver } = this._deps;
-    if (!wakeBridge || !fundManagerResolver) return;
-
-    const fundManager = fundManagerResolver();
-    if (!fundManager) return;
-
-    try {
-      const l2 = strategyRegistry.list({ level: "L2_PAPER" }).filter((s) => s.level === "L2_PAPER");
-      if (l2.length === 0) return;
-
-      const profiles = fundManager.buildProfiles(l2 as unknown[]);
-      for (const profile of profiles) {
-        const check = fundManager.checkPromotion(profile);
-        if (!check.eligible || !check.targetLevel) continue;
-
-        if (check.needsUserConfirmation) {
-          const strategy = l2.find((s) => s.id === profile.strategyId);
-          wakeBridge.onApprovalNeeded({
-            strategyId: profile.strategyId,
-            strategyName: strategy?.name ?? profile.strategyId,
-          });
-        } else {
-          wakeBridge.onPromotionReady({
-            strategyId: profile.strategyId,
-            from: profile.currentLevel,
-            to: check.targetLevel,
-          });
-        }
-      }
-    } catch {
-      this.errorCount++;
-    }
   }
 
   private writeDailyPerfSnapshot(): void {

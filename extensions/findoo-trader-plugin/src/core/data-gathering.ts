@@ -675,3 +675,73 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     },
   };
 }
+
+// ── Flow page data (pipeline + lifecycle engine stats) ────────────
+
+type LifecycleEngineLike = {
+  getStats(): {
+    running: boolean;
+    cycleCount: number;
+    lastCycleAt: number;
+    promotionCount: number;
+    demotionCount: number;
+    pendingApprovals: number;
+  };
+};
+
+export function gatherFlowData(deps: DataGatheringDeps, lifecycleEngine?: LifecycleEngineLike) {
+  const { runtime, eventStore } = deps;
+
+  const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
+    | StrategyRegistryLike
+    | undefined;
+  const strategies = strategyRegistry?.list() ?? [];
+
+  const paperEngine = runtime.services?.get?.("fin-paper-engine") as PaperEngineLike | undefined;
+  const accounts = paperEngine?.listAccounts?.() ?? [];
+  const totalEquity = accounts.reduce((sum, a) => sum + a.equity, 0);
+
+  // Strategy cards with key metrics + days-in-level
+  const now = Date.now();
+  const strategyCards = strategies
+    .filter((s) => s.level !== "KILLED")
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      level: s.level,
+      sharpe: s.lastBacktest?.sharpe ?? null,
+      maxDrawdown: s.lastBacktest?.maxDrawdown ?? null,
+      totalTrades: s.lastBacktest?.totalTrades ?? null,
+      daysInLevel: Math.floor(
+        (now -
+          ((s as { updatedAt?: number; createdAt?: number }).updatedAt ||
+            (s as { createdAt?: number }).createdAt ||
+            now)) /
+          86_400_000,
+      ),
+    }));
+
+  // Pending approvals: events with type=trade_pending, status=pending, action=promote_l3
+  const pendingEvents = eventStore
+    .listEvents({ status: "pending" })
+    .filter((e) => e.actionParams?.action === "promote_l3");
+  const pendingApprovals = pendingEvents
+    .map((e) => (e.actionParams?.strategyId as string) ?? "")
+    .filter(Boolean);
+
+  const engineStats = lifecycleEngine?.getStats() ?? {
+    running: false,
+    cycleCount: 0,
+    lastCycleAt: 0,
+    promotionCount: 0,
+    demotionCount: 0,
+    pendingApprovals: 0,
+  };
+
+  return {
+    strategies: strategyCards,
+    totalEquity,
+    pendingApprovals,
+    lifecycleEngine: engineStats,
+  };
+}

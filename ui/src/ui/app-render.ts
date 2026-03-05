@@ -295,7 +295,11 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const isIframeTab =
-    state.tab === "finOverview" || state.tab === "finTrading" || state.tab === "finStrategyLab";
+    state.tab === "finOverview" ||
+    state.tab === "finTrading" ||
+    state.tab === "finStrategyLab" ||
+    state.tab === "finFlow" ||
+    state.tab === "finSetting";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -1280,8 +1284,10 @@ export function renderApp(state: AppViewState) {
         }
 
         ${state.tab === "finOverview" ? renderIframeDashboard("/dashboard/overview", "Overview") : nothing}
-        ${state.tab === "finTrading" ? renderIframeDashboard("/dashboard/trading-desk", "Trading Desk") : nothing}
-        ${state.tab === "finStrategyLab" ? renderIframeDashboard("/dashboard/strategy-lab", "Strategy Lab") : nothing}
+        ${state.tab === "finTrading" ? renderIframeDashboard("/dashboard/trader", "Trader") : nothing}
+        ${state.tab === "finStrategyLab" ? renderIframeDashboard("/dashboard/strategy", "Strategy") : nothing}
+        ${state.tab === "finFlow" ? renderIframeDashboard("/dashboard/flow", "Flow") : nothing}
+        ${state.tab === "finSetting" ? renderIframeDashboard("/dashboard/setting", "Setting") : nothing}
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}

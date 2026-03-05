@@ -106,10 +106,18 @@ export async function processApproval(
 
 // ── HTTP Route Registration ──
 
+type LifecycleEngineLike = {
+  handleApproval(strategyId: string): boolean;
+  handleRejection(strategyId: string, reason?: string): boolean;
+};
+
 export function registerTelegramApprovalRoute(
   api: OpenClawPluginApi,
   eventStore: AgentEventSqliteStore,
-  opts?: { telegramBotToken?: string },
+  opts?: {
+    telegramBotToken?: string;
+    lifecycleEngineResolver?: () => LifecycleEngineLike | undefined;
+  },
 ): void {
   // POST /api/v1/finance/telegram/callback — handle Telegram inline button callbacks
   api.registerHttpRoute({
@@ -145,6 +153,25 @@ export function registerTelegramApprovalRoute(
           },
           opts,
         );
+
+        // Bridge to LifecycleEngine for L3 promotion approvals
+        if (result.ok && opts?.lifecycleEngineResolver) {
+          const event = eventStore.getEvent(result.eventId);
+          if (event?.actionParams?.action === "promote_l3") {
+            const engine = opts.lifecycleEngineResolver();
+            const strategyId = event.actionParams.strategyId as string;
+            if (engine && strategyId) {
+              if (result.action === "approve") {
+                engine.handleApproval(strategyId);
+              } else {
+                engine.handleRejection(
+                  strategyId,
+                  typeof body.reason === "string" ? body.reason : undefined,
+                );
+              }
+            }
+          }
+        }
 
         jsonResponse(res, result.ok ? 200 : 404, result);
       } catch (err) {

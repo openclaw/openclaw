@@ -21,9 +21,10 @@ export type DashboardTemplates = {
   overview: UnifiedTemplate;
   tradingDesk: UnifiedTemplate;
   strategyLab: UnifiedTemplate;
-  /** v3 4-Tab pages */
+  /** v3 5-Tab pages */
   strategy: UnifiedTemplate;
   trader: UnifiedTemplate;
+  flow: UnifiedTemplate;
   setting: UnifiedTemplate;
 };
 
@@ -69,6 +70,7 @@ export function loadDashboardTemplates(dashboardDir: string): DashboardTemplates
     strategyLab: loadUnified("strategy-lab.html", "strategy-lab.css"),
     strategy: loadUnified("strategy.html", "strategy.css"),
     trader: loadUnified("trader.html", "trader.css"),
+    flow: loadUnified("flow.html", "flow.css"),
     setting: loadUnified("setting.html", "setting.css"),
   };
 }

@@ -20,8 +20,48 @@
   </head>
   <body>
     <script>
+      if (new URLSearchParams(location.search).get("embedded") === "1") document.body.classList.add("embedded");
+    </script>
+    <script>
       var pageData = /*__PAGE_DATA__*/ {};
     </script>
+
+    <!-- GETTING STARTED (shown when empty state detected) -->
+    <div class="getting-started" id="gettingStarted" style="display:none">
+      <div class="getting-started__header">
+        <h2 class="getting-started__title">Welcome to OpenFinClaw</h2>
+        <p class="getting-started__desc">Get started in 3 steps to unlock your financial AI dashboard.</p>
+      </div>
+      <div class="getting-started__steps">
+        <a class="getting-started__card" href="/dashboard/setting" data-step="1">
+          <span class="getting-started__num">1</span>
+          <div class="getting-started__info">
+            <span class="getting-started__card-title">Connect Exchange</span>
+            <span class="getting-started__card-desc">Link your exchange API keys to start receiving live data.</span>
+          </div>
+          <span class="getting-started__arrow">&#8250;</span>
+        </a>
+        <a class="getting-started__card" href="/dashboard/strategy" data-step="2">
+          <span class="getting-started__num">2</span>
+          <div class="getting-started__info">
+            <span class="getting-started__card-title">Create Strategy</span>
+            <span class="getting-started__card-desc">Design or pick a strategy and let the AI optimize it.</span>
+          </div>
+          <span class="getting-started__arrow">&#8250;</span>
+        </a>
+        <a class="getting-started__card" href="/dashboard/trader" data-step="3">
+          <span class="getting-started__num">3</span>
+          <div class="getting-started__info">
+            <span class="getting-started__card-title">Start Trading</span>
+            <span class="getting-started__card-desc">Paper trade first, then promote to live when ready.</span>
+          </div>
+          <span class="getting-started__arrow">&#8250;</span>
+        </a>
+      </div>
+      <button class="getting-started__skip" onclick="document.getElementById('gettingStarted').style.display='none'">
+        Skip &mdash; I'll explore on my own
+      </button>
+    </div>
 
     <!-- RISK HALO -->
     <div class="risk-halo" id="riskHalo"></div>
@@ -41,6 +81,7 @@
         <a class="topbar__nav-item active" href="/dashboard/overview">Overview</a>
         <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
         <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
         <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
@@ -1035,7 +1076,31 @@
           renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
           updateEquityChart(t.snapshots);
           updateAllocChart(t.allocations || (state.fund && state.fund.allocations));
+          checkEmptyState(t, state.config);
         }
+
+        // ── Empty-state detection: show Getting Started panel ──
+        function checkEmptyState(trading, config) {
+          var exchanges = (config && config.exchanges) || [];
+          var strategies = (trading && trading.strategies) || [];
+          var positions = (trading && trading.positions) || [];
+          var summary = (trading && trading.summary) || {};
+          var eq = summary.totalEquity || summary.equity || 0;
+          var isEmpty = exchanges.length === 0 && strategies.length === 0 && positions.length === 0 && eq === 0;
+          var el = $("gettingStarted");
+          if (el) el.style.display = isEmpty ? "" : "none";
+        }
+
+        // ── Propagate ?embedded=1 to internal dashboard links ──
+        (function() {
+          if (!document.body.classList.contains("embedded")) return;
+          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+            var href = a.getAttribute("href");
+            if (href && href.indexOf("embedded") === -1) {
+              a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
+            }
+          });
+        })();
 
         // ── SSE Connection Manager ──
         var sseStreams = {};

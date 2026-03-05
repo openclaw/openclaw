@@ -25,6 +25,7 @@ import {
   gatherSettingData,
   gatherTraderData,
   gatherStrategyData,
+  gatherFlowData,
 } from "./data-gathering.js";
 import type { ExchangeHealthStore } from "./exchange-health-store.js";
 import type { ExchangeRegistry } from "./exchange-registry.js";
@@ -36,6 +37,19 @@ import { registerStrategyRoutes } from "./routes-strategies.js";
 import type { DashboardTemplates } from "./template-renderer.js";
 import { renderDashboard, renderUnifiedDashboard } from "./template-renderer.js";
 
+type LifecycleEngineLike = {
+  getStats(): {
+    running: boolean;
+    cycleCount: number;
+    lastCycleAt: number;
+    promotionCount: number;
+    demotionCount: number;
+    pendingApprovals: number;
+  };
+  handleApproval(strategyId: string): boolean;
+  handleRejection(strategyId: string, reason?: string): boolean;
+};
+
 export type RouteHandlerDeps = {
   api: OpenClawPluginApi;
   gatherDeps: DataGatheringDeps;
@@ -46,6 +60,7 @@ export type RouteHandlerDeps = {
   templates: DashboardTemplates;
   registry?: ExchangeRegistry;
   perfStore?: PerformanceSnapshotStore;
+  lifecycleEngine?: LifecycleEngineLike;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -618,6 +633,48 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     path: "/api/v1/finance/dashboard/setting",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, gatherSettingData({ ...gatherDeps, healthStore }));
+    },
+  });
+
+  // ── Unified Dashboard: Flow (lifecycle pipeline) ──
+  api.registerHttpRoute({
+    path: "/dashboard/flow",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherFlowData(gatherDeps, deps.lifecycleEngine);
+      const html = renderUnifiedDashboard(templates.flow, data);
+      if (!html) {
+        jsonResponse(res, 200, data);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/api/v1/finance/dashboard/flow",
+    handler: async (_req: unknown, res: HttpRes) => {
+      jsonResponse(res, 200, gatherFlowData(gatherDeps, deps.lifecycleEngine));
+    },
+  });
+
+  // ── Flow: Approve L3 promotion ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/flow/approve",
+    handler: async (req: unknown, res: HttpRes) => {
+      const body = await parseJsonBody(req as HttpReq);
+      const strategyId = body?.strategyId as string | undefined;
+      if (!strategyId) {
+        errorResponse(res, 400, "Missing strategyId");
+        return;
+      }
+      const engine = deps.lifecycleEngine;
+      if (!engine) {
+        errorResponse(res, 503, "Lifecycle engine not available");
+        return;
+      }
+      const ok = engine.handleApproval(strategyId);
+      jsonResponse(res, ok ? 200 : 404, { ok, strategyId });
     },
   });
 

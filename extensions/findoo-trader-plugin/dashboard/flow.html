@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenFinClaw — Flow</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /*__SHARED_CSS__*/
+    </style>
+    <style>
+      /*__PAGE_CSS__*/
+    </style>
+  </head>
+  <body>
+    <script>
+      if (new URLSearchParams(location.search).get("embedded") === "1") document.body.classList.add("embedded");
+    </script>
+    <script>
+      var pageData = /*__PAGE_DATA__*/ {};
+    </script>
+
+    <!-- RISK HALO -->
+    <div class="risk-halo" id="riskHalo"></div>
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <span class="topbar__logo">OPENFINCLAW</span>
+      <div class="topbar__sep"></div>
+      <div class="topbar__eq">
+        <span class="topbar__eq-val num" id="eqVal">--</span>
+        <span class="topbar__eq-chg num" id="eqChg"></span>
+      </div>
+      <div class="topbar__sep"></div>
+      <nav class="topbar__nav">
+        <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
+        <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item active" href="/dashboard/flow">Flow</a>
+        <a class="topbar__nav-item" href="/dashboard/setting">Setting</a>
+      </nav>
+      <div class="topbar__fill"></div>
+      <div class="topbar__agents" id="agentDots"></div>
+      <div class="topbar__sep"></div>
+      <span class="topbar__risk" id="riskBadge">--</span>
+      <div class="topbar__sse" id="sseDots" title="SSE connections">
+        <span class="sse-dot" id="sseActivity" title="Activity"></span>
+        <span class="sse-dot" id="sseStrategy" title="Strategy"></span>
+      </div>
+      <span class="topbar__clock num" id="clock">--:--</span>
+      <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
+    </header>
+
+    <!-- MAIN LAYOUT -->
+    <div class="layout">
+      <div class="flow-layout">
+
+        <!-- LEFT: Pipeline Visualization -->
+        <section class="flow-pipeline">
+          <div class="pipeline-grid">
+
+            <!-- L0 INCUBATE -->
+            <div class="pipeline-col" data-level="L0_INCUBATE">
+              <div class="pipeline-col__header">
+                <span class="pipeline-col__dot pipeline-col__dot--l0"></span>
+                <span class="pipeline-col__label">L0 Incubate</span>
+                <span class="pipeline-col__count" id="countL0">0</span>
+              </div>
+              <div class="pipeline-col__cards" id="cardsL0"></div>
+            </div>
+
+            <!-- L1 BACKTEST -->
+            <div class="pipeline-col" data-level="L1_BACKTEST">
+              <div class="pipeline-col__header">
+                <span class="pipeline-col__dot pipeline-col__dot--l1"></span>
+                <span class="pipeline-col__label">L1 Backtest</span>
+                <span class="pipeline-col__count" id="countL1">0</span>
+              </div>
+              <div class="pipeline-col__cards" id="cardsL1"></div>
+            </div>
+
+            <!-- L2 PAPER -->
+            <div class="pipeline-col" data-level="L2_PAPER">
+              <div class="pipeline-col__header">
+                <span class="pipeline-col__dot pipeline-col__dot--l2"></span>
+                <span class="pipeline-col__label">L2 Paper</span>
+                <span class="pipeline-col__count" id="countL2">0</span>
+              </div>
+              <div class="pipeline-col__cards" id="cardsL2"></div>
+            </div>
+
+            <!-- L3 LIVE -->
+            <div class="pipeline-col" data-level="L3_LIVE">
+              <div class="pipeline-col__header">
+                <span class="pipeline-col__dot pipeline-col__dot--l3"></span>
+                <span class="pipeline-col__label">L3 Live</span>
+                <span class="pipeline-col__count" id="countL3">0</span>
+              </div>
+              <div class="pipeline-col__cards" id="cardsL3"></div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- RIGHT: Activity Timeline -->
+        <aside class="flow-timeline">
+          <div class="timeline-header">
+            <span class="timeline-header__title">Agent Activity</span>
+            <div class="timeline-filters" id="timelineFilters">
+              <button class="timeline-chip active" data-filter="all">All</button>
+              <button class="timeline-chip" data-filter="wake">Wake</button>
+              <button class="timeline-chip" data-filter="promotion">Promo</button>
+              <button class="timeline-chip" data-filter="demotion">Demote</button>
+              <button class="timeline-chip" data-filter="approval">Approve</button>
+              <button class="timeline-chip" data-filter="decision">Decision</button>
+              <button class="timeline-chip" data-filter="error">Error</button>
+            </div>
+          </div>
+          <div class="heartbeat-indicator" id="heartbeatBar">
+            <span class="heartbeat-dot" id="hbDot"></span>
+            <span id="hbText">Connecting...</span>
+          </div>
+          <div class="timeline-entries" id="timelineEntries"></div>
+        </aside>
+
+        <!-- BOTTOM: Status Bar -->
+        <div class="flow-status-bar">
+          <div class="flow-status__item">
+            <span class="flow-status__dot" id="engineDot"></span>
+            <span id="engineStatus">Engine: --</span>
+          </div>
+          <div class="flow-status__item">
+            <span id="cycleCount">Cycles: --</span>
+          </div>
+          <div class="flow-status__item">
+            <span id="lastCycle">Last: --</span>
+          </div>
+          <div class="flow-status__item">
+            <span id="pendingCount">Pending: --</span>
+          </div>
+          <div class="flow-status__item" style="margin-left:auto">
+            <span id="totalStrategies">Strategies: --</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <footer class="botbar">
+      <div class="botbar__avatar"></div>
+      <div class="botbar__msg" id="botMsg">Loading Flow...</div>
+      <div class="botbar__sse" id="botSse"></div>
+    </footer>
+
+    <script>
+    (function() {
+      'use strict';
+
+      // ── Category icons ──────────────────────────────────────
+      var ICONS = {
+        wake: '&#9889;',       // ⚡
+        promotion: '&#9650;',  // ▲
+        demotion: '&#9660;',   // ▼
+        approval: '&#9733;',   // ★
+        decision: '&#9670;',   // ◆
+        error: '&#9888;',      // ⚠
+        heartbeat: '&#9829;',  // ♥
+        seed: '&#9741;'        // ⚭
+      };
+
+      var LEVEL_MAP = {
+        L0_INCUBATE: 'L0',
+        L1_BACKTEST: 'L1',
+        L2_PAPER: 'L2',
+        L3_LIVE: 'L3'
+      };
+
+      var currentFilter = 'all';
+      var allEntries = [];
+      var pendingApprovals = new Set();
+
+      // ── Clock ───────────────────────────────────────────────
+      function updateClock() {
+        var now = new Date();
+        var el = document.getElementById('clock');
+        if (el) el.textContent = now.toTimeString().slice(0, 5);
+      }
+      setInterval(updateClock, 10000);
+      updateClock();
+
+      // ── Render pipeline cards ───────────────────────────────
+      function renderPipeline(strategies) {
+        var buckets = { L0: [], L1: [], L2: [], L3: [] };
+
+        (strategies || []).forEach(function(s) {
+          var key = LEVEL_MAP[s.level];
+          if (key && buckets[key]) buckets[key].push(s);
+        });
+
+        Object.keys(buckets).forEach(function(key) {
+          var container = document.getElementById('cards' + key);
+          var countEl = document.getElementById('count' + key);
+          if (!container) return;
+
+          var items = buckets[key];
+          countEl.textContent = items.length;
+
+          if (items.length === 0) {
+            container.innerHTML = '<div class="pipeline-empty">No strategies</div>';
+            return;
+          }
+
+          container.innerHTML = items.map(function(s) {
+            var isPending = pendingApprovals.has(s.id);
+            var sharpe = s.sharpe != null ? s.sharpe.toFixed(2) : '--';
+            var dd = s.maxDrawdown != null ? Math.abs(s.maxDrawdown).toFixed(1) + '%' : '--';
+            var sharpeClass = s.sharpe >= 1 ? 'good' : s.sharpe < 0 ? 'bad' : '';
+            var daysText = s.daysInLevel != null ? s.daysInLevel + 'd' : '--';
+
+            var html = '<div class="strat-card' + (isPending ? ' strat-card--pending' : '') + '">';
+            html += '<div class="strat-card__name">' + escHtml(s.name) + '</div>';
+            html += '<div class="strat-card__metrics">';
+            html += '<div class="strat-card__metric"><span class="strat-card__metric-label">Sharpe</span><span class="strat-card__metric-val' + (sharpeClass ? ' strat-card__metric-val--' + sharpeClass : '') + '">' + sharpe + '</span></div>';
+            html += '<div class="strat-card__metric"><span class="strat-card__metric-label">DD</span><span class="strat-card__metric-val">' + dd + '</span></div>';
+            html += '</div>';
+            html += '<div class="strat-card__time">' + daysText + ' in stage</div>';
+
+            if (isPending) {
+              html += '<button class="strat-card__approve" onclick="approveStrategy(\'' + s.id + '\')">&#10003; Approve L3</button>';
+            }
+
+            html += '</div>';
+            return html;
+          }).join('');
+        });
+
+        // Update total
+        var total = (strategies || []).length;
+        var totalEl = document.getElementById('totalStrategies');
+        if (totalEl) totalEl.textContent = 'Strategies: ' + total;
+      }
+
+      // ── Render timeline entries ─────────────────────────────
+      function renderTimeline() {
+        var container = document.getElementById('timelineEntries');
+        if (!container) return;
+
+        var filtered = currentFilter === 'all'
+          ? allEntries
+          : allEntries.filter(function(e) { return e.category === currentFilter; });
+
+        // Show newest first, limit to 100
+        var visible = filtered.slice(-100).reverse();
+
+        container.innerHTML = visible.map(function(entry) {
+          var icon = ICONS[entry.category] || '&#9679;';
+          var time = formatTime(entry.timestamp);
+
+          return '<div class="timeline-entry">' +
+            '<span class="timeline-entry__icon timeline-entry__icon--' + entry.category + '">' + icon + '</span>' +
+            '<div class="timeline-entry__body">' +
+              '<div class="timeline-entry__text">' + escHtml(entry.detail) + '</div>' +
+              '<div class="timeline-entry__time">' + time + '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+      }
+
+      function addTimelineEntry(entry, animate) {
+        allEntries.push(entry);
+        if (currentFilter === 'all' || currentFilter === entry.category) {
+          var container = document.getElementById('timelineEntries');
+          if (!container) return;
+
+          var div = document.createElement('div');
+          div.className = 'timeline-entry' + (animate ? ' timeline-entry--new' : '');
+          var icon = ICONS[entry.category] || '&#9679;';
+          div.innerHTML =
+            '<span class="timeline-entry__icon timeline-entry__icon--' + entry.category + '">' + icon + '</span>' +
+            '<div class="timeline-entry__body">' +
+              '<div class="timeline-entry__text">' + escHtml(entry.detail) + '</div>' +
+              '<div class="timeline-entry__time">' + formatTime(entry.timestamp) + '</div>' +
+            '</div>';
+          container.insertBefore(div, container.firstChild);
+
+          // Trim to 100 visible
+          while (container.children.length > 100) {
+            container.removeChild(container.lastChild);
+          }
+        }
+      }
+
+      // ── Filter chips ────────────────────────────────────────
+      document.getElementById('timelineFilters').addEventListener('click', function(e) {
+        var chip = e.target.closest('.timeline-chip');
+        if (!chip) return;
+        currentFilter = chip.dataset.filter;
+        document.querySelectorAll('.timeline-chip').forEach(function(c) {
+          c.classList.toggle('active', c.dataset.filter === currentFilter);
+        });
+        renderTimeline();
+      });
+
+      // ── Approve strategy ────────────────────────────────────
+      window.approveStrategy = function(strategyId) {
+        fetch('/api/v1/finance/flow/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategyId: strategyId })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            pendingApprovals.delete(strategyId);
+            fetchFlowData();
+          }
+        })
+        .catch(function() {});
+      };
+
+      // ── Fetch flow data ─────────────────────────────────────
+      function fetchFlowData() {
+        fetch('/api/v1/finance/dashboard/flow')
+          .then(function(r) { return r.json(); })
+          .catch(function() { return null; })
+          .then(function(data) {
+            if (!data) return;
+
+            // Update pipeline
+            renderPipeline(data.strategies);
+
+            // Update pending approvals set
+            pendingApprovals.clear();
+            (data.pendingApprovals || []).forEach(function(id) {
+              pendingApprovals.add(id);
+            });
+
+            // Update engine status bar
+            var eng = data.lifecycleEngine || {};
+            var dotEl = document.getElementById('engineDot');
+            var statusEl = document.getElementById('engineStatus');
+            var cycleEl = document.getElementById('cycleCount');
+            var lastEl = document.getElementById('lastCycle');
+            var pendEl = document.getElementById('pendingCount');
+
+            if (dotEl) {
+              dotEl.className = 'flow-status__dot flow-status__dot--' + (eng.running ? 'running' : 'stopped');
+            }
+            if (statusEl) statusEl.textContent = 'Engine: ' + (eng.running ? 'Running' : 'Stopped');
+            if (cycleEl) cycleEl.textContent = 'Cycles: ' + (eng.cycleCount || 0);
+            if (lastEl) lastEl.textContent = 'Last: ' + (eng.lastCycleAt ? formatTime(eng.lastCycleAt) : 'never');
+            if (pendEl) pendEl.textContent = 'Pending: ' + (eng.pendingApprovals || 0);
+
+            // Update topbar equity
+            if (data.totalEquity != null) {
+              var eqEl = document.getElementById('eqVal');
+              if (eqEl) eqEl.textContent = '$' + Number(data.totalEquity).toLocaleString();
+            }
+
+            // Bot message
+            var botMsg = document.getElementById('botMsg');
+            if (botMsg) botMsg.textContent = 'Flow pipeline active — ' + (data.strategies || []).length + ' strategies tracked';
+
+            // Re-render pipeline with pending info
+            renderPipeline(data.strategies);
+          });
+      }
+
+      // ── SSE: Activity stream ────────────────────────────────
+      function connectActivitySSE() {
+        var sse = new EventSource('/api/v1/finance/agent-activity/stream');
+        var dotEl = document.getElementById('sseActivity');
+
+        sse.onopen = function() {
+          if (dotEl) dotEl.style.background = 'var(--gain)';
+        };
+
+        sse.onmessage = function(ev) {
+          try {
+            var msg = JSON.parse(ev.data);
+
+            if (msg.type === 'initial') {
+              allEntries = msg.entries || [];
+              renderTimeline();
+
+              // Update heartbeat
+              var lastHb = allEntries.filter(function(e) { return e.category === 'heartbeat'; }).pop();
+              updateHeartbeat(lastHb);
+            }
+
+            if (msg.type === 'new_entry') {
+              addTimelineEntry(msg.entry, true);
+              if (msg.entry.category === 'heartbeat') updateHeartbeat(msg.entry);
+              // Re-fetch pipeline data on promotion/demotion/approval events
+              if (['promotion', 'demotion', 'approval'].indexOf(msg.entry.category) >= 0) {
+                fetchFlowData();
+              }
+            }
+          } catch(e) {}
+        };
+
+        sse.onerror = function() {
+          if (dotEl) dotEl.style.background = 'var(--loss)';
+          setTimeout(connectActivitySSE, 5000);
+        };
+      }
+
+      // ── SSE: Strategy stream (for pipeline updates) ─────────
+      function connectStrategySSE() {
+        var sse = new EventSource('/api/v1/finance/strategy/stream');
+        var dotEl = document.getElementById('sseStrategy');
+
+        sse.onopen = function() {
+          if (dotEl) dotEl.style.background = 'var(--gain)';
+        };
+
+        sse.onmessage = function(ev) {
+          try {
+            var data = JSON.parse(ev.data);
+            if (data.strategies) renderPipeline(data.strategies);
+          } catch(e) {}
+        };
+
+        sse.onerror = function() {
+          if (dotEl) dotEl.style.background = 'var(--loss)';
+        };
+      }
+
+      // ── Heartbeat indicator ─────────────────────────────────
+      function updateHeartbeat(entry) {
+        var dotEl = document.getElementById('hbDot');
+        var textEl = document.getElementById('hbText');
+        if (!entry) {
+          if (textEl) textEl.textContent = 'No heartbeat yet';
+          return;
+        }
+
+        var ago = Math.round((Date.now() - entry.timestamp) / 1000);
+        var stale = ago > 600; // > 10 min = stale
+
+        if (dotEl) {
+          dotEl.className = 'heartbeat-dot' + (stale ? ' heartbeat-dot--stale' : '');
+        }
+        if (textEl) {
+          textEl.textContent = stale
+            ? 'Last heartbeat ' + formatDuration(ago) + ' ago'
+            : 'Agent alive — ' + formatDuration(ago) + ' ago';
+        }
+      }
+
+      // ── Helpers ─────────────────────────────────────────────
+      function escHtml(s) {
+        var div = document.createElement('div');
+        div.textContent = s || '';
+        return div.innerHTML;
+      }
+
+      function formatTime(ts) {
+        if (!ts) return '--';
+        var d = new Date(ts);
+        return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+
+      function formatDuration(seconds) {
+        if (seconds < 60) return seconds + 's';
+        if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+        return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+      }
+
+      // ── Init ────────────────────────────────────────────────
+      fetchFlowData();
+      setInterval(fetchFlowData, 30000); // refresh pipeline every 30s
+      connectActivitySSE();
+      connectStrategySSE();
+
+      // Render initial data if server-injected
+      if (pageData && pageData.strategies) {
+        renderPipeline(pageData.strategies);
+      }
+    })();
+    </script>
+  </body>
+</html>

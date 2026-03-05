@@ -19,6 +19,9 @@
   </head>
   <body>
     <script>
+      if (new URLSearchParams(location.search).get("embedded") === "1") document.body.classList.add("embedded");
+    </script>
+    <script>
       var pageData = /*__PAGE_DATA__*/ {};
     </script>
 
@@ -35,6 +38,7 @@
         <a class="topbar__nav-item" href="/dashboard/overview">Overview</a>
         <a class="topbar__nav-item" href="/dashboard/strategy">Strategy</a>
         <a class="topbar__nav-item" href="/dashboard/trader">Trader</a>
+        <a class="topbar__nav-item" href="/dashboard/flow">Flow</a>
         <a class="topbar__nav-item active" href="/dashboard/setting">Setting</a>
       </nav>
       <div class="topbar__fill"></div>
@@ -418,6 +422,17 @@
         }
         tick();
         setInterval(tick, 10000);
+
+        // ── Propagate ?embedded=1 to internal dashboard links ──
+        (function() {
+          if (!document.body.classList.contains("embedded")) return;
+          document.querySelectorAll('a[href^="/dashboard/"]').forEach(function(a) {
+            var href = a.getAttribute("href");
+            if (href && href.indexOf("embedded") === -1) {
+              a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
+            }
+          });
+        })();
 
         // ── Toast ──
         function toast(msg, type) {
