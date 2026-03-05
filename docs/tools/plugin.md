@@ -486,6 +486,11 @@ Important hooks for prompt construction:
 - `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
 - `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
 
+Core-enforced hook policy:
+
+- Operators can disable prompt mutation hooks per plugin via `plugins.entries.<id>.hooks.allowPromptInjection: false`.
+- When disabled, OpenClaw blocks `before_prompt_build` and ignores prompt-mutating fields returned from legacy `before_agent_start` while preserving legacy `modelOverride` and `providerOverride`.
+
 `before_prompt_build` result fields:
 
 - `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content.
