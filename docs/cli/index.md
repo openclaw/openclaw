@@ -723,13 +723,15 @@ Options:
 - `--workspace`
 - `--app`
 - `--all`
+- `--zap`
 - `--yes`
 - `--non-interactive`
 - `--dry-run`
 
 Notes:
 
-- `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
+- `--non-interactive` requires `--yes` and explicit scopes (or `--all`/`--zap`).
+- `--zap` includes `--all` and also attempts to remove global CLI installs and OpenClaw shell completion traces.
 
 ## Gateway
 

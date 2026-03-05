@@ -93,6 +93,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--workspace", "Remove workspace dirs", false)
     .option("--app", "Remove the macOS app", false)
     .option("--all", "Remove service + state + workspace + app", false)
+    .option("--zap", "Remove all traces (includes CLI install + shell completion traces)", false)
     .option("--yes", "Skip confirmation prompts", false)
     .option("--non-interactive", "Disable prompts (requires --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
@@ -104,6 +105,7 @@ export function registerMaintenanceCommands(program: Command) {
           workspace: Boolean(opts.workspace),
           app: Boolean(opts.app),
           all: Boolean(opts.all),
+          zap: Boolean(opts.zap),
           yes: Boolean(opts.yes),
           nonInteractive: Boolean(opts.nonInteractive),
           dryRun: Boolean(opts.dryRun),

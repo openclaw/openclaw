@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
+import { hasBinary } from "../agents/skills.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
@@ -16,6 +20,7 @@ export type UninstallOptions = {
   workspace?: boolean;
   app?: boolean;
   all?: boolean;
+  zap?: boolean;
   yes?: boolean;
   nonInteractive?: boolean;
   dryRun?: boolean;
@@ -34,18 +39,20 @@ function buildScopeSelection(opts: UninstallOptions): {
   scopes: Set<UninstallScope>;
   hadExplicit: boolean;
 } {
-  const hadExplicit = Boolean(opts.all || opts.service || opts.state || opts.workspace || opts.app);
+  const hadExplicit = Boolean(
+    opts.all || opts.zap || opts.service || opts.state || opts.workspace || opts.app,
+  );
   const scopes = new Set<UninstallScope>();
-  if (opts.all || opts.service) {
+  if (opts.all || opts.zap || opts.service) {
     scopes.add("service");
   }
-  if (opts.all || opts.state) {
+  if (opts.all || opts.zap || opts.state) {
     scopes.add("state");
   }
-  if (opts.all || opts.workspace) {
+  if (opts.all || opts.zap || opts.workspace) {
     scopes.add("workspace");
   }
-  if (opts.all || opts.app) {
+  if (opts.all || opts.zap || opts.app) {
     scopes.add("app");
   }
   return { scopes, hadExplicit };
@@ -90,6 +97,120 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
     dryRun,
     label: "/Applications/OpenClaw.app",
   });
+}
+
+const COMPLETION_PROFILE_HEADER = "# OpenClaw Completion";
+
+function shouldRemoveCompletionProfileLine(line: string): boolean {
+  if (line.trim() === COMPLETION_PROFILE_HEADER) {
+    return true;
+  }
+  const normalizedLine = line.replaceAll("\\", "/");
+  return (
+    normalizedLine.includes("openclaw completion") ||
+    normalizedLine.includes("/completions/openclaw.")
+  );
+}
+
+async function cleanupShellCompletionTraces(runtime: RuntimeEnv, dryRun?: boolean) {
+  const home = os.homedir();
+  const profilePaths = [
+    path.join(home, ".zshrc"),
+    path.join(home, ".bashrc"),
+    path.join(home, ".bash_profile"),
+    path.join(home, ".config", "fish", "config.fish"),
+    path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1"),
+  ];
+  if (process.platform === "win32") {
+    const userProfile = process.env.USERPROFILE || home;
+    profilePaths.push(
+      path.join(userProfile, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"),
+    );
+  }
+  for (const profilePath of profilePaths) {
+    let content = "";
+    try {
+      content = await fs.readFile(profilePath, "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = content.split("\n");
+    const nextLines = lines.filter((line) => !shouldRemoveCompletionProfileLine(line));
+    const next = nextLines.join("\n");
+    if (next === content) {
+      continue;
+    }
+    if (dryRun) {
+      runtime.log(`[dry-run] update ${profilePath} (remove OpenClaw completion lines)`);
+      continue;
+    }
+    try {
+      await fs.writeFile(profilePath, next, "utf-8");
+      runtime.log(`Updated ${profilePath} (removed OpenClaw completion lines)`);
+    } catch (err) {
+      runtime.error(`Failed to update ${profilePath}: ${String(err)}`);
+    }
+  }
+
+  const completionArtifacts = [
+    path.join(home, ".zsh", "completions", "_openclaw"),
+    path.join(home, ".oh-my-zsh", "completions", "_openclaw"),
+    path.join(home, ".local", "share", "bash-completion", "completions", "openclaw"),
+    path.join(home, ".config", "fish", "completions", "openclaw.fish"),
+  ];
+  for (const artifactPath of completionArtifacts) {
+    await removePath(artifactPath, runtime, { dryRun, label: artifactPath });
+  }
+}
+
+type ZapUninstallCommand = {
+  manager: "npm" | "pnpm" | "bun";
+  argv: string[];
+};
+
+const ZAP_UNINSTALL_COMMANDS: readonly ZapUninstallCommand[] = [
+  { manager: "npm", argv: ["npm", "rm", "-g", "openclaw"] },
+  { manager: "pnpm", argv: ["pnpm", "remove", "-g", "openclaw"] },
+  { manager: "bun", argv: ["bun", "remove", "-g", "openclaw"] },
+];
+
+function isNotInstalledMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("not found") ||
+    lower.includes("not installed") ||
+    lower.includes("no packages found") ||
+    lower.includes("could not find")
+  );
+}
+
+async function runZapCliUninstall(runtime: RuntimeEnv, dryRun?: boolean) {
+  for (const command of ZAP_UNINSTALL_COMMANDS) {
+    if (!hasBinary(command.manager)) {
+      continue;
+    }
+    const pretty = command.argv.join(" ");
+    if (dryRun) {
+      runtime.log(`[dry-run] run ${pretty}`);
+      continue;
+    }
+    const result = await runCommandWithTimeout(command.argv, { timeoutMs: 120_000 });
+    if (result.code === 0) {
+      runtime.log(`Ran ${pretty}`);
+      continue;
+    }
+    const output = `${result.stderr}\n${result.stdout}`.trim();
+    if (output && isNotInstalledMessage(output)) {
+      runtime.log(`Skipped ${pretty} (openclaw not installed for ${command.manager}).`);
+      continue;
+    }
+    runtime.error(`Failed ${pretty}: ${output || `exit code ${String(result.code ?? "unknown")}`}`);
+  }
+}
+
+async function runZapCleanup(runtime: RuntimeEnv, opts: { dryRun?: boolean }) {
+  await runZapCliUninstall(runtime, opts.dryRun);
+  await cleanupShellCompletionTraces(runtime, opts.dryRun);
 }
 
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
@@ -179,7 +300,15 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     await removeMacApp(runtime, dryRun);
   }
 
-  runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+  if (opts.zap) {
+    await runZapCleanup(runtime, { dryRun });
+  }
+
+  if (opts.zap) {
+    runtime.log("Zap mode attempted to remove CLI installs and shell completion traces.");
+  } else {
+    runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+  }
 
   if (scopes.has("state") && !scopes.has("workspace")) {
     const home = resolveHomeDir();

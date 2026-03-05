@@ -13,5 +13,9 @@ Uninstall the gateway service + local data (CLI remains).
 ```bash
 openclaw uninstall
 openclaw uninstall --all --yes
+openclaw uninstall --zap --yes --non-interactive
 openclaw uninstall --dry-run
 ```
+
+- `--all`: remove service + state + workspace + app.
+- `--zap`: includes `--all` and also attempts to remove global CLI installs plus OpenClaw shell completion traces.

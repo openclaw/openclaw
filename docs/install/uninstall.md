@@ -25,8 +25,12 @@ Non-interactive (automation / npx):
 
 ```bash
 openclaw uninstall --all --yes --non-interactive
+openclaw uninstall --zap --yes --non-interactive
 npx -y openclaw uninstall --all --yes --non-interactive
 ```
+
+`--all` removes service + state + workspace + app.  
+`--zap` is stronger: it includes `--all` and also attempts to remove global CLI installs and OpenClaw shell completion traces.
 
 Manual steps (same result):
 
