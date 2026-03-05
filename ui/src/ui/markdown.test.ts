@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { marked } from "marked";
+import { describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
@@ -81,5 +82,37 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("Col2");
     // Pipes from table delimiters must not appear as raw text
     expect(html).not.toContain("|------|");
+  });
+
+  it("does not throw on deeply nested emphasis markers (#36213)", () => {
+    // Pathological patterns that can trigger catastrophic backtracking / recursion
+    const nested = "*".repeat(500) + "text" + "*".repeat(500);
+    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+    const html = toSanitizedMarkdownHtml(nested);
+    expect(html).toContain("text");
+  });
+
+  it("does not throw on deeply nested brackets (#36213)", () => {
+    const nested = "[".repeat(200) + "link" + "]".repeat(200) + "(" + "x".repeat(200) + ")";
+    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+    const html = toSanitizedMarkdownHtml(nested);
+    expect(html).toContain("link");
+  });
+
+  it("falls back to escaped plain text if marked.parse throws (#36213)", () => {
+    const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
+      throw new Error("forced parse failure");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const input = `Fallback **probe** ${Date.now()}`;
+    try {
+      const html = toSanitizedMarkdownHtml(input);
+      expect(html).toContain('<pre class="code-block">');
+      expect(html).toContain("Fallback **probe**");
+      expect(warnSpy).toHaveBeenCalledOnce();
+    } finally {
+      parseSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
