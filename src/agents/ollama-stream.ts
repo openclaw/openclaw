@@ -470,6 +470,7 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let accumulatedThinking = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
@@ -477,11 +478,11 @@ export function createOllamaStreamFn(
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
           } else if (chunk.message?.thinking) {
-            // Ollama thinking models (Qwen 3, DeepSeek R1): output in thinking field
-            accumulatedContent += chunk.message.thinking;
+            // Buffer thinking separately - only used if no content is produced
+            accumulatedThinking += chunk.message.thinking;
           } else if (chunk.message?.reasoning) {
-            // Legacy: some models may still use reasoning field
-            accumulatedContent += chunk.message.reasoning;
+            // Legacy: buffer reasoning separately - only used if no content is produced
+            accumulatedThinking += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -500,7 +501,8 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
+        // Use thinking/reasoning as fallback only if no content was produced
+        finalResponse.message.content = accumulatedContent || accumulatedThinking;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
