@@ -62,7 +62,7 @@ function logSpawnVerificationFailOpen(params: {
   detail: string;
 }) {
   logWarn(
-    `subagent-spawn-verify: fail-open reason=${params.reasonTag} requester=${params.requesterSessionKey} limit=${params.limit} attempt=${params.attempt} detail=${params.detail}`,
+    `subagent-spawn-sessions.list: degraded reason=${params.reasonTag} requester=${params.requesterSessionKey} limit=${params.limit} attempt=${params.attempt} detail=${params.detail}`,
   );
 }
 
@@ -85,6 +85,10 @@ async function listSpawnedSessionKeysForVerification(params: {
       });
 
       if (!Array.isArray(list?.sessions)) {
+        if (index < SESSIONS_LIST_RETRY_BACKOFF_MS.length) {
+          await delayMs(SESSIONS_LIST_RETRY_BACKOFF_MS[index]);
+          continue;
+        }
         logSpawnVerificationFailOpen({
           reasonTag: "sessions_list_unexpected_shape",
           requesterSessionKey: params.requesterSessionKey,
