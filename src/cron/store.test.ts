@@ -66,6 +66,22 @@ describe("cron store", () => {
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
   });
 
+  it("stores files with private permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const store = await makeStorePath();
+    const payload = makeStore("job-perms", true);
+    await saveCronStore(store.storePath, payload);
+
+    const fileMode = (await fs.stat(store.storePath)).mode & 0o777;
+    const dirMode = (await fs.stat(path.dirname(store.storePath))).mode & 0o777;
+
+    expect(fileMode).toBe(0o600);
+    expect(dirMode).toBe(0o700);
+  });
+
   it("backs up previous content before replacing the store", async () => {
     const store = await makeStorePath();
     const first = makeStore("job-1", true);
@@ -78,6 +94,10 @@ describe("cron store", () => {
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(currentRaw)).toEqual(second);
     expect(JSON.parse(backupRaw)).toEqual(first);
+    if (process.platform !== "win32") {
+      const backupMode = (await fs.stat(`${store.storePath}.bak`)).mode & 0o777;
+      expect(backupMode).toBe(0o600);
+    }
   });
 });
 

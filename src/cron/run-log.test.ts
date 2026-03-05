@@ -69,6 +69,7 @@ describe("cron run log", () => {
   it("appends JSONL and prunes by line count", async () => {
     await withRunLogDir("openclaw-cron-log-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");
+      const runsDir = path.join(dir, "runs");
 
       for (let i = 0; i < 10; i++) {
         await appendCronRunLog(
@@ -92,6 +93,12 @@ describe("cron run log", () => {
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
+      if (process.platform !== "win32") {
+        const runsMode = (await fs.stat(runsDir)).mode & 0o777;
+        const fileMode = (await fs.stat(logPath)).mode & 0o777;
+        expect(runsMode).toBe(0o700);
+        expect(fileMode).toBe(0o600);
+      }
     });
   });
 
