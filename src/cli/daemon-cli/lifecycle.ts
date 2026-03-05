@@ -1,5 +1,6 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { classifyPortListener, inspectPortUsage } from "../../infra/ports.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -18,6 +19,26 @@ import {
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
+
+/**
+ * Find gateway process PIDs listening on the given port.
+ * Used as a signal-based fallback for stop/restart in containers that have
+ * no systemd/launchd service manager.
+ */
+async function findGatewayPidsOnPort(port: number): Promise<number[]> {
+  const portUsage = await inspectPortUsage(port).catch(() => null);
+  if (!portUsage || portUsage.status !== "busy") {
+    return [];
+  }
+  return portUsage.listeners
+    .filter((l) => {
+      const kind = classifyPortListener(l, port);
+      // Target listeners that look like the gateway or unknown (container pid may not show full path).
+      return kind === "gateway" || kind === "unknown";
+    })
+    .filter((l): l is typeof l & { pid: number } => Number.isFinite(l.pid) && (l.pid ?? 0) > 0)
+    .map((l) => l.pid);
+}
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
@@ -55,10 +76,39 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  const json = Boolean(opts.json);
+  const port = await resolveGatewayRestartPort().catch(() =>
+    resolveGatewayPort(loadConfig(), process.env),
+  );
   return await runServiceStop({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     opts,
+    // Signal-based fallback for containers without a service manager (#36137).
+    onNotLoaded: async () => {
+      const pids = await findGatewayPidsOnPort(port);
+      if (pids.length === 0) {
+        return false;
+      }
+      if (!json) {
+        defaultRuntime.log(
+          theme.muted(
+            `No service manager detected. Sending SIGTERM to gateway process(es) on port ${port}: ${pids.join(", ")}`,
+          ),
+        );
+      }
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // best-effort
+        }
+      }
+      if (!json) {
+        defaultRuntime.log(`Gateway stopped (SIGTERM sent to ${pids.length} process(es)).`);
+      }
+      return true;
+    },
   });
 }
 
@@ -82,6 +132,31 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
+    // Signal-based fallback for containers without a service manager (#36137).
+    onNotLoaded: async () => {
+      const pids = await findGatewayPidsOnPort(restartPort);
+      if (pids.length === 0) {
+        return false;
+      }
+      if (!json) {
+        defaultRuntime.log(
+          theme.muted(
+            `No service manager detected. Sending SIGUSR1 to gateway process(es) on port ${restartPort}: ${pids.join(", ")}`,
+          ),
+        );
+      }
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGUSR1");
+        } catch {
+          // best-effort
+        }
+      }
+      if (!json) {
+        defaultRuntime.log(`Gateway restart signal sent. Waiting for health...`);
+      }
+      return true;
+    },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       let health = await waitForGatewayHealthyRestart({
         service,

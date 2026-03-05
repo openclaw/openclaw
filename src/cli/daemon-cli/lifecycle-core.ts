@@ -199,6 +199,13 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
+  /**
+   * Optional fallback called when the service manager reports the service as
+   * not loaded (e.g. no systemd/launchd in containers). If the callback
+   * returns true, the stop is considered handled and the default "not-loaded"
+   * message is suppressed.
+   */
+  onNotLoaded?: () => Promise<boolean>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "stop", json });
@@ -212,6 +219,12 @@ export async function runServiceStop(params: {
     return;
   }
   if (!loaded) {
+    if (params.onNotLoaded) {
+      const handled = await params.onNotLoaded().catch(() => false);
+      if (handled) {
+        return;
+      }
+    }
     emit({
       ok: true,
       result: "not-loaded",
@@ -250,6 +263,13 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  /**
+   * Optional fallback called when the service manager reports the service as
+   * not loaded (e.g. no systemd/launchd in containers). If the callback
+   * returns true, the restart is considered handled and the default
+   * "not-loaded" message is suppressed.
+   */
+  onNotLoaded?: () => Promise<boolean>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
@@ -263,6 +283,12 @@ export async function runServiceRestart(params: {
     return false;
   }
   if (!loaded) {
+    if (params.onNotLoaded) {
+      const handled = await params.onNotLoaded().catch(() => false);
+      if (handled) {
+        return true;
+      }
+    }
     await handleServiceNotLoaded({
       serviceNoun: params.serviceNoun,
       service: params.service,
