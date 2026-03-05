@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelListConfig } from "../config/types.js";
 
 export const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.3-codex";
+const OPENAI_CODEX_DEFAULT_MODEL_NORMALIZED = OPENAI_CODEX_DEFAULT_MODEL.toLowerCase();
 
 function shouldSetOpenAICodexModel(model?: string): boolean {
   const trimmed = model?.trim();
@@ -32,8 +33,21 @@ export function applyOpenAICodexModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
+  return applyOpenAICodexModelDefaultWithOptions(cfg, {});
+}
+
+export function applyOpenAICodexModelDefaultWithOptions(
+  cfg: OpenClawConfig,
+  opts: { force?: boolean },
+): {
+  next: OpenClawConfig;
+  changed: boolean;
+} {
   const current = resolvePrimaryModel(cfg.agents?.defaults?.model);
-  if (!shouldSetOpenAICodexModel(current)) {
+  if (current?.trim().toLowerCase() === OPENAI_CODEX_DEFAULT_MODEL_NORMALIZED) {
+    return { next: cfg, changed: false };
+  }
+  if (!opts.force && !shouldSetOpenAICodexModel(current)) {
     return { next: cfg, changed: false };
   }
   return {

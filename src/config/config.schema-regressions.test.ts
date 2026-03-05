@@ -23,6 +23,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts telegram actions editMessage and createForumTopic flags", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          actions: {
+            sendMessage: true,
+            editMessage: true,
+            createForumTopic: true,
+          },
+          accounts: {
+            main: {
+              botToken: "123456:ABCDEF",
+              actions: {
+                editMessage: false,
+                createForumTopic: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {

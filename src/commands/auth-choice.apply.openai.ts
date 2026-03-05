@@ -10,7 +10,7 @@ import { isRemoteEnvironment } from "./oauth-env.js";
 import { applyAuthProfileConfig, setOpenaiApiKey, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import {
-  applyOpenAICodexModelDefault,
+  applyOpenAICodexModelDefaultWithOptions,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
 import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
@@ -103,7 +103,7 @@ export async function applyAuthChoiceOpenAI(
         mode: "oauth",
       });
       if (params.setDefaultModel) {
-        const applied = applyOpenAICodexModelDefault(nextConfig);
+        const applied = applyOpenAICodexModelDefaultWithOptions(nextConfig, { force: true });
         nextConfig = applied.next;
         if (applied.changed) {
           await params.prompter.note(

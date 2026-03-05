@@ -15,6 +15,7 @@ export type { ChatType } from "../channels/chat-type.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveAllowlistMatchSimple } from "../channels/plugins/allowlist-match.js";
+export { resolveChannelGroupRequireMention } from "../config/group-policy.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
