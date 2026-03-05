@@ -57,7 +57,7 @@ function shouldPseudonymizeInbound(ctx: TemplateContext): boolean {
   return channel === "whatsapp";
 }
 
-function pseudonym(scope: string, raw?: string): string | undefined {
+function pseudonym(scope: string, raw?: string | null): string | undefined {
   const value = safeTrim(raw);
   if (!value) {
     return undefined;
