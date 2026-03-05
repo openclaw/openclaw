@@ -20,6 +20,27 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
     // Anthropic 529 (overloaded) should trigger failover as rate_limit.
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+    // Nested HTTP status payloads (common in SDK errors) should also classify.
+    expect(resolveFailoverReasonFromError({ response: { status: 529 } })).toBe("rate_limit");
+  });
+
+  it("infers failover reason from overloaded/rate-limit error types", () => {
+    expect(resolveFailoverReasonFromError({ type: "overloaded_error" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ error: { type: "overloaded_error" } })).toBe(
+      "rate_limit",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        body: { error: { type: "rate_limit_error" } },
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("infers failover reason from overloaded error type on Error instances", () => {
+    const err = Object.assign(new Error("Anthropic API error"), {
+      error: { type: "overloaded_error" },
+    });
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
   });
 
   it("infers format errors from error messages", () => {

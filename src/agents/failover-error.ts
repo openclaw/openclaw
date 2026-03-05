@@ -70,9 +70,14 @@ function getStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
+  const record = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+    error?: { status?: unknown };
+  };
   const candidate =
-    (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
+    record.status ?? record.statusCode ?? record.response?.status ?? record.error?.status;
   if (typeof candidate === "number") {
     return candidate;
   }
@@ -87,6 +92,24 @@ function getErrorCode(err: unknown): string | undefined {
     return undefined;
   }
   const candidate = (err as { code?: unknown }).code;
+  if (typeof candidate !== "string") {
+    return undefined;
+  }
+  const trimmed = candidate.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function getErrorType(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const record = err as {
+    type?: unknown;
+    error?: { type?: unknown };
+    body?: { type?: unknown; error?: { type?: unknown } };
+  };
+  const candidate =
+    record.type ?? record.error?.type ?? record.body?.type ?? record.body?.error?.type;
   if (typeof candidate !== "string") {
     return undefined;
   }
@@ -176,6 +199,11 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
   if (status === 400) {
     return "format";
+  }
+
+  const errorType = (getErrorType(err) ?? "").toLowerCase();
+  if (errorType === "overloaded_error" || errorType === "rate_limit_error") {
+    return "rate_limit";
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
