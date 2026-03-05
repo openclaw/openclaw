@@ -16,6 +16,7 @@ import {
   getReadChannelAllowFromStoreMock,
   getOnHandler,
   listSkillCommandsForAgents,
+  middlewareUseSpy,
   onSpy,
   replySpy,
   sendMessageSpy,
@@ -1754,5 +1755,47 @@ describe("createTelegramBot", () => {
     };
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
+  });
+
+  describe("setStatus health tracking", () => {
+    it("calls setStatus with lastEventAt and lastInboundAt on each inbound update", async () => {
+      const setStatus = vi.fn();
+      createTelegramBot({ token: "tok", setStatus });
+
+      // The setStatus middleware is registered after the raw-update-logger middleware.
+      // Find it by calling each registered bot.use() middleware until one triggers setStatus.
+      const middlewareCalls = middlewareUseSpy.mock.calls;
+      let statusMiddleware:
+        | ((ctx: unknown, next: () => Promise<void>) => Promise<void>)
+        | undefined;
+      for (const [fn] of middlewareCalls) {
+        const next = vi.fn(async () => {});
+        await (fn as (ctx: unknown, next: () => Promise<void>) => Promise<void>)({}, next);
+        if (setStatus.mock.calls.length > 0) {
+          statusMiddleware = fn as typeof statusMiddleware;
+          break;
+        }
+        setStatus.mockClear();
+      }
+
+      expect(statusMiddleware).toBeDefined();
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastEventAt: expect.any(Number),
+          lastInboundAt: expect.any(Number),
+        }),
+      );
+    });
+
+    it("does not register setStatus middleware when setStatus is not provided", () => {
+      createTelegramBot({ token: "tok" });
+
+      const countBefore = middlewareUseSpy.mock.calls.length;
+      middlewareUseSpy.mockClear();
+      createTelegramBot({ token: "tok", setStatus: undefined });
+
+      // Call count should be identical whether setStatus is provided or not (undefined === skipped)
+      expect(middlewareUseSpy.mock.calls.length).toBe(countBefore);
+    });
   });
 });

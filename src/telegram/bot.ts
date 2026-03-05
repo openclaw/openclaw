@@ -56,6 +56,8 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /** Callback to update the channel account status snapshot (e.g. lastEventAt, lastInboundAt). */
+  setStatus?: (next: Record<string, unknown>) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -205,6 +207,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     await next();
   });
+
+  // Track inbound events for channel health monitoring (lastEventAt / lastInboundAt).
+  if (opts.setStatus) {
+    const trackEvent = opts.setStatus;
+    bot.use(async (_ctx, next) => {
+      try {
+        trackEvent({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
+      } catch {
+        // never let status tracking crash the update pipeline
+      }
+      await next();
+    });
+  }
 
   const historyLimit = Math.max(
     0,
