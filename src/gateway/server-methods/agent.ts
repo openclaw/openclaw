@@ -536,6 +536,32 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
+    const isWebchatOriginRequest = Boolean(client?.connect && isWebchatConnect(client.connect));
+    const hasExplicitRouteHints = Boolean(
+      (typeof request.replyChannel === "string" && request.replyChannel.trim()) ||
+      (typeof request.channel === "string" && request.channel.trim()) ||
+      explicitTo ||
+      (typeof request.replyAccountId === "string" && request.replyAccountId.trim()) ||
+      (typeof request.accountId === "string" && request.accountId.trim()) ||
+      explicitThreadId,
+    );
+
+    // Keep webchat-origin turns internal by default. Otherwise a stale external
+    // last-route on main sessions can leak replies across channels.
+    if (!wantsDelivery && isWebchatOriginRequest && !hasExplicitRouteHints) {
+      resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
+      deliveryTargetMode = undefined;
+      resolvedAccountId = undefined;
+      resolvedTo = undefined;
+      effectivePlan = {
+        ...deliveryPlan,
+        resolvedChannel,
+        resolvedTo: undefined,
+        resolvedAccountId: undefined,
+        resolvedThreadId: undefined,
+        deliveryTargetMode: undefined,
+      };
+    }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -587,9 +613,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         : undefined;
     const originMessageChannel =
       turnSourceMessageChannel ??
-      (client?.connect && isWebchatConnect(client.connect)
-        ? INTERNAL_MESSAGE_CHANNEL
-        : resolvedChannel);
+      (isWebchatOriginRequest ? INTERNAL_MESSAGE_CHANNEL : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
@@ -610,7 +634,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
     respond(true, accepted, undefined, { runId });
 
-    const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const resolvedThreadId = explicitThreadId ?? effectivePlan.resolvedThreadId;
 
     void agentCommandFromIngress(
       {
