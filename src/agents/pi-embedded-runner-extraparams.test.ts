@@ -1045,6 +1045,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
+  it("defaults tool_choice=auto for OpenAI Responses payloads with tools when unset", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
+        tool_choice: null,
+      },
+    });
+    expect(payload.tool_choice).toBe("auto");
+  });
+
+  it("preserves explicit tool_choice for OpenAI Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api-gpt",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api-gpt",
+        id: "gpt-5.3-codex",
+        baseUrl: "https://proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
+        tool_choice: "none",
+      },
+    });
+    expect(payload.tool_choice).toBe("none");
+  });
+
   it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",

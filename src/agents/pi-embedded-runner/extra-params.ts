@@ -283,7 +283,9 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    const normalizeToolChoice =
+      typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+    if (!forceStore && !useServerCompaction && !normalizeToolChoice) {
       return underlying(model, context, options);
     }
 
@@ -298,6 +300,14 @@ function createOpenAIResponsesContextManagementWrapper(
           const payloadObj = payload as Record<string, unknown>;
           if (forceStore) {
             payloadObj.store = true;
+          }
+          if (
+            normalizeToolChoice &&
+            Array.isArray(payloadObj.tools) &&
+            payloadObj.tools.length > 0 &&
+            payloadObj.tool_choice == null
+          ) {
+            payloadObj.tool_choice = "auto";
           }
           if (useServerCompaction && payloadObj.context_management === undefined) {
             payloadObj.context_management = [
