@@ -1454,6 +1454,42 @@ describe("handleCommands subagents", () => {
     expect(trackedRuns[0].runId).toBe("run-1");
     expect(trackedRuns[0].suppressAnnounceReason).toBeUndefined();
   });
+
+  it("restores announce behavior when /steer replacement omits runId", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      if (request.method === "agent") {
+        return {};
+      }
+      return {};
+    });
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer 1 check timer.ts instead", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("send failed: agent dispatch did not return runId");
+
+    const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(trackedRuns).toHaveLength(1);
+    expect(trackedRuns[0].runId).toBe("run-1");
+    expect(trackedRuns[0].suppressAnnounceReason).toBeUndefined();
+  });
 });
 
 describe("handleCommands /tts", () => {
