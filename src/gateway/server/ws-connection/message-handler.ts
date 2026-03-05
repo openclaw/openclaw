@@ -494,7 +494,9 @@ export function attachGatewayWsMessageHandler(params: {
         connectParams.role = role;
         connectParams.scopes = scopes;
 
-        const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        const isControlUi =
+          connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ||
+          connectParams.client.id === GATEWAY_CLIENT_IDS.WEBCHAT_UI;
         const isWebchat = isWebchatConnect(connectParams);
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =

@@ -12,7 +12,8 @@ export function formatGatewayAuthFailureMessage(params: {
 }): string {
   const { authMode, authProvided, reason, client } = params;
   const isCli = isGatewayCliClient(client);
-  const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  const isControlUi =
+    client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI || client?.id === GATEWAY_CLIENT_IDS.WEBCHAT_UI;
   const isWebchat = isWebchatClient(client);
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const tokenHint = isCli
