@@ -534,7 +534,12 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = try Self.decodeParams(OpenClawSystemWhichParams.self, from: req.paramsJSON)
+        let params: OpenClawSystemWhichParams
+        do {
+            params = try Self.decodeParams(OpenClawSystemWhichParams.self, from: req.paramsJSON)
+        } catch {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: bins required")
+        }
         let bins = params.bins
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }

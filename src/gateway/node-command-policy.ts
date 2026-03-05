@@ -108,6 +108,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
+    "screen.record",
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
