@@ -2076,7 +2076,8 @@ describe("createTelegramBot", () => {
     let fetchCallIndex = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       fetchCallIndex++;
-      if (fetchCallIndex === 2) {
+      // Fail calls 2 and 3 (photo 2's initial attempt and its retry) so the photo is skipped.
+      if (fetchCallIndex === 2 || fetchCallIndex === 3) {
         throw new Error("MediaFetchError: Failed to fetch media");
       }
       return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {

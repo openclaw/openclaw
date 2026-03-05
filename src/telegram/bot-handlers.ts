@@ -24,6 +24,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import { retryAsync } from "../infra/retry.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -349,7 +350,20 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+          // Retry once on recoverable errors (e.g. intermittent IPv6/IPv4 races on Node 25).
+          media = await retryAsync(
+            () => resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch),
+            {
+              attempts: 2,
+              minDelayMs: 500,
+              maxDelayMs: 500,
+              shouldRetry: (err) => isRecoverableMediaGroupError(err),
+              onRetry: ({ err }) =>
+                runtime.log?.(
+                  warn(`media group: retrying photo fetch after error: ${String(err)}`),
+                ),
+            },
+          );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
