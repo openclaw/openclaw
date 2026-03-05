@@ -41,6 +41,20 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryOutcomeReason =
+  | "not-requested"
+  | "messaging-tool-delivered"
+  | "heartbeat-only"
+  | "target-resolution-failed"
+  | "target-resolution-failed-best-effort"
+  | "direct-delivered"
+  | "announce-delivered"
+  | "silent-reply"
+  | "interim-suppressed"
+  | "subagent-still-running"
+  | "announce-failed"
+  | "direct-send-failed"
+  | "no-deliverable-payload";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -124,6 +138,8 @@ export type CronJobState = {
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
+  /** Optional reason code explaining delivery skip/failure branches. */
+  lastDeliveryOutcomeReason?: CronDeliveryOutcomeReason;
   /** Delivery-specific error text when available. */
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */

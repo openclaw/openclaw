@@ -483,6 +483,7 @@ export function buildGatewayCronService(params: {
             summary: evt.summary,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
+            deliveryOutcomeReason: evt.deliveryOutcomeReason,
             deliveryError: evt.deliveryError,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,

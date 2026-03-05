@@ -158,6 +158,7 @@ vi.mock("../../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../../logger.js", () => ({
+  logDebug: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
