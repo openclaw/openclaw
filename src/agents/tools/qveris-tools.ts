@@ -66,7 +66,12 @@ interface QverisSearchResponse {
 interface QverisExecutionResponse {
   execution_id: string;
   result: {
-    data: unknown;
+    data?: unknown;
+    status_code?: unknown;
+    message?: unknown;
+    full_content_file_url?: unknown;
+    truncated_content?: unknown;
+    content_schema?: unknown;
   };
   success: boolean;
   error_message: string | null;
