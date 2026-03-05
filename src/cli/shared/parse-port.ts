@@ -11,8 +11,12 @@ export function parsePort(raw: unknown): number | null {
   if (value === null) {
     return null;
   }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 65535) {
     return null;
   }
   return parsed;
