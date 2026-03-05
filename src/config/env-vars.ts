@@ -1,5 +1,13 @@
-import { isDangerousHostEnvVarName, normalizeEnvVarKey } from "../infra/host-env-security.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
 import type { OpenClawConfig } from "./types.js";
+
+function isBlockedConfigEnvVar(key: string): boolean {
+  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+}
 
 function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {
   const envConfig = cfg?.env;
@@ -18,7 +26,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       if (!key) {
         continue;
       }
-      if (isDangerousHostEnvVarName(key)) {
+      if (isBlockedConfigEnvVar(key)) {
         continue;
       }
       entries[key] = value;
@@ -36,7 +44,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
     if (!key) {
       continue;
     }
-    if (isDangerousHostEnvVarName(key)) {
+    if (isBlockedConfigEnvVar(key)) {
       continue;
     }
     entries[key] = value;

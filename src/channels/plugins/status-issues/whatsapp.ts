@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { asString, collectIssuesForEnabledAccounts, isRecord } from "./shared.js";
 
 type WhatsAppAccountStatus = {
   accountId?: unknown;
@@ -30,44 +30,37 @@ function readWhatsAppAccountStatus(value: ChannelAccountSnapshot): WhatsAppAccou
 export function collectWhatsAppStatusIssues(
   accounts: ChannelAccountSnapshot[],
 ): ChannelStatusIssue[] {
-  const issues: ChannelStatusIssue[] = [];
-  for (const entry of accounts) {
-    const account = readWhatsAppAccountStatus(entry);
-    if (!account) {
-      continue;
-    }
-    const accountId = asString(account.accountId) ?? "default";
-    const enabled = account.enabled !== false;
-    if (!enabled) {
-      continue;
-    }
-    const linked = account.linked === true;
-    const running = account.running === true;
-    const connected = account.connected === true;
-    const reconnectAttempts =
-      typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : null;
-    const lastError = asString(account.lastError);
+  return collectIssuesForEnabledAccounts({
+    accounts,
+    readAccount: readWhatsAppAccountStatus,
+    collectIssues: ({ account, accountId, issues }) => {
+      const linked = account.linked === true;
+      const running = account.running === true;
+      const connected = account.connected === true;
+      const reconnectAttempts =
+        typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : null;
+      const lastError = asString(account.lastError);
 
-    if (!linked) {
-      issues.push({
-        channel: "whatsapp",
-        accountId,
-        kind: "auth",
-        message: "Not linked (no WhatsApp Web session).",
-        fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
-      });
-      continue;
-    }
+      if (!linked) {
+        issues.push({
+          channel: "whatsapp",
+          accountId,
+          kind: "auth",
+          message: "Not linked (no WhatsApp Web session).",
+          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
+        });
+        return;
+      }
 
-    if (running && !connected) {
-      issues.push({
-        channel: "whatsapp",
-        accountId,
-        kind: "runtime",
-        message: `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-        fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-      });
-    }
-  }
-  return issues;
+      if (running && !connected) {
+        issues.push({
+          channel: "whatsapp",
+          accountId,
+          kind: "runtime",
+          message: `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
+        });
+      }
+    },
+  });
 }

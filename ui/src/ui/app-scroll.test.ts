@@ -61,39 +61,45 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
 /* ------------------------------------------------------------------ */
 
 describe("handleChatScroll", () => {
-  it("updates near-bottom state across threshold boundaries", () => {
-    const cases = [
-      {
-        name: "clearly near bottom",
-        event: createScrollEvent(2000, 1600, 400),
-        expected: true,
-      },
-      {
-        name: "just under threshold",
-        event: createScrollEvent(2000, 1151, 400),
-        expected: true,
-      },
-      {
-        name: "exactly at threshold",
-        event: createScrollEvent(2000, 1150, 400),
-        expected: false,
-      },
-      {
-        name: "well above threshold",
-        event: createScrollEvent(2000, 500, 400),
-        expected: false,
-      },
-      {
-        name: "scrolled up beyond long message",
-        event: createScrollEvent(2000, 1100, 400),
-        expected: false,
-      },
-    ] as const;
-    for (const testCase of cases) {
-      const { host } = createScrollHost({});
-      handleChatScroll(host, testCase.event);
-      expect(host.chatUserNearBottom, testCase.name).toBe(testCase.expected);
-    }
+  it("sets chatUserNearBottom=true when within the 450px threshold", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 1600 - 400 = 0 → clearly near bottom
+    const event = createScrollEvent(2000, 1600, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserNearBottom).toBe(true);
+  });
+
+  it("sets chatUserNearBottom=true when distance is just under threshold", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 1151 - 400 = 449 → just under threshold
+    const event = createScrollEvent(2000, 1151, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserNearBottom).toBe(true);
+  });
+
+  it("sets chatUserNearBottom=false when distance is exactly at threshold", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 1150 - 400 = 450 → at threshold (uses strict <)
+    const event = createScrollEvent(2000, 1150, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserNearBottom).toBe(false);
+  });
+
+  it("sets chatUserNearBottom=false when scrolled well above threshold", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 500 - 400 = 1100 → way above threshold
+    const event = createScrollEvent(2000, 500, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserNearBottom).toBe(false);
+  });
+
+  it("sets chatUserNearBottom=false when user scrolled up past one long message (>200px <450px)", () => {
+    const { host } = createScrollHost({});
+    // distanceFromBottom = 2000 - 1250 - 400 = 350 → old threshold would say "near", new says "near"
+    // distanceFromBottom = 2000 - 1100 - 400 = 500 → old threshold would say "not near", new also "not near"
+    const event = createScrollEvent(2000, 1100, 400);
+    handleChatScroll(host, event);
+    expect(host.chatUserNearBottom).toBe(false);
   });
 });
 
@@ -115,67 +121,85 @@ describe("scheduleChatScroll", () => {
     vi.restoreAllMocks();
   });
 
-  it("respects near-bottom, force, and initial-load behavior", async () => {
-    const cases = [
-      {
-        name: "near-bottom auto-scroll",
-        scrollTop: 1600,
-        chatUserNearBottom: true,
-        chatHasAutoScrolled: false,
-        force: false,
-        expectedScrollsToBottom: true,
-        expectedNewMessagesBelow: false,
-      },
-      {
-        name: "scrolled-up no-force",
-        scrollTop: 500,
-        chatUserNearBottom: false,
-        chatHasAutoScrolled: false,
-        force: false,
-        expectedScrollsToBottom: false,
-        expectedNewMessagesBelow: true,
-      },
-      {
-        name: "scrolled-up force after initial load",
-        scrollTop: 500,
-        chatUserNearBottom: false,
-        chatHasAutoScrolled: true,
-        force: true,
-        expectedScrollsToBottom: false,
-        expectedNewMessagesBelow: true,
-      },
-      {
-        name: "scrolled-up force on initial load",
-        scrollTop: 500,
-        chatUserNearBottom: false,
-        chatHasAutoScrolled: false,
-        force: true,
-        expectedScrollsToBottom: true,
-        expectedNewMessagesBelow: false,
-      },
-    ] as const;
+  it("scrolls to bottom when user is near bottom (no force)", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    // distanceFromBottom = 2000 - 1600 - 400 = 0 → near bottom
+    host.chatUserNearBottom = true;
 
-    for (const testCase of cases) {
-      const { host, container } = createScrollHost({
-        scrollHeight: 2000,
-        scrollTop: testCase.scrollTop,
-        clientHeight: 400,
-      });
-      host.chatUserNearBottom = testCase.chatUserNearBottom;
-      host.chatHasAutoScrolled = testCase.chatHasAutoScrolled;
-      host.chatNewMessagesBelow = false;
-      const originalScrollTop = container.scrollTop;
+    scheduleChatScroll(host);
+    await host.updateComplete;
 
-      scheduleChatScroll(host, testCase.force);
-      await host.updateComplete;
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
 
-      if (testCase.expectedScrollsToBottom) {
-        expect(container.scrollTop, testCase.name).toBe(container.scrollHeight);
-      } else {
-        expect(container.scrollTop, testCase.name).toBe(originalScrollTop);
-      }
-      expect(host.chatNewMessagesBelow, testCase.name).toBe(testCase.expectedNewMessagesBelow);
-    }
+  it("does NOT scroll when user is scrolled up and no force", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    // distanceFromBottom = 2000 - 500 - 400 = 1100 → not near bottom
+    host.chatUserNearBottom = false;
+    const originalScrollTop = container.scrollTop;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+  });
+
+  it("does NOT scroll with force=true when user has explicitly scrolled up", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    // User has scrolled up — chatUserNearBottom is false
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true; // Already past initial load
+    const originalScrollTop = container.scrollTop;
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    // force=true should still NOT override explicit user scroll-up after initial load
+    expect(container.scrollTop).toBe(originalScrollTop);
+  });
+
+  it("DOES scroll with force=true on initial load (chatHasAutoScrolled=false)", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = false; // Initial load
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    // On initial load, force should work regardless
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("sets chatNewMessagesBelow when not scrolling due to user position", async () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true;
+    host.chatNewMessagesBelow = false;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatNewMessagesBelow).toBe(true);
   });
 });
 

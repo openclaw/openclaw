@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -13,12 +12,13 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -81,6 +81,7 @@ vi.mock("../command-format.js", () => ({
 
 vi.mock("../ports.js", () => ({
   forceFreePortAndWait: (port: number, opts: unknown) => forceFreePortAndWait(port, opts),
+  waitForPortBindable: (port: number, opts?: unknown) => waitForPortBindable(port, opts),
 }));
 
 vi.mock("./dev.js", () => ({
@@ -93,9 +94,14 @@ vi.mock("./run-loop.js", () => ({
 
 describe("gateway run option collisions", () => {
   let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let sharedProgram: Command;
 
   beforeAll(async () => {
     ({ addGatewayRunCommand } = await import("./run.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
+    addGatewayRunCommand(gateway.command("run"));
   });
 
   beforeEach(() => {
@@ -104,18 +110,24 @@ describe("gateway run option collisions", () => {
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
     forceFreePortAndWait.mockClear();
+    waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
   });
 
   async function runGatewayCli(argv: string[]) {
-    await runRegisteredCli({
-      register: ((program: Command) => {
-        const gateway = addGatewayRunCommand(program.command("gateway"));
-        addGatewayRunCommand(gateway.command("run"));
-      }) as (program: Command) => void,
-      argv,
-    });
+    await sharedProgram.parseAsync(argv, { from: "user" });
+  }
+
+  function expectAuthOverrideMode(mode: string) {
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode,
+        }),
+      }),
+    );
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
@@ -131,6 +143,10 @@ describe("gateway run option collisions", () => {
     ]);
 
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
+    expect(waitForPortBindable).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({ host: "127.0.0.1" }),
+    );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
@@ -150,6 +166,28 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({
         bind: "loopback",
       }),
+    );
+  });
+
+  it("accepts --auth none override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+
+    expectAuthOverrideMode("none");
+  });
+
+  it("accepts --auth trusted-proxy override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+
+    expectAuthOverrideMode("trusted-proxy");
+  });
+
+  it("prints all supported modes on invalid --auth value", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
     );
   });
 });

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, maxAsk, minSecurity, resolveSafeBins } from "../infra/exec-approvals.js";
-import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -25,6 +25,7 @@ import {
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
+  sanitizeHostBaseEnv,
   execSchema,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
@@ -163,8 +164,32 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const safeBins = resolveSafeBins(defaults?.safeBins);
-  const trustedSafeBinDirs = getTrustedSafeBinDirs();
+  const {
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    unprofiledSafeBins,
+    unprofiledInterpreterSafeBins,
+  } = resolveExecSafeBinRuntimePolicy({
+    local: {
+      safeBins: defaults?.safeBins,
+      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+      safeBinProfiles: defaults?.safeBinProfiles,
+    },
+    onWarning: (message) => {
+      logInfo(message);
+    },
+  });
+  if (unprofiledSafeBins.length > 0) {
+    logInfo(
+      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+    );
+  }
+  if (unprofiledInterpreterSafeBins.length > 0) {
+    logInfo(
+      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+    );
+  }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
@@ -280,6 +305,7 @@ export function createExecTool(
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
       const configuredHost = defaults?.host ?? "sandbox";
+      const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
@@ -307,6 +333,18 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
+      if (
+        host === "sandbox" &&
+        !sandbox &&
+        (sandboxHostConfigured || requestedHost === "sandbox")
+      ) {
+        throw new Error(
+          [
+            "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
+          ].join("\n"),
+        );
+      }
       const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -322,7 +360,8 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
-      const baseEnv = coerceEnv(process.env);
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
@@ -368,6 +407,10 @@ export function createExecTool(
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
           security,
           ask,
@@ -391,8 +434,13 @@ export function createExecTool(
           security,
           ask,
           safeBins,
+          safeBinProfiles,
           agentId,
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
           warnings,
           notifySessionKey,
@@ -407,8 +455,12 @@ export function createExecTool(
         execCommandOverride = gatewayResult.execCommandOverride;
       }
 
-      const effectiveTimeout =
-        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const backgroundTimeoutBypass =
+        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
+      const effectiveTimeout = backgroundTimeoutBypass
+        ? null
+        : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 

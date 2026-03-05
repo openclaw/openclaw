@@ -18,7 +18,7 @@ import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 import {
@@ -61,6 +61,7 @@ const GATEWAY_TEST_ENV_KEYS = [
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+let suiteConfigRootSeq = 0;
 
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
@@ -121,7 +122,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   if (options.uniqueConfigRoot) {
-    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+    const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
+    await fs.mkdir(suiteRoot, { recursive: true });
+    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
+    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".openclaw-test");
     await fs.rm(tempConfigRoot, { recursive: true, force: true });
@@ -182,6 +187,9 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
+  if (options.restoreEnv) {
+    suiteConfigRootSeq = 0;
+  }
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -241,6 +249,37 @@ type GatewayTestMessage = {
   stateVersion?: Record<string, unknown>;
   [key: string]: unknown;
 };
+
+const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
+const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
+type TrackedWs = WebSocket & Record<string, unknown>;
+
+export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
+  const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
+  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+}
+
+export function trackConnectChallengeNonce(ws: WebSocket): void {
+  const trackedWs = ws as TrackedWs;
+  if (trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] === true) {
+    return;
+  }
+  trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] = true;
+  ws.on("message", (data) => {
+    try {
+      const obj = JSON.parse(rawDataToString(data)) as GatewayTestMessage;
+      if (obj.type !== "event" || obj.event !== "connect.challenge") {
+        return;
+      }
+      const nonce = (obj.payload as { nonce?: unknown } | undefined)?.nonce;
+      if (typeof nonce === "string" && nonce.trim().length > 0) {
+        trackedWs[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      }
+    } catch {
+      // ignore parse errors in nonce tracker
+    }
+  });
+}
 
 export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   ws: WebSocket,
@@ -315,6 +354,57 @@ export async function withGatewayServer<T>(
   }
 }
 
+export async function createGatewaySuiteHarness(opts?: {
+  port?: number;
+  serverOptions?: GatewayServerOptions;
+}): Promise<{
+  port: number;
+  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
+  close: () => Promise<void>;
+}> {
+  const started = await startGatewayServerWithRetries({
+    port: opts?.port ?? (await getFreePort()),
+    opts: opts?.serverOptions,
+  });
+  return {
+    port: started.port,
+    server: started.server,
+    openWs: async (headers?: Record<string, string>) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${started.port}`, headers ? { headers } : undefined);
+      trackConnectChallengeNonce(ws);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+        const cleanup = () => {
+          clearTimeout(timer);
+          ws.off("open", onOpen);
+          ws.off("error", onError);
+          ws.off("close", onClose);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (err: unknown) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+        const onClose = (code: number, reason: Buffer) => {
+          cleanup();
+          reject(new Error(`closed ${code}: ${reason.toString()}`));
+        };
+        ws.once("open", onOpen);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+      });
+      return ws;
+    },
+    close: async () => {
+      await started.server.close();
+    },
+  };
+}
+
 export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
@@ -345,6 +435,7 @@ export async function startServerWithClient(
     `ws://127.0.0.1:${port}`,
     wsHeaders ? { headers: wsHeaders } : undefined,
   );
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const cleanup = () => {
@@ -372,18 +463,69 @@ export async function startServerWithClient(
   return { server, ws, port, prevToken: prev, envSnapshot };
 }
 
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
+}
+
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
   payload?: Record<string, unknown>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string; details?: unknown };
 };
+
+function resolveDefaultTestDeviceIdentityPath(params: {
+  clientId: string;
+  clientMode: string;
+  platform: string;
+  deviceFamily?: string;
+  role: string;
+}) {
+  const safe =
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .toLowerCase();
+  const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+}
+
+export async function readConnectChallengeNonce(
+  ws: WebSocket,
+  timeoutMs = 2_000,
+): Promise<string | undefined> {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  trackConnectChallengeNonce(ws);
+  try {
+    const evt = await onceMessage<{
+      type?: string;
+      event?: string;
+      payload?: Record<string, unknown> | null;
+    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
+    if (typeof nonce === "string" && nonce.trim().length > 0) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      return nonce.trim();
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
+    deviceToken?: string;
     password?: string;
     skipDefaultAuth?: boolean;
     minProtocol?: number;
@@ -410,6 +552,9 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    deviceIdentityPath?: string;
+    skipConnectChallengeNonce?: boolean;
+    timeoutMs?: number;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -434,12 +579,19 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
+  const authTokenForSignature = token ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
       ? ["operator.admin"]
       : [];
+  if (opts?.skipConnectChallengeNonce && opts?.device === undefined) {
+    throw new Error("skipConnectChallengeNonce requires an explicit device override");
+  }
+  const connectChallengeNonce =
+    opts?.device !== undefined ? undefined : await readConnectChallengeNonce(ws);
   const device = (() => {
     if (opts?.device === null) {
       return undefined;
@@ -447,23 +599,38 @@ export async function connectReq(
     if (opts?.device) {
       return opts.device;
     }
-    const identity = loadOrCreateDeviceIdentity();
+    if (!connectChallengeNonce) {
+      throw new Error("missing connect.challenge nonce");
+    }
+    const identityPath =
+      opts?.deviceIdentityPath ??
+      resolveDefaultTestDeviceIdentityPath({
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        role,
+      });
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
+    const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: client.id,
       clientMode: client.mode,
       role,
       scopes: requestedScopes,
       signedAtMs,
-      token: token ?? null,
+      token: authTokenForSignature ?? null,
+      nonce: connectChallengeNonce,
+      platform: client.platform,
+      deviceFamily: client.deviceFamily,
     });
     return {
       id: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
-      nonce: opts?.device?.nonce,
+      nonce: connectChallengeNonce,
     };
   })();
   ws.send(
@@ -481,9 +648,10 @@ export async function connectReq(
         role,
         scopes: requestedScopes,
         auth:
-          token || password
+          token || password || deviceToken
             ? {
                 token,
+                deviceToken,
                 password,
               }
             : undefined,
@@ -498,7 +666,7 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId);
+  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -517,6 +685,7 @@ export async function connectWebchatClient(params: {
   const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
     headers: { origin },
   });
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const onOpen = () => {

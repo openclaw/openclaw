@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
+import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 
 const dockerMocks = vi.hoisted(() => ({
@@ -85,29 +86,19 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
   };
 }
 
-function envEntriesFromDockerArgs(args: string[]): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === "-e" && typeof args[i + 1] === "string") {
-      values.push(args[i + 1]);
-    }
-  }
-  return values;
-}
-
 describe("ensureSandboxBrowser create args", () => {
   beforeEach(() => {
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
-    dockerMocks.dockerContainerState.mockReset();
-    dockerMocks.execDocker.mockReset();
-    dockerMocks.readDockerContainerEnvVar.mockReset();
-    dockerMocks.readDockerContainerLabel.mockReset();
-    dockerMocks.readDockerPort.mockReset();
-    registryMocks.readBrowserRegistry.mockReset();
-    registryMocks.updateBrowserRegistry.mockReset();
-    bridgeMocks.startBrowserBridgeServer.mockReset();
-    bridgeMocks.stopBrowserBridgeServer.mockReset();
+    dockerMocks.dockerContainerState.mockClear();
+    dockerMocks.execDocker.mockClear();
+    dockerMocks.readDockerContainerEnvVar.mockClear();
+    dockerMocks.readDockerContainerLabel.mockClear();
+    dockerMocks.readDockerPort.mockClear();
+    registryMocks.readBrowserRegistry.mockClear();
+    registryMocks.updateBrowserRegistry.mockClear();
+    bridgeMocks.startBrowserBridgeServer.mockClear();
+    bridgeMocks.stopBrowserBridgeServer.mockClear();
 
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
@@ -151,17 +142,16 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(true),
     });
 
-    const createArgs = dockerMocks.execDocker.mock.calls.find(
-      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
-    )?.[0] as string[] | undefined;
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
-    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
+    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
-    expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[a-f0-9]{8}$/);
+    expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
     expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
   });
@@ -174,13 +164,46 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(false),
     });
 
-    const createArgs = dockerMocks.execDocker.mock.calls.find(
-      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
-    )?.[0] as string[] | undefined;
-    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(envEntries.some((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="))).toBe(
       false,
     );
     expect(result?.noVncUrl).toBeUndefined();
+  });
+
+  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "none";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
+  });
+
+  it("keeps the main workspace writable when workspaceAccess is rw", async () => {
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "rw";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain("/tmp/workspace:/workspace");
+    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
   });
 });

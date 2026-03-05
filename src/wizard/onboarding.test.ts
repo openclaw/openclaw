@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
@@ -86,6 +87,7 @@ const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -149,7 +151,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   openUrl: vi.fn(async () => true),
   printWizardHeader: vi.fn(),
-  probeGatewayReachable: vi.fn(async () => ({ ok: true })),
+  probeGatewayReachable,
   waitForGatewayReachable: vi.fn(async () => {}),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   resolveControlUiLinks: vi.fn(() => ({
@@ -193,23 +195,6 @@ vi.mock("./onboarding.finalize.js", () => ({
 vi.mock("./onboarding.completion.js", () => ({
   setupOnboardingShellCompletion,
 }));
-
-function createWizardPrompter(overrides?: Partial<WizardPrompter>): WizardPrompter {
-  const select = vi.fn(
-    async (_params: WizardSelectParams<unknown>) => "quickstart",
-  ) as unknown as WizardPrompter["select"];
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select,
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
 
 function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   if (opts?.throwsOnExit) {
@@ -266,7 +251,7 @@ describe("runOnboardingWizard", () => {
     const select = vi.fn(
       async (_params: WizardSelectParams<unknown>) => "quickstart",
     ) as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
+    const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
@@ -295,7 +280,7 @@ describe("runOnboardingWizard", () => {
       async (_params: WizardSelectParams<unknown>) => "quickstart",
     ) as unknown as WizardPrompter["select"];
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createWizardPrompter({ select, multiselect });
+    const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
@@ -338,7 +323,7 @@ describe("runOnboardingWizard", () => {
       return "quickstart";
     }) as unknown as WizardPrompter["select"];
 
-    const prompter = createWizardPrompter({ select });
+    const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime({ throwsOnExit: true });
 
     await runOnboardingWizard(
@@ -379,7 +364,7 @@ describe("runOnboardingWizard", () => {
 
     try {
       const note: WizardPrompter["note"] = vi.fn(async () => {});
-      const prompter = createWizardPrompter({ note });
+      const prompter = buildWizardPrompter({ note });
       const runtime = createRuntime();
 
       await runOnboardingWizard(
@@ -407,5 +392,102 @@ describe("runOnboardingWizard", () => {
         process.env.BRAVE_API_KEY = prevBraveKey;
       }
     }
+  });
+
+  it("resolves gateway.auth.password SecretRef for local onboarding probe", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-ref-password";
+    probeGatewayReachable.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    try {
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          mode: "local",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+      }
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "gateway-ref-password",
+      }),
+    );
+  });
+
+  it("passes secretInputMode through to local gateway config step", async () => {
+    configureGatewayForOnboarding.mockClear();
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+        secretInputMode: "ref",
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(configureGatewayForOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secretInputMode: "ref",
+      }),
+    );
   });
 });

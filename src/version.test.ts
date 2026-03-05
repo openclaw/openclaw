@@ -4,9 +4,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  VERSION,
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
+  resolveBinaryVersion,
   resolveRuntimeServiceVersion,
+  resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
 
@@ -32,6 +35,12 @@ async function writeJsonFixture(root: string, relativePath: string, value: unkno
   const filePath = path.join(root, relativePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(value), "utf-8");
+}
+
+function expectVersionMetadataToBeMissing(moduleUrl: string) {
+  expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
+  expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
+  expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
 }
 
 describe("version resolution", () => {
@@ -69,9 +78,7 @@ describe("version resolution", () => {
   it("returns null when no version metadata exists", async () => {
     await withTempDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
-      expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+      expectVersionMetadataToBeMissing(moduleUrl);
     });
   });
 
@@ -80,9 +87,7 @@ describe("version resolution", () => {
       await writeJsonFixture(root, "package.json", { name: "other-package", version: "9.9.9" });
       await writeJsonFixture(root, "build-info.json", { version: "  " });
       const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
-      expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+      expectVersionMetadataToBeMissing(moduleUrl);
     });
   });
 
@@ -90,6 +95,42 @@ describe("version resolution", () => {
     expect(readVersionFromPackageJsonForModuleUrl("not-a-valid-url")).toBeNull();
     expect(readVersionFromBuildInfoForModuleUrl("not-a-valid-url")).toBeNull();
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
+  });
+
+  it("resolves binary version with explicit precedence", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          injectedVersion: "9.9.9",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("9.9.9");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("2.3.4");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("8.8.8");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "   ",
+          fallback: "0.0.0",
+        }),
+      ).toBe("0.0.0");
+    });
   });
 
   it("prefers OPENCLAW_VERSION over service and package versions", () => {
@@ -102,14 +143,24 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
-  it("uses service and package fallbacks and ignores blank env values", () => {
+  it("normalizes runtime version candidate for fallback handling", () => {
+    expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
+    expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
+  });
+
+  it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
         OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
-    ).toBe("2.0.0");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion({
@@ -117,7 +168,7 @@ describe("version resolution", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
-    ).toBe("1.0.0-package");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion(
@@ -128,6 +179,6 @@ describe("version resolution", () => {
         },
         "fallback",
       ),
-    ).toBe("fallback");
+    ).toBe(VERSION);
   });
 });

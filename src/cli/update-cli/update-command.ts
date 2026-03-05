@@ -10,6 +10,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
@@ -112,6 +113,65 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     return "command returned a non-zero exit code";
   }
   return detail.split("\n").slice(-3).join("\n");
+}
+
+type UpdateDryRunPreview = {
+  dryRun: true;
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  mode: UpdateRunResult["mode"];
+  updateInstallKind: "git" | "package" | "unknown";
+  switchToGit: boolean;
+  switchToPackage: boolean;
+  restart: boolean;
+  requestedChannel: "stable" | "beta" | "dev" | null;
+  storedChannel: "stable" | "beta" | "dev" | null;
+  effectiveChannel: "stable" | "beta" | "dev";
+  tag: string;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  downgradeRisk: boolean;
+  actions: string[];
+  notes: string[];
+};
+
+function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): void {
+  if (jsonMode) {
+    defaultRuntime.log(JSON.stringify(preview, null, 2));
+    return;
+  }
+
+  defaultRuntime.log(theme.heading("Update dry-run"));
+  defaultRuntime.log(theme.muted("No changes were applied."));
+  defaultRuntime.log("");
+  defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+  defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
+  defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
+  defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+  defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+  if (preview.currentVersion) {
+    defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
+  }
+  if (preview.targetVersion) {
+    defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+  }
+  if (preview.downgradeRisk) {
+    defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(theme.heading("Planned actions:"));
+  for (const action of preview.actions) {
+    defaultRuntime.log(`  - ${action}`);
+  }
+
+  if (preview.notes.length > 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Notes:"));
+    for (const note of preview.notes) {
+      defaultRuntime.log(`  - ${theme.muted(note)}`);
+    }
+  }
 }
 
 async function refreshGatewayServiceEnv(params: {
@@ -530,7 +590,7 @@ async function maybeRestartService(params: {
           }
           defaultRuntime.log(
             theme.muted(
-              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --probe --deep"), CLI_NAME)}\` for details.`,
+              `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
             ),
           );
         }
@@ -596,7 +656,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   if (opts.channel && !configSnapshot.valid) {
-    const issues = configSnapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`);
+    const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
     defaultRuntime.exit(1);
     return;
@@ -613,11 +673,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const explicitTag = normalizeTag(opts.tag);
   let tag = explicitTag ?? channelToNpmTag(channel);
+  let currentVersion: string | null = null;
+  let targetVersion: string | null = null;
+  let downgradeRisk = false;
+  let fallbackToLatest = false;
 
   if (updateInstallKind !== "git") {
-    const currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    let fallbackToLatest = false;
-    const targetVersion = explicitTag
+    currentVersion = switchToPackage ? null : await readPackageVersion(root);
+    targetVersion = explicitTag
       ? await resolveTargetVersion(tag, timeoutMs)
       : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
           tag = resolved.tag;
@@ -626,38 +689,106 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
-    const needsConfirm =
+    downgradeRisk =
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null || (cmp != null && cmp > 0));
+  }
 
-    if (needsConfirm && !opts.yes) {
-      if (!process.stdin.isTTY || opts.json) {
-        defaultRuntime.error(
-          [
-            "Downgrade confirmation required.",
-            "Downgrading can break configuration. Re-run in a TTY to confirm.",
-          ].join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      const targetLabel = targetVersion ?? `${tag} (unknown)`;
-      const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
-      const ok = await confirm({
-        message: stylePromptMessage(message),
-        initialValue: false,
+  if (opts.dryRun) {
+    let mode: UpdateRunResult["mode"] = "unknown";
+    if (updateInstallKind === "git") {
+      mode = "git";
+    } else if (updateInstallKind === "package") {
+      mode = await resolveGlobalManager({
+        root,
+        installKind,
+        timeoutMs: timeoutMs ?? 20 * 60_000,
       });
-      if (isCancel(ok) || !ok) {
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted("Update cancelled."));
-        }
-        defaultRuntime.exit(0);
-        return;
-      }
     }
-  } else if (opts.tag && !opts.json) {
+
+    const actions: string[] = [];
+    if (requestedChannel && requestedChannel !== storedChannel) {
+      actions.push(`Persist update.channel=${requestedChannel} in config`);
+    }
+    if (switchToGit) {
+      actions.push("Switch install mode from package to git checkout (dev channel)");
+    } else if (switchToPackage) {
+      actions.push(`Switch install mode from git to package manager (${mode})`);
+    } else if (updateInstallKind === "git") {
+      actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
+    } else {
+      actions.push(`Run global package manager update with spec openclaw@${tag}`);
+    }
+    actions.push("Run plugin update sync after core update");
+    actions.push("Refresh shell completion cache (if needed)");
+    actions.push(
+      shouldRestart
+        ? "Restart gateway service and run doctor checks"
+        : "Skip restart (because --no-restart is set)",
+    );
+
+    const notes: string[] = [];
+    if (opts.tag && updateInstallKind === "git") {
+      notes.push("--tag applies to npm installs only; git updates ignore it.");
+    }
+    if (fallbackToLatest) {
+      notes.push("Beta channel resolves to latest for this run (fallback).");
+    }
+
+    printDryRunPreview(
+      {
+        dryRun: true,
+        root,
+        installKind,
+        mode,
+        updateInstallKind,
+        switchToGit,
+        switchToPackage,
+        restart: shouldRestart,
+        requestedChannel,
+        storedChannel,
+        effectiveChannel: channel,
+        tag,
+        currentVersion,
+        targetVersion,
+        downgradeRisk,
+        actions,
+        notes,
+      },
+      Boolean(opts.json),
+    );
+    return;
+  }
+
+  if (downgradeRisk && !opts.yes) {
+    if (!process.stdin.isTTY || opts.json) {
+      defaultRuntime.error(
+        [
+          "Downgrade confirmation required.",
+          "Downgrading can break configuration. Re-run in a TTY to confirm.",
+        ].join("\n"),
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    const targetLabel = targetVersion ?? `${tag} (unknown)`;
+    const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+    const ok = await confirm({
+      message: stylePromptMessage(message),
+      initialValue: false,
+    });
+    if (isCancel(ok) || !ok) {
+      if (!opts.json) {
+        defaultRuntime.log(theme.muted("Update cancelled."));
+      }
+      defaultRuntime.exit(0);
+      return;
+    }
+  }
+
+  if (updateInstallKind === "git" && opts.tag && !opts.json) {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
@@ -688,11 +819,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
+  const gatewayPort = resolveGatewayPort(
+    configSnapshot.valid ? configSnapshot.config : undefined,
+    process.env,
+  );
   if (shouldRestart) {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
-        restartScriptPath = await prepareRestartScript(process.env);
+        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }
     } catch {
@@ -773,7 +908,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     result,
     opts,
     refreshServiceEnv: refreshGatewayServiceEnv,
-    gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
+    gatewayPort,
     restartScriptPath,
   });
 

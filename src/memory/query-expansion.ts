@@ -118,6 +118,420 @@ const STOP_WORDS_EN = new Set([
   "give",
 ]);
 
+const STOP_WORDS_ES = new Set([
+  // Articles and determiners
+  "el",
+  "la",
+  "los",
+  "las",
+  "un",
+  "una",
+  "unos",
+  "unas",
+  "este",
+  "esta",
+  "ese",
+  "esa",
+  // Pronouns
+  "yo",
+  "me",
+  "mi",
+  "nosotros",
+  "nosotras",
+  "tu",
+  "tus",
+  "usted",
+  "ustedes",
+  "ellos",
+  "ellas",
+  // Prepositions and conjunctions
+  "de",
+  "del",
+  "a",
+  "en",
+  "con",
+  "por",
+  "para",
+  "sobre",
+  "entre",
+  "y",
+  "o",
+  "pero",
+  "si",
+  "porque",
+  "como",
+  // Common verbs / auxiliaries
+  "es",
+  "son",
+  "fue",
+  "fueron",
+  "ser",
+  "estar",
+  "haber",
+  "tener",
+  "hacer",
+  // Time references (vague)
+  "ayer",
+  "hoy",
+  "mañana",
+  "antes",
+  "despues",
+  "después",
+  "ahora",
+  "recientemente",
+  // Question/request words
+  "que",
+  "qué",
+  "cómo",
+  "cuando",
+  "cuándo",
+  "donde",
+  "dónde",
+  "porqué",
+  "favor",
+  "ayuda",
+]);
+
+const STOP_WORDS_PT = new Set([
+  // Articles and determiners
+  "o",
+  "a",
+  "os",
+  "as",
+  "um",
+  "uma",
+  "uns",
+  "umas",
+  "este",
+  "esta",
+  "esse",
+  "essa",
+  // Pronouns
+  "eu",
+  "me",
+  "meu",
+  "minha",
+  "nos",
+  "nós",
+  "você",
+  "vocês",
+  "ele",
+  "ela",
+  "eles",
+  "elas",
+  // Prepositions and conjunctions
+  "de",
+  "do",
+  "da",
+  "em",
+  "com",
+  "por",
+  "para",
+  "sobre",
+  "entre",
+  "e",
+  "ou",
+  "mas",
+  "se",
+  "porque",
+  "como",
+  // Common verbs / auxiliaries
+  "é",
+  "são",
+  "foi",
+  "foram",
+  "ser",
+  "estar",
+  "ter",
+  "fazer",
+  // Time references (vague)
+  "ontem",
+  "hoje",
+  "amanhã",
+  "antes",
+  "depois",
+  "agora",
+  "recentemente",
+  // Question/request words
+  "que",
+  "quê",
+  "quando",
+  "onde",
+  "porquê",
+  "favor",
+  "ajuda",
+]);
+
+const STOP_WORDS_AR = new Set([
+  // Articles and connectors
+  "ال",
+  "و",
+  "أو",
+  "لكن",
+  "ثم",
+  "بل",
+  // Pronouns / references
+  "أنا",
+  "نحن",
+  "هو",
+  "هي",
+  "هم",
+  "هذا",
+  "هذه",
+  "ذلك",
+  "تلك",
+  "هنا",
+  "هناك",
+  // Common prepositions
+  "من",
+  "إلى",
+  "الى",
+  "في",
+  "على",
+  "عن",
+  "مع",
+  "بين",
+  "ل",
+  "ب",
+  "ك",
+  // Common auxiliaries / vague verbs
+  "كان",
+  "كانت",
+  "يكون",
+  "تكون",
+  "صار",
+  "أصبح",
+  "يمكن",
+  "ممكن",
+  // Time references (vague)
+  "بالأمس",
+  "امس",
+  "اليوم",
+  "غدا",
+  "الآن",
+  "قبل",
+  "بعد",
+  "مؤخرا",
+  // Question/request words
+  "لماذا",
+  "كيف",
+  "ماذا",
+  "متى",
+  "أين",
+  "هل",
+  "من فضلك",
+  "فضلا",
+  "ساعد",
+]);
+
+const STOP_WORDS_KO = new Set([
+  // Particles (조사)
+  "은",
+  "는",
+  "이",
+  "가",
+  "을",
+  "를",
+  "의",
+  "에",
+  "에서",
+  "로",
+  "으로",
+  "와",
+  "과",
+  "도",
+  "만",
+  "까지",
+  "부터",
+  "한테",
+  "에게",
+  "께",
+  "처럼",
+  "같이",
+  "보다",
+  "마다",
+  "밖에",
+  "대로",
+  // Pronouns (대명사)
+  "나",
+  "나는",
+  "내가",
+  "나를",
+  "너",
+  "우리",
+  "저",
+  "저희",
+  "그",
+  "그녀",
+  "그들",
+  "이것",
+  "저것",
+  "그것",
+  "여기",
+  "저기",
+  "거기",
+  // Common verbs / auxiliaries (일반 동사/보조 동사)
+  "있다",
+  "없다",
+  "하다",
+  "되다",
+  "이다",
+  "아니다",
+  "보다",
+  "주다",
+  "오다",
+  "가다",
+  // Nouns (의존 명사 / vague)
+  "것",
+  "거",
+  "등",
+  "수",
+  "때",
+  "곳",
+  "중",
+  "분",
+  // Adverbs
+  "잘",
+  "더",
+  "또",
+  "매우",
+  "정말",
+  "아주",
+  "많이",
+  "너무",
+  "좀",
+  // Conjunctions
+  "그리고",
+  "하지만",
+  "그래서",
+  "그런데",
+  "그러나",
+  "또는",
+  "그러면",
+  // Question words
+  "왜",
+  "어떻게",
+  "뭐",
+  "언제",
+  "어디",
+  "누구",
+  "무엇",
+  "어떤",
+  // Time (vague)
+  "어제",
+  "오늘",
+  "내일",
+  "최근",
+  "지금",
+  "아까",
+  "나중",
+  "전에",
+  // Request words
+  "제발",
+  "부탁",
+]);
+
+// Common Korean trailing particles to strip from words for tokenization
+// Sorted by descending length so longest-match-first is guaranteed.
+const KO_TRAILING_PARTICLES = [
+  "에서",
+  "으로",
+  "에게",
+  "한테",
+  "처럼",
+  "같이",
+  "보다",
+  "까지",
+  "부터",
+  "마다",
+  "밖에",
+  "대로",
+  "은",
+  "는",
+  "이",
+  "가",
+  "을",
+  "를",
+  "의",
+  "에",
+  "로",
+  "와",
+  "과",
+  "도",
+  "만",
+].toSorted((a, b) => b.length - a.length);
+
+function stripKoreanTrailingParticle(token: string): string | null {
+  for (const particle of KO_TRAILING_PARTICLES) {
+    if (token.length > particle.length && token.endsWith(particle)) {
+      return token.slice(0, -particle.length);
+    }
+  }
+  return null;
+}
+
+function isUsefulKoreanStem(stem: string): boolean {
+  // Prevent bogus one-syllable stems from words like "논의" -> "논".
+  if (/[\uac00-\ud7af]/.test(stem)) {
+    return stem.length >= 2;
+  }
+  // Keep stripped ASCII stems for mixed tokens like "API를" -> "api".
+  return /^[a-z0-9_]+$/i.test(stem);
+}
+
+const STOP_WORDS_JA = new Set([
+  // Pronouns and references
+  "これ",
+  "それ",
+  "あれ",
+  "この",
+  "その",
+  "あの",
+  "ここ",
+  "そこ",
+  "あそこ",
+  // Common auxiliaries / vague verbs
+  "する",
+  "した",
+  "して",
+  "です",
+  "ます",
+  "いる",
+  "ある",
+  "なる",
+  "できる",
+  // Particles / connectors
+  "の",
+  "こと",
+  "もの",
+  "ため",
+  "そして",
+  "しかし",
+  "また",
+  "でも",
+  "から",
+  "まで",
+  "より",
+  "だけ",
+  // Question words
+  "なぜ",
+  "どう",
+  "何",
+  "いつ",
+  "どこ",
+  "誰",
+  "どれ",
+  // Time (vague)
+  "昨日",
+  "今日",
+  "明日",
+  "最近",
+  "今",
+  "さっき",
+  "前",
+  "後",
+]);
+
 const STOP_WORDS_ZH = new Set([
   // Pronouns
   "我",
@@ -240,7 +654,7 @@ function isValidKeyword(token: string): boolean {
 }
 
 /**
- * Simple tokenizer that handles both English and Chinese text.
+ * Simple tokenizer that handles English, Chinese, Korean, and Japanese text.
  * For Chinese, we do character-based splitting since we don't have a proper segmenter.
  * For English, we split on whitespace and punctuation.
  */
@@ -252,8 +666,23 @@ function tokenize(text: string): string[] {
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
   for (const segment of segments) {
-    // Check if segment contains CJK characters
-    if (/[\u4e00-\u9fff]/.test(segment)) {
+    // Japanese text often mixes scripts (kanji/kana/ASCII) without spaces.
+    // Extract script-specific chunks so technical terms like "API" / "バグ" are retained.
+    if (/[\u3040-\u30ff]/.test(segment)) {
+      const jpParts =
+        segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
+      for (const part of jpParts) {
+        if (/^[\u4e00-\u9fff]+$/.test(part)) {
+          tokens.push(part);
+          for (let i = 0; i < part.length - 1; i++) {
+            tokens.push(part[i] + part[i + 1]);
+          }
+        } else {
+          tokens.push(part);
+        }
+      }
+    } else if (/[\u4e00-\u9fff]/.test(segment)) {
+      // Check if segment contains CJK characters (Chinese)
       // For Chinese, extract character n-grams (unigrams and bigrams)
       const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
       // Add individual characters
@@ -261,6 +690,18 @@ function tokenize(text: string): string[] {
       // Add bigrams for better phrase matching
       for (let i = 0; i < chars.length - 1; i++) {
         tokens.push(chars[i] + chars[i + 1]);
+      }
+    } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
+      // For Korean (Hangul syllables and jamo), keep the word as-is unless it is
+      // effectively a stop word once trailing particles are removed.
+      const stem = stripKoreanTrailingParticle(segment);
+      const stemIsStopWord = stem !== null && STOP_WORDS_KO.has(stem);
+      if (!STOP_WORDS_KO.has(segment) && !stemIsStopWord) {
+        tokens.push(segment);
+      }
+      // Also emit particle-stripped stems when they are useful keywords.
+      if (stem && !STOP_WORDS_KO.has(stem) && isUsefulKoreanStem(stem)) {
+        tokens.push(stem);
       }
     } else {
       // For non-CJK, keep as single token
@@ -286,7 +727,15 @@ export function extractKeywords(query: string): string[] {
 
   for (const token of tokens) {
     // Skip stop words
-    if (STOP_WORDS_EN.has(token) || STOP_WORDS_ZH.has(token)) {
+    if (
+      STOP_WORDS_EN.has(token) ||
+      STOP_WORDS_ES.has(token) ||
+      STOP_WORDS_PT.has(token) ||
+      STOP_WORDS_AR.has(token) ||
+      STOP_WORDS_ZH.has(token) ||
+      STOP_WORDS_KO.has(token) ||
+      STOP_WORDS_JA.has(token)
+    ) {
       continue;
     }
     // Skip invalid keywords

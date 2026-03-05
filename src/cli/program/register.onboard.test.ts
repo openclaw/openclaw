@@ -14,7 +14,12 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
 }));
 
 vi.mock("../../commands/onboard-provider-auth-flags.js", () => ({
-  ONBOARD_PROVIDER_AUTH_FLAGS: [] as Array<{ cliOption: string; description: string }>,
+  ONBOARD_PROVIDER_AUTH_FLAGS: [
+    {
+      cliOption: "--mistral-api-key <key>",
+      description: "Mistral API key",
+    },
+  ] as Array<{ cliOption: string; description: string }>,
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
@@ -98,6 +103,27 @@ describe("registerOnboardCommand", () => {
       2,
       expect.objectContaining({
         gatewayPort: undefined,
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards --reset-scope to onboard command options", async () => {
+    await runCli(["onboard", "--reset", "--reset-scope", "full"]);
+    expect(onboardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reset: true,
+        resetScope: "full",
+      }),
+      runtime,
+    );
+  });
+
+  it("parses --mistral-api-key and forwards mistralApiKey", async () => {
+    await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
+    expect(onboardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mistralApiKey: "sk-mistral-test",
       }),
       runtime,
     );

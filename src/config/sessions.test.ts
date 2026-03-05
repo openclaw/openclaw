@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
@@ -36,6 +37,71 @@ describe("sessions", () => {
 
   const withStateDir = <T>(stateDir: string, fn: () => T): T =>
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, fn);
+
+  async function createSessionStoreFixture(params: {
+    prefix: string;
+    entries: Record<string, Record<string, unknown>>;
+  }): Promise<{ storePath: string }> {
+    const dir = await createCaseDir(params.prefix);
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, JSON.stringify(params.entries), "utf-8");
+    return { storePath };
+  }
+
+  function expectedBot1FallbackSessionPath() {
+    return path.join(
+      path.resolve("/different/state"),
+      "agents",
+      "bot1",
+      "sessions",
+      "sess-1.jsonl",
+    );
+  }
+
+  function buildMainSessionEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "sess-1",
+      updatedAt: 123,
+      ...overrides,
+    };
+  }
+
+  async function createAgentSessionsLayout(label: string): Promise<{
+    stateDir: string;
+    mainStorePath: string;
+    bot2SessionPath: string;
+    outsidePath: string;
+  }> {
+    const stateDir = await createCaseDir(label);
+    const mainSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const bot1SessionsDir = path.join(stateDir, "agents", "bot1", "sessions");
+    const bot2SessionsDir = path.join(stateDir, "agents", "bot2", "sessions");
+    await fs.mkdir(mainSessionsDir, { recursive: true });
+    await fs.mkdir(bot1SessionsDir, { recursive: true });
+    await fs.mkdir(bot2SessionsDir, { recursive: true });
+
+    const mainStorePath = path.join(mainSessionsDir, "sessions.json");
+    await fs.writeFile(mainStorePath, "{}", "utf-8");
+
+    const bot2SessionPath = path.join(bot2SessionsDir, "sess-1.jsonl");
+    await fs.writeFile(bot2SessionPath, "{}", "utf-8");
+
+    const outsidePath = path.join(stateDir, "outside", "not-a-session.jsonl");
+    await fs.mkdir(path.dirname(outsidePath), { recursive: true });
+    await fs.writeFile(outsidePath, "{}", "utf-8");
+
+    return { stateDir, mainStorePath, bot2SessionPath, outsidePath };
+  }
+
+  async function normalizePathForComparison(filePath: string): Promise<string> {
+    const canonicalFile = await fs.realpath(filePath).catch(() => null);
+    if (canonicalFile) {
+      return canonicalFile;
+    }
+    const parentDir = path.dirname(filePath);
+    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
+    return path.join(canonicalParent, path.basename(filePath));
+  }
 
   const deriveSessionKeyCases = [
     {
@@ -150,30 +216,21 @@ describe("sessions", () => {
 
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 123,
-            systemSent: true,
-            thinkingLevel: "low",
-            responseUsage: "on",
-            queueDebounceMs: 1234,
-            reasoningLevel: "on",
-            elevatedLevel: "on",
-            authProfileOverride: "auth-1",
-            compactionCount: 2,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          systemSent: true,
+          thinkingLevel: "low",
+          responseUsage: "on",
+          queueDebounceMs: 1234,
+          reasoningLevel: "on",
+          elevatedLevel: "on",
+          authProfileOverride: "auth-1",
+          compactionCount: 2,
+        }),
+      },
+    });
 
     await updateLastRoute({
       storePath,
@@ -203,9 +260,10 @@ describe("sessions", () => {
 
   it("updateLastRoute prefers explicit deliveryContext", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {},
+    });
 
     await updateLastRoute({
       storePath,
@@ -233,30 +291,21 @@ describe("sessions", () => {
 
   it("updateLastRoute clears threadId when explicit route omits threadId", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 123,
-            deliveryContext: {
-              channel: "telegram",
-              to: "222",
-              threadId: "42",
-            },
-            lastChannel: "telegram",
-            lastTo: "222",
-            lastThreadId: "42",
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          deliveryContext: {
+            channel: "telegram",
+            to: "222",
+            threadId: "42",
           },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+          lastChannel: "telegram",
+          lastTo: "222",
+          lastThreadId: "42",
+        }),
+      },
+    });
 
     await updateLastRoute({
       storePath,
@@ -277,9 +326,10 @@ describe("sessions", () => {
 
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
     const sessionKey = "agent:main:whatsapp:group:123@g.us";
-    const dir = await createCaseDir("updateLastRoute");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute",
+      entries: {},
+    });
 
     await updateLastRoute({
       storePath,
@@ -307,23 +357,16 @@ describe("sessions", () => {
 
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
     const sessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateSessionStoreEntry");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 100,
-            reasoningLevel: "on",
-          },
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          reasoningLevel: "on",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     await updateSessionStoreEntry({
       storePath,
@@ -334,6 +377,44 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
     expect(store[sessionKey]?.reasoningLevel).toBe("on");
+  });
+
+  it("updateSessionStoreEntry returns null when session key does not exist", async () => {
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-missing",
+      entries: {},
+    });
+    const update = async () => ({ thinkingLevel: "high" as const });
+    const result = await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "agent:main:missing",
+      update,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("updateSessionStoreEntry keeps existing entry when patch callback returns null", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-noop",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
+        },
+      },
+    });
+
+    const result = await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => null,
+    });
+    expect(result).toEqual(expect.objectContaining({ sessionId: "sess-1", thinkingLevel: "low" }));
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.thinkingLevel).toBe("low");
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {
@@ -492,18 +573,15 @@ describe("sessions", () => {
     });
   });
 
-  it("resolves cross-agent absolute sessionFile paths", () => {
-    const stateDir = path.resolve("/home/user/.openclaw");
-    withStateDir(stateDir, () => {
-      const bot2Session = path.join(stateDir, "agents", "bot2", "sessions", "sess-1.jsonl");
+  it("resolves cross-agent absolute sessionFile paths", async () => {
+    const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
+    const sessionFile = withStateDir(stateDir, () =>
       // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      const sessionFile = resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: bot2Session },
-        { agentId: "bot1" },
-      );
-      expect(sessionFile).toBe(bot2Session);
-    });
+      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
+    );
+    expect(await normalizePathForComparison(sessionFile)).toBe(
+      await normalizePathForComparison(bot2SessionPath),
+    );
   });
 
   it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
@@ -520,40 +598,91 @@ describe("sessions", () => {
     });
   });
 
-  it("rejects absolute sessionFile paths outside agent sessions directories", () => {
-    withStateDir(path.resolve("/home/user/.openclaw"), () => {
-      expect(() =>
-        resolveSessionFilePath(
-          "sess-1",
-          { sessionFile: path.resolve("/etc/passwd") },
-          { agentId: "bot1" },
-        ),
-      ).toThrow(/within sessions directory/);
+  it("falls back when structural cross-root path traverses after sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: path.join(unsafe, "passwd") },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
     });
+  });
+
+  it("falls back when structural cross-root path nests under sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const nested = path.join(
+        originalBase,
+        "agents",
+        "bot2",
+        "sessions",
+        "nested",
+        "sess-1.jsonl",
+      );
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: nested },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
+    });
+  });
+
+  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute store path", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const resolved = resolveSessionFilePathOptions({
+      agentId: "bot2",
+      storePath,
+    });
+    expect(resolved?.agentId).toBe("bot2");
+    expect(resolved?.sessionsDir).toBe(path.dirname(path.resolve(storePath)));
+  });
+
+  it("resolves sibling agent absolute sessionFile using alternate agentId from options", async () => {
+    const { stateDir, mainStorePath, bot2SessionPath } =
+      await createAgentSessionsLayout("sibling-agent");
+    const sessionFile = withStateDir(stateDir, () => {
+      const opts = resolveSessionFilePathOptions({
+        agentId: "bot2",
+        storePath: mainStorePath,
+      });
+
+      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
+    });
+    expect(await normalizePathForComparison(sessionFile)).toBe(
+      await normalizePathForComparison(bot2SessionPath),
+    );
+  });
+
+  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
+    const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
+    const sessionFile = withStateDir(stateDir, () =>
+      resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
+    );
+    const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
+    expect(await normalizePathForComparison(sessionFile)).toBe(
+      await normalizePathForComparison(expectedPath),
+    );
   });
 
   it("updateSessionStoreEntry merges concurrent patches", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await createCaseDir("updateSessionStoreEntry");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-1",
-            updatedAt: 123,
-            thinkingLevel: "low",
-          },
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const createDeferred = <T>() => {
-      let resolve!: (value: T) => void;
+      let resolve!: (value: T | PromiseLike<T>) => void;
       let reject!: (reason?: unknown) => void;
       const promise = new Promise<T>((res, rej) => {
         resolve = res;
@@ -590,5 +719,46 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
+  });
+
+  it("updateSessionStoreEntry re-reads disk inside lock instead of using stale cache", async () => {
+    const mainSessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-cache-bypass",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
+        },
+      },
+    });
+
+    // Prime the in-process cache with the original entry.
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+    const originalStat = await fs.stat(storePath);
+
+    // Simulate an external writer that updates the store but preserves mtime.
+    const externalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    externalStore[mainSessionKey] = {
+      ...externalStore[mainSessionKey],
+      providerOverride: "anthropic",
+      updatedAt: 124,
+    };
+    await fs.writeFile(storePath, JSON.stringify(externalStore), "utf-8");
+    await fs.utimes(storePath, originalStat.atime, originalStat.mtime);
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => ({ thinkingLevel: "high" }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.providerOverride).toBe("anthropic");
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 });

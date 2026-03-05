@@ -1,7 +1,9 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isLocalishHost,
   isPrivateOrLoopbackAddress,
+  isPrivateOrLoopbackHost,
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
@@ -20,6 +22,28 @@ describe("resolveHostName", () => {
     ] as const;
     for (const testCase of cases) {
       expect(resolveHostName(testCase.input), testCase.input).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("isLocalishHost", () => {
+  it("accepts loopback and tailscale serve/funnel host headers", () => {
+    const accepted = [
+      "localhost",
+      "127.0.0.1:18789",
+      "[::1]:18789",
+      "[::ffff:127.0.0.1]:18789",
+      "gateway.tailnet.ts.net",
+    ];
+    for (const host of accepted) {
+      expect(isLocalishHost(host), host).toBe(true);
+    }
+  });
+
+  it("rejects non-local hosts", () => {
+    const rejected = ["example.com", "192.168.1.10", "203.0.113.5:18789"];
+    for (const host of rejected) {
+      expect(isLocalishHost(host), host).toBe(false);
     }
   });
 });
@@ -80,6 +104,11 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.42.0.59", proxies)).toBe(true); // CIDR match
       expect(isTrustedProxyAddress("172.19.5.100", proxies)).toBe(true); // CIDR match
       expect(isTrustedProxyAddress("10.43.0.1", proxies)).toBe(false); // no match
+    });
+
+    it("supports IPv6 CIDR notation", () => {
+      expect(isTrustedProxyAddress("2001:db8::1234", ["2001:db8::/32"])).toBe(true);
+      expect(isTrustedProxyAddress("2001:db9::1234", ["2001:db8::/32"])).toBe(false);
     });
   });
 
@@ -321,21 +350,93 @@ describe("isPrivateOrLoopbackAddress", () => {
   });
 });
 
+describe("isPrivateOrLoopbackHost", () => {
+  it("accepts localhost", () => {
+    expect(isPrivateOrLoopbackHost("localhost")).toBe(true);
+  });
+
+  it("accepts loopback addresses", () => {
+    expect(isPrivateOrLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isPrivateOrLoopbackHost("::1")).toBe(true);
+    expect(isPrivateOrLoopbackHost("[::1]")).toBe(true);
+  });
+
+  it("accepts RFC 1918 private addresses", () => {
+    expect(isPrivateOrLoopbackHost("10.0.0.5")).toBe(true);
+    expect(isPrivateOrLoopbackHost("10.42.1.100")).toBe(true);
+    expect(isPrivateOrLoopbackHost("172.16.0.1")).toBe(true);
+    expect(isPrivateOrLoopbackHost("172.31.255.254")).toBe(true);
+    expect(isPrivateOrLoopbackHost("192.168.1.100")).toBe(true);
+  });
+
+  it("accepts CGNAT and link-local addresses", () => {
+    expect(isPrivateOrLoopbackHost("100.64.0.1")).toBe(true);
+    expect(isPrivateOrLoopbackHost("169.254.10.20")).toBe(true);
+  });
+
+  it("accepts IPv6 private addresses", () => {
+    expect(isPrivateOrLoopbackHost("[fc00::1]")).toBe(true);
+    expect(isPrivateOrLoopbackHost("[fd12:3456:789a::1]")).toBe(true);
+    expect(isPrivateOrLoopbackHost("[fe80::1]")).toBe(true);
+  });
+
+  it("rejects unspecified IPv6 address (::)", () => {
+    expect(isPrivateOrLoopbackHost("[::]")).toBe(false);
+    expect(isPrivateOrLoopbackHost("::")).toBe(false);
+    expect(isPrivateOrLoopbackHost("0:0::0")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[0:0::0]")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[0000:0000:0000:0000:0000:0000:0000:0000]")).toBe(false);
+  });
+
+  it("rejects multicast IPv6 addresses (ff00::/8)", () => {
+    expect(isPrivateOrLoopbackHost("[ff02::1]")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[ff05::2]")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[ff0e::1]")).toBe(false);
+  });
+
+  it("rejects public addresses", () => {
+    expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
+    expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
+    expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
+  });
+
+  it("rejects empty/falsy input", () => {
+    expect(isPrivateOrLoopbackHost("")).toBe(false);
+  });
+});
+
 describe("isSecureWebSocketUrl", () => {
-  it("accepts secure websocket/loopback ws URLs and rejects unsafe inputs", () => {
+  it("defaults to loopback-only ws:// and rejects private/public remote ws://", () => {
     const cases = [
+      // wss:// always accepted
       { input: "wss://127.0.0.1:18789", expected: true },
       { input: "wss://localhost:18789", expected: true },
       { input: "wss://remote.example.com:18789", expected: true },
       { input: "wss://192.168.1.100:18789", expected: true },
+      // ws:// loopback accepted
       { input: "ws://127.0.0.1:18789", expected: true },
       { input: "ws://localhost:18789", expected: true },
       { input: "ws://[::1]:18789", expected: true },
       { input: "ws://127.0.0.42:18789", expected: true },
-      { input: "ws://remote.example.com:18789", expected: false },
-      { input: "ws://192.168.1.100:18789", expected: false },
+      // ws:// private/public remote addresses rejected by default
       { input: "ws://10.0.0.5:18789", expected: false },
+      { input: "ws://10.42.1.100:18789", expected: false },
+      { input: "ws://172.16.0.1:18789", expected: false },
+      { input: "ws://172.31.255.254:18789", expected: false },
+      { input: "ws://192.168.1.100:18789", expected: false },
+      { input: "ws://169.254.10.20:18789", expected: false },
       { input: "ws://100.64.0.1:18789", expected: false },
+      { input: "ws://[fc00::1]:18789", expected: false },
+      { input: "ws://[fd12:3456:789a::1]:18789", expected: false },
+      { input: "ws://[fe80::1]:18789", expected: false },
+      { input: "ws://[::]:18789", expected: false },
+      { input: "ws://[ff02::1]:18789", expected: false },
+      // ws:// public addresses rejected
+      { input: "ws://remote.example.com:18789", expected: false },
+      { input: "ws://1.1.1.1:18789", expected: false },
+      { input: "ws://8.8.8.8:18789", expected: false },
+      { input: "ws://203.0.113.10:18789", expected: false },
+      // invalid URLs
       { input: "not-a-url", expected: false },
       { input: "", expected: false },
       { input: "http://127.0.0.1:18789", expected: false },
@@ -344,6 +445,34 @@ describe("isSecureWebSocketUrl", () => {
 
     for (const testCase of cases) {
       expect(isSecureWebSocketUrl(testCase.input), testCase.input).toBe(testCase.expected);
+    }
+  });
+
+  it("allows private ws:// only when opt-in is enabled", () => {
+    const allowedWhenOptedIn = [
+      "ws://10.0.0.5:18789",
+      "ws://172.16.0.1:18789",
+      "ws://192.168.1.100:18789",
+      "ws://100.64.0.1:18789",
+      "ws://169.254.10.20:18789",
+      "ws://[fc00::1]:18789",
+      "ws://[fe80::1]:18789",
+    ];
+
+    for (const input of allowedWhenOptedIn) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(true);
+    }
+  });
+
+  it("still rejects non-unicast IPv6 ws:// even when opt-in is enabled", () => {
+    const disallowedWhenOptedIn = [
+      "ws://[::]:18789",
+      "ws://[0:0::0]:18789",
+      "ws://[ff02::1]:18789",
+    ];
+
+    for (const input of disallowedWhenOptedIn) {
+      expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
   });
 });

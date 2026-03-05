@@ -5,6 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
+import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -140,10 +141,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext:
-      acc?.prependContext && next.prependContext
-        ? `${acc.prependContext}\n\n${next.prependContext}`
-        : (next.prependContext ?? acc?.prependContext),
+    prependContext: concatOptionalTextSegments({
+      left: acc?.prependContext,
+      right: next.prependContext,
+    }),
+    prependSystemContext: concatOptionalTextSegments({
+      left: acc?.prependSystemContext,
+      right: next.prependSystemContext,
+    }),
+    appendSystemContext: concatOptionalTextSegments({
+      left: acc?.appendSystemContext,
+      right: next.appendSystemContext,
+    }),
   });
 
   const mergeSubagentSpawningResult = (
@@ -172,6 +181,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return next;
   };
 
+  const handleHookError = (params: {
+    hookName: PluginHookName;
+    pluginId: string;
+    error: unknown;
+  }): never | void => {
+    const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${String(
+      params.error,
+    )}`;
+    if (catchErrors) {
+      logger?.error(msg);
+      return;
+    }
+    throw new Error(msg, { cause: params.error });
+  };
+
   /**
    * Run a hook that doesn't return a value (fire-and-forget style).
    * All handlers are executed in parallel for performance.
@@ -192,12 +216,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       try {
         await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     });
 
@@ -237,12 +256,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           }
         }
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     }
 

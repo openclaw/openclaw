@@ -76,7 +76,7 @@ describe("resolveDiscordTarget", () => {
   const listPeers = vi.mocked(listDiscordDirectoryPeersLive);
 
   beforeEach(() => {
-    listPeers.mockReset();
+    listPeers.mockClear();
   });
 
   it("returns a resolved user for usernames", async () => {

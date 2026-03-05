@@ -182,9 +182,7 @@ The `metadata.openclaw` object supports:
 The `handler.ts` file exports a `HookHandler` function:
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const myHandler: HookHandler = async (event) => {
+const myHandler = async (event) => {
   // Only trigger on 'new' command
   if (event.type !== "command" || event.action !== "new") {
     return;
@@ -260,7 +258,9 @@ Triggered when the gateway starts:
 Triggered when messages are received or sent:
 
 - **`message`**: All message events (general listener)
-- **`message:received`**: When an inbound message is received from any channel
+- **`message:received`**: When an inbound message is received from any channel. Fires early in processing before media understanding. Content may contain raw placeholders like `<media:audio>` for media attachments that haven't been processed yet.
+- **`message:transcribed`**: When a message has been fully processed, including audio transcription and link understanding. At this point, `transcript` contains the full transcript text for audio messages. Use this hook when you need access to transcribed audio content.
+- **`message:preprocessed`**: Fires for every message after all media + link understanding completes, giving hooks access to the fully enriched body (transcripts, image descriptions, link summaries) before the agent sees it.
 - **`message:sent`**: When an outbound message is successfully sent
 
 #### Message Event Context
@@ -299,19 +299,45 @@ Message events include rich context about the message:
   accountId?: string,     // Provider account ID
   conversationId?: string, // Chat/conversation ID
   messageId?: string,     // Message ID returned by the provider
+  isGroup?: boolean,      // Whether this outbound message belongs to a group/channel context
+  groupId?: string,       // Group/channel identifier for correlation with message:received
+}
+
+// message:transcribed context
+{
+  body?: string,          // Raw inbound body before enrichment
+  bodyForAgent?: string,  // Enriched body visible to the agent
+  transcript: string,     // Audio transcript text
+  channelId: string,      // Channel (e.g., "telegram", "whatsapp")
+  conversationId?: string,
+  messageId?: string,
+}
+
+// message:preprocessed context
+{
+  body?: string,          // Raw inbound body
+  bodyForAgent?: string,  // Final enriched body after media/link understanding
+  transcript?: string,    // Transcript when audio was present
+  channelId: string,      // Channel (e.g., "telegram", "whatsapp")
+  conversationId?: string,
+  messageId?: string,
+  isGroup?: boolean,
+  groupId?: string,
 }
 ```
 
 #### Example: Message Logger Hook
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-import { isMessageReceivedEvent, isMessageSentEvent } from "../../src/hooks/internal-hooks.js";
+const isMessageReceivedEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "received";
+const isMessageSentEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "sent";
 
-const handler: HookHandler = async (event) => {
-  if (isMessageReceivedEvent(event)) {
+const handler = async (event) => {
+  if (isMessageReceivedEvent(event as { type: string; action: string })) {
     console.log(`[message-logger] Received from ${event.context.from}: ${event.context.content}`);
-  } else if (isMessageSentEvent(event)) {
+  } else if (isMessageSentEvent(event as { type: string; action: string })) {
     console.log(`[message-logger] Sent to ${event.context.to}: ${event.context.content}`);
   }
 };
@@ -364,9 +390,7 @@ This hook does something useful when you issue `/new`.
 ### 4. Create handler.ts
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const handler: HookHandler = async (event) => {
+const handler = async (event) => {
   if (event.type !== "command" || event.action !== "new") {
     return;
   }
@@ -793,13 +817,17 @@ Test your handlers in isolation:
 
 ```typescript
 import { test } from "vitest";
-import { createHookEvent } from "./src/hooks/hooks.js";
 import myHandler from "./hooks/my-hook/handler.js";
 
 test("my handler works", async () => {
-  const event = createHookEvent("command", "new", "test-session", {
-    foo: "bar",
-  });
+  const event = {
+    type: "command",
+    action: "new",
+    sessionKey: "test-session",
+    timestamp: new Date(),
+    messages: [],
+    context: { foo: "bar" },
+  };
 
   await myHandler(event);
 
