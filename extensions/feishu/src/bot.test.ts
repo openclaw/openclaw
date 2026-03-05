@@ -69,10 +69,15 @@ function createRuntimeEnv(): RuntimeEnv {
   } as RuntimeEnv;
 }
 
-async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+}) {
   await handleFeishuMessage({
     cfg: params.cfg,
     event: params.event,
+    botOpenId: params.botOpenId,
     runtime: createRuntimeEnv(),
   });
 }
@@ -565,6 +570,57 @@ describe("handleFeishuMessage command authorization", () => {
         ChatType: "group",
         CommandAuthorized: true,
         SenderId: "ou-admin",
+      }),
+    );
+  });
+
+  it("normalizes leading bot mention into slash CommandBody for group commands", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          allowFrom: ["ou-admin"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-admin",
+        },
+      },
+      message: {
+        message_id: "msg-group-command-mention-prefix",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_bot_1 /model" }),
+        mentions: [
+          {
+            key: "@_bot_1",
+            name: "OpenClaw",
+            id: { open_id: "ou-bot" },
+          },
+        ],
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou-bot" });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        RawBody: '<at user_id="ou-bot">OpenClaw</at> /model',
+        CommandBody: "/model",
       }),
     );
   });

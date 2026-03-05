@@ -503,6 +503,30 @@ function normalizeMentions(
   return result;
 }
 
+function normalizeFeishuCommandBody(params: {
+  text: string;
+  isGroup: boolean;
+  botOpenId?: string;
+}): string {
+  const trimmed = params.text.trimStart();
+  if (!params.isGroup) {
+    return trimmed;
+  }
+
+  const botOpenId = params.botOpenId?.trim();
+  if (!botOpenId) {
+    return trimmed;
+  }
+
+  const escapedBotOpenId = botOpenId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const leadingBotMentionPattern = new RegExp(
+    `^(?:<at\\s+user_id="${escapedBotOpenId}">[^<]*</at>\\s*)+`,
+    "i",
+  );
+  const stripped = trimmed.replace(leadingBotMentionPattern, "").trimStart();
+  return stripped.startsWith("/") ? stripped : trimmed;
+}
+
 /**
  * Parse media keys from message content based on message type.
  */
@@ -1297,6 +1321,11 @@ export async function handleFeishuMessage(params: {
             timestamp: entry.timestamp,
           }))
         : undefined;
+    const normalizedCommandBody = normalizeFeishuCommandBody({
+      text: ctx.content,
+      isGroup,
+      botOpenId,
+    });
 
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = (
@@ -1311,7 +1340,7 @@ export async function handleFeishuMessage(params: {
         ReplyToId: ctx.parentId,
         RootMessageId: ctx.rootId,
         RawBody: ctx.content,
-        CommandBody: ctx.content,
+        CommandBody: normalizedCommandBody,
         From: feishuFrom,
         To: feishuTo,
         SessionKey: agentSessionKey,
