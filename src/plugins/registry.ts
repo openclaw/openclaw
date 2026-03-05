@@ -12,7 +12,11 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { isPluginHookName, isPromptInjectionHookName } from "./types.js";
+import {
+  isPluginHookName,
+  isPromptInjectionHookName,
+  stripPromptMutationFieldsFromLegacyHookResult,
+} from "./types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -32,7 +36,6 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
-  PluginHookBeforeAgentStartResult,
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -144,24 +147,6 @@ export type PluginRegistryParams = {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
-};
-
-const stripPromptMutationFieldsFromLegacyHookResult = (
-  result: PluginHookBeforeAgentStartResult | void,
-): PluginHookBeforeAgentStartResult | void => {
-  if (!result || typeof result !== "object") {
-    return result;
-  }
-  const {
-    systemPrompt: _systemPrompt,
-    prependContext: _prependContext,
-    prependSystemContext: _prependSystemContext,
-    appendSystemContext: _appendSystemContext,
-    ...remaining
-  } = result;
-  return Object.keys(remaining).length > 0
-    ? (remaining as PluginHookBeforeAgentStartResult)
-    : undefined;
 };
 
 const constrainLegacyPromptInjectionHook = (

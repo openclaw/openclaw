@@ -430,6 +430,22 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
 };
 
+export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
+  "systemPrompt",
+  "prependContext",
+  "prependSystemContext",
+  "appendSystemContext",
+] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
+
+type MissingPluginPromptMutationResultFields = Exclude<
+  keyof PluginHookBeforePromptBuildResult,
+  (typeof PLUGIN_PROMPT_MUTATION_RESULT_FIELDS)[number]
+>;
+type AssertAllPluginPromptMutationResultFieldsListed =
+  MissingPluginPromptMutationResultFields extends never ? true : never;
+const assertAllPluginPromptMutationResultFieldsListed: AssertAllPluginPromptMutationResultFieldsListed = true;
+void assertAllPluginPromptMutationResultFieldsListed;
+
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
@@ -439,6 +455,26 @@ export type PluginHookBeforeAgentStartEvent = {
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
   PluginHookBeforeModelResolveResult;
+
+export type PluginHookBeforeAgentStartOverrideResult = Omit<
+  PluginHookBeforeAgentStartResult,
+  keyof PluginHookBeforePromptBuildResult
+>;
+
+export const stripPromptMutationFieldsFromLegacyHookResult = (
+  result: PluginHookBeforeAgentStartResult | void,
+): PluginHookBeforeAgentStartOverrideResult | void => {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  const remaining: Partial<PluginHookBeforeAgentStartResult> = { ...result };
+  for (const field of PLUGIN_PROMPT_MUTATION_RESULT_FIELDS) {
+    delete remaining[field];
+  }
+  return Object.keys(remaining).length > 0
+    ? (remaining as PluginHookBeforeAgentStartOverrideResult)
+    : undefined;
+};
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {
