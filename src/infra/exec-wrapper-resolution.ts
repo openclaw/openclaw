@@ -3,6 +3,7 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
+  extractPosixShellScriptPath,
 } from "./shell-inline-command.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
@@ -656,4 +657,31 @@ export function extractShellWrapperCommand(
   rawCommand?: string | null,
 ): ShellWrapperCommand {
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+}
+
+/**
+ * Extract the script file path from a shell wrapper invocation.
+ * Example: bash -o pipefail script.sh → "script.sh"
+ * Returns null if this is an inline command (bash -c "...") or if no script path is found.
+ */
+export function extractShellScriptPath(argv: string[]): string | null {
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return null;
+  }
+  
+  const wrapper = normalizeExecutableToken(token0);
+  const spec = findShellWrapperSpec(wrapper);
+  if (!spec) {
+    return null;
+  }
+  
+  // For POSIX shells, use the new robust script path extractor
+  if (spec.kind === "posix") {
+    return extractPosixShellScriptPath(argv);
+  }
+  
+  // For cmd and powershell, they typically don't have a script file mode
+  // (they use /c or -Command for scripts)
+  return null;
 }

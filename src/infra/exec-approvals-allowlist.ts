@@ -20,6 +20,7 @@ import {
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
   extractShellWrapperInlineCommand,
+  extractShellScriptPath,
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   unwrapKnownShellMultiplexerInvocation,
@@ -380,28 +381,42 @@ function collectAllowAlwaysPatterns(params: {
     params.out.add(candidatePath);
     return;
   }
+  
+  // Handle shell wrapper: either inline command (-c) or script file
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
-  if (!inlineCommand) {
-    return;
-  }
-  const nested = analyzeShellCommand({
-    command: inlineCommand,
-    cwd: params.cwd,
-    env: params.env,
-    platform: params.platform,
-  });
-  if (!nested.ok) {
-    return;
-  }
-  for (const nestedSegment of nested.segments) {
-    collectAllowAlwaysPatterns({
-      segment: nestedSegment,
+  if (inlineCommand) {
+    // Inline command case: bash -c "echo hi"
+    const nested = analyzeShellCommand({
+      command: inlineCommand,
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
-      depth: params.depth + 1,
-      out: params.out,
     });
+    if (!nested.ok) {
+      return;
+    }
+    for (const nestedSegment of nested.segments) {
+      collectAllowAlwaysPatterns({
+        segment: nestedSegment,
+        cwd: params.cwd,
+        env: params.env,
+        platform: params.platform,
+        depth: params.depth + 1,
+        out: params.out,
+      });
+    }
+    return;
+  }
+  
+  // No inline command → check for script file path
+  // Example: bash -o pipefail script.sh
+  const scriptPath = extractShellScriptPath(params.segment.argv);
+  if (scriptPath) {
+    const scriptResolution = resolveCommandResolutionFromArgv([scriptPath], params.cwd, params.env);
+    const scriptCandidatePath = resolveAllowlistCandidatePath(scriptResolution, params.cwd);
+    if (scriptCandidatePath) {
+      params.out.add(scriptCandidatePath);
+    }
   }
 }
 
