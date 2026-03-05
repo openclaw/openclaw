@@ -23,6 +23,7 @@ import {
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "ark"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
+const MAX_TIMEOUT_SECONDS = 300;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
@@ -83,6 +84,7 @@ const WebSearchSchema = Type.Object({
     Type.Number({
       description: "Request timeout in seconds.",
       minimum: 1,
+      maximum: MAX_TIMEOUT_SECONDS,
     }),
   ),
 });
@@ -136,6 +138,7 @@ type ArkSearchResponse = {
   output?: Array<{
     type?: string;
     role?: string;
+    text?: string;
     content?: Array<{
       type?: string;
       text?: string;
@@ -1518,8 +1521,12 @@ export function createWebSearchTool(options?: {
       }
       const argTimeoutSeconds = readNumberParam(params, "timeoutSeconds", { integer: true });
       const configTimeoutSeconds = search?.timeoutSeconds;
-      const finalTimeoutSeconds =
+      const rawTimeoutSeconds =
         argTimeoutSeconds ?? configTimeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+      const finalTimeoutSeconds = Math.min(
+        Math.max(1, Math.floor(Number(rawTimeoutSeconds))),
+        MAX_TIMEOUT_SECONDS,
+      );
 
       const result = await runWebSearch({
         query,
