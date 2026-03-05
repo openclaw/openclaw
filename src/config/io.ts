@@ -356,6 +356,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: false,
         raw: null,
         parsed: {},
+        resolved: {},
         valid: true,
         config,
         hash,
@@ -375,6 +376,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: {},
+          resolved: {},
           valid: false,
           config: {},
           hash,
@@ -401,6 +403,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(parsedRes.parsed),
           valid: false,
           config: coerceConfig(parsedRes.parsed),
           hash,
@@ -429,6 +432,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(resolved),
           valid: false,
           config: coerceConfig(resolved),
           hash,
@@ -448,6 +452,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           exists: true,
           raw,
           parsed: parsedRes.parsed,
+          resolved: coerceConfig(resolvedConfigRaw),
           valid: false,
           config: coerceConfig(resolvedConfigRaw),
           hash,
@@ -463,6 +468,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw,
         parsed: parsedRes.parsed,
+        resolved: validated.config,
         valid: true,
         config: normalizeConfigPaths(
           applyTalkApiKey(
@@ -484,6 +490,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         exists: true,
         raw: null,
         parsed: {},
+        resolved: {},
         valid: false,
         config: {},
         hash: hashConfigRaw(null),
@@ -494,7 +501,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig) {
+  async function writeConfigFile(cfg: OpenClawConfig, _options?: { unsetPaths?: string[][] }) {
     clearConfigCache();
     const validated = validateConfigObjectWithPlugins(cfg);
     if (!validated.ok) {
@@ -625,7 +632,10 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
 
-export async function writeConfigFile(cfg: OpenClawConfig): Promise<void> {
+export async function writeConfigFile(
+  cfg: OpenClawConfig,
+  options?: { unsetPaths?: string[][] },
+): Promise<void> {
   clearConfigCache();
-  await createConfigIO().writeConfigFile(cfg);
+  await createConfigIO().writeConfigFile(cfg, options);
 }

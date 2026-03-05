@@ -114,6 +114,8 @@ export type ConfigFileSnapshot = {
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  /** Config after $include and ${ENV} resolution, but before runtime defaults */
+  resolved: OpenClawConfig;
   valid: boolean;
   config: OpenClawConfig;
   hash?: string;
