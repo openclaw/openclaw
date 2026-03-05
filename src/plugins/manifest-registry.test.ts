@@ -150,7 +150,10 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("emits duplicate warning for same-origin plugins with same id", () => {
