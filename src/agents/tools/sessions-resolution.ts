@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+
+const log = createSubsystemLogger("sessions-resolution");
 
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
@@ -55,7 +58,10 @@ export async function listSpawnedSessionKeys(params: {
       .map((value) => value.trim())
       .filter(Boolean);
     return new Set(keys);
-  } catch {
+  } catch (err) {
+    log.debug(
+      `listSpawnedSessionKeys failed for requester=${params.requesterSessionKey}: ${String(err)}`,
+    );
     return new Set();
   }
 }
@@ -242,7 +248,8 @@ async function resolveSessionKeyFromKey(params: {
       }),
       resolvedViaSessionId: false,
     };
-  } catch {
+  } catch (err) {
+    log.debug(`resolveSessionKeyFromKey failed for key=${params.key}: ${String(err)}`);
     return null;
   }
 }
