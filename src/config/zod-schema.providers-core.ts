@@ -385,6 +385,13 @@ const DiscordUiSchema = z
   .strict()
   .optional();
 
+const DiscordAgentComponentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const DiscordVoiceAutoJoinSchema = z
   .object({
     guildId: z.string().min(1),
@@ -474,6 +481,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    agentComponents: DiscordAgentComponentsSchema,
     ui: DiscordUiSchema,
     slashCommand: z
       .object({
