@@ -7,6 +7,7 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   normalizeHookDispatchSessionKey,
   type HookAgentDispatchPayload,
@@ -40,10 +41,20 @@ export function createGatewayHooksRequestHandler(params: {
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    const notifySessionKey =
-      requestedSessionKey && requestedSessionKey !== sessionKey
-        ? requestedSessionKey
-        : sessionKey || mainSessionKey;
+    let notifySessionKey = sessionKey || mainSessionKey;
+    if (requestedSessionKey && requestedSessionKey !== sessionKey) {
+      const parsedRequested = parseAgentSessionKey(requestedSessionKey);
+      const targetAgentId = value.agentId ? normalizeAgentId(value.agentId) : undefined;
+      if (
+        parsedRequested &&
+        targetAgentId &&
+        normalizeAgentId(parsedRequested.agentId) === targetAgentId
+      ) {
+        notifySessionKey = `agent:${targetAgentId}:${sessionKey}`;
+      } else {
+        notifySessionKey = requestedSessionKey;
+      }
+    }
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {

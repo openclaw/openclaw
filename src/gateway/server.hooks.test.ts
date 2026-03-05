@@ -319,6 +319,39 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("canonicalizes notify lane when request session key uses mixed-case agent prefix", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        agentId: "hooks",
+        sessionKey: "agent:HOOKS:slack:channel:c123",
+      });
+      expect(resAgent.status).toBe(200);
+
+      const canonicalNotifyKey = "agent:hooks:slack:channel:c123";
+      const notifyEvents = await waitForSessionEvent(canonicalNotifyKey);
+      expect(notifyEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+
+      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { agentId?: string } }
+        | undefined;
+      expect(routedCall?.job?.agentId).toBe("hooks");
+      expect(routedCall?.sessionKey).toBe("slack:channel:c123");
+      expect(peekSystemEvents("agent:HOOKS:slack:channel:c123")).toEqual([]);
+      drainSystemEvents(canonicalNotifyKey);
+    });
+  });
+
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
