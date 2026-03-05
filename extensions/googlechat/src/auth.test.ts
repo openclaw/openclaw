@@ -25,6 +25,26 @@ describe("verifyGoogleChatRequest", () => {
     vi.clearAllMocks();
   });
 
+  it("accepts trusted Chat issuer even when email_verified is missing", async () => {
+    verifyIdTokenMock.mockResolvedValue({
+      getPayload: () => ({
+        email: "chat@system.gserviceaccount.com",
+      }),
+    });
+
+    const result = await verifyGoogleChatRequest({
+      bearer: "token",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    });
+
+    expect(verifyIdTokenMock).toHaveBeenCalledWith({
+      idToken: "token",
+      audience: "https://example.com/googlechat",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
   it("accepts trusted add-on issuer even when email_verified is missing", async () => {
     verifyIdTokenMock.mockResolvedValue({
       getPayload: () => ({
