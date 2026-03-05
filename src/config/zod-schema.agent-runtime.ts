@@ -525,6 +525,14 @@ export const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    mutationGate: z
+      .object({
+        enabled: z.boolean().optional(),
+        extraMutations: z.array(z.string()).optional(),
+        channels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -729,6 +737,14 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
+    mutationGate: z
+      .object({
+        enabled: z.boolean().optional(),
+        extraMutations: z.array(z.string()).optional(),
+        channels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

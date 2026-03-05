@@ -478,6 +478,12 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.knownPollNoProgress":
     "Enable known poll tool no-progress loop detection (default: true).",
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
+  "tools.mutationGate.enabled":
+    "Block mutation tools unless user clicks an inline approval button. One click = one tool call (default: false).",
+  "tools.mutationGate.extraMutations":
+    "Extra tool names that require approval, added on top of the built-in defaults (apply_patch, gateway).",
+  "tools.mutationGate.channels":
+    'Channels where the gate is enforced (default: ["telegram"]). Only channels with inline-button approval support should be listed.',
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
