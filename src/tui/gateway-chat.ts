@@ -128,7 +128,12 @@ export class GatewayChatClient {
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.UI,
+      // Important: treat the TUI as a CLI client for routing decisions.
+      // TUI clients should be allowed to inherit deliverable routes on configured
+      // main sessions when `--deliver` is enabled. Using UI mode causes gateway
+      // chat.send to treat these as Webchat-like clients and force internal routing.
+      // See: https://github.com/openclaw/openclaw/issues/36088
+      mode: GATEWAY_CLIENT_MODES.CLI,
       caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
