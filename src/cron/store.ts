@@ -74,8 +74,9 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     serializedStoreCache.set(storePath, json);
     return;
   }
-  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
+
+  // Backup must be created BEFORE any write operations to ensure it captures
+  // the original content. See issue #35195.
   if (previous !== null) {
     try {
       await fs.promises.copyFile(storePath, `${storePath}.bak`);
@@ -83,6 +84,9 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
       // best-effort
     }
   }
+
+  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  await fs.promises.writeFile(tmp, json, "utf-8");
   await renameWithRetry(tmp, storePath);
   serializedStoreCache.set(storePath, json);
 }
