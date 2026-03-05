@@ -3,7 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
+  analyzeArgvCommand,
+  evaluateExecAllowlist,
   evaluateShellAllowlist,
+  normalizeSafeBins,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
   resolveSafeBins,
@@ -143,6 +146,68 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform: process.platform,
     });
     expect(patterns).toEqual([]);
+  });
+
+  it("persists and reuses script path for direct bash script invocations", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const script = path.join(dir, "scripts", "save_crystal.sh");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, "echo ok\n", "utf8");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+    const command = "bash scripts/save_crystal.sh";
+
+    const first = evaluateShellAllowlist({
+      command,
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([script]);
+
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(false);
+
+    const argvAnalysis = analyzeArgvCommand({
+      argv: ["bash", "scripts/save_crystal.sh"],
+      cwd: dir,
+      env,
+    });
+    const argvEval = evaluateExecAllowlist({
+      analysis: argvAnalysis,
+      allowlist: [{ pattern: script }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(argvEval.allowlistSatisfied).toBe(true);
   });
 
   it("detects shell wrappers even when unresolved executableName is a full path", () => {

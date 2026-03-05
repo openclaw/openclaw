@@ -25,6 +25,7 @@ import {
   unwrapKnownShellMultiplexerInvocation,
   unwrapKnownDispatchWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
+import { expandHomePrefix } from "./home-dir.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -221,7 +222,17 @@ function evaluateSegments(
       candidatePath && segment.resolution
         ? { ...segment.resolution, resolvedPath: candidatePath }
         : segment.resolution;
-    const match = matchAllowlist(params.allowlist, candidateResolution);
+    const scriptPath = resolveShellWrapperScriptCandidatePath({ segment, cwd: params.cwd });
+    const scriptResolution = scriptPath
+      ? {
+          rawExecutable: scriptPath,
+          resolvedPath: scriptPath,
+          executableName: path.basename(scriptPath),
+        }
+      : null;
+    const match =
+      matchAllowlist(params.allowlist, candidateResolution) ??
+      (scriptResolution ? matchAllowlist(params.allowlist, scriptResolution) : null);
     if (match) {
       matches.push(match);
     }
@@ -327,6 +338,46 @@ function isDispatchWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isDispatchWrapperExecutable);
 }
 
+function resolveDirectShellScriptToken(argv: string[]): string | null {
+  const first = argv[1]?.trim() ?? "";
+  if (!first) {
+    return null;
+  }
+  if (first === "--") {
+    const target = argv[2]?.trim() ?? "";
+    if (!target || target === "-" || target.startsWith("-") || target.startsWith("+")) {
+      return null;
+    }
+    return target;
+  }
+  if (first === "-" || first.startsWith("-") || first.startsWith("+")) {
+    return null;
+  }
+  return first;
+}
+
+function resolveShellWrapperScriptCandidatePath(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+}): string | null {
+  if (!isShellWrapperSegment(params.segment)) {
+    return null;
+  }
+  if (extractShellWrapperInlineCommand(params.segment.argv)) {
+    return null;
+  }
+  const token = resolveDirectShellScriptToken(params.segment.argv);
+  if (!token) {
+    return null;
+  }
+  const expanded = token.startsWith("~") ? expandHomePrefix(token) : token;
+  if (path.isAbsolute(expanded)) {
+    return expanded;
+  }
+  const base = params.cwd?.trim() ? params.cwd.trim() : process.cwd();
+  return path.resolve(base, expanded);
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -372,16 +423,23 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
-  if (!candidatePath) {
-    return;
-  }
   if (!isShellWrapperSegment(params.segment)) {
+    const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+    if (!candidatePath) {
+      return;
+    }
     params.out.add(candidatePath);
     return;
   }
   const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
   if (!inlineCommand) {
+    const scriptPath = resolveShellWrapperScriptCandidatePath({
+      segment: params.segment,
+      cwd: params.cwd,
+    });
+    if (scriptPath) {
+      params.out.add(scriptPath);
+    }
     return;
   }
   const nested = analyzeShellCommand({
