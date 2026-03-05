@@ -676,7 +676,17 @@ run_npm_global_install() {
     local log="$2"
 
     local -a cmd
-    cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    # Prevent git/ssh from prompting for credentials during npm install (installer is non-interactive).
+    # This avoids hangs like: "git@github.com's password:" in piped install flows (#35118).
+    cmd=(
+        env
+        "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS"
+        "GIT_TERMINAL_PROMPT=0"
+        "GIT_ASKPASS=false"
+        "GIT_SSH_COMMAND=ssh -oBatchMode=yes"
+        npm
+        --loglevel "$NPM_LOGLEVEL"
+    )
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
@@ -778,6 +788,11 @@ print_npm_failure_diagnostics() {
     first_error="$(extract_first_npm_error_line "$log")"
     if [[ -n "$first_error" ]]; then
         echo "  First npm error: ${first_error}"
+    fi
+
+    if grep -q "terminal prompts disabled" "$log" || grep -q "could not read Username for" "$log"; then
+        echo "  Note: git tried to prompt for credentials during npm install (disabled by this installer to avoid hangs)."
+        echo "  Rerun with --verbose to see the full npm output and identify the dependency requiring git."
     fi
 }
 
