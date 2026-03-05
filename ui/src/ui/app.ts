@@ -400,7 +400,7 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    void handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 
   protected firstUpdated() {

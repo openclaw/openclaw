@@ -4,6 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import { getCachedBuildInfoVersion } from "./build-info.ts";
 import {
   applySettings,
   loadCron,
@@ -145,11 +146,14 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  // Use cached version from build-info.json if available, otherwise fall back to "dev"
+  const clientVersion = getCachedBuildInfoVersion() ?? "dev";
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
+    clientVersion,
     mode: "webchat",
     instanceId: host.clientInstanceId,
     onHello: (hello) => {
