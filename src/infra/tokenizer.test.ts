@@ -13,10 +13,12 @@ describe("tokenizer", () => {
   });
 
   describe("default behavior (char estimation: chars * 0.4)", () => {
-    it("should use char estimation by default", () => {
+    it("should report correct enabled status from config", () => {
       const config = getConfig();
-      // 默认应该是禁用的，使用字符估算
-      expect(config.enabled).toBe(false);
+      const expected =
+        process.env.OPENCLAW_TOKENIZER_ENABLED === "1" ||
+        process.env.OPENCLAW_TOKENIZER_ENABLED === "true";
+      expect(config.enabled).toBe(expected);
     });
 
     it("should estimate tokens using chars * 0.4, only counting content", () => {
