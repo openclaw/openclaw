@@ -320,20 +320,30 @@ export function handleMessageEnd(
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    // If this is a non-streamed turn and a cross-turn separator is pending,
+    // prepend it to the text. This handles turns that emit only via this
+    // fallback path (no text_* events), which would otherwise never consume
+    // the separator in handleMessageUpdate.
+    let finalText = cleanedText;
+    if (ctx.state.pendingCrossTurnSeparator && finalText) {
+      finalText = "\n\n" + finalText;
+      ctx.state.pendingCrossTurnSeparator = false;
+    }
+
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: finalText,
+        delta: finalText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "assistant",
       data: {
-        text: cleanedText,
-        delta: cleanedText,
+        text: finalText,
+        delta: finalText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });

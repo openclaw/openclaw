@@ -159,5 +159,52 @@ describe("pendingCrossTurnSeparator flag preservation", () => {
       separatorFlag ||= blockChunking && emittedAssistantUpdate;
       expect(separatorFlag).toBe(true);
     });
+
+    it("consumes separator in fallback path for non-streamed turns", () => {
+      // Simulate separator consumption in handleMessageEnd fallback path
+      let pendingCrossTurnSeparator = true; // Separator was armed by previous turn
+      let cleanedText = "Fallback text from non-streamed turn";
+
+      // Fallback path should prepend separator and clear flag
+      if (pendingCrossTurnSeparator && cleanedText) {
+        cleanedText = "\n\n" + cleanedText;
+        pendingCrossTurnSeparator = false;
+      }
+
+      expect(cleanedText).toBe("\n\nFallback text from non-streamed turn");
+      expect(pendingCrossTurnSeparator).toBe(false);
+    });
+
+    it("does not consume separator when no text in fallback path", () => {
+      // Simulate fallback path with no text
+      let pendingCrossTurnSeparator = true; // Separator was armed
+      let cleanedText = ""; // No text to emit
+
+      // Fallback path shouldn't modify anything
+      if (pendingCrossTurnSeparator && cleanedText) {
+        cleanedText = "\n\n" + cleanedText;
+        pendingCrossTurnSeparator = false;
+      }
+
+      expect(cleanedText).toBe("");
+      expect(pendingCrossTurnSeparator).toBe(true); // Flag should stay set
+    });
+
+    it("handles media-only turn with pending separator", () => {
+      // Simulate media-only turn (no cleanedText, but hasMedia)
+      let pendingCrossTurnSeparator = true;
+      let cleanedText = "";
+
+      // Media-only turns don't prepend text separator, but the flag
+      // would be consumed by the next text turn. For this test, verify
+      // that empty cleanedText doesn't consume the separator.
+      if (pendingCrossTurnSeparator && cleanedText) {
+        cleanedText = "\n\n" + cleanedText;
+        pendingCrossTurnSeparator = false;
+      }
+
+      expect(cleanedText).toBe("");
+      expect(pendingCrossTurnSeparator).toBe(true); // Flag stays for next turn
+    });
   });
 });
