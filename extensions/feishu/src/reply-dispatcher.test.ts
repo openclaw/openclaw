@@ -26,6 +26,23 @@ vi.mock("./typing.js", () => ({
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
 vi.mock("./streaming-card.js", () => ({
+  mergeStreamingText: (previousText: string | undefined, nextText: string | undefined) => {
+    const previous = typeof previousText === "string" ? previousText : "";
+    const next = typeof nextText === "string" ? nextText : "";
+    if (!next) {
+      return previous;
+    }
+    if (!previous || next === previous) {
+      return next;
+    }
+    if (next.startsWith(previous)) {
+      return next;
+    }
+    if (previous.startsWith(next)) {
+      return previous;
+    }
+    return `${previous}${next}`;
+  },
   FeishuStreamingSession: class {
     active = false;
     start = vi.fn(async () => {
@@ -242,6 +259,116 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
+  });
+
+  it("delivers distinct final payloads after streaming close", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(2);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
+    expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("skips exact duplicate final text after streaming close", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```");
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate final text while still sending media", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "plain final" }, { kind: "final" });
+    await options.deliver(
+      { text: "plain final", mediaUrl: "https://example.com/a.png" },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "plain final",
+      }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
+  });
+
+  it("treats block updates as delta chunks", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+    await result.replyOptions.onPartialReply?.({ text: "hello" });
+    await options.deliver({ text: "lo world" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world");
   });
 
   it("sends media-only payloads as attachments", async () => {
