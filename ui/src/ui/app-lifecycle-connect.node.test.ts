@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-const connectGatewayMock = vi.fn();
-const loadBootstrapMock = vi.fn();
+const { connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
+  connectGatewayMock: vi.fn(),
+  loadBootstrapMock: vi.fn(),
+}));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
