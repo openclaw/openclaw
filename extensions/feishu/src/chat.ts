@@ -390,42 +390,47 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
         const p = params as FeishuChatParams;
         try {
           const client = getClient();
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          const chatId = p.chat_id!;
           switch (p.action) {
             case "members":
               return json(
-                await getChatMembers(
-                  client,
-                  p.chat_id,
-                  p.page_size,
-                  p.page_token,
-                  p.member_id_type,
-                ),
+                await getChatMembers(client, chatId, p.page_size, p.page_token, p.member_id_type),
               );
             case "info":
-              return json(await getChatInfo(client, p.chat_id));
+              return json(await getChatInfo(client, chatId));
             case "get_announcement":
-              return json(await getAnnouncement(client, p.chat_id));
+              return json(await getAnnouncement(client, chatId));
             case "list_announcement_blocks":
-              return json(await listAnnouncementBlocks(client, p.chat_id));
+              return json(await listAnnouncementBlocks(client, chatId));
             case "get_announcement_block":
-              return json(await getAnnouncementBlock(client, p.chat_id, p.block_id));
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              return json(await getAnnouncementBlock(client, chatId, p.block_id!));
             case "write_announcement":
-              return json(await writeAnnouncement(client, p.chat_id, p.content));
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              return json(await writeAnnouncement(client, chatId, p.content!));
             case "append_announcement":
-              return json(await appendAnnouncement(client, p.chat_id, p.content));
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              return json(await appendAnnouncement(client, chatId, p.content!));
             case "update_announcement_block":
-              return json(await updateAnnouncementBlock(client, p.chat_id, p.block_id, p.content));
+              return json(
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                await updateAnnouncementBlock(client, chatId, p.block_id!, p.content!),
+              );
             case "create_chat":
-              return json(await createChat(client, p.name, p.user_ids, p.description));
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              return json(await createChat(client, p.name!, p.user_ids, p.description));
             case "add_members":
-              return json(await addMembers(client, p.chat_id, p.user_ids));
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              return json(await addMembers(client, chatId, p.user_ids!));
             case "check_bot_in_chat":
-              return json(await checkBotInChat(client, p.chat_id));
+              return json(await checkBotInChat(client, chatId));
             case "delete_chat":
-              return json(await deleteChat(client, p.chat_id));
+              return json(await deleteChat(client, chatId));
             case "create_session_chat":
               return json(
-                await createSessionChat(client, p.name, p.user_ids, p.greeting, p.description),
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                await createSessionChat(client, p.name!, p.user_ids!, p.greeting, p.description),
               );
             default:
               return json({ error: `Unknown action: ${String((p as { action: string }).action)}` });
