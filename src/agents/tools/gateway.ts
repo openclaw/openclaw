@@ -123,13 +123,13 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         })
       : undefined;
   const explicitToken = trimToUndefined(opts?.gatewayToken);
-  const token = validatedOverride
-    ? resolveGatewayOverrideToken({
-        cfg,
-        target: validatedOverride.target,
-        explicitToken,
-      })
-    : explicitToken;
+  // Always resolve credentials via config/env fallback so gateway.auth.mode=token
+  // works for agent tool calls, not just CLI/webchat paths. (#35039)
+  const token = resolveGatewayOverrideToken({
+    cfg,
+    target: validatedOverride?.target ?? "local",
+    explicitToken,
+  });
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))

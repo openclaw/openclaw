@@ -117,7 +117,10 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   }
   return {
     security: minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity),
-    ask: maxAsk(configuredAsk, requestedAsk ?? configuredAsk),
+    // When --ask is explicitly provided on the CLI, honour it directly so that
+    // `--ask off` can override the config default. maxAsk would always pick the
+    // stricter value, making it impossible to relax the ask policy from the CLI. (#35122)
+    ask: requestedAsk !== undefined && requestedAsk !== null ? requestedAsk : configuredAsk,
   };
 }
 
