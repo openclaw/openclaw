@@ -883,6 +883,46 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("archives replaced transcripts when daily reset rotates a stale session", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-archive-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:s-archive";
+    const existingSessionId = "daily-archive-session";
+    const existingSessionFile = path.join(root, "daily-archive-session.jsonl");
+    await fs.writeFile(existingSessionFile, "", "utf-8");
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const sessionUtils = await import("../../gateway/session-utils.fs.js");
+    const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(archiveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        storePath,
+        reason: "reset",
+      }),
+    );
+    archiveSpy.mockRestore();
+  });
+
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-edge-");

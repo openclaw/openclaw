@@ -328,7 +328,7 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  let previousSessionEntry: SessionEntry | undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -367,6 +367,11 @@ export async function initSessionState(params: {
     persistedProviderOverride = entry.providerOverride;
     persistedLabel = entry.label;
   } else {
+    // Archive/emit hooks for any rotation that replaces an existing session entry
+    // (manual /new,/reset and policy-based daily/idle resets).
+    if (entry) {
+      previousSessionEntry = { ...entry };
+    }
     sessionId = crypto.randomUUID();
     isNewSession = true;
     systemSent = false;
