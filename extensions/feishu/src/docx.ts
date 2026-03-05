@@ -508,8 +508,12 @@ async function resolveUploadInput(
 
   if (url) {
     const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
-    const urlPath = new URL(url).pathname;
-    const guessed = urlPath.split("/").pop() || "upload.bin";
+    let guessed = "upload.bin";
+    try {
+      guessed = new URL(url).pathname.split("/").pop() || "upload.bin";
+    } catch {
+      // Invalid URL — use default filename
+    }
     return {
       buffer: fetched.buffer,
       fileName: explicitFileName || guessed,
@@ -549,8 +553,12 @@ async function processImages(
 
     try {
       const buffer = await downloadImage(url, maxBytes);
-      const urlPath = new URL(url).pathname;
-      const fileName = urlPath.split("/").pop() || `image_${i}.png`;
+      let fileName = `image_${i}.png`;
+      try {
+        fileName = new URL(url).pathname.split("/").pop() || fileName;
+      } catch {
+        // Invalid URL — use default filename
+      }
       const fileToken = await uploadImageToDocx(client, blockId, buffer, fileName, docToken);
 
       await client.docx.documentBlock.patch({
