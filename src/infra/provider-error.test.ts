@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderError } from "./provider-error.js";
 import { DEFAULT_RETRY_POLICY, parseProviderError, retryWithBackoff } from "./provider-error.js";
-import type { ProviderError, RetryPolicy } from "./provider-error.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -225,7 +225,9 @@ describe("retryWithBackoff", () => {
     let calls = 0;
     const fn = vi.fn(async () => {
       calls++;
-      if (calls === 1) throw providerErr;
+      if (calls === 1) {
+        throw providerErr;
+      }
       return "ok";
     });
 
@@ -242,7 +244,9 @@ describe("retryWithBackoff", () => {
     let calls = 0;
     const fn = vi.fn(async () => {
       calls++;
-      if (calls === 1) throw providerErr;
+      if (calls === 1) {
+        throw providerErr;
+      }
       return "ok";
     });
 
@@ -317,7 +321,9 @@ describe("retryWithBackoff", () => {
     let calls = 0;
     const fn = vi.fn(async () => {
       calls++;
-      if (calls === 1) throw providerErr;
+      if (calls === 1) {
+        throw providerErr;
+      }
       throw new Error("unexpected failure");
     });
 
@@ -340,7 +346,9 @@ describe("retryWithBackoff", () => {
     let fnCalls = 0;
     const fn = vi.fn(async (): Promise<string> => {
       fnCalls++;
-      if (fnCalls === 1) throw secondErr; // attempt 1 retry: fails with 8000ms retry-after
+      if (fnCalls === 1) {
+        throw secondErr;
+      } // attempt 1 retry: fails with 8000ms retry-after
       return "ok"; // attempt 2 retry: succeeds
     });
 

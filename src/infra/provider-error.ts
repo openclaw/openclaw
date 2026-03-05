@@ -35,12 +35,16 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 };
 
 function capitalizeFirst(s: string): string {
-  if (s.length === 0) return s;
+  if (s.length === 0) {
+    return s;
+  }
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function parseRetryAfterMs(headerValue: string | null): number | null {
-  if (headerValue === null || headerValue.trim() === "") return null;
+  if (headerValue === null || headerValue.trim() === "") {
+    return null;
+  }
 
   const numeric = parseInt(headerValue.trim(), 10);
   if (!isNaN(numeric) && /^\d+$/.test(headerValue.trim())) {
@@ -174,8 +178,12 @@ export async function retryWithBackoff<T>(
   try {
     return await fn();
   } catch (err: unknown) {
-    if (!isProviderError(err)) throw err;
-    if (!err.retryable) throw err;
+    if (!isProviderError(err)) {
+      throw err;
+    }
+    if (!err.retryable) {
+      throw err;
+    }
     lastError = err;
   }
 
@@ -192,8 +200,12 @@ export async function retryWithBackoff<T>(
     try {
       return await fn();
     } catch (err: unknown) {
-      if (!isProviderError(err)) throw err;
-      if (!err.retryable) throw err;
+      if (!isProviderError(err)) {
+        throw err;
+      }
+      if (!err.retryable) {
+        throw err;
+      }
       lastError = err;
     }
   }

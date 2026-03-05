@@ -28,7 +28,9 @@ export async function fetchJsonWithRetry(
   onRetry?: (attempt: number, max: number, delayMs: number) => void,
 ): Promise<Response> {
   const res = await fetchJson(url, init, timeoutMs, fetchFn);
-  if (res.ok) return res;
+  if (res.ok) {
+    return res;
+  }
 
   const providerErr = await parseProviderError(provider, res);
 
