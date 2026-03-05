@@ -36,6 +36,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -104,7 +105,7 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
-function stripUnknownConfigKeys(config: OpenClawConfig): {
+export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
 } {
@@ -1781,6 +1782,7 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
+  runtime?: RuntimeEnv;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
@@ -2069,12 +2071,26 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
     candidate = unknown.config;
     pendingChanges = true;
+
+    // Warn about removed keys to prevent silent data loss
+    const warningLines = [
+      `Removed ${unknown.removed.length} unknown config key${unknown.removed.length === 1 ? "" : "s"}:`,
+      lines,
+      "These keys are not recognized by the current schema and have been removed.",
+      "A backup was saved to openclaw.json.bak if you need to recover these values.",
+    ].join("\n");
+
     if (shouldRepair) {
       cfg = unknown.config;
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
       fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
+    }
+
+    // Always log warnings regardless of repair mode
+    if (params.runtime) {
+      params.runtime.warn(warningLines);
     }
   }
 
