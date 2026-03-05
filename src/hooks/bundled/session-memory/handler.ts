@@ -333,14 +333,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Write session memory — always use writeFileWithinRoot for path
     // traversal protection. When redirected, shift the root directory
     // to the redirect target's parent.
-    const targetDir =
-      typeof redirectPath === "string" && redirectPath.length > 0
-        ? path.dirname(memoryFilePath)
-        : memoryDir;
-    const targetFilename =
-      typeof redirectPath === "string" && redirectPath.length > 0
-        ? path.basename(memoryFilePath)
-        : filename;
+    const isRedirected = typeof redirectPath === "string" && redirectPath.length > 0;
+    const targetDir = isRedirected ? path.dirname(memoryFilePath) : memoryDir;
+    const targetFilename = isRedirected ? path.basename(memoryFilePath) : filename;
+    // Ensure target directory exists — memoryDir is created earlier,
+    // but redirect paths may point to directories that don't exist yet.
+    if (isRedirected) {
+      await fs.mkdir(targetDir, { recursive: true });
+    }
     await writeFileWithinRoot({
       rootDir: targetDir,
       relativePath: targetFilename,
