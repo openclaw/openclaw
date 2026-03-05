@@ -195,6 +195,52 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("treats internal gateway admin clients as owner senders", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123"] },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SenderId: "openclaw-tui",
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("keeps non-admin internal clients non-owner", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123"] },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SenderId: "openclaw-tui",
+      GatewayClientScopes: ["operator.write"],
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
   describe("commands.allowFrom", () => {
     const commandsAllowFromConfig = {
       commands: {

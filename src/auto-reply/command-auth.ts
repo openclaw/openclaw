@@ -16,6 +16,18 @@ export type CommandAuthorization = {
   to?: string;
 };
 
+function hasInternalGatewayAdminScope(ctx: MsgContext): boolean {
+  const channel =
+    normalizeMessageChannel(ctx.Provider) ??
+    normalizeMessageChannel(ctx.Surface) ??
+    normalizeMessageChannel(ctx.OriginatingChannel);
+  if (channel !== INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  const scopes = Array.isArray(ctx.GatewayClientScopes) ? ctx.GatewayClientScopes : [];
+  return scopes.includes("operator.admin");
+}
+
 function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): ChannelId | undefined {
   const explicitMessageChannel =
     normalizeMessageChannel(ctx.Provider) ??
@@ -341,7 +353,7 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
+  const senderIsOwner = Boolean(matchedSender) || hasInternalGatewayAdminScope(ctx);
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
