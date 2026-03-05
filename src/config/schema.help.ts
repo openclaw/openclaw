@@ -1103,6 +1103,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.timezone":
+    "Default IANA timezone for cron expressions that omit an explicit tz field (for example `America/New_York`). Falls back to the gateway process timezone when unset. Containers often default to UTC, causing cron jobs to fire hours off from operator intent.",
+  "cron.timeSyncCheck":
+    "Internet time-sync drift detection. Compares the local clock against an HTTP Date header on startup and periodically to warn when the host clock has drifted.",
+  "cron.timeSyncCheck.enabled":
+    "Enable startup and periodic time-drift checks (default `true`). Disable on air-gapped hosts where outbound HTTP is unavailable.",
+  "cron.timeSyncCheck.source":
+    "URL queried via HTTP HEAD for its Date header (default `https://www.google.com`). Use any reliable endpoint that returns a standard Date header.",
+  "cron.timeSyncCheck.thresholdSeconds":
+    "Maximum acceptable clock drift in seconds before a warning is logged (default `60`).",
+  "cron.timeSyncCheck.intervalMinutes":
+    "How often to re-check drift in minutes (default `60`). Set to `0` to disable periodic checks while keeping the startup check.",
+  "cron.timeSyncCheck.blockStartup":
+    "When true, the gateway refuses to start if the initial drift check exceeds the threshold (default `false`). Useful for environments where accurate scheduling is critical.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":

@@ -116,11 +116,16 @@ export async function start(state: CronServiceState) {
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
+    // Log the effective default timezone so operators can diagnose
+    // cron jobs firing at unexpected times in containers/VMs.
+    const effectiveTimezone =
+      state.deps.cronConfig?.timezone?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone;
     state.deps.log.info(
       {
         enabled: true,
         jobs: state.store?.jobs.length ?? 0,
         nextWakeAtMs: nextWakeAtMs(state) ?? null,
+        timezone: effectiveTimezone,
       },
       "cron: started",
     );
@@ -293,7 +298,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
       if (job.enabled) {
-        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now, state.deps.cronConfig?.timezone);
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
@@ -303,7 +308,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       // missing/corrupt nextRunAtMs for the updated job.
       const nextRun = job.state.nextRunAtMs;
       if (typeof nextRun !== "number" || !Number.isFinite(nextRun)) {
-        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now, state.deps.cronConfig?.timezone);
       }
     }
 
