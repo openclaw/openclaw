@@ -24,7 +24,6 @@ const EXCLUDED_MUTABLE_OR_RUNTIME_MANAGED = [
   "commands.ownerDisplaySecret",
   "channels.matrix.accessToken",
   "channels.matrix.accounts.*.accessToken",
-  "gateway.auth.token",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
