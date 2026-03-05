@@ -25,6 +25,7 @@ import {
   resolveExecHostApprovalContext,
 } from "./bash-tools.exec-host-shared.js";
 import {
+  buildApprovalPendingMessage,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   emitExecSystemEvent,
@@ -303,9 +304,14 @@ export async function processGatewayAllowlist(
         content: [
           {
             type: "text",
-            text:
-              `${warningText}Approval required (id ${approvalSlug}). ` +
-              "Approve to run; updates will arrive after completion.",
+            text: buildApprovalPendingMessage({
+              warningText,
+              approvalSlug,
+              approvalId,
+              command: params.command,
+              cwd: params.workdir,
+              host: "gateway",
+            }),
           },
         ],
         details: {

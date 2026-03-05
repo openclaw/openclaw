@@ -106,7 +106,19 @@ describe("exec approvals", () => {
 
     const result = await tool.execute("call1", { command: "ls -la" });
     expect(result.details.status).toBe("approval-pending");
-    const approvalId = (result.details as { approvalId: string }).approvalId;
+    const details = result.details as { approvalId: string; approvalSlug: string };
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    );
+    expect(pendingText).toContain(`full ${details.approvalId}`);
+    expect(pendingText).toContain("Host: node");
+    expect(pendingText).toContain("Node: node-1");
+    expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+    expect(pendingText).toContain("Command:\n```sh\nls -la\n```");
+    expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
+    expect(pendingText).toContain("Background mode requires pre-approved policy");
+    const approvalId = details.approvalId;
 
     await expect
       .poll(() => (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId, {
@@ -287,9 +299,132 @@ describe("exec approvals", () => {
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
     expect(result.details.status).toBe("approval-pending");
+    const details = result.details as { approvalId: string; approvalSlug: string };
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    );
+    expect(pendingText).toContain(`full ${details.approvalId}`);
+    expect(pendingText).toContain("Host: gateway");
+    expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+    expect(pendingText).toContain("Command:\n```sh\necho ok\n```");
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("requires a separate approval for each elevated command after allow-once", async () => {
+    const requestCommands: string[] = [];
+    const requestIds: string[] = [];
+    const waitIds: string[] = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        const request = params as { id?: string; command?: string };
+        if (typeof request.command === "string") {
+          requestCommands.push(request.command);
+        }
+        if (typeof request.id === "string") {
+          requestIds.push(request.id);
+        }
+        return { status: "accepted", id: request.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        const wait = params as { id?: string };
+        if (typeof wait.id === "string") {
+          waitIds.push(wait.id);
+        }
+        return { decision: "allow-once" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const first = await tool.execute("call-seq-1", {
+      command: "npm view diver --json",
+      elevated: true,
+    });
+    const second = await tool.execute("call-seq-2", {
+      command: "brew outdated",
+      elevated: true,
+    });
+
+    expect(first.details.status).toBe("approval-pending");
+    expect(second.details.status).toBe("approval-pending");
+    expect(requestCommands).toEqual(["npm view diver --json", "brew outdated"]);
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).not.toBe(requestIds[1]);
+    expect(waitIds).toEqual(requestIds);
+  });
+
+  it("shows full chained gateway commands in approval-pending message", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-chain-gateway", {
+      command: "npm view diver --json | jq .name && brew outdated",
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      "Command:\n```sh\nnpm view diver --json | jq .name && brew outdated\n```",
+    );
+    expect(calls).toContain("exec.approval.request");
+  });
+
+  it("shows full chained node commands in approval-pending message", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-chain-node", {
+      command: "npm view diver --json | jq .name && brew outdated",
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(pendingText).toContain(
+      "Command:\n```sh\nnpm view diver --json | jq .name && brew outdated\n```",
+    );
+    expect(calls).toContain("exec.approval.request");
   });
 
   it("waits for approval registration before returning approval-pending", async () => {

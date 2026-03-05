@@ -171,7 +171,12 @@ describe("exec approval forwarder", () => {
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command: `echo hello`");
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Command: `echo hello`");
+    expect(text).toContain("Mode: foreground (interactive approvals available in this chat).");
+    expect(text).toContain(
+      "Background mode note: non-interactive runs cannot wait for chat approvals;",
+    );
   });
 
   it("formats complex commands as fenced code blocks", async () => {
