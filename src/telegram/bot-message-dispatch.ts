@@ -304,7 +304,8 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     // Suppress NO_REPLY streaming fragments (e.g., "NO", "NO_", "NO_RE", "NO_REPLY")
-    if (text === "NO_REPLY" || text.startsWith("NO_REPLY")) {
+    // Check if text is a prefix of NO_REPLY (not the other way around)
+    if (text === "NO_REPLY" || "NO_REPLY".startsWith(text)) {
       return;
     }
     if (text === lane.lastPartialText) {

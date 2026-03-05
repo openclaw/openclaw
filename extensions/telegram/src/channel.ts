@@ -119,18 +119,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   },
   reload: {
     configPrefixes: ["channels.telegram"],
-    reloadGroups: async ({ cfg, accountId }) => {
-      // Dynamic group reload: re-read group configuration and update runtime state
-      // This allows adding/removing groups without restarting the Telegram channel
-      const account = cfg.channels?.telegram?.accounts?.[accountId];
-      const globalGroups = cfg.channels?.telegram?.groups;
-      const groups = account?.groups ?? globalGroups;
-
-      // Update the group configuration in runtime
-      // The actual implementation depends on how groups are stored in runtime
-      // For now, we just log the reload
-      console.log(`[Telegram] Hot reloading groups for account ${accountId}:`, groups);
-    },
+    // Note: reloadGroups not implemented - group config changes trigger channel restart
+    // TODO: Implement true hot-reload by updating runtime config reference
+    // The bot uses a config snapshot at startup; to hot-reload groups we need
+    // to either: (A) pass fresh config to bot, or (B) store groups in runtime
   },
   configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
