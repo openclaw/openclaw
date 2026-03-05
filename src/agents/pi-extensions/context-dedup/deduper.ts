@@ -76,12 +76,13 @@ function messageRole(msg: any): string {
 
 /**
  * Dedup target scope:
- * - Only tool/toolResult message bodies (where file-read outputs typically land)
- * - No sub-line/LCS chunking; exact full-string matches only
+ * - user / assistant / tool / toolResult message text blocks
+ * - excludes system messages to avoid touching instructions
+ * - no sub-line/LCS chunking; exact full-string matches only
  */
 function isDedupEligibleMessage(msg: any): boolean {
   const role = messageRole(msg);
-  return role === "tool" || role === "toolresult";
+  return role === "user" || role === "assistant" || role === "tool" || role === "toolresult";
 }
 
 type TextLikeBlock = string | { type?: string; text?: string; content?: string; [key: string]: unknown };
@@ -166,7 +167,7 @@ Each entry uses: <¯REF_XXXX= [content] END_REF¯>
  * Deduplicate content in messages.
  *
  * Algorithm:
- * 1. Scan tool/toolResult text blocks for exact duplicate strings
+ * 1. Scan eligible message text blocks for exact duplicate strings
  * 2. Keep the first occurrence intact
  * 3. Replace later occurrences with a plain-language pointer to the first one
  *
@@ -222,6 +223,7 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
   }
 
   const dedupHashes = new Set<string>();
+  const omittedRepeatsByHash = new Map<string, number>();
   for (const [hash, count] of counts) {
     if (count <= 1) {
       continue;
@@ -234,12 +236,14 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
       continue;
     }
     dedupHashes.add(hash);
+    omittedRepeatsByHash.set(hash, Math.max(1, count - 1));
   }
 
-  function makePlainPointer(first: FirstOccurrence): string {
+  function makePlainPointer(first: FirstOccurrence, omittedRepeats: number): string {
     const toolHint = first.toolCallId ? ` (toolCallId ${first.toolCallId})` : "";
+    const repeatLabel = omittedRepeats === 1 ? "repeat" : "repeats";
     return (
-      `[Repeated content omitted]\n` +
+      `[${omittedRepeats} ${repeatLabel} of content omitted]\n` +
       `Same as context message #${first.messageIndex}, block #${first.blockIndex}${toolHint}.`
     );
   }
@@ -277,7 +281,8 @@ export function deduplicateMessages(messages: any[], config: DedupConfig): Dedup
         return block;
       }
 
-      const pointer = makePlainPointer(first);
+      const omittedRepeats = omittedRepeatsByHash.get(hash) || 1;
+      const pointer = makePlainPointer(first, omittedRepeats);
       if (pointer.length >= text.length) {
         return block;
       }
