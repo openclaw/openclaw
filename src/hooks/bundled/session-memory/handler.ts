@@ -184,7 +184,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Check if another hook (e.g., security plugin) blocked the save.
     // Inside the try block for consistent error handling with the rest of the handler.
-    if (context.blockSessionSave === true) {
+    if (context.blockSessionSave) {
       log.debug("Session save blocked by upstream hook");
       return;
     }
@@ -300,10 +300,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const redirectPath = context.sessionSaveRedirectPath;
     const isRedirected = typeof redirectPath === "string" && redirectPath.length > 0;
     // For redirects, compute a workspace-relative path so writeFileWithinRoot
-    // can validate containment. Absolute paths are made relative to workspace.
+    // can validate containment. Absolute paths are made relative to the
+    // canonical workspace root (realpath) to avoid symlink aliasing issues
+    // where the same physical directory has different path representations.
+    const canonicalWorkspace =
+      isRedirected && path.isAbsolute(redirectPath)
+        ? await fs.realpath(workspaceDir).catch(() => workspaceDir)
+        : workspaceDir;
     const writeRelativePath = isRedirected
       ? path.isAbsolute(redirectPath)
-        ? path.relative(workspaceDir, redirectPath)
+        ? path.relative(canonicalWorkspace, redirectPath)
         : redirectPath
       : path.join("memory", filename);
 
@@ -349,8 +355,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Write session memory — writeFileWithinRoot handles path traversal,
     // symlink resolution, containment validation, and mkdir in one call.
     // Root is always workspaceDir; the relative path encodes the target.
-    // If a redirect path fails validation (e.g. escapes workspace), fall
-    // back to the default memory directory.
+    // If a redirect path fails validation, the handler fails closed
+    // (returns without writing) to avoid defeating quarantine intent.
     let writePath = writeRelativePath;
     if (isRedirected) {
       try {
