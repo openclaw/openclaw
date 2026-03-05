@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
+  extractSkillInvocationRouting: vi.fn(),
   sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
@@ -59,6 +60,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
+  extractSkillInvocationRouting: mocks.extractSkillInvocationRouting,
   onAgentEvent: vi.fn(),
 }));
 
