@@ -76,15 +76,33 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, "utf-8");
-  if (previous !== null) {
+  // Capture backup bytes from disk immediately before overwrite.
+  // This preserves true pre-replace content even if another writer changed
+  // the store between our initial snapshot and final rename/copy.
+  const overwriteBase = await readStoreBytes(storePath);
+  if (overwriteBase !== null) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      await fs.promises.writeFile(`${storePath}.bak`, overwriteBase, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
   serializedStoreCache.set(storePath, json);
+}
+
+async function readStoreBytes(storePath: string): Promise<string | null> {
+  try {
+    return await fs.promises.readFile(storePath, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
 }
 
 const RENAME_MAX_RETRIES = 3;
