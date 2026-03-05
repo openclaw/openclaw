@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -52,25 +53,139 @@ export function renderGatewayServiceCleanupHints(
 
 type Marker = (typeof EXTRA_MARKERS)[number];
 
-function detectMarker(content: string): Marker | null {
-  const lower = content.toLowerCase();
+type PathChar = string;
+
+const PATH_BOUNDARY_CHARS = new Set<PathChar>([
+  "",
+  "/",
+  "\\",
+  "\n",
+  "\r",
+  "\t",
+  " ",
+  '"',
+  "'",
+  ":",
+  "=",
+  "<",
+  ">",
+]);
+
+function isBoundaryChar(char: PathChar | undefined): boolean {
+  return PATH_BOUNDARY_CHARS.has(char ?? "");
+}
+
+function scrubHomePath(lower: string, home: string): string {
+  if (!home) {
+    return lower;
+  }
+  const homeLower = home.toLowerCase();
+  let out = "";
+  let idx = 0;
+  while (idx < lower.length) {
+    const hit = lower.indexOf(homeLower, idx);
+    if (hit === -1) {
+      out += lower.slice(idx);
+      break;
+    }
+    const before = hit === 0 ? "" : lower[hit - 1];
+    const after = lower[hit + homeLower.length] ?? "";
+    const isStartBoundary = hit === 0 || isBoundaryChar(before);
+    const isEndBoundary = isBoundaryChar(after);
+    if (isStartBoundary && isEndBoundary) {
+      out += lower.slice(idx, hit);
+      idx = hit + homeLower.length;
+      continue;
+    }
+    out += lower.slice(idx, hit + homeLower.length);
+    idx = hit + homeLower.length;
+  }
+  return out;
+}
+
+function toWindowsDrivePath(home: string): string | null {
+  const match = home.match(/^\/([a-z])\/(.+)$/i);
+  if (!match) {
+    return null;
+  }
+  const drive = match[1]?.toLowerCase();
+  const rest = match[2];
+  if (!drive || !rest) {
+    return null;
+  }
+  return `${drive}:/${rest}`;
+}
+
+function normalizeHomeVariant(home: string): string {
+  if (!home) {
+    return home;
+  }
+  if (home === "/" || home === "\\") {
+    return home;
+  }
+  if (/^[a-z]:[/\\]?$/i.test(home)) {
+    return `${home[0]}:`;
+  }
+  return home.replace(/[/\\]+$/g, "");
+}
+
+function resolveHomeVariants(env: Record<string, string | undefined>): string[] {
+  const variants = new Set<string>();
+  const addVariant = (value: string | undefined) => {
+    const lowered = value?.trim().toLowerCase();
+    const trimmed = lowered ? normalizeHomeVariant(lowered) : "";
+    if (!trimmed) {
+      return;
+    }
+    variants.add(trimmed);
+    variants.add(trimmed.replaceAll("\\", "/"));
+    variants.add(trimmed.replaceAll("/", "\\"));
+    const windowsDrive = toWindowsDrivePath(trimmed);
+    if (windowsDrive) {
+      variants.add(windowsDrive);
+      variants.add(windowsDrive.replaceAll("/", "\\"));
+    }
+  };
+
+  addVariant(env.HOME);
+  addVariant(env.USERPROFILE);
+  return [...variants];
+}
+
+function scrubHomeVariants(content: string, env: Record<string, string | undefined>): string {
+  let scrubbed = content.toLowerCase();
+  try {
+    const homes = resolveHomeVariants(env);
+    for (const home of homes) {
+      scrubbed = scrubHomePath(scrubbed, home);
+    }
+  } catch {}
+  return scrubbed;
+}
+
+function detectMarker(content: string, env: Record<string, string | undefined>): Marker | null {
+  const scrubbed = scrubHomeVariants(content, env);
   for (const marker of EXTRA_MARKERS) {
-    if (lower.includes(marker)) {
+    if (scrubbed.includes(marker)) {
       return marker;
     }
   }
   return null;
 }
 
-export function detectMarkerLineWithGateway(contents: string): Marker | null {
+export function detectMarkerLineWithGateway(
+  contents: string,
+  env: Record<string, string | undefined>,
+): Marker | null {
   // Join line continuations (trailing backslash) into single lines
   const lower = contents.replace(/\\\r?\n\s*/g, " ").toLowerCase();
   for (const line of lower.split(/\r?\n/)) {
     if (!line.includes("gateway")) {
       continue;
     }
+    const scrubbed = scrubHomeVariants(line, env);
     for (const marker of EXTRA_MARKERS) {
-      if (line.includes(marker)) {
+      if (scrubbed.includes(marker)) {
         return marker;
       }
     }
@@ -145,6 +260,11 @@ function isLegacyLabel(label: string): boolean {
   return lower.includes("clawdbot");
 }
 
+function isLegacyGatewayUnitName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES.includes(lower);
+}
+
 async function readDirEntries(dir: string): Promise<string[]> {
   try {
     return await fs.readdir(dir);
@@ -196,6 +316,7 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
+  env: Record<string, string | undefined>;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
@@ -205,7 +326,7 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarker(contents, params.env);
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
     if (!marker) {
       const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
@@ -244,6 +365,7 @@ async function scanLaunchdDir(params: {
 async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
+  env: Record<string, string | undefined>;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
@@ -253,7 +375,9 @@ async function scanSystemdDir(params: {
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarkerLineWithGateway(contents);
+    const marker =
+      detectMarkerLineWithGateway(contents, params.env) ??
+      (isLegacyGatewayUnitName(name) ? detectMarker(entry, params.env) : null);
     if (!marker) {
       continue;
     }
@@ -321,6 +445,11 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
   return tasks;
 }
 
+export const __test__ = {
+  detectMarker,
+  scrubHomePath,
+};
+
 export async function findExtraGatewayServices(
   env: Record<string, string | undefined>,
   opts: FindExtraGatewayServicesOptions = {},
@@ -343,6 +472,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanLaunchdDir({
         dir: userDir,
         scope: "user",
+        env,
       })) {
         push(svc);
       }
@@ -350,12 +480,14 @@ export async function findExtraGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchAgents"),
           scope: "system",
+          env,
         })) {
           push(svc);
         }
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
+          env,
         })) {
           push(svc);
         }
@@ -373,6 +505,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanSystemdDir({
         dir: userDir,
         scope: "user",
+        env,
       })) {
         push(svc);
       }
@@ -385,6 +518,7 @@ export async function findExtraGatewayServices(
           for (const svc of await scanSystemdDir({
             dir,
             scope: "system",
+            env,
           })) {
             push(svc);
           }
@@ -413,15 +547,7 @@ export async function findExtraGatewayServices(
       if (isOpenClawGatewayTaskName(name)) {
         continue;
       }
-      const lowerName = name.toLowerCase();
-      const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
-      let marker: Marker | null = null;
-      for (const candidate of EXTRA_MARKERS) {
-        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
-          marker = candidate;
-          break;
-        }
-      }
+      const marker = detectMarker(`${name}\n${task.taskToRun ?? ""}`, env);
       if (!marker) {
         continue;
       }

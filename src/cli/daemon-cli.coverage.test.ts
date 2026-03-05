@@ -17,12 +17,31 @@ const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
 const resolveGatewayProbeAuthWithSecretInputs = vi.fn(async (_opts?: unknown) => ({}));
 const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
+const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free",
   listeners: [],
   hints: [],
 }));
+const resolveGatewayBindHost = vi.fn(
+  async (_bindMode?: string, _customBindHost?: string) => "127.0.0.1",
+);
+const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
+const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
+  enabled: false,
+  required: false,
+}));
+const resolveGatewayPort = vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+  const fromEnv = env?.OPENCLAW_GATEWAY_PORT;
+  return fromEnv ? Number(fromEnv) : 18789;
+});
+const resolveStateDir = vi.fn(
+  (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli-state",
+);
+const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
+  return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
+});
 const buildGatewayInstallPlan = vi.fn(
   async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
@@ -100,9 +119,43 @@ vi.mock("../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
 
+vi.mock("../daemon/service-audit.js", () => ({
+  auditGatewayServiceConfig: (opts: unknown) => auditGatewayServiceConfig(opts),
+}));
+
 vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
+}));
+
+vi.mock("../gateway/net.js", () => ({
+  resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
+    resolveGatewayBindHost(bindMode, customBindHost),
+}));
+
+vi.mock("../infra/tailnet.js", () => ({
+  pickPrimaryTailnetIPv4: () => pickPrimaryTailnetIPv4(),
+}));
+
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
+}));
+
+vi.mock("../config/config.js", () => ({
+  createConfigIO: ({ configPath }: { configPath: string }) => ({
+    readConfigFileSnapshot: async () => ({
+      path: configPath,
+      exists: true,
+      valid: true,
+      issues: [],
+    }),
+    loadConfig: () => ({}),
+  }),
+  loadConfig: () => ({}),
+  readBestEffortConfig: async () => ({}),
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  resolveGatewayPort: (cfg?: unknown, env?: NodeJS.ProcessEnv) => resolveGatewayPort(cfg, env),
+  resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -156,6 +209,16 @@ describe("daemon-cli coverage", () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
+    serviceInstall.mockClear();
+    serviceUninstall.mockClear();
+    serviceStop.mockClear();
+    serviceRestart.mockClear();
+    serviceIsLoaded.mockReset().mockResolvedValue(false);
+    serviceReadRuntime.mockReset().mockResolvedValue({ status: "running" });
+    findExtraGatewayServices.mockClear();
+    inspectPortUsage.mockClear();
+    probeGatewayStatus.mockClear();
+    auditGatewayServiceConfig.mockClear();
     serviceReadCommand.mockResolvedValue(null);
     resolveGatewayProbeAuthWithSecretInputs.mockClear();
     buildGatewayInstallPlan.mockClear();
