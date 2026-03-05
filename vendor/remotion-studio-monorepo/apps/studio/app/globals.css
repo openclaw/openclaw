@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base: #eef4ff;
+  --bg-surface: rgba(246, 250, 255, 0.62);
+  --bg-card: rgba(255, 255, 255, 0.6);
+  --line-soft: rgba(44, 62, 80, 0.2);
+  --text-primary: #25323f;
+  --text-secondary: #4b5b6d;
+  --text-strong: #0f172a;
+  --accent: #ff7a59;
+  --accent-strong: #2fc9b8;
+  --accent-soft: #ffd166;
+  --accent-green: #9ddf8f;
+  --accent-violet: #7c67ff;
+  --radius-card: 1.3rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text-primary);
+  background:
+    radial-gradient(
+      circle at 12% 18%,
+      rgba(47, 201, 184, 0.25),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 84% 14%,
+      rgba(255, 122, 89, 0.26),
+      transparent 40%
+    ),
+    radial-gradient(
+      circle at 52% 86%,
+      rgba(124, 103, 255, 0.22),
+      transparent 34%
+    ),
+    linear-gradient(145deg, #f8fbff 0%, #eef4ff 46%, #f5efff 100%);
+  font-family:
+    var(--font-quicksand), "Hiragino Maru Gothic ProN", "Yu Gothic UI",
+    "Meiryo", sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      130deg,
+      rgba(255, 255, 255, 0.2) 0%,
+      rgba(255, 255, 255, 0) 46%
+    ),
+    radial-gradient(
+      circle at 14% 26%,
+      rgba(255, 255, 255, 0.46) 0 2px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at 72% 62%,
+      rgba(255, 255, 255, 0.38) 0 2px,
+      transparent 2px
+    );
+  background-size:
+    100% 100%,
+    36px 36px,
+    44px 44px;
+  opacity: 0.4;
+  z-index: -1;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  width: 420px;
+  height: 420px;
+  left: -120px;
+  bottom: -180px;
+  border-radius: 999px;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 30% 30%,
+    rgba(47, 201, 184, 0.3),
+    rgba(124, 103, 255, 0.06) 62%,
+    transparent 76%
+  );
+  filter: blur(14px);
+  z-index: -1;
+  animation: drift-bubble 11s ease-in-out infinite;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.forge-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.forge-chip {
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.68),
+    rgba(255, 255, 255, 0.34)
+  );
+  border-radius: 1rem;
+  padding: 0.7rem 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  backdrop-filter: blur(14px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 12px 26px rgba(15, 23, 42, 0.08);
+}
+
+.forge-chip-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.forge-chip strong {
+  font-size: 1.02rem;
+  line-height: 1.2;
+  color: var(--text-strong);
+}
+
+.forge-progress {
+  width: 100%;
+  height: 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.68);
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+
+.forge-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--accent-strong) 0%,
+    #7f7dff 44%,
+    var(--accent-soft) 72%,
+    var(--accent) 100%
+  );
+  box-shadow:
+    0 0 20px rgba(47, 201, 184, 0.3),
+    0 0 10px rgba(124, 103, 255, 0.25);
+  transition: width 420ms ease;
+}
+
+.forge-card {
+  opacity: 0;
+  transform-origin: center top;
+  animation: forge-pop 560ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.forge-card:hover {
+  box-shadow: 0 30px 54px rgba(15, 23, 42, 0.18);
+}
+
+@keyframes forge-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985) rotateX(8deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotateX(0deg);
+  }
+}
+
+@keyframes drift-bubble {
+  0% {
+    transform: translateY(0) translateX(0);
+  }
+  50% {
+    transform: translateY(-18px) translateX(12px);
+  }
+  100% {
+    transform: translateY(0) translateX(0);
+  }
+}

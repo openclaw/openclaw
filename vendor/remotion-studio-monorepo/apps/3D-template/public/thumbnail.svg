@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="3D Template">
+  <defs>
+    <linearGradient id="threeDGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1d4ed8" />
+      <stop offset="100%" stop-color="#7c3aed" />
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#threeDGradient)" />
+  <circle cx="1080" cy="120" r="230" fill="rgba(255,255,255,0.08)" />
+  <circle cx="150" cy="640" r="260" fill="rgba(255,255,255,0.08)" />
+  <text x="82" y="500" fill="#f8fafc" font-size="84" font-family="Inter, system-ui, sans-serif" font-weight="700">3D Template</text>
+  <text x="86" y="570" fill="rgba(248,250,252,0.92)" font-size="36" font-family="Inter, system-ui, sans-serif">Remotion Forge 3D</text>
+</svg>

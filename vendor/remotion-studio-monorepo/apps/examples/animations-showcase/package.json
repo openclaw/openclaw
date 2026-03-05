@@ -1,0 +1,28 @@
+{
+  "name": "@examples/animations-showcase",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion build",
+    "render": "remotion render",
+    "preview": "remotion preview",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" remotion.config.ts"
+  },
+  "dependencies": {
+    "@studio/timing": "workspace:*",
+    "@studio/hooks": "workspace:*",
+    "@studio/core-types": "workspace:*",
+    "@studio/easings": "workspace:*",
+    "@studio/transitions": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "remotion": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@remotion/cli": "catalog:",
+    "@types/react": "catalog:",
+    "typescript": "catalog:"
+  }
+}

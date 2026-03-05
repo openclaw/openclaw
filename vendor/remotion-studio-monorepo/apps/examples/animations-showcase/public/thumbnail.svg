@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Animations Showcase">
+  <defs>
+    <linearGradient id="showcaseGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#334155" />
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#showcaseGradient)" />
+  <circle cx="1140" cy="120" r="220" fill="rgba(56,189,248,0.14)" />
+  <circle cx="170" cy="640" r="280" fill="rgba(34,197,94,0.12)" />
+  <text x="82" y="486" fill="#f8fafc" font-size="78" font-family="Inter, system-ui, sans-serif" font-weight="700">Animations Showcase</text>
+  <text x="86" y="558" fill="rgba(248,250,252,0.88)" font-size="36" font-family="Inter, system-ui, sans-serif">Remotion Examples</text>
+</svg>

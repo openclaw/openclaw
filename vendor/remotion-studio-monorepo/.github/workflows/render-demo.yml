@@ -1,0 +1,275 @@
+name: Render Demo Videos
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "scripts/**"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "scripts/**"
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App to render (leave empty for all)"
+        required: false
+        type: string
+      composition:
+        description: "Composition ID (leave empty for all)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  render:
+    name: Render Videos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ensure Remotion browser
+        run: pnpm remotion browser ensure
+
+      - name: Build packages
+        run: pnpm build:packages
+
+      - name: Render videos
+        id: render
+        run: |
+          set -euo pipefail
+          mkdir -p rendered-videos
+          failed=0
+          rendered=0
+          selected_apps=0
+
+          # Find apps to render (supports nested apps such as apps/examples/*)
+          mapfile -t app_dirs < <(find apps -type f -name package.json -print | xargs -n1 dirname | sort -u)
+          declare -A changed_app_dirs=()
+          render_all=0
+
+          if [ -n "${{ inputs.app }}" ]; then
+            echo "Manual app filter enabled: ${{ inputs.app }}"
+          elif [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            diff_base=""
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              diff_base="${{ github.event.pull_request.base.sha }}"
+            elif [ "${{ github.event_name }}" = "push" ]; then
+              diff_base="${{ github.event.before }}"
+            fi
+
+            if [ -n "$diff_base" ]; then
+              mapfile -t changed_files < <(git diff --name-only "$diff_base" "$GITHUB_SHA" || true)
+              if [ "${#changed_files[@]}" -gt 0 ]; then
+                for file in "${changed_files[@]}"; do
+                  if [[ "$file" == packages/* ]] || [[ "$file" == scripts/* ]]; then
+                    render_all=1
+                    break
+                  fi
+                done
+              fi
+
+              if [ "$render_all" -eq 0 ]; then
+                for app in "${app_dirs[@]}"; do
+                  for file in "${changed_files[@]}"; do
+                    if [[ "$file" == "$app/"* ]]; then
+                      changed_app_dirs["$app"]=1
+                      break
+                    fi
+                  done
+                done
+              fi
+            fi
+          fi
+
+          for app in "${app_dirs[@]}"; do
+            app_name="${app#apps/}"
+            app_base=$(basename "$app")
+
+            # Skip templates
+            if [[ "$app_base" =~ ^_ ]] || [[ "$app_name" =~ template ]]; then
+              continue
+            fi
+
+            # Skip non-Remotion dashboard app
+            if [ "$app_name" = "studio" ]; then
+              echo "Skipping studio dashboard (non-Remotion app)."
+              continue
+            fi
+
+            # If specific app requested, skip others
+            if [ -n "${{ inputs.app }}" ] && [ "$app_name" != "${{ inputs.app }}" ]; then
+              continue
+            fi
+
+            if [ -z "${{ inputs.app }}" ] && [ "$render_all" -eq 0 ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+              if [ -z "${changed_app_dirs["$app"]+x}" ]; then
+                continue
+              fi
+            fi
+
+            echo "Rendering $app_name..."
+            selected_apps=$((selected_apps + 1))
+
+            # Resolve entrypoint
+            cd "$app"
+            entry=""
+            for candidate in src/index.ts src/index.tsx src/main.ts src/main.tsx index.ts index.tsx; do
+              if [ -f "$candidate" ]; then
+                entry="$candidate"
+                break
+              fi
+            done
+
+            if [ -z "$entry" ]; then
+              echo "No entry point found for $app_name. Skipping."
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            # Get compositions (parse Remotion table output to avoid mixing progress logs)
+            composition_output=$(pnpm exec remotion compositions "$entry" 2>/dev/null || true)
+            mapfile -t compositions < <(
+              printf '%s\n' "$composition_output" \
+                | sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' \
+                | awk -F'[[:space:]][[:space:]]+' '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+x[0-9]+$/ && $4 ~ /^[0-9]+/ {print $1}'
+            )
+
+            if [ "${#compositions[@]}" -eq 0 ]; then
+              echo "No compositions found for $app_name"
+              failed=1
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            # Render each composition
+            for comp in "${compositions[@]}"; do
+              # If specific composition requested, skip others
+              if [ -n "${{ inputs.composition }}" ] && [ "$comp" != "${{ inputs.composition }}" ]; then
+                continue
+              fi
+
+              echo "Rendering composition: $comp"
+              output_file="$GITHUB_WORKSPACE/rendered-videos/${app_name//\//-}-${comp}.mp4"
+
+              if pnpm exec remotion render "$entry" "$comp" "$output_file" \
+                --concurrency 2 \
+                --timeout 300000; then
+                rendered=$((rendered + 1))
+              else
+                echo "Failed to render $app_name / $comp"
+                failed=1
+              fi
+            done
+
+            cd "$GITHUB_WORKSPACE"
+          done
+
+          if [ "$render_all" -eq 0 ] && [ -z "${{ inputs.app }}" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Filtered to changed apps only."
+          else
+            echo "Rendering all candidate apps."
+          fi
+
+          if [ "$selected_apps" -eq 0 ]; then
+            echo "No eligible apps matched current filters. Skipping render."
+            exit 0
+          fi
+
+          if [ "$rendered" -eq 0 ]; then
+            echo "No videos were rendered."
+            exit 1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more renders failed."
+            exit 1
+          fi
+
+      - name: Upload rendered videos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendered-videos-${{ github.sha }}
+          path: rendered-videos/
+          retention-days: 30
+
+      - name: Comment PR with video links
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const videoDir = 'rendered-videos';
+            if (!fs.existsSync(videoDir)) {
+              console.log('No videos rendered');
+              return;
+            }
+
+            const videos = fs.readdirSync(videoDir);
+            if (videos.length === 0) {
+              console.log('No videos found');
+              return;
+            }
+
+            let comment = '## 🎬 Rendered Videos\n\n';
+            comment += `Found ${videos.length} video(s):\n\n`;
+
+            videos.forEach(video => {
+              comment += `- \`${video}\`\n`;
+            });
+
+            comment += '\n📦 Download artifacts to view the videos.';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
