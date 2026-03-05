@@ -22,13 +22,9 @@ const gatewayLog = {
   error: vi.fn(),
 };
 
-vi.mock("../../infra/gateway-lock.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../infra/gateway-lock.js")>();
-  return {
-    GatewayLockError: original.GatewayLockError,
-    acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
-  };
-});
+vi.mock("../../infra/gateway-lock.js", () => ({
+  acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
+}));
 
 vi.mock("../../infra/restart.js", () => ({
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
