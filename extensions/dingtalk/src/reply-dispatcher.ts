@@ -54,7 +54,10 @@ export function createDingtalkReplyDispatcher(params: {
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        const hasMedia = Boolean(
+          payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0),
+        );
+        const text = payload.text ?? (hasMedia ? "[Media attachment]" : "");
         if (!text.trim()) return;
 
         if (info?.kind === "block") {
