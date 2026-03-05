@@ -309,20 +309,6 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           accountId,
         });
       },
-      resolveToolPolicy: ({ cfg, accountId, groupId, senderId, senderName, senderUsername }) => {
-        if (!groupId) {
-          return undefined;
-        }
-        return resolveChannelGroupToolsPolicy({
-          cfg,
-          channel: "line",
-          groupId,
-          accountId,
-          senderId,
-          senderName,
-          senderUsername,
-        });
-      },
     },
   },
   whatsapp: {
