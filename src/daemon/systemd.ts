@@ -179,6 +179,18 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+function isGenericSystemctlIsEnabledFailure(detail: string, unitName: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.startsWith("command failed: systemctl ") &&
+    normalized.includes(" is-enabled ") &&
+    normalized.includes(unitName.toLowerCase())
+  );
+}
+
 function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
@@ -430,7 +442,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (
+    isSystemctlMissing(detail) ||
+    isSystemdUnitNotEnabled(detail) ||
+    isGenericSystemctlIsEnabledFailure(detail, unitName)
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
