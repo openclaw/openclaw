@@ -658,6 +658,16 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
   });
 
+  it("rotates on bare service unavailable without cooling down the profile", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: "LLM error: service unavailable",
+      sessionKey: "agent:test:service-unavailable-no-cooldown",
+      runId: "run:service-unavailable-no-cooldown",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+  });
+
   it("does not rotate for compaction timeouts", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
