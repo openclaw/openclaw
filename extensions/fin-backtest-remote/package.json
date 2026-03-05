@@ -1,0 +1,16 @@
+{
+  "name": "@openfinclaw/fin-backtest-remote",
+  "version": "2026.2.0",
+  "private": true,
+  "description": "OpenFinClaw remote backtest agent — submit, poll, and fetch reports via Findoo Backtest API",
+  "type": "module",
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openfinclaw": ">=2026.2.0"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

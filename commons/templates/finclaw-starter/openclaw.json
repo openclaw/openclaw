@@ -2,8 +2,26 @@
   "$schema": "https://openclaw.ai/schema/config.json",
   "name": "finclaw-starter",
   "description": "FinClaw starter workspace with finance-focused defaults",
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": ["read", "exec", "write", "edit"]
+  },
   "skills": {
     "autoDiscover": true,
-    "skillsDir": "./skills"
+    "skillsDir": "./skills",
+    "load": {
+      "extraDirs": ["skills", "commons/skills"]
+    }
+  },
+  "plugins": {
+    "entries": {
+      "fin-backtest-remote": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://150.109.16.195:8000",
+          "apiKey": ""
+        }
+      }
+    }
   }
 }
