@@ -42,7 +42,9 @@ const TRUSTED_BASE = new Set([
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
 
-const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
+// Accept an optional leading * which icacls prefixes to SIDs when invoked with /sid
+// (e.g. *S-1-5-18 instead of S-1-5-18).
+const SID_RE = /^\*?s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
   "s-1-5-18",
   "s-1-5-32-544",
@@ -91,7 +93,11 @@ function classifyPrincipal(
   const normalized = normalize(principal);
 
   if (SID_RE.test(normalized)) {
-    return TRUSTED_SIDS.has(normalized) || trustedPrincipals.has(normalized) ? "trusted" : "group";
+    // Strip the leading * that icacls /sid prefixes to SIDs before lookup.
+    const sid = normalized.startsWith("*") ? normalized.slice(1) : normalized;
+    return TRUSTED_SIDS.has(sid) || trustedPrincipals.has(sid) || trustedPrincipals.has(normalized)
+      ? "trusted"
+      : "group";
   }
 
   if (
@@ -249,7 +255,12 @@ export async function inspectWindowsAcl(
 ): Promise<WindowsAclSummary> {
   const exec = opts?.exec ?? runExec;
   try {
-    const { stdout, stderr } = await exec("icacls", [targetPath]);
+    // /sid outputs security identifiers (e.g. *S-1-5-18) instead of locale-
+    // dependent account names so the audit works correctly on non-English
+    // Windows (Russian, Chinese, etc.) where icacls prints Cyrillic / CJK
+    // characters that may be garbled when Node reads them in the wrong code
+    // page.  Fixes #35834.
+    const { stdout, stderr } = await exec("icacls", [targetPath, "/sid"]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
     const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, opts?.env);

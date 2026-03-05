@@ -244,6 +244,20 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "S-1-5-18" })]);
     });
 
+    it("classifies *S-1-5-18 (icacls /sid prefix form of SYSTEM) as trusted (refs #35834)", () => {
+      // icacls /sid output prefixes SIDs with *, e.g. *S-1-5-18 instead of
+      // S-1-5-18.  Without this fix the asterisk caused SID_RE to not match
+      // and the SYSTEM entry was misclassified as "group" (untrusted).
+      expectTrustedOnly([aclEntry({ principal: "*S-1-5-18" })]);
+    });
+
+    it("classifies *S-1-5-32-544 (icacls /sid Administrators) as trusted", () => {
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "*S-1-5-32-544" })];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
     it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
       const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-32-544" })];
       const summary = summarizeWindowsAcl(entries);
@@ -319,7 +333,30 @@ Successfully processed 1 files`;
         exec: mockExec,
       });
       expectInspectSuccess(result, 2);
-      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt"]);
+      // /sid is passed so that account names are printed as SIDs, making the
+      // audit locale-independent (fixes #35834).
+      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt", "/sid"]);
+    });
+
+    it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {
+      // When icacls is called with /sid it outputs *S-X-X-X instead of
+      // locale-dependent names like "NT AUTHORITY\\SYSTEM" or the Russian
+      // garbled equivalent.
+      const mockExec = vi.fn().mockResolvedValue({
+        stdout:
+          "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)\n                *S-1-5-18:(F)\n                *S-1-5-32-544:(F)",
+        stderr: "",
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { USERSID: "S-1-5-21-111-222-333-1001" },
+      });
+      expectInspectSuccess(result, 3);
+      // All three entries (current user, SYSTEM, Administrators) must be trusted.
+      expect(result.trusted).toHaveLength(3);
+      expect(result.untrustedGroup).toHaveLength(0);
+      expect(result.untrustedWorld).toHaveLength(0);
     });
 
     it("returns error state on exec failure", async () => {
