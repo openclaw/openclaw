@@ -80,7 +80,14 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const isEnabled = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (resolveTelegramPollActionGateState(isEnabled).enabled) {
+    const pollEnabledForAnyAccount = accounts.some((account) => {
+      const accountGate = createTelegramActionGate({
+        cfg,
+        accountId: account.accountId,
+      });
+      return resolveTelegramPollActionGateState(accountGate).enabled;
+    });
+    if (pollEnabledForAnyAccount) {
       actions.add("poll");
     }
     if (isEnabled("reactions")) {
@@ -148,7 +155,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action === "poll") {
       const to = readStringParam(params, "to", { required: true });
       const question = readStringParam(params, "pollQuestion", { required: true });
-      const answers = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const answers = readStringArrayParam(params, "pollOption", { required: true });
       const durationHours = readNumberParam(params, "pollDurationHours", {
         integer: true,
       });

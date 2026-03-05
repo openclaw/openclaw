@@ -19,10 +19,6 @@ export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
 
-export const TELEGRAM_POLL_CREATION_PARAM_NAMES = POLL_CREATION_PARAM_NAMES.filter(
-  (name) => POLL_CREATION_PARAM_DEFS[name].telegramOnly === true,
-);
-
 export function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;

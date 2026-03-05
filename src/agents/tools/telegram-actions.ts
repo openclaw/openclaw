@@ -264,7 +264,7 @@ export async function handleTelegramAction(
     }
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });
-    const answers = readStringArrayParam(params, "answers", { required: true }) ?? [];
+    const answers = readStringArrayParam(params, "answers", { required: true });
     const allowMultiselect =
       typeof params.allowMultiselect === "boolean" ? params.allowMultiselect : false;
     const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });

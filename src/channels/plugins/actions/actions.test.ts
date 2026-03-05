@@ -532,6 +532,35 @@ describe("telegramMessageActions", () => {
     expect(actions).not.toContain("poll");
   });
 
+  it("omits poll when sendMessage and poll are split across accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            senderOnly: {
+              botToken: "tok-send",
+              actions: {
+                sendMessage: true,
+                poll: false,
+              },
+            },
+            pollOnly: {
+              botToken: "tok-poll",
+              actions: {
+                sendMessage: false,
+                poll: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).not.toContain("poll");
+  });
+
   it("lists sticker actions only when enabled by config", () => {
     const cases = [
       {
