@@ -1,3 +1,17 @@
+function concatUint8Chunks(chunks: readonly Uint8Array[], total: number): Buffer {
+  if (total === 0) {
+    return Buffer.alloc(0);
+  }
+
+  const out = Buffer.allocUnsafe(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -45,8 +59,5 @@ export async function readResponseWithLimit(
     } catch {}
   }
 
-  return Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    total,
-  );
+  return concatUint8Chunks(chunks, total);
 }
