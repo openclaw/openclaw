@@ -11,6 +11,17 @@
 
 See the [Trust page](https://trust.openclaw.ai) for full reporting instructions covering all repos.
 
+## Official domains and anti-phishing check
+
+Use only official OpenClaw properties:
+
+- `https://github.com/openclaw/openclaw`
+- `https://docs.openclaw.ai`
+- `https://trust.openclaw.ai`
+- `https://openclaw.ai`
+
+If a domain looks similar but is not one of the official properties above, treat it as suspicious and avoid entering credentials or running installers from it.
+
 ## Contact
 
 - **Jamieson O'Reilly** ([@theonejvo](https://twitter.com/theonejvo)) - Security & Trust
