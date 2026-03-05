@@ -255,6 +255,7 @@ export type AppViewState = {
     logsMaxBytes: number;
     logsAtBottom: boolean;
     updateAvailable: import("./types.js").UpdateAvailable | null;
+    updateDismissedVersion: string | null;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;
